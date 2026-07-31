@@ -46,6 +46,15 @@ export const SHARED_CSS = `
    default 1 would squeeze sections into the viewport height.) */
 .section { padding: 12px; border-bottom: 1px solid var(--border);
            min-width: 0; flex-shrink: 0; }
+/* A COLLAPSED section is nothing but its glass pill, so the 12px block padding
+   (sized for a section BODY) just stacked whitespace: 12 + 1px rule + 12 = 25px
+   between consecutive pills. Trim the vertical padding to 3px and drop the
+   divider rule — the emboss relief already reads as a discrete item — leaving a
+   6px gap. That still clears the pill's own drop shadow (0 2px 5px ⇒ ~4.5px of
+   visible reach below the box), so no pill's shadow lands on its neighbour.
+   Horizontal padding and the pill's own 7px/10px inner padding (the touch
+   target) are untouched, and expanded sections keep the full 12px rhythm. */
+.section.collapsed { padding-top: 3px; padding-bottom: 3px; border-bottom: none; }
 .section h3 { font-size: 11px; color: var(--text-dim); text-transform: uppercase;
               letter-spacing: 0.08em; margin-bottom: 8px; }
 .row { display: flex; align-items: center; gap: 6px; font-size: 12px; padding: 3px 0;
@@ -228,11 +237,22 @@ diorama-toolbar { display: block; flex: 0 0 auto; }
   display: flex; flex-direction: column; gap: 4px; padding: 5px 6px 6px;
   user-select: none;
 }
-.tb-dock.tb-collapsed { padding: 3px 6px; flex-direction: row; justify-content: center; }
+/* Collapsed: the dock is just the handle, LEFT-anchored (thumb-reachable on a
+   phone) rather than centred. */
+.tb-dock.tb-collapsed { padding: 3px 6px; flex-direction: row; justify-content: flex-start; }
 .tb-row { display: flex; align-items: center; gap: 4px; overflow-x: auto; overflow-y: hidden; }
 .tb-row::-webkit-scrollbar { height: 6px; }
 .tb-row::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-.tb-tabs { padding-bottom: 1px; }
+/* The tabs row does NOT scroll as a whole — the handle is a fixed flex item on
+   the left and only .tb-tabstrip beside it scrolls, so the collapse control can
+   never be scrolled out of reach at narrow widths. */
+.tb-tabs { display: flex; align-items: center; gap: 6px; }
+.tb-tabstrip {
+  flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 4px;
+  overflow-x: auto; overflow-y: hidden; padding-bottom: 1px;
+}
+.tb-tabstrip::-webkit-scrollbar { height: 6px; }
+.tb-tabstrip::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 .tb-tab {
   flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px;
   padding: 4px 9px; border-radius: 6px; border: 1px solid var(--border);
@@ -242,11 +262,17 @@ diorama-toolbar { display: block; flex: 0 0 auto; }
 .tb-tab:hover { border-color: var(--accent); color: var(--text); }
 .tb-tab.active { background: var(--accent); border-color: var(--accent); color: #fff; }
 .tb-tab-glyph { font-size: 13px; }
+/* Full touch target (>=40x40) with an oversized chevron — this is the one
+   control a phone user reaches for to get the canvas back. */
 .tb-handle {
-  flex: 0 0 auto; padding: 3px 9px; border-radius: 6px; border: 1px solid var(--border);
+  flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  min-width: 40px; min-height: 40px; padding: 0 10px; line-height: 1;
+  border-radius: 8px; border: 1px solid var(--border);
   background: transparent; color: var(--text-dim); font-size: 12px; cursor: pointer;
 }
 .tb-handle:hover { border-color: var(--accent); color: var(--text); }
+.tb-handle-glyph { font-size: 19px; line-height: 1; }
+.tb-handle-label { white-space: nowrap; }
 .tb-cards { gap: 6px; padding: 2px 0 3px; min-height: 92px; }
 .tb-card {
   flex: 0 0 auto; width: 72px; display: flex; flex-direction: column; align-items: center;

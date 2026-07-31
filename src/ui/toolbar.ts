@@ -38,6 +38,21 @@ export class Toolbar extends LitElement {
 
   private _cats(): ToolCategory[] { return buildToolbarModel(this.planner); }
 
+  // The collapse/expand control. LEFT-ANCHORED in both states (it is the first
+  // child of the dock's top row, outside the tabs' horizontal scroller, so it
+  // stays reachable with a thumb at any width) and sized as a real touch target
+  // (>=40x40) with an oversized chevron.
+  private _handle(collapsed: boolean) {
+    const label = collapsed ? 'Show placement toolbar' : 'Collapse placement toolbar';
+    return html`
+      <button class="tb-handle" title=${label} aria-label=${label}
+              aria-expanded=${collapsed ? 'false' : 'true'}
+              @click=${() => this._toggleCollapsed()}>
+        <span class="tb-handle-glyph">${collapsed ? '▴' : '▾'}</span>
+        ${collapsed ? html`<span class="tb-handle-label">Toolbar</span>` : nothing}
+      </button>`;
+  }
+
   private _card(card: ToolCard) {
     const p = this.planner;
     const armed = card.isArmed(p);
@@ -73,8 +88,7 @@ export class Toolbar extends LitElement {
     if (this._collapsed) {
       return html`
         <div class="tb-dock tb-collapsed">
-          <button class="tb-handle" title="Show placement toolbar"
-                  @click=${() => this._toggleCollapsed()}>▴ Toolbar</button>
+          ${this._handle(true)}
         </div>`;
     }
 
@@ -83,15 +97,15 @@ export class Toolbar extends LitElement {
 
     return html`
       <div class="tb-dock">
-        <div class="tb-row tb-tabs">
-          ${cats.map(c => html`
-            <button class="tb-tab ${c.id === this._tab ? 'active' : ''}"
-                    @click=${() => { this._tab = c.id; }}>
-              <span class="tb-tab-glyph">${c.glyph}</span>${c.label}
-            </button>`)}
-          <span style="flex:1"></span>
-          <button class="tb-handle" title="Collapse placement toolbar"
-                  @click=${() => this._toggleCollapsed()}>▾</button>
+        <div class="tb-tabs">
+          ${this._handle(false)}
+          <div class="tb-tabstrip">
+            ${cats.map(c => html`
+              <button class="tb-tab ${c.id === this._tab ? 'active' : ''}"
+                      @click=${() => { this._tab = c.id; }}>
+                <span class="tb-tab-glyph">${c.glyph}</span>${c.label}
+              </button>`)}
+          </div>
         </div>
         ${armedWithVariants ? this._variantRow(armedWithVariants) : nothing}
         <div class="tb-row tb-cards">

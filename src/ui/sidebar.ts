@@ -261,7 +261,8 @@ export class Sidebar extends LitElement {
   ) {
     const collapsed = this._collapsed.has(slug);
     return html`
-      <div class="section" style=${opts?.style ?? nothing} id=${opts?.id ?? nothing}>
+      <div class="section ${collapsed ? 'collapsed' : ''}"
+           style=${opts?.style ?? nothing} id=${opts?.id ?? nothing}>
         <h3 class="collapsible-header ${collapsed ? '' : 'open'}"
             role="button" tabindex="0" aria-expanded=${collapsed ? 'false' : 'true'}
             title=${collapsed ? 'Collapsed — click to expand' : 'Expanded — click to collapse'}
@@ -465,7 +466,7 @@ export class Sidebar extends LitElement {
         ${this._rulersSection()}
         ${this._toolsSection()}
 
-        ${this._section('sensors', 'mmWave Sensors on this floor', () => html`
+        ${this._section('sensors', 'mmWave Sensors', () => html`
           ${f.sensors.length === 0
             ? html`<div style="color:var(--text-dim);font-size:11px;padding:4px 0">
                 No mmWave sensors yet — pick the mmWave tool and click the floor.

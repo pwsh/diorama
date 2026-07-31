@@ -304,6 +304,15 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **UI polish: toolbar handle + heading + spacing** (2026-07-31,
+  user-directed ×3; unreleased — on main past v0.47.0). Bottom
+  toolbar collapse handle left-anchored + 40×40 touch target
+  (outside the new tabstrip scroller — can't scroll away on
+  mobile); "mmWave Sensors" title (the only wrapping header,
+  measured); collapsed glass-pill rhythm 25→6 px
+  (.section.collapsed rule, emboss shadow cleared). toolbar-test
+  42→53, sidebar-org 141→150; layers2d 67/67, sensor-focus 14/14
+  held.
 - **Flight speed visualization + independent height scale**
   (2026-07-31, user-requested ×2, Sonnet-researched then
   Opus-implemented; unreleased — on main past v0.47.0). Five

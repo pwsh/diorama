@@ -10,7 +10,7 @@
   .pass { color:#69f0ae; } .fail { color:#ff5252; }
   .name { color:#90caf9; } .extra { color:#ffd54f; font-size:11px; }
   h2 { font-size:12px; color:#80cbc4; margin:14px 0 4px; }
-  #mount { position:absolute; left:-4000px; top:0; width:1200px; }
+  #mount { position:absolute; left:-4000px; top:0; width:1200px; height:2400px; }
 </style>
 <h1>Sidebar organisation — floor picker / floor tools / collapse-all / section order / hotkey switch /
    glass headers / armed tool hints / Settings ▸ Floor Plan</h1>
@@ -43,7 +43,12 @@
          "http://localhost:8932/sidebar-org-test.html" | grep -o "<title>[^<]*"  -->
 <script type="module">
   const V = '?v=' + Date.now();
-  const { Planner } = await import('./layers2d.mod.js' + V);
+  const { Planner, injectSharedStyles } = await import('./layers2d.mod.js' + V);
+  // Section L measures REAL laid-out geometry (header wrap height, collapsed
+  // pill gaps) at the shipped 250 px sidebar width, so the app's document-level
+  // CSS has to be present — the page mounts <diorama-sidebar> directly, which
+  // normally rides app.ts's injectSharedStyles().
+  injectSharedStyles();
 
   const results = [];
   const ok = (name, cond, extra = '') => results.push({ name, pass: !!cond, extra: String(extra) });
@@ -113,7 +118,9 @@
     const want = ['Floors', 'Floor tools', 'Layers', 'Dimensions', 'Rulers', 'Tools'];
     ok('A1 first six sections match the pinned order',
        want.every((w, i) => titles[i] === w), `${titles.slice(0, 8).join(' | ')}`);
-    ok('A2 mmWave sensors follows Tools', titles[6] === 'mmWave Sensors on this floor', titles[6]);
+    // Title shortened from "mmWave Sensors on this floor" — the suffix wrapped
+    // the pill to two lines at 250 px (measured in section L).
+    ok('A2 mmWave sensors follows Tools', titles[6] === 'mmWave Sensors', titles[6]);
     // Layers / Dimensions / Rulers appear EXACTLY once (moved, not duplicated).
     for (const t of ['Layers', 'Dimensions', 'Rulers', 'Tools', 'Floors', 'Floor tools']) {
       ok(`A3 "${t}" appears exactly once`, titles.filter(x => x === t).length === 1,
@@ -588,6 +595,69 @@
     ok('K17 the checkbox drives store.imperial', p.store.imperial === true, p.store.imperial);
     imp.checked = false; imp.dispatchEvent(new Event('change')); await frames(2);
     ok('K18 …both ways', p.store.imperial === false, p.store.imperial);
+
+    // ── L: header wrap + collapsed vertical rhythm (MEASURED, not asserted
+    // from the stylesheet). Baselines captured on the pre-change build at the
+    // shipped 250 px width: every header 28 px EXCEPT "mmWave Sensors on this
+    // floor" at 40 px (two lines), and 25 px between consecutive collapsed
+    // pills (12 px section padding + 1 px divider + 12 px). ───────────────
+    drawer.remove();                      // keep the drawer out of the layout
+    sb.querySelector('[data-expand-all]').click(); await frames(3);
+    {
+      ok('L1 the sidebar really is 250 px wide (the premise of L2–L8)',
+         Math.round(sb.getBoundingClientRect().width) === 250,
+         sb.getBoundingClientRect().width);
+      const hs = () => [...sb.querySelectorAll('h3.collapsible-header')];
+      const byText = t => hs().find(h => h.textContent.trim() === t);
+      const sens = byText('mmWave Sensors');
+      ok('L2 the mmWave header is exactly the shortened title', !!sens,
+         hs().map(h => h.textContent.trim()).find(t => t.startsWith('mmWave')) ?? 'missing');
+      const ref = byText('Tools');         // a known one-liner
+      const oneLine = ref.getBoundingClientRect().height;
+      ok('L3 the mmWave header renders on ONE line (was 40 px / 2 lines)',
+         sens.getBoundingClientRect().height === oneLine &&
+         sens.getBoundingClientRect().height < 34,
+         `${sens.getBoundingClientRect().height} vs 1-line ${oneLine}`);
+      const wrapped = hs().filter(h => h.getBoundingClientRect().height > oneLine + 0.5)
+                          .map(h => h.textContent.trim());
+      ok('L4 NO section header wraps to a second line at 250 px',
+         wrapped.length === 0, wrapped.join(' | ') || 'none');
+      // Expanded sections keep breathing room between the pill and the body.
+      const openH = hs().find(h => h.classList.contains('open') && h.nextElementSibling);
+      const bodyGap = openH.nextElementSibling.getBoundingClientRect().top -
+                      openH.getBoundingClientRect().bottom;
+      ok('L5 an EXPANDED header still clears its body (>= 6 px)', bodyGap >= 6,
+         `${bodyGap.toFixed(2)}px under "${openH.textContent.trim()}"`);
+    }
+    // Collapsed rhythm.
+    sb.querySelector('[data-collapse-all]').click(); await frames(4);
+    {
+      const secs = [...sb.querySelectorAll('.section')]
+        .filter(s => s.querySelector('h3.collapsible-header[aria-expanded="false"]'));
+      const gaps = [];
+      for (let i = 0; i + 1 < secs.length; i++) {
+        if (secs[i].nextElementSibling !== secs[i + 1]) continue;
+        // "Background image" is deliberately pinned to the bottom of the flex
+        // column (margin-top:auto), so the slack above it is not rhythm.
+        if ((secs[i + 1].getAttribute('style') || '').includes('margin-top:auto')) continue;
+        gaps.push(secs[i + 1].querySelector('h3').getBoundingClientRect().top -
+                  secs[i].querySelector('h3').getBoundingClientRect().bottom);
+      }
+      const max = Math.max(...gaps), min = Math.min(...gaps);
+      ok('L6 enough collapsed pairs measured', gaps.length >= 10, `n=${gaps.length}`);
+      ok('L7 collapsed pills sit <= 8 px apart (was 25 px)', max <= 8, `max=${max.toFixed(2)}`);
+      // The pill's emboss shadow is `0 2px 5px` ⇒ ~4.5 px of visible reach below
+      // the box; the gap must clear it so one pill's shadow never lands on the
+      // next pill (and the pills stay readable as distinct items).
+      ok('L8 …but still clear the 0 2px 5px emboss shadow (>= 5 px)', min >= 5,
+         `min=${min.toFixed(2)}`);
+      ok('L9 every collapsed section keeps its pill padding (touch target)',
+         secs.every(s => {
+           const h = s.querySelector('h3').getBoundingClientRect();
+           return h.height >= 26;
+         }), secs[0].querySelector('h3').getBoundingClientRect().height);
+    }
+    sb.querySelector('[data-expand-all]').click(); await frames(3);
   } catch (err) {
     ok('harness threw', false, (err && (err.stack || err.message)) || String(err));
   }

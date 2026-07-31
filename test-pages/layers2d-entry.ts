@@ -16,6 +16,9 @@
 //     --alias:lit/decorators.js=$PWD/node_modules/lit/decorators.js \
 //     --outfile=<harness>/layers2d.mod.js
 export { Planner } from './planner.js';
+// Sidebar-org measures real geometry (header wrap height, collapsed-pill gaps),
+// which needs the document-level shared CSS the app normally injects.
+export { injectSharedStyles } from './styles.js';
 export { drawAll, computeView, mmToPx, fixtureCaption } from './canvas-render.js';
 export { hitDoor, hitWindow, openingsVisible } from './canvas-hit.js';
 export {

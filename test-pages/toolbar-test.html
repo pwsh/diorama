@@ -29,7 +29,8 @@
 <script type="module">
   const V = '?v=' + Date.now();
   const mod = await import('./toolbar.mod.js' + V);
-  const { Planner, NEW_ROOM, NEW_LANDMARK, toolarm, thumbcache, FURNITURE_KINDS } = mod;
+  const { Planner, NEW_ROOM, NEW_LANDMARK, toolarm, thumbcache, FURNITURE_KINDS,
+          injectSharedStyles } = mod;
   const { buildToolbarModel, armGround, hashRecipe } = toolarm;
   const { glyphDataURL, thumbCacheKey, thumbStoreKey, THUMB_BUILD_TAG } = thumbcache;
 
@@ -331,6 +332,73 @@
         el2.planner = p2; document.body.appendChild(el2);
         await waitFor(() => el2.querySelector('.tb-dock') != null, 200);
         ok('F6: fresh element restores collapsed from storage', el2.querySelector('.tb-collapsed') != null, '');
+        el2.remove();
+
+        // ── G. collapse handle: left-anchored + real touch target ──────────
+        // The dock is laid out for real (shared CSS injected, on-screen width)
+        // so the geometry assertions below are the live ones, not the ideal.
+        document.getElementById('rows').insertAdjacentHTML('beforeend',
+          '<h2>G. collapse handle placement</h2>');
+        injectSharedStyles();
+        el.style.cssText = 'display:block;width:900px';
+
+        // Re-expand via the SAME left-side button that collapsed it.
+        const collapsedHandle = el.querySelector('.tb-handle');
+        ok('G1: collapsed dock still exposes exactly one handle',
+          el.querySelectorAll('.tb-handle').length === 1,
+          el.querySelectorAll('.tb-handle').length);
+        ok('G2: collapsed handle is the dock\'s FIRST child (left edge)',
+          el.querySelector('.tb-collapsed').firstElementChild === collapsedHandle,
+          el.querySelector('.tb-collapsed').firstElementChild?.className);
+        {
+          const dr = el.querySelector('.tb-collapsed').getBoundingClientRect();
+          const hr = collapsedHandle.getBoundingClientRect();
+          ok('G3: collapsed handle hugs the dock\'s left edge (not centred)',
+            hr.left - dr.left < 12 && hr.left - dr.left >= 0, `dx=${(hr.left - dr.left).toFixed(1)}`);
+          ok('G4: collapsed handle hit area >= 40x40',
+            hr.width >= 40 && hr.height >= 40, `${hr.width.toFixed(1)}x${hr.height.toFixed(1)}`);
+          const g = collapsedHandle.querySelector('.tb-handle-glyph');
+          ok('G5: chevron glyph is 18-20px', g &&
+            parseFloat(getComputedStyle(g).fontSize) >= 18 &&
+            parseFloat(getComputedStyle(g).fontSize) <= 20,
+            g ? getComputedStyle(g).fontSize : 'missing');
+        }
+        collapsedHandle.click();
+        await waitFor(() => el.querySelector('.tb-collapsed') == null, 200);
+        ok('G6: the same button re-expands (and clears the pref)',
+          el.querySelector('.tb-dock') != null && el.querySelector('.tb-collapsed') == null &&
+          localStorage.getItem('diorama:toolbar:collapsed') === '0',
+          localStorage.getItem('diorama:toolbar:collapsed'));
+
+        // Expanded: handle is the first child of the tabs row, LEFT of every tab.
+        const exHandle = el.querySelector('.tb-handle');
+        ok('G7: expanded handle is the tabs row\'s FIRST child',
+          el.querySelector('.tb-tabs')?.firstElementChild === exHandle,
+          el.querySelector('.tb-tabs')?.firstElementChild?.className);
+        {
+          const hr = exHandle.getBoundingClientRect();
+          const tabs = [...el.querySelectorAll('.tb-tab')].map(t => t.getBoundingClientRect());
+          ok('G8: expanded handle sits left of every category tab',
+            tabs.length > 0 && tabs.every(t => t.left >= hr.right - 0.5),
+            `handle.right=${hr.right.toFixed(1)} minTab.left=${Math.min(...tabs.map(t => t.left)).toFixed(1)}`);
+          ok('G9: expanded handle hit area >= 40x40',
+            hr.width >= 40 && hr.height >= 40, `${hr.width.toFixed(1)}x${hr.height.toFixed(1)}`);
+          // The handle must NOT live inside the tabs' horizontal scroller, or a
+          // narrow dock would scroll it out of reach.
+          const strip = el.querySelector('.tb-tabstrip');
+          ok('G10: tabs scroll in their own strip, handle outside it',
+            !!strip && !strip.contains(exHandle) && strip.contains(el.querySelector('.tb-tab')),
+            strip ? getComputedStyle(strip).overflowX : 'missing');
+        }
+        // Toggling back down still works from the expanded position.
+        exHandle.click();
+        await waitFor(() => el.querySelector('.tb-collapsed') != null, 200);
+        ok('G11: collapse works again from the expanded handle',
+          el.querySelector('.tb-collapsed') != null &&
+          localStorage.getItem('diorama:toolbar:collapsed') === '1',
+          localStorage.getItem('diorama:toolbar:collapsed'));
+        // Drop the app CSS again so this report page stays scrollable/readable.
+        document.getElementById('diorama-shared-css')?.remove();
       } catch (e) {
         compOk = false;
         ok('F: component render threw', false, String(e).slice(0, 160));
