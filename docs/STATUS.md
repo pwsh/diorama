@@ -1,6 +1,6 @@
 # Project status & pick-up guide
 
-Last updated: 2026-07-31, at **v0.49.0**. This is the single document to
+Last updated: 2026-07-31, at **v0.50.0**. This is the single document to
 read (alongside `CLAUDE.md`) to resume work with full context.
 
 ## Where things stand
@@ -310,12 +310,16 @@ instance.
   absorbed by speed trim, plane never slides backwards; forward-only
   ease backstop; contrail min-segment gate + arc-length ramp — no
   more fold-back or flag-flap).
+  → v0.50.0 home position (3D boot-framing fix — the camera was
+  never framed to the real floor, a fixed ~10.8 m pose served every
+  load; resolveBootPose ladder + 20 s reframe latch; device-local
+  view persistence for 2D pan/zoom + 3D camera, config+floor keyed,
+  kiosk tablets restore).
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
 - **View persistence + boot-framing fix** (2026-07-31, user-reported
-  "after a hard refresh the scene is zoomed in a lot"; unreleased —
-  on main past v0.49.0). Root cause: the 3D camera was NEVER framed
+  "after a hard refresh the scene is zoomed in a lot"; released in v0.50.0). Root cause: the 3D camera was NEVER framed
   — a hard-coded ~10.8 m constructor pose served every load
   (_applyUrlTemplate returns with no cam/view3d; iso was only the
   named-view fallback); bigger plans read more zoomed-in. New pure
