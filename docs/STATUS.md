@@ -1,6 +1,6 @@
 # Project status & pick-up guide
 
-Last updated: 2026-07-31, at **v0.47.0**. This is the single document to
+Last updated: 2026-07-31, at **v0.48.0**. This is the single document to
 read (alongside `CLAUDE.md`) to resume work with full context.
 
 ## Where things stand
@@ -301,12 +301,16 @@ instance.
   sidebar reorg (Floor tools, collapse-all, grouped Tools, hotkey
   master switch) + polish wave 2 (Floor Plan settings tab, glass
   emboss/deboss headers, armed-variant tool hints)).
+  → v0.48.0 vapor trails (five-band flight speed visualization +
+  independent height scale; trail tail-exit anchoring w/ aftZ;
+  ground writing true overlay everywhere w/ surface-derived ink;
+  left-anchored 40px toolbar handle, one-line mmWave title,
+  6px collapsed-pill rhythm).
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
 - **Flight trail tail-exit anchoring** (2026-07-31, user-reported
-  "bisecting the plane 2/3 of the way back"; unreleased — on main
-  past v0.47.0). All trailing effects anchor at the tail exit:
+  "bisecting the plane 2/3 of the way back"; released in v0.48.0). All trailing effects anchor at the tail exit:
   `_flightTailAnchor` (aftZ + 140 mm gap, × rigScale, along the
   eased yaw/pitch) applied to ring-buffer writes AND the live head
   (pushed-offset — live-head-only leaves old samples inside the
@@ -318,7 +322,7 @@ instance.
   246/246 held.
 - **Ground writing: true overlay everywhere** (2026-07-31,
   user-reported "still rendering as a box with text inside it";
-  unreleased — on main past v0.47.0). The AUTO margin-strip path
+  released in v0.48.0). The AUTO margin-strip path
   (the last opaque painter) is now letters-only transparent — the
   surface beneath is the backdrop in every mode; ink resolves from
   the ground beneath (containing area kind → yardFill → grass) via
@@ -330,7 +334,7 @@ instance.
   229→246, bgtext 29→30; terrain 103/103, flights-render 475/475
   held.
 - **UI polish: toolbar handle + heading + spacing** (2026-07-31,
-  user-directed ×3; unreleased — on main past v0.47.0). Bottom
+  user-directed ×3; released in v0.48.0). Bottom
   toolbar collapse handle left-anchored + 40×40 touch target
   (outside the new tabstrip scroller — can't scroll away on
   mobile); "mmWave Sensors" title (the only wrapping header,
@@ -340,7 +344,7 @@ instance.
   held.
 - **Flight speed visualization + independent height scale**
   (2026-07-31, user-requested ×2, Sonnet-researched then
-  Opus-implemented; unreleased — on main past v0.47.0). Five
+  Opus-implemented; released in v0.48.0). Five
   research-backed speed bands (<60 hover: no trail + rotor blur +
   hunt jitter; 60–200 short comet; 200–450 longer comet + motion
   lines; 450–700 white contrail ribbon; 700+ afterburner + ghosts +
