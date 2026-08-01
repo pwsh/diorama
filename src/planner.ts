@@ -6,7 +6,7 @@ import { loadStore, saveStore, newId, repairFloor, defaultStore,
          cfgBodyKey, loadConfigsCache, saveConfigsCache } from './storage.js';
 import { slugToName, normMac, localToWorld, segCrossesSolidWall, mowerSweepWaypoints,
          MOWER_KINEMATICS, MOWER_ROW_MM, stepBicycle, mowerWaypointReached, wrapAngle,
-         ROBOT_DEFAULTS, robotLedColor, parseVacuumPosition, vacuumRawToWorld,
+         ROBOT_DEFAULTS, robotLedColor, dockParkedHeading, parseVacuumPosition, vacuumRawToWorld,
          vacuumRawHeadingRad, isStairsKind, logicLightState, actionButtonKind,
          furnitureKind, normalizeLockState, valveIsOpen, cameraColor, slugifyFrigateName,
          closedWallLoops, envKindOf, tempToCelsius, aggregateRoomTemps,
@@ -6708,6 +6708,7 @@ export class Planner extends EventTarget {
     for (const it of f.alertBeacons ?? []) rot(it);     // ceiling puck, no heading
     for (const it of f.robots ?? []) {
       rot(it);                                          // dock position
+      bump(it);                                         // dock orientation (screen-CW, 0 = +Y)
       if (it.kind === 'mower') {
         // Mower GPS trim is a world-mm DELTA added to the projected fix, not a
         // world point — rotate it as a VECTOR (about the origin): with landmarks
@@ -7045,7 +7046,12 @@ export class Planner extends EventTarget {
     let h = 0;
     for (let i = 0; i < r.id.length; i++) h = (h * 31 + r.id.charCodeAt(i)) & 0xffff;
     return {
-      x: r.x, y: r.y, heading: 0, phase: h % 100,
+      // A mower spawns PARKED IN its dock: nose toward the dock's back wall (see
+      // dockParkedHeading). The vacuum keeps heading 0 (its puck is round and the
+      // controller's golden probes are pinned to that seed).
+      x: r.x, y: r.y,
+      heading: r.kind === 'mower' ? dockParkedHeading(r.rotation) : 0,
+      phase: h % 100,
       activity: 'docked', led: robotLedColor('docked'),
       goalX: r.x, goalY: r.y,
       demoPhase: 'dock', demoTimer: 15 + (h % 60),   // start parked, then run
@@ -7134,6 +7140,29 @@ export class Planner extends EventTarget {
       headingRad = Math.atan2(s * east + c * north, c * east - s * north);  // geo→plan, then atan2(dy,dx)
     }
     return { x: pos.x, y: pos.y, headingRad, lat, lon };
+  }
+
+  // One-click GPS trim solve — the mower twin of the vacuum's "Set dock as
+  // reference". With the mower physically parked on its dock, the fix it reports
+  // IS the dock, so the trim that makes the projection land on the placed dock is
+  // simply (dock − raw projection). Deliberately re-projects the RAW lat/lon
+  // (never `_mowerGps().x/y`, which already carries the old trim AND a boundary
+  // clamp — solving against a clamped point would bake the clamp in). Refuses
+  // (false, no mutation) outside edit mode, for a vacuum, without a geo fit, or
+  // with no numeric fix. Owns its own save() + emitConfig() = ONE undo step.
+  calibrateMowerToDock(r: RobotFixture): boolean {
+    if (this.uiMode !== 'edit') return false;
+    if (!r || r.kind !== 'mower') return false;
+    const gps = this._mowerGps(r);        // also gates fit-quality + fix presence
+    if (!gps) return false;
+    const fit = this.geoFit();
+    if (!fit || fit.transform.quality === 'none') return false;
+    const proj = latLonToPlan(fit.transform, gps.lat, gps.lon);
+    if (!proj || !isFinite(proj.x) || !isFinite(proj.y)) return false;
+    r.posOffsetX = r.x - proj.x;
+    r.posOffsetY = r.y - proj.y;
+    this.save(); this.emitConfig();
+    return true;
   }
 
   // LIVE vacuum position (#6): when a `posEntity` is bound and its
@@ -7310,6 +7339,16 @@ export class Planner extends EventTarget {
     }
     if (act === 'docked' || act === 'returning') {
       stepBicycle(bs, r.x, r.y, dt, { stop: true });
+      // Parked IN the dock: settle the nose toward the dock's own facing so a
+      // rotated dock holds a rotated mower. Same bounded-yaw discipline as the
+      // GPS station-keeping branch — a car cannot spin on the spot, so the rate
+      // ceiling is the min-speed turn rate (never a snap).
+      if (act === 'docked' && Math.hypot(r.x - bs.x, r.y - bs.y) < K.arriveMm) {
+        const wMax = Math.max(K.minSpeedMm, bs.speed) / K.turnRadiusMm;
+        const e = wrapAngle(dockParkedHeading(r.rotation) - bs.heading);
+        const h = Math.max(0, Math.min(0.2, dt));
+        bs.heading = wrapAngle(bs.heading + Math.max(-wMax * h, Math.min(wMax * h, K.steerGain * e * h)));
+      }
       commit();
       if (act === 'returning' && !r.entity_id && Math.hypot(r.x - rs.x, r.y - rs.y) < K.arriveMm) {
         rs.demoPhase = 'dock'; rs.demoTimer = 60 + Math.random() * 60;

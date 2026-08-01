@@ -32,7 +32,7 @@
      Run headless (serve over http — Chrome blocks dynamic module imports on file://):
        (cd "$H" && python3 -m http.server 8931 &)
        google-chrome --headless=new --disable-gpu --use-angle=swiftshader \
-         --enable-unsafe-swiftshader --window-size=1300,1000 \
+         --enable-unsafe-swiftshader --window-size=1300,1000 --run-all-compositor-stages-before-draw \
          --virtual-time-budget=40000 --dump-dom \
          "http://localhost:8931/layers2d-test.html" | grep -o "<title>[^<]*"  -->
 <script type="module">

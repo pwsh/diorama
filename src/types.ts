@@ -505,7 +505,7 @@ export interface AlertBeacon {
 // device_tracker with latitude/longitude attrs (+ optional `direction` heading
 // attr, e.g. Mammotion `<name>_gps`) OR a separate lat/lon sensor pair. Live
 // position is computed by Planner.stepRobots (runtime-only) and read by BOTH the
-// 2D canvas and the 3D renderer. Rides the `sensors` layer.
+// 2D canvas and the 3D renderer. Rides its OWN `robots` layer (Layers2D.robots, absent = on).
 export interface RobotFixture {
   id: string;
   x: number; y: number;          // DOCK / charging base position (world mm)
@@ -536,6 +536,12 @@ export interface RobotFixture {
   // room segmentation as an overlay, REUSING the pos* calibration fields above to
   // map map pixels → plan mm (calibrate once via "Set dock as reference").
   valetudoId?: string;
+  // Dock orientation (item-level, absent = 0): degrees screen-CW where 0 = the
+  // dock's local +Y faces world +Y — the standard furniture/fixture convention.
+  // The dock's FRONT (the opening the robot drives out of) is local −Y, so at
+  // rotation 0 it faces world −Y. A parked robot points INTO the dock; see
+  // geometry.dockParkedHeading. Rides rotateFloorContent's `bump`.
+  rotation?: number;
   label?: string;
   // Calibration diagnostic (item-level, absent = OFF): draw the REPORTED position
   // (live map fix / GPS fix / simulated pose) as a crosshair + a small monospace

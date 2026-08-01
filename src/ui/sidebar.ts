@@ -2470,6 +2470,14 @@ export class Sidebar extends LitElement {
           <input type="number" .value=${String(Math.round(r.y))}
                  @input=${(e: Event) => upd(() => { r.y = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
         </div>
+        <div class="row"><label>Rotation (°)</label>
+          <input type="number" step="5" .value=${String(Math.round(r.rotation ?? 0))}
+                 title="Which way the dock faces — 0 = the opening points toward −Y (screen-down); degrees turn it clockwise on screen."
+                 @input=${(e: Event) => upd(() => {
+                   const n = parseFloat((e.target as HTMLInputElement).value);
+                   r.rotation = isFinite(n) ? n : 0;
+                 })}>
+        </div>
         <div class="row"><label>${kind === 'mower' ? 'lawn_mower' : 'vacuum'}</label>
           <span style="font-size:11px;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
             ${r.entity_id || '— unbound —'}
@@ -2534,11 +2542,37 @@ export class Sidebar extends LitElement {
           <button class="btn" style="font-size:11px" @click=${() => this._pickRobotLatLon(r, 'lon')}>Bind</button>
         </div>
         ${this._robotPosReadout(r)}
+        ${this._mowerCalibrateRow(r)}
         <div style="font-size:10px;color:var(--text-dim);margin-top:3px;line-height:1.3">
           Needs calibrated GPS landmarks (GPS/Geo section). No fix / no calibration → simulated mowing.
         </div>
       </div>
     `;
+  }
+
+  // Mower twin of the vacuum's "Set dock as reference": with the mower parked on
+  // its dock, solve the GPS trim (posOffsetX/Y) so the projected fix lands on the
+  // placed dock. Disabled — with the reason in the tooltip — when there is no geo
+  // fit or no numeric fix; Planner.calibrateMowerToDock owns the save + emitConfig
+  // (ONE undo step) and refuses silently, so the disabled state is the whole UX.
+  private _mowerCalibrateRow(r: RobotFixture) {
+    const p = this.planner;
+    const hasSrc = !!(r.trackerEntity || (r.latEntity && r.lonEntity));
+    if (!hasSrc) return nothing;
+    const fit = p.geoFit();
+    const hasFit = !!fit && fit.transform.quality !== 'none';
+    const hasFix = p.robotPosInfo(r)?.mode === 'gps';
+    const why = !hasFit ? 'Calibrate GPS landmarks first (GPS/Geo section)'
+              : !hasFix ? 'No numeric GPS fix from the bound source yet'
+              : 'Park the mower on its dock, then click to solve the position trim';
+    return html`
+      <button class="btn" style="width:100%;margin-top:4px;font-size:11px"
+              ?disabled=${!hasFit || !hasFix} title=${why}
+              @click=${() => p.calibrateMowerToDock(r)}>Calibrate to dock</button>
+      <div style="font-size:10px;color:var(--text-dim);margin-top:3px;line-height:1.3">
+        Park the mower on its dock first — this solves the position trim so the
+        reported fix lands on the placed dock.
+      </div>`;
   }
 
   // Shared live readout of Planner.robotPosInfo — what the SOURCE reports and

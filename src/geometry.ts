@@ -1702,6 +1702,19 @@ export function robotColor(kind: 'vacuum' | 'mower'): string {
   return kind === 'mower' ? '#66bb6a' : '#455a64';
 }
 
+// Plan heading (radians, atan2(dy, dx)) a robot takes while PARKED in its dock.
+// `RobotFixture.rotation` is the repo-standard screen-CW degrees where 0 = the
+// piece's local +Y faces world +Y, and the dock's functional FRONT (the opening
+// the robot drives out of) is local −Y — exactly the furniture convention, so
+// `frontVectorPlan(rotation)` is the outward direction. A parked robot points
+// the other way, INTO the dock: world direction of dock-local +Y = (sinθ, cosθ),
+// hence heading = atan2(cosθ, sinθ). Checks: 0 → +π/2 (+Y), 90 → 0 (+X),
+// 180 → −π/2 (−Y), 270 → π (−X).
+export function dockParkedHeading(rotationDeg?: number): number {
+  const t = (rotationDeg ?? 0) * Math.PI / 180;
+  return Math.atan2(Math.cos(t), Math.sin(t));
+}
+
 // Task-progress percent (0..100) for a robot's body progress strip/ring, or null
 // when no source is known. Shared 2D + 3D + tests. `stateOf` returns a minimal HA
 // state envelope (state + attributes). Resolution order (entity field WINS):

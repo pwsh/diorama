@@ -1512,7 +1512,7 @@ export class ThreeView extends LitElement {
       // Planner.robotStates just below (persistent rigs — not dirty-keyed).
       const robotList = f.robots ?? [];
       const keyRobots = `${p.configRev}|` + robotList.map(ro =>
-        `${ro.id}:${ro.kind}:${Math.round(ro.x)}:${Math.round(ro.y)}:${ro.entity_id ?? '-'}`).join(',');
+        `${ro.id}:${ro.kind}:${Math.round(ro.x)}:${Math.round(ro.y)}:${Math.round(ro.rotation ?? 0)}:${ro.entity_id ?? '-'}`).join(',');
       if (keyRobots !== this._keyRobots) {
         this._keyRobots = keyRobots;
         r.updateRobotDocks(robotList);

@@ -12222,6 +12222,7 @@ export class ThreeDRenderer {
         const roof = new THREE.Mesh(new THREE.BoxGeometry(740, 30, 360),
           this._mat({ color: col, roughness: 0.6 }));
         roof.position.set(0, 350, 130); roof.rotation.x = -0.2; roof.userData = ud; grp.add(roof);
+        grp.add(this._dockFrontStrip(560, -244, 44, col, ud));
       } else {
         // Flat ramp/base plate with a charging LED.
         const base = new THREE.Mesh(new THREE.BoxGeometry(420, 30, 260),
@@ -12230,14 +12231,34 @@ export class ThreeDRenderer {
         const contact = new THREE.Mesh(new THREE.BoxGeometry(120, 50, 20),
           this._mat({ color: col, emissive: col, emissiveIntensity: 0.4, roughness: 0.5 }));
         contact.position.set(0, 40, 120); contact.userData = ud; grp.add(contact);
+        grp.add(this._dockFrontStrip(320, -122, 31, col, ud));
       }
       this._addOutlines(grp);
       // A mower dock lives in the yard: stand it on the surroundings grade (the
       // moving rigs already resolve their height through _groundYAt).
       const p = this._w(r.x, r.y, this._itemGroundY(r.x, r.y));
       grp.position.set(p.x, p.y, p.z);
+      // Dock orientation: the same sign the furniture group yaw uses
+      // (grp.rotation.y = −rotationDeg·π/180), so the dock's FRONT — local −Z,
+      // world −Y at rotation 0 — tracks frontVectorPlan(rotation) exactly.
+      // rotation 0/absent ⇒ yaw 0 ⇒ byte-identical to the pre-rotation build.
+      grp.rotation.y = -((r.rotation || 0) * Math.PI / 180);
       this._robotGroup.add(grp);
     }
+  }
+
+  // Emissive entry strip laid along a dock's FRONT edge (local −Z) — the "drive
+  // in here" cue, the 3D twin of the 2D front chevron. Deliberately overlaps
+  // into the base plate (y span straddles the base top; front face proud of the
+  // base front) so no face is coplanar with the base — the coincident-face
+  // gotcha. outlineSkip: it is an emissive marker, not a solid body.
+  private _dockFrontStrip(w: number, z: number, y: number, col: number,
+                          ud: Record<string, unknown>): THREE.Mesh {
+    const strip = new THREE.Mesh(new THREE.BoxGeometry(w, 12, 40),
+      this._mat({ color: col, emissive: col, emissiveIntensity: 0.5, roughness: 0.5 }));
+    strip.position.set(0, y, z);
+    strip.userData = { ...ud, outlineSkip: true, robotDockFront: true };
+    return strip;
   }
 
   // Persistent moving-robot rigs, positioned from Planner.robotStates each frame.

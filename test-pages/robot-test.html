@@ -21,6 +21,7 @@
   <div class="grid" id="grid"></div>
   <!-- Renderer canvas (rig geometry + progress) + a hidden 2D canvas (drawAll). -->
   <div id="rc" style="width:900px;height:600px;position:absolute;left:-9999px;top:0"></div>
+  <div id="rc2" style="width:600px;height:400px;position:absolute;left:-9999px;top:1300px"></div>
   <canvas id="c2d" width="800" height="600" style="position:absolute;left:-9999px;top:620px"></canvas>
 
   <!-- Harness build (from the repo root; NEVER reuse stale bundles). The pure
@@ -53,6 +54,7 @@
       pointInPolygon, closedWallLoops, robotLedColor, robotProgress, ROBOT_DEFAULTS,
       MOWER_KINEMATICS, MOWER_ROW_MM, stepBicycle, mowerWaypointReached, wrapAngle,
       parseVacuumPosition, vacuumRawToWorld, vacuumRawHeadingRad, solveVacuumDockOffset,
+      dockParkedHeading, frontVectorPlan, furnitureWorldToLocal,
       hexToInt,
     } from './geometry.mod.js';
     import { fitGeoTransform, latLonToPlan, clampToBoundary } from './geo.mod.js';
@@ -747,6 +749,265 @@
       ok('2D: drawAll with showPosInfo does not throw', !threwPI);
     } catch (e) {
       ok('robots layer / posInfo / nudge tests threw', false, String(e && e.message || e));
+    }
+
+    // ── Dock orientation, parked heading, dock calibration, rotated hits ─────
+    // `RobotFixture.rotation` (screen-CW degrees, 0 = local +Y along world +Y —
+    // the furniture convention) turns the dock in BOTH views; the dock's FRONT
+    // (the opening) is local −Y, so frontVectorPlan(rotation) is the outward
+    // direction and dockParkedHeading is the opposite (nose into the dock).
+    {
+      ok('dockParkedHeading: absent rotation → +Y (π/2)',
+         near(dockParkedHeading(undefined), Math.PI / 2, 1e-12), String(dockParkedHeading(undefined)));
+      ok('dockParkedHeading: 0° → π/2 (+Y)', near(dockParkedHeading(0), Math.PI / 2, 1e-12));
+      ok('dockParkedHeading: 90° → 0 (+X)', near(dockParkedHeading(90), 0, 1e-12),
+         String(dockParkedHeading(90)));
+      ok('dockParkedHeading: 180° → −π/2 (−Y)', near(dockParkedHeading(180), -Math.PI / 2, 1e-12),
+         String(dockParkedHeading(180)));
+      ok('dockParkedHeading: 270° → π (−X)',
+         near(Math.abs(dockParkedHeading(270)), Math.PI, 1e-12), String(dockParkedHeading(270)));
+      // The parked nose is EXACTLY opposite the dock opening, at every angle.
+      let opp = true;
+      for (const deg of [0, 30, 45, 90, 137, 180, 250, 315]) {
+        const h = dockParkedHeading(deg), fv = frontVectorPlan(deg);
+        if (!near(Math.cos(h), -fv.x, 1e-9) || !near(Math.sin(h), -fv.y, 1e-9)) opp = false;
+      }
+      ok('dockParkedHeading: nose is exactly −frontVectorPlan at every angle', opp);
+    }
+
+    try {
+      const { Planner } = await import('./planner.mod.js?v=' + Date.now());
+      const C3 = await import('./canvas-render.mod.js?v=' + Date.now());
+      const { hitRobot, hitPx, computeView } = C3;
+
+      // ── "Calibrate to dock": solve the GPS trim from a docked fix ──────────
+      const mkGeoPlanner = () => {
+        const p = new Planner();
+        const f = p.floor();
+        f.w = 5000; f.d = 4000; f.walls = [];
+        p.store.geo = { landmarks: [
+          { id: 'l1', name: 'L1', x: L1.x, y: L1.y, lat: L1.lat, lon: L1.lon },
+          { id: 'l2', name: 'L2', x: L2.x, y: L2.y, lat: L2.lat, lon: L2.lon },
+        ] };
+        return { p, f };
+      };
+      const midLat2 = (L1.lat + L2.lat) / 2, midLon2 = (L1.lon + L2.lon) / 2;
+      const fixStates = (lat, lon) => ({ 'device_tracker.mow': {
+        state: 'home', attributes: { latitude: lat, longitude: lon } } });
+
+      {
+        const { p, f } = mkGeoPlanner();
+        // Dock deliberately NOT where the raw fix projects (≈ the plan midpoint).
+        const r = { id: 'cal1', kind: 'mower', x: 1500, y: 1200, trackerEntity: 'device_tracker.mow' };
+        f.robots = [r];
+        p.hass = { states: fixStates(midLat2, midLon2) };
+        const before = p.robotPosInfo(r);
+        ok('calibrate: the uncalibrated fix does NOT land on the dock',
+           before && before.mode === 'gps' && Math.hypot(before.worldX - r.x, before.worldY - r.y) > 500,
+           before && `(${before.worldX.toFixed(0)},${before.worldY.toFixed(0)})`);
+        p.save();
+        const depth0 = p._undoStack.length;
+        const okc = p.calibrateMowerToDock(r);
+        const after = p.robotPosInfo(r);
+        ok('calibrate: returns true with a fit + a fix', okc === true);
+        ok('calibrate: the trimmed fix now lands EXACTLY on the dock',
+           after && near(after.worldX, r.x, 1e-6) && near(after.worldY, r.y, 1e-6),
+           after && `(${after.worldX},${after.worldY})`);
+        ok('calibrate: writes a non-zero trim',
+           Math.hypot(r.posOffsetX ?? 0, r.posOffsetY ?? 0) > 500,
+           `${Math.round(r.posOffsetX)},${Math.round(r.posOffsetY)}`);
+        ok('calibrate: one undo step', p._undoStack.length === depth0 + 1,
+           `${p._undoStack.length} vs ${depth0 + 1}`);
+        // Re-running on the same fix is idempotent (already solved → same trim).
+        const ox = r.posOffsetX, oy = r.posOffsetY;
+        p.calibrateMowerToDock(r);
+        ok('calibrate: idempotent on an unchanged fix',
+           near(r.posOffsetX, ox, 1e-9) && near(r.posOffsetY, oy, 1e-9));
+        // A PRIOR trim must not bias the solve (the raw lat/lon is re-projected).
+        r.posOffsetX = 99999; r.posOffsetY = -77777;
+        p.calibrateMowerToDock(r);
+        ok('calibrate: an existing trim (even one past the clamp) does not bias the solve',
+           near(r.posOffsetX, ox, 1e-9) && near(r.posOffsetY, oy, 1e-9),
+           `${Math.round(r.posOffsetX)},${Math.round(r.posOffsetY)}`);
+      }
+      // Refuse matrix — every branch leaves the store untouched.
+      {
+        const { p, f } = mkGeoPlanner();
+        const v = { id: 'cv', kind: 'vacuum', x: 500, y: 500, trackerEntity: 'device_tracker.mow' };
+        f.robots = [v];
+        p.hass = { states: fixStates(midLat2, midLon2) };
+        ok('calibrate: refuses for a vacuum',
+           p.calibrateMowerToDock(v) === false && v.posOffsetX === undefined);
+      }
+      {
+        const { p, f } = mkGeoPlanner();
+        p.store.geo = { landmarks: [] };                       // no fit
+        const r = { id: 'cnf', kind: 'mower', x: 500, y: 500, trackerEntity: 'device_tracker.mow' };
+        f.robots = [r];
+        p.hass = { states: fixStates(midLat2, midLon2) };
+        ok('calibrate: refuses with no geo fit',
+           p.calibrateMowerToDock(r) === false && r.posOffsetX === undefined);
+      }
+      {
+        const { p, f } = mkGeoPlanner();
+        const r = { id: 'cnx', kind: 'mower', x: 500, y: 500, trackerEntity: 'device_tracker.mow' };
+        f.robots = [r];
+        p.hass = { states: { 'device_tracker.mow': { state: 'home', attributes: {} } } };   // no fix
+        ok('calibrate: refuses with no numeric fix',
+           p.calibrateMowerToDock(r) === false && r.posOffsetX === undefined);
+        r.trackerEntity = null;
+        ok('calibrate: refuses with no GPS source at all',
+           p.calibrateMowerToDock(r) === false && r.posOffsetX === undefined);
+      }
+      {
+        const { p, f } = mkGeoPlanner();
+        const r = { id: 'cvm', kind: 'mower', x: 500, y: 500, trackerEntity: 'device_tracker.mow' };
+        f.robots = [r];
+        p.hass = { states: fixStates(midLat2, midLon2) };
+        p.uiMode = 'view';
+        ok('calibrate: refuses in view mode',
+           p.calibrateMowerToDock(r) === false && r.posOffsetX === undefined);
+      }
+
+      // ── rotateFloorContent bumps the dock rotation ─────────────────────────
+      {
+        const p = new Planner();
+        const f = p.floor();
+        f.w = 6000; f.d = 4000; f.walls = [];
+        const a = { id: 'ra', kind: 'mower', x: 1000, y: 1000, rotation: 10 };
+        const b = { id: 'rb', kind: 'vacuum', x: 2000, y: 1000 };        // rotation absent
+        f.robots = [a, b];
+        p.rotateFloorContent(45);
+        ok('rotate: dock rotation bumps by φ', a.rotation === 55, String(a.rotation));
+        ok('rotate: an absent rotation becomes φ (furniture semantics)',
+           b.rotation === 45, String(b.rotation));
+        p.rotateFloorContent(330);
+        ok('rotate: rotation normalizes into 0..360',
+           a.rotation === 25 && b.rotation === 15, `${a.rotation},${b.rotation}`);
+      }
+
+      // ── Rotation-aware hit tests (dock rect + mower body rect) ─────────────
+      {
+        const p = new Planner();
+        const f = p.floor();
+        f.w = 4000; f.d = 3000; f.walls = [];
+        const dock = { id: 'hd', kind: 'mower', x: 2000, y: 2000, rotation: 45 };
+        f.robots = [dock];
+        const cv = document.getElementById('c2d');
+        const view = computeView(cv, f.w, f.d, p.viewCenter, p.zoom);
+        const tol = hitPx(view) * 1.6;
+        // Both probe points sit 430 mm from the centre; the legacy tolerance
+        // circle must not reach them or neither assertion discriminates.
+        ok('hit precondition: the grab-tolerance circle is smaller than the probes',
+           tol < 420, `tol=${Math.round(tol)} mm`);
+        // Dock is 720 × 520 → local (350, 250) is inside the rect, and at 45°
+        // its world offset (424, −71) is OUTSIDE the axis-aligned footprint.
+        const inRot = { x: 2000 + 424.26, y: 2000 - 70.71 };
+        const inAabb = { x: 2000 + 350, y: 2000 + 250 };
+        ok('hit: a point inside the ROTATED dock rect hits', hitRobot(p, view, inRot) === dock);
+        ok('hit: a point inside the AABB but outside the rotated rect misses',
+           hitRobot(p, view, inAabb) === null);
+        dock.rotation = 0;
+        ok('hit: at rotation 0 the same pair swaps (AABB hits, rotated-probe misses)',
+           hitRobot(p, view, inAabb) === dock && hitRobot(p, view, inRot) === null);
+
+        // Mower BODY: bodyD (450) along travel, bodyW (600) across, aimed at the
+        // live heading. Probe 290 mm out — inside across, outside along.
+        // Dock parked well away from the probe cluster — its own 720 × 520
+        // footprint would otherwise swallow these hits.
+        f.robots = [{ id: 'hb', kind: 'mower', x: 3400, y: 2500 }];
+        const hb = f.robots[0];
+        p.robotStates = { hb: { x: 1000, y: 1000, heading: 0, phase: 0, activity: 'mowing', led: '#43a047' } };
+        const pPlusX = { x: 1290, y: 1000 }, pPlusY = { x: 1000, y: 1290 };
+        ok('hit: heading +X → the across probe (+Y) hits', hitRobot(p, view, pPlusY) === hb);
+        ok('hit: heading +X → the along probe (+X, past bodyD/2) misses',
+           hitRobot(p, view, pPlusX) === null);
+        p.robotStates.hb.heading = Math.PI / 2;
+        ok('hit: heading +Y → the pair swaps (+X hits, +Y misses)',
+           hitRobot(p, view, pPlusX) === hb && hitRobot(p, view, pPlusY) === null);
+        // Vacuum keeps the plain centre circle (no rect widening).
+        f.robots = [{ id: 'hv', kind: 'vacuum', x: 3400, y: 2500 }];
+        const hv = f.robots[0];
+        p.robotStates = { hv: { x: 1000, y: 1000, heading: 0, phase: 0, activity: 'cleaning', led: '#43a047' } };
+        ok('hit: vacuum body is unchanged (circle of the grab tolerance)',
+           hitRobot(p, view, { x: 1000 + tol * 0.5, y: 1000 }) === hv
+           && hitRobot(p, view, { x: 1000, y: 1000 + tol * 0.5 }) === hv
+           && hitRobot(p, view, { x: 1000 + 290, y: 1000 }) === null);
+      }
+
+      // ── A docked mower parks aligned with its (rotated) dock ───────────────
+      {
+        const p = new Planner();
+        const f = p.floor();
+        f.w = 8000; f.d = 6000; f.walls = [];
+        const r = { id: 'pk', kind: 'mower', x: 2000, y: 2000, rotation: 90 };
+        f.robots = [r];
+        p.stepRobots(0.05);
+        ok('parked: a fresh mower spawns nose-into its dock',
+           near(p.robotStates.pk.heading, dockParkedHeading(90), 1e-9),
+           String(p.robotStates.pk.heading));
+        // Turn the dock under a settled mower → the nose eases onto the new pose
+        // (bounded yaw rate — a car never spins on the spot).
+        r.rotation = 180;
+        for (let i = 0; i < 600; i++) p.stepRobots(0.05);
+        ok('parked: it eases onto a re-aimed dock',
+           near(p.robotStates.pk.heading, dockParkedHeading(180), 1e-3),
+           String(p.robotStates.pk.heading));
+        // A vacuum's seed heading is UNCHANGED (its golden probes depend on it).
+        const pv = new Planner();
+        pv.floor().robots = [{ id: 'sv', kind: 'vacuum', x: 900, y: 900, rotation: 90 }];
+        pv.stepRobots(0.05);
+        ok('parked: the vacuum spawn heading stays 0', pv.robotStates.sv.heading === 0,
+           String(pv.robotStates.sv.heading));
+      }
+    } catch (e) {
+      ok('dock rotation / calibrate / hit tests threw', false, String(e && e.message || e));
+    }
+
+    // ── Renderer: dock orientation + the emissive front strip ────────────────
+    try {
+      const rmod = await import('./assets/three-renderer.js?v=' + Date.now());
+      const R2 = new rmod.ThreeDRenderer(document.getElementById('rc2'));
+      await R2.load();
+      const docks = [
+        { id: 'd0', kind: 'mower',  x: 1000, y: 1000, entity_id: null },                 // rotation absent
+        { id: 'd1', kind: 'mower',  x: 3000, y: 1000, entity_id: null, rotation: 90 },
+        { id: 'd2', kind: 'vacuum', x: 5000, y: 1000, entity_id: null, rotation: 210 },
+      ];
+      R2.updateRobotDocks(docks);
+      const g = R2._robotGroup.children;
+      ok('dock3d: one group per dock', g.length === 3, 'n=' + g.length);
+      ok('dock3d: rotation 0 / absent leaves the yaw untouched', g[0].rotation.y === 0,
+         String(g[0].rotation.y));
+      ok('dock3d: yaw uses the furniture sign (−deg·π/180)',
+         near(g[1].rotation.y, -Math.PI / 2, 1e-12) && near(g[2].rotation.y, -210 * Math.PI / 180, 1e-12),
+         `${g[1].rotation.y} / ${g[2].rotation.y}`);
+      const strips = g.map(grp => {
+        let s = null; grp.traverse(o => { if (o.userData && o.userData.robotDockFront) s = o; }); return s;
+      });
+      ok('dock3d: every dock (both kinds) gains exactly one front strip',
+         strips.every(s => !!s));
+      ok('dock3d: the strip sits on the dock FRONT (local −Z)',
+         strips.every(s => s.position.z < 0), strips.map(s => s && s.position.z).join(','));
+      ok('dock3d: the strip is outline-skipped (emissive marker, not a body)',
+         strips.every(s => s.userData.outlineSkip === true));
+      // The strip's WORLD-plan direction must equal frontVectorPlan(rotation).
+      // scene = (fw/2 − wx, h, wy − fd/2) ⇒ Δworld = (−Δscene.x, Δscene.z).
+      let dirOk = true, dirDetail = '';
+      for (let i = 0; i < docks.length; i++) {
+        const a = g[i].rotation.y, pz = strips[i].position.z, px = strips[i].position.x;
+        const sx = px * Math.cos(a) + pz * Math.sin(a);
+        const sz = -px * Math.sin(a) + pz * Math.cos(a);
+        const n = Math.hypot(sx, sz) || 1;
+        const wdx = -sx / n, wdy = sz / n;
+        const fv = frontVectorPlan(docks[i].rotation);
+        if (!near(wdx, fv.x, 1e-9) || !near(wdy, fv.y, 1e-9)) dirOk = false;
+        dirDetail += `${(docks[i].rotation ?? 0)}:(${wdx.toFixed(3)},${wdy.toFixed(3)}) `;
+      }
+      ok('dock3d: the front strip points along frontVectorPlan(rotation)', dirOk, dirDetail.trim());
+      R2.destroy();
+    } catch (e) {
+      ok('renderer dock rotation tests threw', false, String(e && e.message || e));
     }
 
     // ── run + report ─────────────────────────────────────────────────────────

@@ -1,7 +1,7 @@
 import { switchSize, distMM, pointToSeg, transformVerts, centroid, localToWorld,
          bgLocalToWorld, bgWorldToLocal, furnitureWorldToLocal,
          furnitureCorners, furnitureLocalToWorld, doorEndpoint,
-         doorOpenDeltaDeg, doorOpenFraction, isDoubleLeafDoorKind, windowEndpoints, pointInPolygon, resolveRulerEnds, SPRINKLER_DEFAULTS, FLAGPOLE_DEFAULTS } from './geometry.js';
+         doorOpenDeltaDeg, doorOpenFraction, isDoubleLeafDoorKind, windowEndpoints, pointInPolygon, resolveRulerEnds, SPRINKLER_DEFAULTS, FLAGPOLE_DEFAULTS, ROBOT_DEFAULTS } from './geometry.js';
 import type { Planner } from './planner.js';
 import type { Vec2, Wall, Sensor, Furniture, BgImage, MotionSensor, EnvSensor, BleProxy, AlarmPanel, CalendarPanel, ThermostatFixture, SafetySensor, AlertBeacon, RobotFixture, CameraFixture, ProjectorFixture, ValveFixture, PlugFixture, SprinklerZone, FlagpoleFixture, PresenceZone, InfoCard, ActionButton, Door, Window as WindowType, Floor, Ruler } from './types.js';
 import type { FloorEdge } from './geometry.js';
@@ -480,9 +480,30 @@ export function hitRobot(p: Planner, view: View, mm: Vec2): RobotFixture | null 
   const list = f.robots ?? [];
   for (let i = list.length - 1; i >= 0; i--) {
     const r = list[i];
+    const kind = r.kind === 'mower' ? 'mower' : 'vacuum';
+    const dk = kind === 'mower' ? ROBOT_DEFAULTS.mower : ROBOT_DEFAULTS.vacuum;
+    // DOCK: the drawn footprint is a ROTATED rectangle (RobotFixture.rotation is
+    // screen-CW degrees, the furniture convention), so test it in the dock-local
+    // frame — a turned dock is grabbable exactly where it draws. The legacy
+    // centre-proximity circle stays as the grab tolerance, so this is a strict
+    // superset of the old behaviour and rotation 0 reduces to the AABB.
+    const dl = furnitureWorldToLocal(r.rotation, mm.x - r.x, mm.y - r.y);
+    if (Math.abs(dl.x) < dk.dockW / 2 && Math.abs(dl.y) < dk.dockD / 2) return r;
     if (distMM(r, mm) < h) return r;
     const rs = p.robotStates[r.id];
-    if (rs && Math.hypot(rs.x - mm.x, rs.y - mm.y) < h) return r;
+    if (!rs) continue;
+    if (kind === 'mower') {
+      // BODY: the mower draws as a rotated bodyW × bodyD box aimed along its
+      // live plan heading (the 2D twin of the 3D box rig). furnitureWorldToLocal
+      // rotates a world delta by the NEGATIVE of its screen-CW degree argument,
+      // so feeding −heading gives the heading-aligned frame (local +x = forward
+      // along bodyD, local +y = across along bodyW). The legacy centre circle
+      // below still supplies the grab tolerance.
+      const bl = furnitureWorldToLocal(-rs.heading * 180 / Math.PI, mm.x - rs.x, mm.y - rs.y);
+      if (Math.abs(bl.x) < ROBOT_DEFAULTS.mower.bodyD / 2
+       && Math.abs(bl.y) < ROBOT_DEFAULTS.mower.bodyW / 2) return r;
+    }
+    if (Math.hypot(rs.x - mm.x, rs.y - mm.y) < h) return r;   // vacuum puck / tolerance
   }
   return null;
 }

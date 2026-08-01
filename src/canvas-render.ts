@@ -9,7 +9,7 @@ import {
   climateTempUnit, fmtTempNum,
   actionButtonSize, actionButtonColor, actionButtonIcon,
   safetyColor, safetyGlyph, safetyIsFloor, safetyIsPlate, SAFETY_DEFAULTS, leakPuddleRadiusMm,
-  robotGlyph, robotColor, robotProgress, ROBOT_DEFAULTS,
+  robotGlyph, robotColor, robotProgress, dockParkedHeading, ROBOT_DEFAULTS,
   presenceZoneColor, cameraFov, cameraRange, cameraStateColor, cameraColor,
   projectorProjecting, projectorAim, projectorBeamColor, projectorThrow, screenCenterHeight, biasLightColor,
   VALVE_DEFAULTS, valveOpenness, valveFlowing, valveTransitional, valveRotation,
@@ -2318,12 +2318,17 @@ function drawRobots(ctx: CanvasRenderingContext2D, p: Planner, view: View): void
     const mv = ROBOT_DEFAULTS.mower, vac = ROBOT_DEFAULTS.vacuum;
     const dockW = kind === 'mower' ? mv.dockW : vac.dockW;
     const dockD = kind === 'mower' ? mv.dockD : vac.dockD;
-    const bodyMm = kind === 'mower' ? mv.bodyW / 2 : vac.bodyR;
     const dw = Math.max(14, dockW * view.scale);
     const dd = Math.max(10, dockD * view.scale);
+    // Dock orientation: `rotation` is screen-CW degrees (0 = local +Y along
+    // world +Y), so ctx.rotate takes it verbatim — the furniture idiom. The
+    // dock FRONT (the opening) is local −Y = canvas +y after the rotate.
+    const dockRot = (r.rotation || 0) * Math.PI / 180;
     ctx.save();
+    ctx.translate(dc.x, dc.y);
+    if (dockRot) ctx.rotate(dockRot);
     ctx.beginPath();
-    ctx.rect(dc.x - dw / 2, dc.y - dd / 2, dw, dd);
+    ctx.rect(-dw / 2, -dd / 2, dw, dd);
     ctx.fillStyle = hexToRgba(baseCol, 0.25);
     ctx.fill();
     ctx.lineWidth = selected ? 2.5 : 1.5;
@@ -2331,30 +2336,85 @@ function drawRobots(ctx: CanvasRenderingContext2D, p: Planner, view: View): void
     ctx.setLineDash([3 * dpr, 2 * dpr]);
     ctx.stroke();
     ctx.setLineDash([]);
+    // Front indicator: a thin chevron just outside the opening edge, pointing
+    // OUT (the direction the robot drives away). Always drawn — the dock is
+    // directional and the user needs to see which way it faces.
+    const cvW = Math.max(4, Math.min(dw * 0.28, 9 * dpr));
+    const cvH = Math.max(3, Math.min(dd * 0.30, 7 * dpr));
+    const cvY = dd / 2 + Math.max(2, 2.5 * dpr);
+    ctx.beginPath();
+    ctx.moveTo(-cvW, cvY);
+    ctx.lineTo(0, cvY + cvH);
+    ctx.lineTo(cvW, cvY);
+    ctx.lineWidth = Math.max(1.2, 1.8 * dpr);
+    ctx.strokeStyle = hexToRgba(baseCol, 0.95);
+    ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    ctx.stroke();
     ctx.restore();
 
     // ── Moving robot body ──
+    // No controller state yet → draw the robot parked in its dock, nose toward
+    // the back wall (the same pose _spawnRobot seeds for a mower).
     const bx = rs ? rs.x : r.x, by = rs ? rs.y : r.y;
+    const bHead = rs ? rs.heading : dockParkedHeading(r.rotation);
     const bc = mmToPx(view, bx, by);
-    const bodyR = Math.max(7, bodyMm * view.scale);
+    // `bodyR` stays the layout radius everything else anchors off (LED dot,
+    // progress arc, label, battery badge): the puck radius for a vacuum, half
+    // the body diagonal for the mower's rectangle so nothing overlaps the box
+    // at any heading.
+    const mowRectL = Math.max(9, mv.bodyD * view.scale);   // along travel
+    const mowRectW = Math.max(7, mv.bodyW * view.scale);   // across
+    const bodyR = kind === 'mower'
+      ? Math.hypot(mowRectL, mowRectW) / 2
+      : Math.max(7, vac.bodyR * view.scale);
     ctx.save();
-    ctx.beginPath();
-    ctx.arc(bc.x, bc.y, bodyR, 0, 2 * Math.PI);
-    ctx.fillStyle = hexToRgba(baseCol, 0.95);
-    ctx.fill();
-    // State ring.
-    ctx.lineWidth = Math.max(1.5, 2.5 * dpr);
-    ctx.strokeStyle = led;
-    ctx.stroke();
-    // Heading tick (body-forward = plan heading; canvas Y flips).
-    if (rs) {
-      const hx = Math.cos(rs.heading), hy = -Math.sin(rs.heading);
+    if (kind === 'mower') {
+      // Rotated rectangle matching the 3D box rig: bodyW across, bodyD along
+      // travel, body-forward = the live plan heading. ctx.rotate is screen-CW
+      // and the canvas Y axis is flipped, so rotating by −heading sends local
+      // +x onto the heading direction (cos h, −sin h) in screen space.
+      ctx.save();
+      ctx.translate(bc.x, bc.y);
+      ctx.rotate(-bHead);
+      const hl = mowRectL / 2, hw = mowRectW / 2;
+      const rr = Math.min(hl, hw) * 0.35;
       ctx.beginPath();
-      ctx.moveTo(bc.x, bc.y);
-      ctx.lineTo(bc.x + hx * bodyR, bc.y + hy * bodyR);
-      ctx.lineWidth = Math.max(1, 1.5 * dpr);
-      ctx.strokeStyle = '#fff';
+      if (typeof ctx.roundRect === 'function') ctx.roundRect(-hl, -hw, mowRectL, mowRectW, rr);
+      else ctx.rect(-hl, -hw, mowRectL, mowRectW);
+      ctx.fillStyle = hexToRgba(baseCol, 0.95);
+      ctx.fill();
+      ctx.lineWidth = Math.max(1.5, 2.5 * dpr);
+      ctx.strokeStyle = led;
       ctx.stroke();
+      // Brighter nose bar on the leading edge (replaces the puck's centre tick —
+      // on a rectangle an edge reads the facing far better than a spoke).
+      ctx.beginPath();
+      ctx.moveTo(hl, -hw * 0.72);
+      ctx.lineTo(hl, hw * 0.72);
+      ctx.lineWidth = Math.max(1.5, 2.2 * dpr);
+      ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+      ctx.lineCap = 'round';
+      ctx.stroke();
+      ctx.restore();
+    } else {
+      ctx.beginPath();
+      ctx.arc(bc.x, bc.y, bodyR, 0, 2 * Math.PI);
+      ctx.fillStyle = hexToRgba(baseCol, 0.95);
+      ctx.fill();
+      // State ring.
+      ctx.lineWidth = Math.max(1.5, 2.5 * dpr);
+      ctx.strokeStyle = led;
+      ctx.stroke();
+      // Heading tick (body-forward = plan heading; canvas Y flips).
+      if (rs) {
+        const hx = Math.cos(bHead), hy = -Math.sin(bHead);
+        ctx.beginPath();
+        ctx.moveTo(bc.x, bc.y);
+        ctx.lineTo(bc.x + hx * bodyR, bc.y + hy * bodyR);
+        ctx.lineWidth = Math.max(1, 1.5 * dpr);
+        ctx.strokeStyle = '#fff';
+        ctx.stroke();
+      }
     }
     // Status LED dot: docked breathes, error blinks, else steady.
     let ledA = 1;
