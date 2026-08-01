@@ -1,6 +1,6 @@
 # Project status & pick-up guide
 
-Last updated: 2026-08-01, at **v0.52.0**. This is the single document to
+Last updated: 2026-08-01, at **v0.53.0**. This is the single document to
 read (alongside `CLAUDE.md`) to resume work with full context.
 
 ## Where things stand
@@ -327,12 +327,18 @@ instance.
   with loop-scoped 2D floors + bindable outdoors/ground areas;
   round + square firepits with animated fire; sidebar header
   no-jump).
+  → v0.53.0 hands on (midpoint vertex-insert handles + whole-shape
+  drags + draggable anchor-positioned room labels; universal
+  cross-category alignment guides; Alt+click identify with sidebar
+  navigation incl. locked items; banner/vehicle color customization
+  + the bgTexts field-stripping fix; full 2D↔3D interaction parity —
+  doors and windows clickable in 3D).
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
 - **3D interaction parity audit + door/window clicks** (2026-08-01,
   user-reported "doors respond in 2D but not 3D — full pass all
-  objects"; unreleased — on main past v0.52.0). Full 2D↔3D matrix
+  objects"; released in v0.53.0). Full 2D↔3D matrix
   audited (every canvas-interact click/dblclick/kiosk branch vs the
   raycast dispatch): ~20 kinds already at parity; TWO real gaps —
   door panels (all 8 kinds) and windows (all 7 incl. bay) — now
@@ -354,8 +360,7 @@ instance.
   53/53, curtain 36/36, covers 22/22, lockoven 31/31, identify
   45/45, media-raycast 7/7 unchanged.
 - **Banner/vehicle colors + ground-writing persistence fix**
-  (2026-08-01, user-requested + user-reported; unreleased — on main
-  past v0.52.0). BUG: _migrateBgTexts rebuilt every bgTexts row from
+  (2026-08-01, user-requested + user-reported; released in v0.53.0). BUG: _migrateBgTexts rebuilt every bgTexts row from
   a hard-coded field whitelist on EVERY load — 10 fields silently
   dropped (aircraft, scale, grassAreaId, faceCamera, rotationDeg +
   the 5 new colors), exactly the reported "resets to auto rotate and
@@ -372,7 +377,7 @@ instance.
   resume across recolor pinned. Tests: bgtext-multi 309/309 (+63),
   bgtext 30/30, flights-render 513/513.
 - **Universal alignment guides + Alt+click identify** (2026-08-01,
-  user-requested; unreleased — on main past v0.52.0). Alignment
+  user-requested; released in v0.53.0). Alignment
   rewritten: global cross-category pool (wall corners + room anchors
   + every fixture/furniture center; polygon drags also see other
   areas' vertices) with dashed guides + 8px snap for fixtures,
@@ -395,7 +400,7 @@ instance.
   44/44, ruler-dims 107/107, sensor-focus 14/14, sidebar-org
   153/153, door-kinds 97/97 unchanged.
 - **Vertex insert + anchor labels + whole-shape drags** (2026-08-01,
-  user-requested; unreleased — on main past v0.52.0). Midpoint "+"
+  user-requested; released in v0.53.0). Midpoint "+"
   insert handles on every vertex-draggable polyline/polygon (walls,
   ground areas incl. path centerlines, pools, voids, presence zones
   — pure midpointHandles in geometry.ts; splice + immediate vertex
