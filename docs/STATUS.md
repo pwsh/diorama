@@ -1,6 +1,6 @@
 # Project status & pick-up guide
 
-Last updated: 2026-07-31, at **v0.51.0**. This is the single document to
+Last updated: 2026-08-01, at **v0.52.0**. This is the single document to
 read (alongside `CLAUDE.md`) to resume work with full context.
 
 ## Where things stand
@@ -321,12 +321,17 @@ instance.
   calibrate-to-dock, dock rotation with a front indicator in both
   views, and a heading-rotated rectangular 2D mower body matching
   the 3D box).
+  → v0.52.0 steady flame (wall-cutaway flash fixed + config-channel
+  churn scoped to bound entities + weather/particle rebuild
+  continuity — the whole idle-redraw class closed; per-room flooring
+  with loop-scoped 2D floors + bindable outdoors/ground areas;
+  round + square firepits with animated fire; sidebar header
+  no-jump).
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
 - **Particle continuity across rebuilds (audit findings)** (2026-08-01,
-  user-directed "work on the audit findings"; unreleased — on main
-  past v0.51.0). All five visually-stateful dirty-key findings fixed
+  user-directed "work on the audit findings"; released in v0.52.0). All five visually-stateful dirty-key findings fixed
   with one shared mechanism (ParticleCloudState + mulberry32 seeded
   off _hashStr(fixtureId) + per-fixture state maps adopting live
   pos/vel/life buffers BY REFERENCE when the rebuild signature
@@ -343,7 +348,7 @@ instance.
   100/100, sink 48/48, churn 48/48 unchanged.
 - **Firepit models** (2026-08-01, user-requested "round and square
   firepit models with a fire animation that can be turned on and
-  off"; unreleased — on main past v0.51.0). Two LightIconKinds on
+  off"; released in v0.52.0). Two LightIconKinds on
   the fireplace pattern (firepit_round ◉ / firepit_square ▣, shared
   900 mm footprint via FIREPIT_SIZE_MM/isFirepitKind): deterministic
   index-hashed stone ring / boxed stone bowl + logs; ON = ember bed,
@@ -358,7 +363,7 @@ instance.
   (+2), toolbar 53/53 (28 light cards), layers2d 84/84.
 - **Weather dirty-key decoupled from configRev** (2026-08-01,
   user-reported "weather overlays redraw at entity changes";
-  unreleased — on main past v0.51.0). The _keyBgText precedent
+  released in v0.52.0). The _keyBgText precedent
   applied: _keyWeather's composition is now the pure exported
   weatherRebuildKey(fx, floor, effPreset) in weather.ts — no
   configRev; floor DIMS, isDay (lightning energy) and a 3°
@@ -376,7 +381,7 @@ instance.
   _keyHalos already clean. Also flagged: precip DPR cap not in any key
   (cosmetic, monitor-move only).
 - **Rooms & flooring refinement + bindable outdoors** (2026-08-01,
-  user-directed; unreleased — on main past v0.51.0). Rooms section
+  user-directed; released in v0.52.0). Rooms section
   moved under Layers. Per-room flooring: Room.floorColor/floorTex
   (ladder room → look3d → scene3d → defaults) applied per wall loop
   in BOTH views (3D per-loop slab materials via a color|tex cache,
@@ -399,7 +404,7 @@ instance.
   nav-parity 54/54, ghost-align 22/22, rooms 10/10, ruler-dims
   107/107, door-kinds 97/97 unchanged.
 - **Config-channel churn reduction** (2026-08-01, the follow-up flagged
-  by the wall-flash investigation; unreleased — on main past v0.51.0).
+  by the wall-flash investigation; released in v0.52.0).
   The blanket "`number.*`/`switch.*` always slow-path" rule in
   `_isSlowEntity` is replaced by a membership set: `_slowIdSet` (every
   bound entity id swept from the whole store, all floors + store-level
@@ -416,15 +421,14 @@ instance.
   686/686, weather 200/200 unchanged.
 - **Sidebar header no-jump fix** (2026-08-01, user-reported "expanding
   a section restores the space above/below and the header jumps";
-  unreleased — on main past v0.51.0). The 3 px vertical padding moved
+  released in v0.52.0). The 3 px vertical padding moved
   to the BASE .section rule (both states, no divider in either) so a
   toggled header stays put; expanded adds only padding-bottom 8px
   below the body. sidebar-org 152/152 (+2: L10/L11 pin toggle
   Δ ≤ 1 px both directions; L5–L9 rhythm assertions unchanged).
 - **Wall-cutaway flash fix** (2026-07-31, user-reported "foreground
   walls flash translucent→opaque→translucent at irregular 1–12 s
-  intervals, layers irrelevant, several releases old"; unreleased —
-  on main past v0.51.0). CONFIRMED with an instrumented repro: any
+  intervals, layers irrelevant, several releases old"; released in v0.52.0). CONFIRMED with an instrumented repro: any
   idle `_keyFloor` change (configRev via the blanket number.*/
   switch.* slow-path rule, 50 W power buckets, applianceJustFinished
   time flips, preset changes…) rebuilt walls at base opacity; the
