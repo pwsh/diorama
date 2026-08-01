@@ -29,7 +29,7 @@ import {
   windowEndpoints, wallCutsForSegment, wallKind, isBayWindowKind, bayProjectSign, bayPlan,
   ENV_KINDS, envKindOf, envColor, envValueText, envScale,
   infoCardText, infoCardRule, infoCardScale, infoCardMount,
-  closedWallLoops, loopContaining, roomLabel,
+  closedWallLoops, loopContaining, roomLabel, roomsByLoop, roomFloorLook,
   heatmapColor, HEATMAP_COMFORT_LO_DEFAULT, HEATMAP_COMFORT_HI_DEFAULT,
   parseNowPlaying, isMediaPlayerId,
   resolveRulerEnds, outerWallSegments, wallDimSide, structureExtents,
@@ -60,7 +60,7 @@ import { aircraftArchetype } from './aircraft-types.js';
 // the combined canvas bundle.
 export { flightFieldText, flightLabelLines };
 import type { Planner } from './planner.js';
-import type { Vec2, LightIconKind, Furniture, ObjectRecipe, RecipePrimitive, HassState, FloorTexKind, RobotFixture } from './types.js';
+import type { Vec2, LightIconKind, Furniture, ObjectRecipe, RecipePrimitive, HassState, FloorTexKind, RobotFixture, Floor } from './types.js';
 
 // ── `objectLabels` layer (absent = ON) ──────────────────────────────────────
 // Gates NAME / caption text on fixtures and structural items — door + window
@@ -1364,7 +1364,7 @@ function drawWallDimensions(ctx: CanvasRenderingContext2D, p: Planner, view: Vie
   if (!mode || mode === 'off') return;
   const dpr = window.devicePixelRatio || 1;
   const imperial = p.store.imperial;
-  const loops = closedWallLoops(f.walls);
+  const loops = floorLoops(f);
   // Select the wall segments to dimension.
   type Seg = { a: Vec2; b: Vec2 };
   let segs: Seg[] = [];
@@ -1421,7 +1421,7 @@ function drawActivity(ctx: CanvasRenderingContext2D, p: Planner, view: View): vo
   const states0 = p.hass?.states;
   const rooms = f.rooms ?? [];
   if (rooms.some(rm => rm.occupancyEntity)) {
-    const loops = closedWallLoops(f.walls ?? []);
+    const loops = floorLoops(f);
     for (const rm of rooms) {
       if (!rm.occupancyEntity) continue;
       if (states0?.[rm.occupancyEntity]?.state !== 'on') continue;
@@ -3289,7 +3289,7 @@ function drawGroundAreas(ctx: CanvasRenderingContext2D, p: Planner, view: View):
   // on the `ground` layer (mirrors the 3D y=2 underlay patch).
   if (f.yardFill) {
     const col = groundAreaColor({ kind: f.yardFill });
-    const loops = closedWallLoops(f.walls ?? []);
+    const loops = floorLoops(f);
     ctx.save();
     ctx.beginPath();
     const c0 = mmToPx(view, 0, 0), c1 = mmToPx(view, f.w, 0);
@@ -3825,21 +3825,63 @@ function floorPatternTile(ctx: CanvasRenderingContext2D,
   return pat;
 }
 
+// ── Shared wall-loop cache (2D) ───────────────────────────────────────────
+// drawAll runs every RAF frame and FIVE painters need the current floor's
+// closed wall loops (floor fill, dimensions, activity/occupancy, yard fill,
+// room labels). closedWallLoops welds nodes pairwise (O(n²)) and traces faces
+// — far too hot to run five times a frame on a big plan. One module-level
+// single-slot cache keyed by floor id + a CHEAP linear hash of the wall
+// geometry (NOT configRev: walls move live during a vertex drag, which never
+// save()s until release, and the dims/labels must track that). Returned arrays
+// are shared, so callers must treat them as read-only — loop ARRAY IDENTITY is
+// what resolveRoomForPoint / roomsByLoop key on, and a shared cache keeps that
+// identity consistent across painters within a frame.
+let _loopCacheKey = '';
+let _loopCacheVal: Vec2[][] = [];
+function floorLoops(f: Floor): Vec2[][] {
+  const walls = f.walls ?? [];
+  let h = 2166136261;
+  for (const w of walls) {
+    const pts = w.points;
+    h = Math.imul(h ^ pts.length, 16777619);
+    for (const pt of pts) {
+      h = Math.imul(h ^ Math.round(pt.x), 16777619);
+      h = Math.imul(h ^ Math.round(pt.y), 16777619);
+    }
+  }
+  const key = `${f.id}|${walls.length}|${h >>> 0}`;
+  if (key !== _loopCacheKey) {
+    _loopCacheKey = key;
+    _loopCacheVal = closedWallLoops(walls);
+  }
+  return _loopCacheVal;
+}
+
+// `region` (px, optional) narrows the painted area — the per-room path clips to
+// one loop, so filling the whole floor rect would rasterize the same pattern
+// once per room. The tiling ANCHOR stays world (0,0) either way, so the grain
+// runs continuously across rooms and doesn't swim while panning.
 function drawFloorTexture(ctx: CanvasRenderingContext2D, view: View,
                           kind: FloorTexKind, color: string,
-                          p0: { x: number; y: number }, p1: { x: number; y: number }): void {
+                          p0: { x: number; y: number }, p1: { x: number; y: number },
+                          region?: { x0: number; y0: number; x1: number; y1: number }): void {
   if (kind === 'none') return;
   // One tile spans FLOOR_TEX_MM of world, so the pattern scale follows zoom.
   const k = (FLOOR_TEX_MM * view.scale) / FLOOR_TILE_PX;
   if (!isFinite(k) || k < 0.02) return;   // zoomed so far out the detail is sub-pixel
   const pat = floorPatternTile(ctx, kind, color);
   if (!pat) return;
+  const rx0 = region ? region.x0 : Math.min(p0.x, p1.x);
+  const ry0 = region ? region.y0 : Math.min(p0.y, p1.y);
+  const rx1 = region ? region.x1 : Math.max(p0.x, p1.x);
+  const ry1 = region ? region.y1 : Math.max(p0.y, p1.y);
+  if (rx1 <= rx0 || ry1 <= ry0) return;
   ctx.save();
   // Anchor the tiling at world (0,0) so the grain doesn't swim while panning.
   ctx.translate(p0.x, p0.y);
   ctx.scale(k, k);
   ctx.fillStyle = pat;
-  ctx.fillRect((p1.x - p0.x) / k, (p1.y - p0.y) / k, (p0.x - p1.x) / k, (p0.y - p1.y) / k);
+  ctx.fillRect((rx0 - p0.x) / k, (ry0 - p0.y) / k, (rx1 - rx0) / k, (ry1 - ry0) / k);
   ctx.restore();
 }
 
@@ -3856,9 +3898,45 @@ function drawFloor(ctx: CanvasRenderingContext2D, p: Planner, view: View,
   const sc3 = p.store.scene3d;
   const floorColor = f.look3d?.floorColor ?? sc3?.floorColor ?? FLOOR_COLOR_DEFAULT;
   const floorTex = (f.look3d?.floorTex ?? sc3?.floorTex ?? 'none') as FloorTexKind;
-  ctx.fillStyle = floorColor;
-  ctx.fillRect(p1.x, p1.y, p0.x - p1.x, p0.y - p1.y);
-  drawFloorTexture(ctx, view, floorTex, floorColor, p0, p1);
+  // FLOOR = ROOMS. When the walls trace closed loop(s) the floor colour/texture
+  // paints ONLY those loops — matching 3D, where the slab has always been
+  // clipped to the loops. Outside them is GROUND, not floor: it keeps the
+  // canvas background (yard fill / ground areas paint over it in
+  // drawGroundAreas). No loops (open-plan / wall-less floor) → the classic
+  // full-rect fill, unchanged. Per-loop look: the room owning that loop may
+  // override colour/texture (room → look3d → scene3d → defaults).
+  const loops = floorLoops(f);
+  if (loops.length) {
+    const roomOfLoop = roomsByLoop(f.rooms ?? [], loops);
+    for (const loop of loops) {
+      if (loop.length < 3) continue;
+      const look = roomFloorLook(roomOfLoop.get(loop), floorColor, floorTex);
+      ctx.save();
+      ctx.beginPath();
+      const q0 = mmToPx(view, loop[0].x, loop[0].y);
+      ctx.moveTo(q0.x, q0.y);
+      let bx0 = q0.x, by0 = q0.y, bx1 = q0.x, by1 = q0.y;
+      for (let i = 1; i < loop.length; i++) {
+        const qi = mmToPx(view, loop[i].x, loop[i].y);
+        ctx.lineTo(qi.x, qi.y);
+        if (qi.x < bx0) bx0 = qi.x; if (qi.x > bx1) bx1 = qi.x;
+        if (qi.y < by0) by0 = qi.y; if (qi.y > by1) by1 = qi.y;
+      }
+      ctx.closePath();
+      ctx.fillStyle = look.color;
+      ctx.fill();               // colour: the path itself, no clip needed
+      ctx.clip();
+      // The pattern stays world-anchored (continuous grain across rooms); the
+      // clip + bbox keep the rasterization to this loop.
+      drawFloorTexture(ctx, view, look.tex, look.color, p0, p1,
+                       { x0: bx0, y0: by0, x1: bx1, y1: by1 });
+      ctx.restore();
+    }
+  } else {
+    ctx.fillStyle = floorColor;
+    ctx.fillRect(p1.x, p1.y, p0.x - p1.x, p0.y - p1.y);
+    drawFloorTexture(ctx, view, floorTex, floorColor, p0, p1);
+  }
   ctx.strokeStyle = '#2e3a55'; ctx.lineWidth = 1.5;
   ctx.strokeRect(p1.x, p1.y, p0.x - p1.x, p0.y - p1.y);
 
@@ -3920,7 +3998,7 @@ function drawRooms(ctx: CanvasRenderingContext2D, p: Planner, view: View): void 
   const rooms = f.rooms;
   if (!rooms || rooms.length === 0) return;
   const dpr = window.devicePixelRatio || 1;
-  const loops = closedWallLoops(f.walls ?? []);
+  const loops = floorLoops(f);
   ctx.save();
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   for (const rm of rooms) {
@@ -4531,7 +4609,7 @@ function drawWindows(ctx: CanvasRenderingContext2D, p: Planner, view: View): voi
   // Bay windows need the closed wall loops to resolve which side is exterior.
   // Computed at most ONCE per frame, and only when a bay is actually present.
   let bayLoops: Vec2[][] | null = null;
-  const loopsForBay = () => (bayLoops ??= closedWallLoops(f.walls ?? []));
+  const loopsForBay = () => (bayLoops ??= floorLoops(f));
   for (const w of f.windows) {
     const st = p.effectiveState(w);
     const isOpen = st?.state === 'on';

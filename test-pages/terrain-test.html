@@ -941,6 +941,115 @@
     r.updateGroundAreas([]);
   }
 
+  // ── L: PER-ROOM FLOORING — each wall loop takes its room's floor look ─────
+  // A Room may override floorColor / floorTex for its OWN loop (room →
+  // Floor.look3d → Store.scene3d → defaults). Materials are cached per
+  // colour|tex within one updateFloor, so rooms sharing a look share one
+  // material and a plan with no overrides builds exactly as before. The
+  // occupancy wash still REPLACES the material while the room is occupied.
+  {
+    const loopL = (x0, y0, x1, y1, id) => ({ id, kind: 'full',
+      points: [{x:x0,y:y0},{x:x1,y:y0},{x:x1,y:y1},{x:x0,y:y1},{x:x0,y:y0}] });
+    const wallsL = [loopL(1000, 1000, 5000, 6000, 'lw1'), loopL(6000, 1000, 11000, 6000, 'lw2')];
+    const roomsL = () => ([
+      { id: 'rA', name: 'A', anchor: { x: 3000, y: 3500 } },
+      { id: 'rB', name: 'B', anchor: { x: 8500, y: 3500 } },
+    ]);
+    // Slabs are the ShapeGeometry meshes in _floorGroup (walls are extrusions).
+    const slabs = () => r._floorGroup.children.filter(
+      c => c.isMesh && c.geometry && c.geometry.type === 'ShapeGeometry');
+    // Map a slab back to world coords via its geometry bbox centre:
+    // scene sx = FW/2 − wx, sy = FD/2 − wy.
+    const slabAt = (wx, wy) => slabs().find(m => {
+      m.geometry.computeBoundingBox();
+      const b = m.geometry.boundingBox;
+      const cx = FW / 2 - (b.min.x + b.max.x) / 2, cy = FD / 2 - (b.min.y + b.max.y) / 2;
+      return Math.abs(cx - wx) < 900 && Math.abs(cy - wy) < 900;
+    });
+    const hexOf = m => m ? '#' + m.material.color.getHexString() : null;
+    const buildL = (rooms, stateOf) =>
+      r.updateFloor(mkFloor([], { walls: wallsL, rooms }), scene, undefined, undefined, stateOf);
+
+    buildL(roomsL());
+    ok('L1 two wall loops build two floor slabs', slabs().length === 2, `${slabs().length}`);
+    const A0 = slabAt(3000, 3500), B0 = slabAt(8500, 3500);
+    ok('L2 both slabs found', !!A0 && !!B0, `${!!A0}/${!!B0}`);
+    // _simsColor pushes saturation, so compare against REFERENCE hexes captured
+    // by driving the SAME colour through the floor-wide path.
+    const BASE = hexOf(A0);
+    r.updateFloor(mkFloor([], { walls: wallsL, rooms: roomsL() }),
+                  { ...scene, floorColor: '#c0392b' });
+    const RED = hexOf(slabAt(3000, 3500));
+    r.updateFloor(mkFloor([], { walls: wallsL, rooms: roomsL() }),
+                  { ...scene, floorColor: '#2f6f4f' });
+    const GREEN = hexOf(slabAt(3000, 3500));
+    buildL(roomsL());
+    ok('L3 no overrides → both slabs read the floor-wide colour',
+       hexOf(A0) === BASE && hexOf(slabAt(8500, 3500)) === BASE && BASE !== RED,
+       `${BASE} / ${RED}`);
+    ok('L4 no overrides → ONE shared material (cache seeded with the base mat)',
+       A0.material === B0.material, `${A0.material === B0.material}`);
+
+    // Per-room colour override — only that loop changes.
+    {
+      const rooms = roomsL(); rooms[0].floorColor = '#c0392b';
+      buildL(rooms);
+      const A = slabAt(3000, 3500), B = slabAt(8500, 3500);
+      ok('L5 a room floorColor override colours ITS slab', hexOf(A) === RED, hexOf(A));
+      ok('L6 the other room keeps the floor-wide colour', hexOf(B) === BASE, hexOf(B));
+      ok('L7 the two slabs no longer share a material', A.material !== B.material, 'distinct');
+    }
+    // Two rooms with the SAME look share one cached material.
+    {
+      const rooms = roomsL(); rooms[0].floorColor = '#2f6f4f'; rooms[1].floorColor = '#2f6f4f';
+      buildL(rooms);
+      const A = slabAt(3000, 3500), B = slabAt(8500, 3500);
+      ok('L8 rooms sharing a look share ONE material',
+         A.material === B.material && hexOf(A) === GREEN, hexOf(A));
+    }
+    // Per-room texture.
+    {
+      const rooms = roomsL(); rooms[1].floorTex = 'wood';
+      buildL(rooms);
+      const A = slabAt(3000, 3500), B = slabAt(8500, 3500);
+      ok('L9 a room floorTex override gives that slab a map',
+         !!B.material.map && !A.material.map, `${!!B.material.map}/${!!A.material.map}`);
+      ok('L10 the per-room texture uses the loop-path 1/800 repeat',
+         Math.abs(B.material.map.repeat.x - 1 / 800) < 1e-9
+           && Math.abs(B.material.map.repeat.y - 1 / 800) < 1e-9,
+         `${B.material.map.repeat.x},${B.material.map.repeat.y}`);
+    }
+    // null == inherit (the sidebar's clear writes undefined, imports may hold null).
+    {
+      const rooms = roomsL(); rooms[0].floorColor = null; rooms[0].floorTex = null;
+      buildL(rooms);
+      const A = slabAt(3000, 3500), B = slabAt(8500, 3500);
+      ok('L11 null overrides read as inherit',
+         hexOf(A) === BASE && A.material === B.material, hexOf(A));
+    }
+    // A loop with NO room keeps the floor-wide look.
+    {
+      buildL([{ id: 'rA', name: 'A', anchor: { x: 3000, y: 3500 }, floorColor: '#c0392b' }]);
+      ok('L12 a room-less loop keeps the floor-wide material',
+         hexOf(slabAt(8500, 3500)) === BASE, hexOf(slabAt(8500, 3500)));
+    }
+    // Occupancy WINS over the room look while the room is occupied.
+    {
+      const rooms = roomsL();
+      rooms[0].floorColor = '#c0392b';
+      rooms[0].occupancyEntity = 'binary_sensor.occ';
+      buildL(rooms, id => (id === 'binary_sensor.occ' ? { state: 'on', attributes: {} } : null));
+      const A = slabAt(3000, 3500);
+      ok('L13 an occupied room takes the occupancy wash, not the room colour',
+         A.material.emissive && A.material.emissive.getHex() !== 0 && hexOf(A) === BASE,
+         `${hexOf(A)} emissive=${A.material.emissive?.getHexString()}`);
+      buildL(rooms, () => ({ state: 'off', attributes: {} }));
+      ok('L14 …and the room colour returns when it clears',
+         hexOf(slabAt(3000, 3500)) === RED, hexOf(slabAt(3000, 3500)));
+    }
+    r.updateFloor(mkFloor([]), scene);
+  }
+
   let pass = 0; const fails = [];
   for (const t of tests) { if (t.ok) pass++; else fails.push(t.name); }
   const total = tests.length, allPass = pass === total;

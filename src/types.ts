@@ -604,6 +604,10 @@ export interface GroundArea {
                                // shape" clears `path` → plain editable polygon).
   locked?: boolean;            // canvas vertex-drag / delete disabled
   hidden?: boolean;            // per-area hide (plus the whole ground layer toggle)
+  haAreaId?: string | null;    // bound HA area — step 2 of the outdoor area-binding
+                               // ladder (resolveAreaBindingForPoint): a fixture standing
+                               // on this patch, outside every room, picks up this area.
+                               // Smallest containing bound area wins; hidden areas skip.
 }
 
 // Irrigation / sprinkler zone (T3). A small ground-embedded head placed freely
@@ -1027,6 +1031,22 @@ export interface Room {
                                     // `name` — display resolution is typed name → area name →
                                     // "Unnamed room" (see roomLabel). Binding also scopes the
                                     // occupancy / temperature entity pickers to that area.
+  // Per-room flooring override (item-level — no repairFloor). Applied to the
+  // room's wall LOOP in BOTH views (3D slab patch + 2D floor fill/pattern).
+  // Resolution ladder: room → Floor.look3d → Store.scene3d → defaults; absent
+  // OR null = inherit (a "↺" clear button in the sidebar removes the field).
+  floorColor?: string | null;
+  floorTex?: FloorTexKind | null;
+}
+
+// The pseudo-area covering everything OUTSIDE every closed wall loop on a floor
+// (the yard / driveway / porch). Not a Room — it has no anchor and no loop; it
+// is the ladder's fallback so outdoor fixtures can still resolve to an HA area
+// (see resolveAreaBindingForPoint in geometry.ts). Per-floor (Floor.outdoor);
+// label resolution is typed name → bound HA area name → "Outdoors".
+export interface OutdoorArea {
+  name?: string;
+  haAreaId?: string | null;
 }
 
 // FP2-style presence zone (roadmap #5). A user-drawn polygon (world-mm) bound to
@@ -1167,6 +1187,8 @@ export interface Floor {
   yardFill?: GroundKind;       // opt-in: auto-paint this ground kind over the floor
                                // rect MINUS every closed wall loop (y=2 underlay).
                                // Undefined = off (today's void-yard behavior).
+  outdoor?: OutdoorArea;       // the bindable pseudo-area for everything OUTSIDE every
+                               // closed wall loop; in repairFloor's field list.
   voidAreas?: VoidArea[];  // floor voids / openings (holes cut from the slab); repairFloor backfills []
   infoCards?: InfoCard[];  // generic entity-value / clock plaques; repairFloor backfills []
   actionButtons?: ActionButton[];  // generic action / trigger buttons; repairFloor backfills []

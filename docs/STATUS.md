@@ -324,6 +324,29 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Rooms & flooring refinement + bindable outdoors** (2026-08-01,
+  user-directed; unreleased — on main past v0.51.0). Rooms section
+  moved under Layers. Per-room flooring: Room.floorColor/floorTex
+  (ladder room → look3d → scene3d → defaults) applied per wall loop
+  in BOTH views (3D per-loop slab materials via a color|tex cache,
+  occupancy glow still wins; 2D per-loop fill with world-anchored
+  pattern continuity). 2D floor fill is now LOOP-SCOPED: nothing
+  outside the wall loops renders as floor (canvas bg + yardFill/
+  ground areas show; no-loops floors keep the classic full-rect
+  fill; nav untouched — the yard stays walkable, nav-parity 54/54).
+  2D wall loops unified into one cached floorLoops() (floorId +
+  wall-point FNV hash — NOT configRev, vertex drags mutate without
+  save; 5 per-frame call sites now share one trace). Bindable
+  outdoors: Floor.outdoor {name, haAreaId} (repairFloor pinned,
+  "Outdoors" pseudo-row at the bottom of Rooms, auto-prunes when
+  empty) + GroundArea.haAreaId; resolveAreaBindingForPoint ladder
+  (room ends the ladder → smallest bound containing ground area →
+  outdoor when outside all loops → null) feeds the entity-picker
+  area filter; the "— No room —" bucket takes the outdoor label
+  (collapse key /none unchanged). Tests: area-binding 116/116 (+45),
+  layers2d 84/84 (+17), terrain 117/117 (+14), sidebar-org 153/153;
+  nav-parity 54/54, ghost-align 22/22, rooms 10/10, ruler-dims
+  107/107, door-kinds 97/97 unchanged.
 - **Config-channel churn reduction** (2026-08-01, the follow-up flagged
   by the wall-flash investigation; unreleased — on main past v0.51.0).
   The blanket "`number.*`/`switch.*` always slow-path" rule in

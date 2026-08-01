@@ -37,7 +37,9 @@
          "http://localhost:8842/area-binding-test.html" | grep -o "<title>[^<]*"  -->
 <script type="module">
   const V = '?v=' + Date.now();
-  const { Planner, LocalApi, roomLabel, repairFloor } = await import('./area.mod.js' + V);
+  const { Planner, LocalApi, roomLabel, repairFloor,
+          resolveAreaBindingForPoint, outdoorLabel, outdoorConfigured,
+          closedWallLoops } = await import('./area.mod.js' + V);
 
   const results = [];
   let section = '';
@@ -494,6 +496,267 @@
          roomLabel(p.floor().rooms[0], p.roomAreaName(p.floor().rooms[0])).text === 'Unnamed room',
          roomLabel(p.floor().rooms[0], p.roomAreaName(p.floor().rooms[0])).text);
       sb2.remove();
+    }
+
+    // ═══ H. Outdoor pseudo-area + ground-area bindings (the ladder) ════════
+    // Pinned ladder: fuzzy room (a hit ENDS it, bound or not) → smallest bound
+    // GroundArea containing the point (hidden / unbound skipped) → the floor's
+    // `outdoor` pseudo-area when outside every loop → null.
+    section = 'H';
+    {
+      const hWalls = [rect('hw1', 500, 500, 5000, 5000), rect('hw2', 6000, 500, 10000, 5000)];
+      const hRooms = [
+        { id: 'r_kitchen', name: 'Kitchen', anchor: { x: 2000, y: 2000 }, haAreaId: 'a_kitchen' },
+        { id: 'r_living',  name: 'Living Room', anchor: { x: 8000, y: 2000 } },   // UNBOUND
+      ];
+      const poly = (x0, y0, x1, y1) =>
+        [{ x: x0, y: y0 }, { x: x1, y: y0 }, { x: x1, y: y1 }, { x: x0, y: y1 }];
+      const hGround = [
+        // Big bound lawn.
+        { id: 'g_lawn',  kind: 'grass',    points: poly(0, 6000, 12000, 11000), haAreaId: 'a_office' },
+        // Smaller bound patio INSIDE the lawn — must win (smallest containing).
+        { id: 'g_patio', kind: 'concrete', points: poly(1000, 7000, 3000, 9000), haAreaId: 'a_living' },
+        // Hidden bound area inside the lawn — never a candidate.
+        { id: 'g_hide',  kind: 'sand',     points: poly(5000, 7000, 7000, 9000), haAreaId: 'a_bed', hidden: true },
+        // UNBOUND area away from everything — not a candidate either.
+        { id: 'g_free',  kind: 'mulch',    points: poly(500, 11200, 2500, 11800) },
+        // Bound area laid OVER the kitchen loop — the room must still win.
+        { id: 'g_over',  kind: 'blacktop', points: poly(400, 400, 5100, 5100), haAreaId: 'a_bed' },
+      ];
+      const hFloor = mkFloor({
+        walls: hWalls, rooms: clone(hRooms), groundAreas: clone(hGround),
+        outdoor: { haAreaId: 'a_bed' },
+        envSensors: [{ id: 'e_out', x: 2000, y: 8000, entity_id: null, label: 'Yard' }],
+      });
+      const { p: H } = await mkPlanner(mkSeed([hFloor]));
+      await H.ensureHaAreaRegistry();
+      const hf = H.floor();
+      const L = closedWallLoops(hf.walls);
+      const at = (x, y) => resolveAreaBindingForPoint(hf, L, x, y, id => H.areaName(id));
+
+      ok('H1 two wall loops traced', L.length === 2, `${L.length}`);
+      ok('H2 point in a BOUND room → that room\'s area',
+         at(2000, 2000)?.haAreaId === 'a_kitchen' && at(2000, 2000)?.source === 'room',
+         JSON.stringify(at(2000, 2000)));
+      ok('H3 room label comes through', at(2000, 2000)?.label === 'Kitchen', at(2000, 2000)?.label);
+      ok('H4 a bound ground area OVER a room loop does not beat the room',
+         at(2000, 2000)?.source === 'room', JSON.stringify(at(2000, 2000)));
+      ok('H5 point in an UNBOUND room STOPS the ladder (null area, source room)',
+         at(8000, 2000)?.source === 'room' && at(8000, 2000)?.haAreaId === null,
+         JSON.stringify(at(8000, 2000)));
+      ok('H6 overlapping ground areas → the SMALLEST bound one wins',
+         at(2000, 8000)?.haAreaId === 'a_living' && at(2000, 8000)?.source === 'ground',
+         JSON.stringify(at(2000, 8000)));
+      ok('H7 unnamed ground area labels from its bound HA area',
+         at(2000, 8000)?.label === 'Living Room', at(2000, 8000)?.label);
+      ok('H8 a typed ground-area name beats the area name', (() => {
+        hf.groundAreas[1].name = 'Patio';
+        const r = at(2000, 8000)?.label;
+        hf.groundAreas[1].name = undefined;
+        return r === 'Patio';
+      })(), 'Patio');
+      ok('H9 HIDDEN bound ground area is skipped (falls to the lawn)',
+         at(6000, 8000)?.haAreaId === 'a_office', JSON.stringify(at(6000, 8000)));
+      ok('H10 UNBOUND ground area is not a candidate (falls to outdoor)',
+         at(1500, 11500)?.source === 'outdoor' && at(1500, 11500)?.haAreaId === 'a_bed',
+         JSON.stringify(at(1500, 11500)));
+      ok('H11 outside every loop + no ground area → the outdoor pseudo-area',
+         at(11500, 500)?.source === 'outdoor' && at(11500, 500)?.haAreaId === 'a_bed',
+         JSON.stringify(at(11500, 500)));
+      ok('H12 outdoor label falls back to the bound area name',
+         at(11500, 500)?.label === 'Bedroom', at(11500, 500)?.label);
+      ok('H13 a typed outdoor name wins over the area name', (() => {
+        hf.outdoor.name = 'Back Yard';
+        const r = at(11500, 500)?.label;
+        hf.outdoor.name = undefined;
+        return r === 'Back Yard';
+      })(), 'Back Yard');
+      ok('H14 outdoorLabel ladder: name → area → "Outdoors"',
+         outdoorLabel({ name: 'Yard' }, 'Bedroom') === 'Yard'
+           && outdoorLabel({ haAreaId: 'a_bed' }, 'Bedroom') === 'Bedroom'
+           && outdoorLabel(undefined, null) === 'Outdoors',
+         `${outdoorLabel(undefined, null)}`);
+      ok('H15 an UNCONFIGURED outdoor area yields no ladder step', (() => {
+        const saved = hf.outdoor;
+        hf.outdoor = undefined;
+        const r = at(11500, 500);
+        hf.outdoor = saved;
+        return r === null;
+      })(), 'null');
+      ok('H16 outdoorConfigured: empty / name / area',
+         outdoorConfigured(undefined) === false && outdoorConfigured({}) === false
+           && outdoorConfigured({ name: ' ' }) === false
+           && outdoorConfigured({ name: 'Yard' }) === true
+           && outdoorConfigured({ haAreaId: 'a_bed' }) === true, 'ok');
+      ok('H17 nothing bound anywhere → null (unfiltered)', (() => {
+        const bare = { rooms: [], groundAreas: [], outdoor: undefined };
+        return resolveAreaBindingForPoint(bare, [], 5000, 5000, () => null) === null;
+      })(), 'null');
+      ok('H18 a fixture flush ON a wall still resolves its room (fuzzy)',
+         at(500, 2000)?.haAreaId === 'a_kitchen', JSON.stringify(at(500, 2000)));
+
+      // (H19) repairFloor keeps `outdoor` across a load cycle (field-list pin).
+      const round = repairFloor(clone(hf));
+      ok('H19 repairFloor preserves Floor.outdoor',
+         round.outdoor?.haAreaId === 'a_bed', JSON.stringify(round.outdoor));
+      ok('H20 repairFloor preserves GroundArea.haAreaId (item-level pass-through)',
+         round.groundAreas?.[0]?.haAreaId === 'a_office', JSON.stringify(round.groundAreas?.[0]?.haAreaId));
+
+      // ── Sidebar: outdoor row, ground-area dropdown, bucket label ─────────
+      const mount2 = document.getElementById('mount');
+      const c2 = document.createElement('diorama-canvas-2d');
+      c2.planner = H; c2.style.cssText = 'display:block;width:400px;height:300px';
+      mount2.appendChild(c2);
+      const sb3 = document.createElement('diorama-sidebar');
+      sb3.planner = H;
+      mount2.appendChild(sb3);
+      const pick3 = document.createElement('diorama-entity-picker');
+      pick3.planner = H;
+      mount2.appendChild(pick3);
+      let detail3 = null;
+      mount2.addEventListener('open-entity-picker', e => {
+        detail3 = e.detail;
+        pick3.show(e.detail.domain ?? '', e.detail.onPick, e.detail.areaFilter ?? null);
+      });
+      await sb3.updateComplete; await pick3.updateComplete; await frames(3);
+
+      const optVals3 = sel => sel ? [...sel.querySelectorAll('option')].map(o => o.value) : null;
+      const odSel = () => sb3.querySelector('select[data-outdoor-area]');
+      const odName = () => sb3.querySelector('input[data-outdoor-name]');
+      ok('H21 the Rooms section renders an outdoor row', !!odName() && !!odSel(),
+         `${!!odName()}/${!!odSel()}`);
+      ok('H22 the outdoor dropdown offers the same areas the room rows do',
+         JSON.stringify(optVals3(odSel())) ===
+           JSON.stringify(['', 'a_bed', 'a_kitchen', 'a_living', 'a_office']),
+         JSON.stringify(optVals3(odSel())));
+      ok('H23 the outdoor dropdown reflects the bound area', odSel().value === 'a_bed',
+         odSel().value);
+      odSel().value = 'a_office'; odSel().dispatchEvent(new Event('change'));
+      await frames(3);
+      ok('H24 picking an outdoor area writes floor.outdoor.haAreaId',
+         H.floor().outdoor?.haAreaId === 'a_office', JSON.stringify(H.floor().outdoor));
+      odName().value = 'Back Yard'; odName().dispatchEvent(new Event('input'));
+      await frames(3);
+      ok('H25 typing an outdoor name writes floor.outdoor.name',
+         H.floor().outdoor?.name === 'Back Yard', JSON.stringify(H.floor().outdoor));
+      // Clearing BOTH fields drops the object again (no empty husk persisted).
+      odName().value = ''; odName().dispatchEvent(new Event('input'));
+      await frames(2);
+      odSel().value = ''; odSel().dispatchEvent(new Event('change'));
+      await frames(3);
+      ok('H26 clearing name + area removes floor.outdoor entirely',
+         H.floor().outdoor === undefined, JSON.stringify(H.floor().outdoor));
+      // Restore the binding for the bucket-label + picker checks.
+      H.floor().outdoor = { name: 'Back Yard', haAreaId: 'a_bed' };
+      H.emitConfig(); await frames(3);
+
+      // Ground-area HA dropdown (needs the area selected so its editor renders).
+      H.setActiveGroundArea('g_patio');
+      H.emitConfig(); await frames(3);
+      const gSel = sb3.querySelector('select[data-ground-area-for="g_patio"]');
+      ok('H27 the ground-area editor renders an HA area dropdown', !!gSel,
+         gSel ? 'present' : 'missing');
+      ok('H28 it reflects the stored binding', gSel?.value === 'a_living', gSel?.value);
+      gSel.value = 'a_office'; gSel.dispatchEvent(new Event('change'));
+      await frames(3);
+      ok('H29 picking a ground area writes GroundArea.haAreaId',
+         H.floor().groundAreas.find(g => g.id === 'g_patio')?.haAreaId === 'a_office',
+         JSON.stringify(H.floor().groundAreas.find(g => g.id === 'g_patio')?.haAreaId));
+      gSel.value = 'a_living'; gSel.dispatchEvent(new Event('change'));
+      await frames(3);
+
+      // Bucket label: the env sensor sits outdoors → the trailing "no room"
+      // bucket takes the outdoor label, but its collapse KEY stays 'env/none'.
+      const headerTexts = () => [...sb3.querySelectorAll('.collapsible-header')]
+        .map(h => h.textContent.replace(/[▸\s]+/g, ' ').trim());
+      ok('H30 the outdoor bucket header shows the outdoor label',
+         headerTexts().some(t => t === 'Back Yard'), JSON.stringify(headerTexts().slice(0, 40)));
+      ok('H31 "— No room —" is gone once outdoor is configured',
+         !headerTexts().some(t => t.includes('No room')), JSON.stringify(headerTexts().slice(0, 40)));
+      const outHeader = [...sb3.querySelectorAll('.collapsible-header')]
+        .find(h => h.textContent.replace(/[▸\s]+/g, ' ').trim() === 'Back Yard');
+      outHeader.click();
+      await frames(3);
+      const collapsedKeys = JSON.parse(localStorage.getItem('diorama:sidebar:collapsed') ?? '[]');
+      ok('H32 the collapse key is still <slug>/none (no key migration)',
+         collapsedKeys.includes('env/none'), JSON.stringify(collapsedKeys));
+      outHeader.click(); await frames(2);
+      // Un-configuring outdoor restores the classic label.
+      H.floor().outdoor = undefined; H.emitConfig(); await frames(3);
+      ok('H33 unconfigured outdoor restores "— No room —"',
+         headerTexts().some(t => t.includes('No room')), JSON.stringify(headerTexts().slice(0, 40)));
+      H.floor().outdoor = { haAreaId: 'a_bed' }; H.emitConfig(); await frames(3);
+
+      // Picker: an env sensor standing on the bound patio scopes to THAT area.
+      detail3 = null;
+      sb3._pickEnvEntity(H.floor().envSensors[0]);
+      await pick3.updateComplete; await frames(3);
+      ok('H34 env picker outdoors resolves the smallest bound ground area',
+         detail3?.areaFilter?.areaId === 'a_living' && detail3?.areaFilter?.areaName === 'Living Room',
+         JSON.stringify(detail3?.areaFilter));
+      pick3.open = false; await frames(1);
+      // Move it off every ground area → the outdoor binding scopes it instead.
+      H.floor().envSensors[0].x = 11500; H.floor().envSensors[0].y = 500;
+      H.emitConfig(); await frames(3);
+      detail3 = null;
+      sb3._pickEnvEntity(H.floor().envSensors[0]);
+      await pick3.updateComplete; await frames(3);
+      ok('H35 env picker off every area falls through to the outdoor binding',
+         detail3?.areaFilter?.areaId === 'a_bed', JSON.stringify(detail3?.areaFilter));
+      pick3.open = false; await frames(1);
+      // Nothing bound outdoors → no filter at all (today's behaviour).
+      H.floor().outdoor = undefined; H.emitConfig(); await frames(3);
+      detail3 = null;
+      sb3._pickEnvEntity(H.floor().envSensors[0]);
+      await pick3.updateComplete; await frames(3);
+      ok('H36 with outdoor unbound the picker is unfiltered again',
+         detail3?.areaFilter === null, JSON.stringify(detail3?.areaFilter));
+      pick3.open = false; await frames(1);
+      sb3.remove(); pick3.remove(); c2.remove();
+    }
+
+    // ═══ I. Per-room flooring persistence (item-level fields) ══════════════
+    section = 'I';
+    {
+      const { p: R } = await mkPlanner(mkSeed([mkFloor({
+        walls: [rect('w1', 500, 500, 5000, 5000)],
+        rooms: [{ id: 'r1', name: 'Kitchen', anchor: { x: 2000, y: 2000 },
+                  floorColor: '#ff0000', floorTex: 'tile' }],
+      })]));
+      await R.ensureHaAreaRegistry();
+      const round = repairFloor(clone(R.floor()));
+      ok('I1 repairFloor passes room floorColor through',
+         round.rooms[0].floorColor === '#ff0000', round.rooms[0].floorColor);
+      ok('I2 repairFloor passes room floorTex through',
+         round.rooms[0].floorTex === 'tile', round.rooms[0].floorTex);
+
+      const mount3 = document.getElementById('mount');
+      const sb4 = document.createElement('diorama-sidebar');
+      sb4.planner = R;
+      mount3.appendChild(sb4);
+      await sb4.updateComplete; await frames(3);
+      const colorIn = sb4.querySelector('input[data-room-floor-color-for="r1"]');
+      const texSel = sb4.querySelector('select[data-room-floor-tex-for="r1"]');
+      ok('I3 the room row renders the flooring controls', !!colorIn && !!texSel,
+         `${!!colorIn}/${!!texSel}`);
+      ok('I4 the texture dropdown reflects the stored override', texSel.value === 'tile',
+         texSel.value);
+      texSel.value = 'wood'; texSel.dispatchEvent(new Event('change'));
+      await frames(3);
+      ok('I5 picking a texture writes Room.floorTex',
+         R.floor().rooms[0].floorTex === 'wood', `${R.floor().rooms[0].floorTex}`);
+      texSel.value = 'inherit'; texSel.dispatchEvent(new Event('change'));
+      await frames(3);
+      ok('I6 "(inherit)" REMOVES the field (not a null husk)',
+         !('floorTex' in R.floor().rooms[0]), JSON.stringify(R.floor().rooms[0]));
+      const clr = sb4.querySelector('button[data-room-floor-color-clear="r1"]');
+      ok('I7 the colour ↺ clear button shows only while overridden', !!clr, `${!!clr}`);
+      clr.click(); await frames(3);
+      ok('I8 ↺ removes Room.floorColor',
+         !('floorColor' in R.floor().rooms[0]), JSON.stringify(R.floor().rooms[0]));
+      ok('I9 the ↺ button disappears once cleared',
+         !sb4.querySelector('button[data-room-floor-color-clear="r1"]'), 'gone');
+      sb4.remove();
     }
   } catch (err) {
     section = '';

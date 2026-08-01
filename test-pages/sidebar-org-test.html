@@ -115,14 +115,16 @@
 
     // ── A: pinned section order ──────────────────────────────────────────
     const titles = sectionTitles(sb);
-    const want = ['Floors', 'Floor tools', 'Layers', 'Dimensions', 'Rulers', 'Tools'];
-    ok('A1 first six sections match the pinned order',
-       want.every((w, i) => titles[i] === w), `${titles.slice(0, 8).join(' | ')}`);
+    // Rooms was moved up to sit directly under Layers (per-room flooring made it
+    // a top-of-list concern, not a bottom-of-list one).
+    const want = ['Floors', 'Floor tools', 'Layers', 'Rooms', 'Dimensions', 'Rulers', 'Tools'];
+    ok('A1 first seven sections match the pinned order',
+       want.every((w, i) => titles[i] === w), `${titles.slice(0, 9).join(' | ')}`);
     // Title shortened from "mmWave Sensors on this floor" — the suffix wrapped
     // the pill to two lines at 250 px (measured in section L).
-    ok('A2 mmWave sensors follows Tools', titles[6] === 'mmWave Sensors', titles[6]);
-    // Layers / Dimensions / Rulers appear EXACTLY once (moved, not duplicated).
-    for (const t of ['Layers', 'Dimensions', 'Rulers', 'Tools', 'Floors', 'Floor tools']) {
+    ok('A2 mmWave sensors follows Tools', titles[7] === 'mmWave Sensors', titles[7]);
+    // Layers / Rooms / Dimensions / Rulers appear EXACTLY once (moved, not duplicated).
+    for (const t of ['Layers', 'Rooms', 'Dimensions', 'Rulers', 'Tools', 'Floors', 'Floor tools']) {
       ok(`A3 "${t}" appears exactly once`, titles.filter(x => x === t).length === 1,
          titles.filter(x => x === t).length);
     }

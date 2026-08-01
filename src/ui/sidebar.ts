@@ -10,6 +10,7 @@ import type {
   Furniture, FurnitureKind, Door, Window as WindowType, WindowKind, WindowCurtainStyle, Layers2D, Floor, Room,
   ObjectRecipe, RecipePrimitive, RecipeShape, ActivityKind, AvatarKind,
   BleProxy, AlarmPanel, CalendarPanel, ThermostatFixture, SafetySensor, AlertBeacon, RobotFixture, CameraFixture, ProjectorFixture, ValveFixture, SprinklerZone, SprinklerHeadKind, FlagpoleFixture, PlugFixture, PresenceZone, GroundArea, GroundKind, Pool, VoidArea, DioramaPerson, Roamer, GeoLandmark,
+  FloorTexKind, OutdoorArea,
 } from '../types.js';
 import type { BermudaDevice } from '../planner.js';
 import { alertBeaconState, alertBeaconColor, isAlertDomain } from '../alerts.js';
@@ -41,6 +42,7 @@ import {
   isTreeKind, TREE_MIN_HEIGHT_MM, TREE_MAX_HEIGHT_MM,
   isMechanicalApplianceKind, mechanicalBindDomains, mechanicalRun,
   closedWallLoops, loopContaining, resolveRoomForPointFuzzy, roomLabel,
+  resolveAreaBindingForPoint, outdoorLabel, outdoorConfigured,
   floorsDisplayOrder,
 } from '../geometry.js';
 import { solveHomography, homographyResidualsMm } from '../homography.js';
@@ -376,7 +378,17 @@ export class Sidebar extends LitElement {
         out.push({ id: rm.id, label: roomLabel(rm, this.planner.roomAreaName(rm)).text, items: arr });
       }
     }
-    if (none.length) out.push({ id: 'none', label: '— No room —', items: none });
+    // The trailing bucket takes the OUTDOOR pseudo-area's label once the user
+    // named or bound it (name → HA area name → "Outdoors"); otherwise it stays
+    // "— No room —". The collapse KEY is always 'none' — persisted collapse
+    // keys must never migrate.
+    if (none.length) {
+      const f = this.planner.floor();
+      const label = outdoorConfigured(f.outdoor)
+        ? outdoorLabel(f.outdoor, this.planner.areaName(f.outdoor?.haAreaId))
+        : '— No room —';
+      out.push({ id: 'none', label, items: none });
+    }
     return out;
   }
 
@@ -462,6 +474,7 @@ export class Sidebar extends LitElement {
         ${this._collapseAllRow()}
         ${this._floorToolsSection()}
         ${this._layers2dSection()}
+        ${this._roomsSection()}
         ${this._dimensionsSection()}
         ${this._rulersSection()}
         ${this._toolsSection()}
@@ -501,7 +514,6 @@ export class Sidebar extends LitElement {
         ${this._windowsSection()}
         ${this._furnitureSection()}
         ${this._customObjectsSection()}
-        ${this._roomsSection()}
         ${this._fixturesSection()}
         ${this._geoSection()}
         ${this._neighborhoodSection()}
@@ -3741,6 +3753,24 @@ export class Sidebar extends LitElement {
                  })}>
           <span style="color:var(--text-dim);font-size:11px">mm</span>
         </div>
+        <div class="row"
+             title="Bind this ground area to a Home Assistant area. A fixture standing on it — outside every room — opens its entity picker scoped to that area (the smallest bound area containing the point wins).">
+          <label>HA area</label>
+          ${this._areaOptions(p.floor(), g).length === 0
+            ? html`<span style="flex:1;font-size:10px;color:var(--text-dim);font-style:italic" data-ground-area-empty>
+                ${p.haAreaRegistryLoaded ? '(no Home Assistant areas)' : 'loading…'}</span>`
+            : html`
+              <select style="flex:1;min-width:0" data-ground-area-for=${g.id}
+                      .value=${g.haAreaId ?? ''}
+                      @change=${(e: Event) => {
+                        const v = (e.target as HTMLSelectElement).value;
+                        upd(() => { g.haAreaId = v || undefined; });
+                      }}>
+                <option value="" ?selected=${!g.haAreaId}>— none —</option>
+                ${this._areaOptions(p.floor(), g).map(a => html`
+                  <option value=${a.area_id} ?selected=${g.haAreaId === a.area_id}>${a.name}</option>`)}
+              </select>`}
+        </div>
         <div class="row"><label>Hidden</label>
           <button class="btn" style="font-size:11px;flex:1"
                   @click=${() => upd(() => { g.hidden = !g.hidden; })}>${g.hidden ? '🙈 Hidden' : '👁 Shown'}</button>
@@ -4416,13 +4446,103 @@ export class Sidebar extends LitElement {
                 <button class="btn" style="font-size:10px;padding:2px 6px"
                         @click=${() => upd(() => { rm.occupancyEntity = null; })}>✕</button>` : nothing}
             </div>
+            ${this._roomFlooringRows(rm, upd)}
           `;
         })}
+        ${this._outdoorRow(f, upd)}
         <button class="btn" style="width:100%;margin-top:6px"
                 @click=${() => { p.placingRoomId = NEW_ROOM; p.maybeCloseSidebarForPlacement(); p.emitConfig(); }}>
           + Add room
         </button>
     `);
+  }
+
+  // Per-room flooring override (room → Floor.look3d → Store.scene3d → default).
+  // Mirrors the "This floor's 3D look" controls: a colour input + a texture
+  // dropdown whose "(inherit)" entry and "↺" button REMOVE the field, so an
+  // untouched room stays byte-identical to before the feature. Applies to the
+  // room's wall loop in BOTH views.
+  private _roomFlooringRows(rm: Room, upd: (mut: () => void) => void) {
+    const p = this.planner;
+    const f = p.floor();
+    const sc3 = p.store.scene3d;
+    const baseColor = f.look3d?.floorColor ?? sc3?.floorColor ?? '#101820';
+    const baseTex = f.look3d?.floorTex ?? sc3?.floorTex ?? 'none';
+    return html`
+      <div class="row" style="gap:4px;margin:0 0 2px 0"
+           title="Override the floor colour for THIS room only (its wall loop) in 2D and 3D. ↺ clears it back to the floor-wide look.">
+        <label style="font-size:10px">Floor color</label>
+        <input type="color" data-room-floor-color-for=${rm.id}
+               .value=${rm.floorColor ?? baseColor}
+               style="width:36px;height:22px;padding:0;border:1px solid var(--border);background:#111"
+               @input=${(e: Event) => upd(() => { rm.floorColor = (e.target as HTMLInputElement).value; })}>
+        ${rm.floorColor != null ? html`
+          <button class="btn" style="font-size:10px;padding:2px 6px" title="Use the floor-wide colour"
+                  data-room-floor-color-clear=${rm.id}
+                  @click=${() => upd(() => { delete rm.floorColor; })}>↺</button>` : nothing}
+        <label style="font-size:10px;margin-left:4px">Texture</label>
+        <select style="flex:1;min-width:0;background:#111;color:var(--text);border:1px solid var(--border);
+                       border-radius:4px;padding:2px 4px;font-size:11px"
+                data-room-floor-tex-for=${rm.id}
+                .value=${rm.floorTex ?? 'inherit'}
+                @change=${(e: Event) => upd(() => {
+                  const v = (e.target as HTMLSelectElement).value;
+                  if (v === 'inherit') delete rm.floorTex;
+                  else rm.floorTex = v as FloorTexKind;
+                })}>
+          <option value="inherit" ?selected=${rm.floorTex == null}>(inherit ${baseTex})</option>
+          <option value="none" ?selected=${rm.floorTex === 'none'}>None</option>
+          <option value="wood" ?selected=${rm.floorTex === 'wood'}>Wood</option>
+          <option value="tile" ?selected=${rm.floorTex === 'tile'}>Tile</option>
+          <option value="concrete" ?selected=${rm.floorTex === 'concrete'}>Concrete</option>
+        </select>
+      </div>
+    `;
+  }
+
+  // The OUTDOOR pseudo-area row, pinned at the bottom of the rooms list: not a
+  // Room (no anchor, no loop) but the bindable stand-in for everything outside
+  // the walls, so yard fixtures resolve to an HA area in the entity pickers.
+  private _outdoorRow(f: Floor, upd: (mut: () => void) => void) {
+    const p = this.planner;
+    const od = f.outdoor;
+    const ensure = (mut: (o: OutdoorArea) => void) => upd(() => {
+      const o = (f.outdoor ??= {});
+      mut(o);
+      if (!(o.name ?? '').trim() && !o.haAreaId) f.outdoor = undefined;
+    });
+    const opts = this._areaOptions(f, od ?? null);
+    return html`
+      <div style="border-top:1px dashed var(--border);margin-top:6px;padding-top:4px">
+        <div class="sensor-item" style="cursor:default;gap:4px">
+          <span style="font-size:12px" title="Everything outside every closed wall loop">🌳</span>
+          <input type="text" .value=${od?.name ?? ''} style="flex:1;min-width:0" data-outdoor-name
+                 placeholder=${p.areaName(od?.haAreaId) ? `${p.areaName(od?.haAreaId)} (from area)` : 'Outdoors'}
+                 @input=${(e: Event) => ensure(o => { o.name = (e.target as HTMLInputElement).value; })}>
+        </div>
+        <div style="font-size:10px;color:var(--text-dim);padding:0 0 2px 0">everything outside the walls</div>
+        <div class="row" style="gap:4px;margin:0 0 4px 0">
+          <label style="font-size:10px"
+                 title="Bind the outdoor pseudo-area to a Home Assistant area. Entity pickers opened for a fixture standing outside every room (and off every bound ground area) scope to it.">HA area</label>
+          ${opts.length === 0
+            ? html`<span style="flex:1;font-size:10px;color:var(--text-dim);font-style:italic" data-outdoor-area-empty>
+                ${p.haAreaRegistryLoaded ? '(no Home Assistant areas)' : 'loading…'}</span>`
+            : html`
+              <select style="flex:1;min-width:0;background:#111;color:var(--text);border:1px solid var(--border);
+                             border-radius:4px;padding:2px 4px;font-size:11px"
+                      data-outdoor-area
+                      .value=${od?.haAreaId ?? ''}
+                      @change=${(e: Event) => {
+                        const v = (e.target as HTMLSelectElement).value;
+                        ensure(o => { o.haAreaId = v || undefined; });
+                      }}>
+                <option value="" ?selected=${!od?.haAreaId}>— none —</option>
+                ${opts.map(a => html`
+                  <option value=${a.area_id} ?selected=${od?.haAreaId === a.area_id}>${a.name}</option>`)}
+              </select>`}
+        </div>
+      </div>
+    `;
   }
 
   private _deleteRoom(id: string): void {
@@ -4434,11 +4554,12 @@ export class Sidebar extends LitElement {
   // Result line for the "Match all by name" action (dismissible).
   @state() private _areaMatchNote = '';
 
-  // The HA areas offered for one room's dropdown. When the FLOOR is bound to an
-  // HA floor the list is scoped to that floor's areas; a room already bound to
-  // an off-floor area keeps its own entry so an existing bind never silently
-  // vanishes from the list. An unbound floor offers every area.
-  private _areaOptions(f: Floor, rm: Room | null) {
+  // The HA areas offered for one bindable's dropdown (a room, a ground area, or
+  // the outdoor pseudo-area — anything carrying an haAreaId). When the FLOOR is
+  // bound to an HA floor the list is scoped to that floor's areas; a bindable
+  // already pointing at an off-floor area keeps its own entry so an existing
+  // bind never silently vanishes. An unbound floor offers every area.
+  private _areaOptions(f: Floor, rm: { haAreaId?: string | null } | null) {
     const areas = this.planner.haAreas();
     if (!f.haFloorId) return areas;
     const scoped = areas.filter(a => a.floor_id === f.haFloorId);
@@ -4481,14 +4602,23 @@ export class Sidebar extends LitElement {
     return (rm?.haAreaId && name) ? { areaId: rm.haAreaId, areaName: name } : null;
   }
 
-  // Area scope for a picker opened for a PLACED fixture: fuzzy-resolve the
-  // fixture's plan position to a room (same rule the sidebar's room grouping
-  // uses), then take that room's bound area. Null when no fit — today's
-  // unfiltered behaviour.
+  // Area scope for a picker opened for a PLACED fixture. Runs the full pinned
+  // ladder (resolveAreaBindingForPoint): fuzzy room → smallest bound ground
+  // area → the floor's outdoor pseudo-area → null. A ROOM hit ends the ladder
+  // even when that room is unbound (today's behaviour); an unbound result of
+  // any step means "no filter". The chip's name comes from the HA registry.
   private _areaFilterForPoint(x: number, y: number) {
-    const { loops, rooms } = this._roomGroupsCtx();
-    if (!rooms.length) return null;
-    return this._areaFilterForRoom(resolveRoomForPointFuzzy(rooms, loops, x, y));
+    const p = this.planner;
+    const f = p.floor();
+    const { loops } = this._roomGroupsCtx();
+    // Rooms alone gated the old fast-path (_roomGroupsCtx skips the trace when
+    // the floor has none); the ladder now also serves floors with no rooms at
+    // all — a bound lawn / outdoor area still scopes a picker.
+    const lp = loops.length ? loops : closedWallLoops(f.walls ?? []);
+    const hit = resolveAreaBindingForPoint(f, lp, x, y, (id: string) => p.areaName(id));
+    if (!hit?.haAreaId) return null;
+    const name = p.areaName(hit.haAreaId);
+    return name ? { areaId: hit.haAreaId, areaName: name } : null;
   }
 
   // Room occupancy binding (#1): any binary_sensor whose 'on' state means the

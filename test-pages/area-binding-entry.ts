@@ -13,7 +13,8 @@
 //     --outfile=<harness>/area.mod.js
 export { Planner } from './planner.js';
 export { LocalApi } from './ha-local.js';
-export { roomLabel } from './geometry.js';
+export { roomLabel, resolveAreaBindingForPoint, outdoorLabel, outdoorConfigured,
+  closedWallLoops } from './geometry.js';
 export { repairFloor } from './storage.js';
 import './ui/sidebar.js';
 import './ui/modals.js';

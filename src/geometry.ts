@@ -3,7 +3,7 @@
 import type { Vec2, Sensor, BgImage, LightIconKind, FurnitureKind, EnvKind, WallKind,
   ActivityKind, ObjectRecipe, Furniture, Room, Floor, SafetyKind, GroundKind, GroundArea,
   InfoCard, InfoCardMount, ActionKind, SprinklerHeadKind, Pool,
-  Wall, Ruler, RulerEnd, DoorKind, WindowKind } from './types.js';
+  Wall, Ruler, RulerEnd, DoorKind, WindowKind, FloorTexKind, OutdoorArea } from './types.js';
 import { formatEntityValue, formatClock, evalRules, ruleMatches, relTimeText,
   type HassStateLike, type ClockMode, type ValueRule } from './value-rules.js';
 
@@ -520,6 +520,103 @@ export function roomLabel(
   const a = (areaName ?? '').trim();
   if (a) return { text: a, placeholder: false };
   return { text: 'Unnamed room', placeholder: true };
+}
+
+// Map each closed wall loop to the room that owns it (the room whose anchor
+// falls inside it). The loop→room direction is what per-loop RENDERING needs
+// (per-room flooring, occupancy wash): iterate loops, ask "whose is this?".
+// First room wins when two anchors share a loop — the same rule
+// resolveRoomForPoint applies from the other direction. Keyed by loop array
+// IDENTITY, so the caller must pass the SAME loops array it renders from.
+export function roomsByLoop(rooms: Room[], loops: Vec2[][]): Map<Vec2[], Room> {
+  const out = new Map<Vec2[], Room>();
+  for (const rm of rooms) {
+    const lp = loopContaining(loops, rm.anchor.x, rm.anchor.y);
+    if (lp && !out.has(lp)) out.set(lp, rm);
+  }
+  return out;
+}
+
+// Per-room flooring resolution (task: per-room flooring). A room may override
+// the floor colour / texture for its own loop; absent OR null = inherit the
+// floor-wide look the caller already resolved (Floor.look3d → Store.scene3d →
+// defaults). Pure so 2D and 3D can never disagree.
+export function roomFloorLook(
+  rm: Room | null | undefined, baseColor: string, baseTex: FloorTexKind,
+): { color: string; tex: FloorTexKind } {
+  return {
+    color: rm?.floorColor ?? baseColor,
+    tex: (rm?.floorTex ?? baseTex) as FloorTexKind,
+  };
+}
+
+// Display label for the OUTDOOR pseudo-area: typed name → bound HA area name
+// (resolved by the caller — geometry.ts never reaches into the registry) →
+// "Outdoors".
+export function outdoorLabel(
+  od: OutdoorArea | null | undefined, areaName?: string | null,
+): string {
+  const t = (od?.name ?? '').trim();
+  if (t) return t;
+  const a = (areaName ?? '').trim();
+  if (a) return a;
+  return 'Outdoors';
+}
+
+// True when the floor's outdoor pseudo-area carries anything the user set (a
+// name or an HA-area binding). An untouched floor keeps today's behaviour
+// everywhere (no ladder step 3, "— No room —" bucket label unchanged).
+export function outdoorConfigured(od: OutdoorArea | null | undefined): boolean {
+  return !!od && (!!(od.name ?? '').trim() || !!od.haAreaId);
+}
+
+// Resolve the HA area a plan point belongs to. PINNED LADDER:
+//   1. the FUZZY-resolved room (boundary-tolerant, the same rule the sidebar's
+//      room grouping uses) — a room hit ENDS the ladder even when that room is
+//      unbound (haAreaId null), which is today's behaviour;
+//   2. else the SMALLEST bound GroundArea containing the point (the enclosure
+//      idiom groundAreaSkirtBase uses — a small patch drawn inside a big lawn
+//      wins); hidden areas are skipped, unbound ones are not candidates;
+//   3. else the floor's `outdoor` pseudo-area when the point lies outside every
+//      closed wall loop AND the user configured it;
+//   4. else null (unfiltered — today's behaviour).
+// `areaName` maps an HA area_id → display name (Planner.areaName).
+export function resolveAreaBindingForPoint(
+  floor: { rooms?: Room[]; groundAreas?: GroundArea[]; outdoor?: OutdoorArea },
+  loops: Vec2[][], x: number, y: number,
+  areaName?: (areaId: string) => string | null,
+): { haAreaId: string | null; label: string; source: 'room' | 'ground' | 'outdoor' } | null {
+  const nameOf = (id: string | null | undefined) => (id && areaName ? areaName(id) : null);
+  const rm = resolveRoomForPointFuzzy(floor.rooms ?? [], loops, x, y);
+  if (rm) {
+    return {
+      haAreaId: rm.haAreaId ?? null,
+      label: roomLabel(rm, nameOf(rm.haAreaId)).text,
+      source: 'room',
+    };
+  }
+  let best: GroundArea | null = null, bestArea = Infinity;
+  for (const g of floor.groundAreas ?? []) {
+    if (g.hidden || !g.haAreaId || g.points.length < 3) continue;
+    if (!pointInPolygon(x, y, g.points)) continue;
+    const a = Math.abs(polygonArea(g.points));
+    if (a < bestArea) { bestArea = a; best = g; }
+  }
+  if (best) {
+    return {
+      haAreaId: best.haAreaId ?? null,
+      label: (best.name ?? '').trim() || nameOf(best.haAreaId) || groundKindLabel(best.kind),
+      source: 'ground',
+    };
+  }
+  if (outdoorConfigured(floor.outdoor) && !loopContaining(loops, x, y)) {
+    return {
+      haAreaId: floor.outdoor!.haAreaId ?? null,
+      label: outdoorLabel(floor.outdoor, nameOf(floor.outdoor!.haAreaId)),
+      source: 'outdoor',
+    };
+  }
+  return null;
 }
 
 // ── Wall openings (doors / windows cut gaps into wall segments) ──────────

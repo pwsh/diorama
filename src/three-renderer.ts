@@ -5,6 +5,7 @@ import { MTLLoader } from 'three/examples/jsm/loaders/MTLLoader.js';
 import type {
   Floor, Sensor, Light, SwitchFixture, MotionSensor, Vec2, HassState, Wall,
   Scene3D, ScenePreset, FloorTexKind, GroundKind, GroundArea, Model3D, Furniture, AvatarKind, WeatherEffectKey, BgTextMode, BgTextEntryMode,
+  Room,
 } from './types.js';
 import {
   lightHeight, lightRadius, lightIntensity, lightIconKind, lightRotation, lightLength, lightTilt,
@@ -88,7 +89,7 @@ interface RobotRig {
   progressGroup: THREE.Group;       // toggled visible on/off by source presence
   progressMats: THREE.MeshToonMaterial[]; // ordered fill segments (strip L→R / ring CW)
 }
-import { wallCutsForSegment, WINDOW_DEFAULTS, isBayWindowKind, windowSillMm, windowGlassHMm, bayProjectSign, bayPlan, closedWallLoops, wallSegmentInLoops, doorSpanCenter, wallKind, WALL_KINDS, furnitureLocalToWorld, furnitureWorldToLocal, pointInPolygon as pip, centroid, loopContaining, resolveRoomForPoint, roomLabel, intersectLoopWithRect, polygonArea, heatmapColor, groundAreaSkirtBase, poolWaterColor, poolDepthMm, poolRaisedMm, poolHeaterState, poolPumpOn, poolLightOn, poolRimY, poolBasinFloorY, poolWaterSurfaceY, POOL_COPING_COLOR, POOL_HEAT_GLOW, type RoomTemp } from './geometry.js';
+import { wallCutsForSegment, WINDOW_DEFAULTS, isBayWindowKind, windowSillMm, windowGlassHMm, bayProjectSign, bayPlan, closedWallLoops, wallSegmentInLoops, doorSpanCenter, wallKind, WALL_KINDS, furnitureLocalToWorld, furnitureWorldToLocal, pointInPolygon as pip, centroid, loopContaining, resolveRoomForPoint, roomLabel, roomsByLoop, roomFloorLook, intersectLoopWithRect, polygonArea, heatmapColor, groundAreaSkirtBase, poolWaterColor, poolDepthMm, poolRaisedMm, poolHeaterState, poolPumpOn, poolLightOn, poolRimY, poolBasinFloorY, poolWaterSurfaceY, POOL_COPING_COLOR, POOL_HEAT_GLOW, type RoomTemp } from './geometry.js';
 import { visibilityToFogDensity, moonPhaseFraction, type WeatherNow } from './weather.js';
 import { skySnapshot, moonAltAz, capSampleAltAz, satAltAz } from './sky-astro.js';
 // flights.ts is deliberately zero-import (three-free) and shared by BOTH the app
@@ -5557,6 +5558,33 @@ export class ThreeDRenderer {
       emissive: 0xffa030, emissiveIntensity: 0.32,
       ...(glassHouse ? { transparent: true, opacity: 0.45, depthWrite: true } : {}),
     });
+    // Per-room flooring: a Room may override floorColor / floorTex for its own
+    // wall loop (room → Floor.look3d → Store.scene3d → defaults; the caller
+    // already merged the last two into `scene3d`). Materials are CACHED per
+    // `color|tex` combo within this update — rooms sharing a look share one
+    // material, and the floor-wide look seeds the cache as `floorMat` so a plan
+    // with no overrides builds byte-identically to before.
+    const roomOfLoop = roomsByLoop(f.rooms ?? [], loops);
+    const baseTexKind = (scene3d?.floorTex ?? 'none') as FloorTexKind;
+    const baseColorHex = scene3d?.floorColor ?? '#101820';
+    const loopMats = new Map<string, THREE.Material>([[`${baseColorHex}|${baseTexKind}`, floorMat]]);
+    const loopMat = (rm: Room | undefined): THREE.Material => {
+      const look = roomFloorLook(rm, baseColorHex, baseTexKind);
+      const key = `${look.color}|${look.tex}`;
+      let m = loopMats.get(key);
+      if (!m) {
+        const tex = this._floorTexture(look.tex);
+        // Loop-path repeat (see below): ShapeGeometry UVs are raw shape mm.
+        if (tex) tex.repeat.set(1 / 800, 1 / 800);
+        m = this._mat({
+          color: hexToInt(look.color), map: tex ?? null,
+          side: THREE.DoubleSide, roughness: 0.9, metalness: 0.0,
+          ...(glassHouse ? { transparent: true, opacity: 0.45, depthWrite: true } : {}),
+        });
+        loopMats.set(key, m);
+      }
+      return m;
+    };
     if (loops.length) {
       // ShapeGeometry UVs are raw shape coords (mm); one texture repeat per
       // 800 mm matches the plane path's repeat = size/800.
@@ -5588,8 +5616,10 @@ export class ThreeDRenderer {
             shape.holes.push(scenePathFor(clipped));
           }
         }
+        // Occupancy wash WINS over the room look while the room is occupied
+        // (it replaces the material outright, exactly as before this feature).
         const mesh = new THREE.Mesh(new THREE.ShapeGeometry(shape),
-                                    occLoops.has(loop) ? occMat() : floorMat);
+                                    occLoops.has(loop) ? occMat() : loopMat(roomOfLoop.get(loop)));
         mesh.rotation.x = -Math.PI / 2;
         mesh.receiveShadow = true;
         this._floorGroup.add(mesh);

@@ -563,6 +563,109 @@
       ok('7J openingStatus leaves other fixtures’ state badges alone',
          diffPixels(alarmOn, snap(ctx2)) === 0, diffPixels(alarmOn, snap(ctx2)));
     }
+
+    // ═══ 8. FLOOR = ROOMS — per-room flooring + no floor outside the loops ═══
+    // 3D has always clipped the slab to the closed wall loops; 2D filled the
+    // whole rect. Now 2D fills each LOOP with its room's resolved look, and the
+    // area outside every loop keeps the canvas background (ground/yard paint
+    // over it). No loops at all ⇒ the classic full-rect fill (section 1 pins it).
+    sec('8. per-room flooring + loops-only floor fill');
+    {
+      // Two rooms side by side inside an 8000 × 6000 rect; a wide margin all
+      // round is OUTSIDE every loop.
+      const box = (id, x0, y0, x1, y1) => ({ id,
+        points: [P(x0,y0), P(x1,y0), P(x1,y1), P(x0,y1), P(x0,y0)] });
+      const walls = [box('wA', 1000, 1000, 3500, 5000), box('wB', 4500, 1000, 7000, 5000)];
+      const rooms = [
+        { id: 'rA', name: 'Kitchen', anchor: P(2200, 3000) },
+        { id: 'rB', name: 'Living',  anchor: P(5700, 3000) },
+      ];
+      const { ctx } = mkCanvas();
+      const p = await mkPlanner([baseFloor({ walls, rooms })],
+                                { layers2d: { labels: false } });   // labels would ink the probe boxes
+      p.store.scene3d = { preset: 'day', floorColor: '#8a7860' };
+      const v = paint(ctx, p);
+      // Screen probes: inside room A, inside room B, and OUTSIDE both loops but
+      // still inside the floor rect (the top-left margin).
+      const at = (wx, wy) => { const q = mmToPx(v, wx, wy); return [Math.round(q.x) - 8, Math.round(q.y) - 8, 16, 16]; };
+      const inA = at(2200, 3000), inB = at(5700, 3000), outside = at(500, 5600);
+      ok('8A a pixel inside room A reads the floor-wide colour',
+         dominant(ctx, ...inA).color === hexRGB('#8a7860'), dominant(ctx, ...inA).color);
+      ok('8B a pixel inside room B reads it too',
+         dominant(ctx, ...inB).color === hexRGB('#8a7860'), dominant(ctx, ...inB).color);
+      ok('8C a pixel OUTSIDE every loop does NOT read the floor colour',
+         dominant(ctx, ...outside).color !== hexRGB('#8a7860'), dominant(ctx, ...outside).color);
+
+      // Per-room override: only room A's loop changes.
+      const before = snap(ctx);
+      p.floor().rooms[0].floorColor = '#c0392b';
+      paint(ctx, p);
+      ok('8D a room floorColor override repaints THAT room',
+         dominant(ctx, ...inA).color === hexRGB('#c0392b'), dominant(ctx, ...inA).color);
+      ok('8E the other room keeps the floor-wide colour',
+         dominant(ctx, ...inB).color === hexRGB('#8a7860'), dominant(ctx, ...inB).color);
+      ok('8F nothing outside the loops changed', boxDiff(before, snap(ctx), ...outside) === 0,
+         boxDiff(before, snap(ctx), ...outside));
+
+      // Per-room texture: room B textured, room A left flat.
+      const flatA = distinctColors(ctx, ...inA);
+      p.floor().rooms[1].floorTex = 'wood';
+      paint(ctx, p);
+      ok('8G a room floorTex override textures THAT room',
+         distinctColors(ctx, ...inB) > 4, `${distinctColors(ctx, ...inB)} colours`);
+      ok('8H the untextured room stays flat',
+         distinctColors(ctx, ...inA) === flatA, `${flatA} → ${distinctColors(ctx, ...inA)}`);
+      // Clearing the overrides returns EXACTLY to the shared look.
+      delete p.floor().rooms[0].floorColor; delete p.floor().rooms[1].floorTex;
+      paint(ctx, p);
+      ok('8I clearing both overrides restores the shared paint',
+         diffPixels(before, snap(ctx)) === 0, `${diffPixels(before, snap(ctx))} px`);
+      // null (not just absent) also means "inherit".
+      p.floor().rooms[0].floorColor = null; p.floor().rooms[0].floorTex = null;
+      paint(ctx, p);
+      ok('8J null overrides read as inherit', diffPixels(before, snap(ctx)) === 0,
+         `${diffPixels(before, snap(ctx))} px`);
+      delete p.floor().rooms[0].floorColor; delete p.floor().rooms[0].floorTex;
+
+      // A loop with NO room keeps the floor-wide look (nothing to override).
+      p.floor().rooms = [];
+      paint(ctx, p);
+      ok('8K a room-less loop still paints the floor-wide colour',
+         dominant(ctx, ...inA).color === hexRGB('#8a7860'), dominant(ctx, ...inA).color);
+      ok('8L …and still nothing outside it', dominant(ctx, ...outside).color !== hexRGB('#8a7860'),
+         dominant(ctx, ...outside).color);
+
+      // Removing the walls (no loops) restores the classic full-rect fill.
+      p.floor().walls = [];
+      paint(ctx, p);
+      ok('8M with NO loops the whole rect fills again',
+         dominant(ctx, ...outside).color === hexRGB('#8a7860'), dominant(ctx, ...outside).color);
+      // …and yard fill still paints outside the loops when walls come back.
+      p.floor().walls = walls;
+      p.floor().yardFill = 'grass';
+      paint(ctx, p);
+      ok('8N yardFill still paints the area outside the loops',
+         dominant(ctx, ...outside).color !== hexRGB('#8a7860')
+           && dominant(ctx, ...outside).count > 100,
+         dominant(ctx, ...outside).color);
+      ok('8O yard fill does not bleed into a room',
+         dominant(ctx, ...inA).color === hexRGB('#8a7860'), dominant(ctx, ...inA).color);
+      delete p.floor().yardFill;
+
+      // The loop cache must track LIVE wall edits (a vertex drag never save()s
+      // until release, so a configRev-keyed cache would freeze the plan).
+      p.floor().walls = [box('wA', 1000, 1000, 3500, 5000)];   // room B's loop gone
+      paint(ctx, p);
+      ok('8P editing walls re-traces the loops (cache keyed on wall geometry)',
+         dominant(ctx, ...inB).color !== hexRGB('#8a7860')
+           && dominant(ctx, ...inA).color === hexRGB('#8a7860'),
+         `${dominant(ctx, ...inB).color} / ${dominant(ctx, ...inA).color}`);
+      p.floor().walls[0].points[1] = P(6000, 1000);   // widen A over B's old spot
+      p.floor().walls[0].points[2] = P(6000, 5000);
+      paint(ctx, p);
+      ok('8Q moving ONE vertex re-traces immediately',
+         dominant(ctx, ...inB).color === hexRGB('#8a7860'), dominant(ctx, ...inB).color);
+    }
   } catch (err) {
     ok('harness threw', false, (err && err.stack) || String(err));
   }

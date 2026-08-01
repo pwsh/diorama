@@ -77,6 +77,7 @@ export function repairFloor(f: Partial<Floor> & { id: string; name: string; w: n
     peek2d: f.peek2d,
     elevationMm: f.elevationMm,   // height above the world ground plane; absent = AUTO (index × 3000)
     haFloorId: f.haFloorId,       // bound HA floor_id (area binding); absent = unbound
+    outdoor: f.outdoor,           // bindable "everything outside the walls" pseudo-area; absent = unbound
   };
 }
 
