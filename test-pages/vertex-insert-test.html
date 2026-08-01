@@ -1,0 +1,767 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>VERTEXINSERT …</title>
+<style>
+  body { margin:0; background:#0d1116; color:#cfd8dc; font:13px/1.5 sans-serif; padding:14px; }
+  h1 { font-size:15px; margin:0 0 10px; }
+  #summary { font-size:14px; font-weight:bold; margin:10px 0; padding:8px 10px; border-radius:5px; }
+  .okbg { background:#12331f; color:#69f0ae; } .badbg { background:#3a1414; color:#ff8a80; }
+  .row { display:flex; justify-content:space-between; gap:10px; padding:2px 0; border-bottom:1px solid #1c2530; }
+  .pass { color:#69f0ae; } .fail { color:#ff5252; }
+  .name { color:#90caf9; } .extra { color:#ffd54f; font-size:11px; }
+  h2 { font-size:12px; color:#80cbc4; margin:14px 0 4px; }
+  #mount { position:absolute; left:-4000px; top:0; width:1200px; }
+  #gl { position:absolute; left:-4000px; top:900px; width:640px; height:480px; }
+</style>
+<h1>Midpoint vertex-insert handles · whole-shape body moves · room label = anchor</h1>
+<div id="summary">Running…</div>
+<div id="rows"></div>
+<div id="mount"></div>
+<div id="gl"></div>
+
+<!-- Harness build (from the repo root; NEVER reuse stale bundles):
+       npm run build
+       H=/tmp/diorama-harness-vinsert
+       rm -rf "$H"; mkdir -p "$H"; cp -r dist/* "$H"/
+       cp test-pages/vertex-insert-test.html "$H"/
+       T=$(mktemp -d); cp -r src/* "$T"/; cp tsconfig.json "$T"/
+       cp test-pages/fake-avatar-store.ts   "$T"/avatar-store.ts
+       cp test-pages/vertex-insert-entry.ts "$T"/vertex-insert-entry.ts
+       npx esbuild "$T"/vertex-insert-entry.ts --bundle --format=esm --tsconfig="$T"/tsconfig.json \
+         --alias:lit=$PWD/node_modules/lit/index.js \
+         --alias:lit/decorators.js=$PWD/node_modules/lit/decorators.js \
+         --outfile="$H"/vinsert.mod.js
+     Run headless (serve over http — Chrome blocks dynamic module imports on file://):
+       (cd "$H" && python3 -m http.server 8977 &)
+       google-chrome --headless=new --disable-gpu --use-angle=swiftshader \
+         --enable-unsafe-swiftshader --window-size=1200,900 --run-all-compositor-stages-before-draw \
+         --virtual-time-budget=40000 --dump-dom \
+         "http://localhost:8977/vertex-insert-test.html" | grep -o "<title>[^<]*"  -->
+<script type="module">
+  const V = '?v=' + Date.now();
+  const M = await import('./vinsert.mod.js' + V);
+  const {
+    Planner, repairFloor,
+    drawAll, computeView, mmToPx, roomLabelHalfPx, insertHandleMinLenMm,
+    insertHandlesEnabled, INSERT_HANDLE_MIN_PX, POLY_CAPS,
+    hitWallVert, hitWallVertInsert,
+    hitPresenceZoneVertex, hitPresenceZoneVertexInsert,
+    hitGroundAreaVertex, hitGroundAreaVertexInsert,
+    hitPathVertex, hitPathVertexInsert,
+    hitPoolVertex, hitPoolVertexInsert,
+    hitVoidAreaVertex, hitVoidAreaVertexInsert,
+    hitRoomLabel, hitGroundArea,
+    onCanvasMouseDown, onCanvasMouseMove, onCanvasMouseUp,
+    midpointHandles, closedWallLoops, loopContaining, centroid,
+    POLY_VERTEX_CAP_GROUND, POLY_VERTEX_CAP_VOID, POLY_VERTEX_CAP_PATH,
+  } = M;
+
+  const results = [];
+  const ok = (name, cond, extra = '') => results.push({ name, pass: !!cond, extra: String(extra) });
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const frames = n => new Promise(r => { let i = 0; const go = () => (++i >= n ? r() : requestAnimationFrame(go)); requestAnimationFrame(go); });
+  async function waitFor(cond, tries = 800) {
+    for (let i = 0; i < tries; i++) { if (cond()) return true; await sleep(4); }
+    return !!cond();
+  }
+  const clone = o => JSON.parse(JSON.stringify(o));
+  const near = (a, b, tol = 1e-6) => Math.abs(a - b) <= tol;
+
+  // ── Fake HaApi over a Map (the ruler-dims / config-test seam) ─────────────
+  class FakeHa {
+    constructor(seed) { this.map = new Map(); for (const [k, v] of Object.entries(seed || {})) this.map.set(k, clone(v)); this.states = {}; this._s = []; this._c = []; }
+    connect() { for (const cb of this._c) cb('connected'); for (const cb of this._s) cb(this.states, undefined); }
+    onState(fn) { this._s.push(fn); } onConn(fn) { this._c.push(fn); }
+    callService() { return Promise.resolve(); }
+    async getHistory() { return {}; } async getWeatherForecasts() { return null; }
+    async getDevices() { return []; } async getEntityRegistry() { return []; } async updateEntityRegistry() { return true; }
+    async getAreaRegistry() { return []; } async getFloorRegistry() { return []; }
+    async getUserData(k) { return this.map.has(k) ? clone(this.map.get(k)) : null; }
+    async setUserData(k, v) { this.map.set(k, clone(v)); return true; }
+    async refreshStates() {} async subscribeMqtt() { return () => {}; } async publishMqtt() {}
+    async getCalendarEvents() { return {}; }
+    async subscribePersistentNotifications() { return () => {}; }
+    async listRepairsIssues() { return []; }
+  }
+  const baseFloor = (over = {}) => Object.assign({
+    id: 'f1', name: 'Home', w: 12000, d: 9000,
+    walls: [], furniture: [], lights: [], switches: [], sensors: [], motionSensors: [],
+    envSensors: [], bleProxies: [], doors: [], windows: [], rooms: [], groundAreas: [],
+    voidAreas: [], pools: [], presenceZones: [], rulers: [], bg: null }, over);
+  async function mkPlanner(floors, extra = {}) {
+    localStorage.removeItem('diorama:store:v1'); localStorage.removeItem('diorama:configs');
+    const seed = Object.assign({ v: 2, floors, currentFloorId: floors[0].id, activeSensorId: null,
+      coverage: false, imperial: false, showDetails: false, useRawTargets: false }, extra);
+    const p = new Planner(); p.connectWith(new FakeHa({ diorama: seed }));
+    await waitFor(() => p.configIndex !== null);
+    return p;
+  }
+
+  // ── Canvas + synthetic pointer plumbing ──────────────────────────────────
+  const CW = 900, CH = 640;
+  const canvas = document.createElement('canvas');
+  canvas.width = CW; canvas.height = CH;
+  canvas.style.width = CW + 'px'; canvas.style.height = CH + 'px';
+  document.getElementById('mount').appendChild(canvas);
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  const viewFor = p => computeView(canvas, p.floor().w, p.floor().d, null, 1);
+  // Inverse of pxToMm for the SAME canvas: world mm → clientX/clientY.
+  function client(view, wx, wy) {
+    const r = canvas.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    const q = mmToPx(view, wx, wy);
+    return { clientX: r.left + q.x / dpr, clientY: r.top + q.y / dpr };
+  }
+  const mev = (view, wx, wy, extra = {}) => Object.assign(
+    { ...client(view, wx, wy), altKey: false, shiftKey: false, preventDefault() {} }, extra);
+  const down = (p, view, wx, wy, extra) => onCanvasMouseDown(p, canvas, view, mev(view, wx, wy, extra));
+  const move = (p, view, wx, wy, extra) => onCanvasMouseMove(p, canvas, view, mev(view, wx, wy, extra));
+  const up   = (p, extra) => onCanvasMouseUp(p, canvas, extra ? mev(viewFor(p), 0, 0, extra) : undefined);
+  // A drag gesture that reaches BOTH the mousedown handler and drag release.
+  function gesture(p, view, from, to) {
+    down(p, view, from.x, from.y);
+    move(p, view, to.x, to.y);
+    up(p);
+  }
+  const paint = p => { const v = viewFor(p); drawAll(ctx, p, v, null); drawAll(ctx, p, v, null); return v; };
+
+  const sq = (x, y, w, h) => [{ x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h }];
+  const rectWall = (id, x, y, w, h, over = {}) => Object.assign(
+    { id, points: [{ x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h }, { x, y }] }, over);
+
+  try {
+    let section = '';
+
+    // ═══ A. midpointHandles — the pure core ══════════════════════════════════
+    section = 'A';
+    {
+      const open3 = [{ x: 0, y: 0 }, { x: 1000, y: 0 }, { x: 1000, y: 1000 }];
+      const ho = midpointHandles(open3, false);
+      ok('A1 OPEN polyline: N points → N−1 handles', ho.length === 2, `${ho.length}`);
+      ok('A2 handle 0 is the midpoint of edge 0',
+         near(ho[0].x, 500) && near(ho[0].y, 0), JSON.stringify(ho[0]));
+      ok('A3 handle idx is the SPLICE index (edge i → i+1)',
+         ho[0].idx === 1 && ho[1].idx === 2, `${ho[0].idx}/${ho[1].idx}`);
+
+      const poly = sq(0, 0, 1000, 1000);
+      const hc = midpointHandles(poly, true);
+      ok('A4 CLOSED polygon: N points → N handles (incl. the wrap edge)',
+         hc.length === 4, `${hc.length}`);
+      ok('A5 the wrap handle splices at the END (idx === N)',
+         hc[3].idx === 4 && near(hc[3].x, 0) && near(hc[3].y, 500), JSON.stringify(hc[3]));
+      // Splicing at every reported index reproduces a ring with the midpoint
+      // between its two edge endpoints.
+      const spliced = poly.map(v => ({ ...v }));
+      spliced.splice(hc[3].idx, 0, { x: hc[3].x, y: hc[3].y });
+      ok('A6 wrap splice lands BETWEEN the last and first point',
+         spliced.length === 5 && near(spliced[4].x, 0) && near(spliced[4].y, 500),
+         JSON.stringify(spliced[4]));
+
+      ok('A7 short edges are filtered by minLenMm',
+         midpointHandles(sq(0, 0, 1000, 1000), true, 1200).length === 0,
+         `${midpointHandles(sq(0, 0, 1000, 1000), true, 1200).length}`);
+      ok('A8 minLen filters ONLY the short edges',
+         midpointHandles([{ x: 0, y: 0 }, { x: 5000, y: 0 }, { x: 5010, y: 0 }, { x: 5010, y: 4000 }], false, 100).length === 2,
+         '2 of 3');
+      ok('A9 degenerate inputs return []',
+         midpointHandles([], true).length === 0 && midpointHandles([{ x: 1, y: 2 }], true).length === 0, 'ok');
+      ok('A10 the pure fn never mutates its input',
+         JSON.stringify(poly) === JSON.stringify(sq(0, 0, 1000, 1000)), 'unchanged');
+    }
+
+    // ═══ B. Insert via the REAL mousedown → drag → release path ═════════════
+    section = 'B';
+    {
+      const p = await mkPlanner([baseFloor({
+        groundAreas: [{ id: 'g1', name: 'Lawn', kind: 'grass', points: sq(2000, 2000, 6000, 4000) }],
+      })]);
+      p.activeGroundAreaId = 'g1';
+      const view = paint(p);
+      const g = () => p.floor().groundAreas[0];
+      const before = clone(g().points);
+      const mid01 = { x: 5000, y: 2000 };   // midpoint of edge 0 (v0 → v1)
+
+      const hit = hitGroundAreaVertexInsert(p, view, mid01.x, mid01.y);
+      ok('B1 (guard) hit helper takes a Vec2, not loose numbers', hit === null || typeof hit === 'object', 'shape');
+      const hit2 = hitGroundAreaVertexInsert(p, view, { x: mid01.x, y: mid01.y });
+      ok('B2 the midpoint of edge 0 hits an insert handle at idx 1',
+         !!hit2 && hit2.at.idx === 1, JSON.stringify(hit2 && hit2.at));
+
+      down(p, view, mid01.x, mid01.y);
+      ok('B3 mousedown SPLICES a vertex at idx 1',
+         g().points.length === 5 && near(g().points[1].x, 5000) && near(g().points[1].y, 2000),
+         JSON.stringify(g().points[1]));
+      ok('B4 the neighbours are untouched (only an insert, no reshuffle)',
+         near(g().points[0].x, before[0].x) && near(g().points[2].x, before[1].x),
+         `${g().points[0].x}/${g().points[2].x}`);
+      ok('B5 it starts the ORDINARY vertex drag at the new index',
+         p.drag && p.drag.kind === 'groundVert' && p.drag.idx === 1, JSON.stringify(p.drag && [p.drag.kind, p.drag.idx]));
+      ok('B6 selectedVertex points at the new index',
+         p.selectedVertex && p.selectedVertex.kind === 'ground' && p.selectedVertex.index === 1,
+         JSON.stringify(p.selectedVertex));
+      const undosBefore = p._undoStack ? p._undoStack.length : -1;
+      ok('B7 no save() at insert time (the release owns the undo step)',
+         undosBefore === 0, `${undosBefore}`);
+
+      move(p, view, 5000, 3000);
+      up(p);
+      ok('B8 the release places the vertex where the drag ended',
+         near(g().points[1].x, 5000) && near(g().points[1].y, 3000), JSON.stringify(g().points[1]));
+      ok('B9 insert + drag + release is exactly ONE undo step',
+         p._undoStack.length === 1, `${p._undoStack.length}`);
+      p.undo();
+      ok('B10 undo restores the PRE-INSERT array',
+         JSON.stringify(p.floor().groundAreas[0].points) === JSON.stringify(before),
+         JSON.stringify(p.floor().groundAreas[0].points));
+
+      // Release WITHOUT moving is a valid outcome (vertex stays at the midpoint).
+      p.activeGroundAreaId = 'g1';
+      paint(p);
+      down(p, view, mid01.x, mid01.y); up(p);
+      ok('B11 releasing without moving keeps the midpoint vertex',
+         p.floor().groundAreas[0].points.length === 5, `${p.floor().groundAreas[0].points.length}`);
+    }
+
+    // ═══ C. Precedence, locks, caps, layer + mode gates ═════════════════════
+    section = 'C';
+    {
+      const p = await mkPlanner([baseFloor({
+        groundAreas: [
+          { id: 'g1', name: 'Lawn', kind: 'grass', points: sq(2000, 2000, 6000, 4000) },
+          { id: 'gl', name: 'Locked', kind: 'rock', points: sq(9000, 500, 2000, 2000), locked: true },
+        ],
+      })]);
+      p.activeGroundAreaId = 'g1';
+      const view = paint(p);
+      const g = () => p.floor().groundAreas.find(x => x.id === 'g1');
+
+      // A real vertex inside its own radius must WIN over any nearby midpoint.
+      const v0 = g().points[0];
+      ok('C1 a real vertex is hit at the vertex position',
+         !!hitGroundAreaVertex(p, view, { x: v0.x, y: v0.y }), 'hit');
+      down(p, view, v0.x, v0.y);
+      ok('C2 pressing a REAL vertex drags it (no splice)',
+         p.drag && p.drag.kind === 'groundVert' && p.drag.idx === 0 && g().points.length === 4,
+         `${p.drag && p.drag.idx}/${g().points.length}`);
+      up(p);
+
+      // Locked area: selecting it exposes neither handles nor inserts.
+      p.activeGroundAreaId = 'gl';
+      paint(p);
+      const locked = p.floor().groundAreas.find(x => x.id === 'gl');
+      const lmid = { x: 10000, y: 500 };
+      ok('C3 a LOCKED area exposes no insert handle',
+         hitGroundAreaVertexInsert(p, view, lmid) === null, 'null');
+      down(p, view, lmid.x, lmid.y);
+      ok('C4 pressing a locked area midpoint splices nothing',
+         locked.points.length === 4, `${locked.points.length}`);
+      up(p);
+
+      // Mode / tool gates.
+      p.activeGroundAreaId = 'g1';
+      paint(p);
+      const mid = { x: 5000, y: 2000 };
+      ok('C5 insert handles are live in edit + select', !!hitGroundAreaVertexInsert(p, view, mid), 'yes');
+      p.tool = 'wall';
+      ok('C6 a non-select tool disables inserts', hitGroundAreaVertexInsert(p, view, mid) === null, 'null');
+      p.tool = 'select'; p.uiMode = 'kiosk';
+      ok('C7 kiosk disables inserts', hitGroundAreaVertexInsert(p, view, mid) === null, 'null');
+      ok('C8 insertHandlesEnabled agrees', insertHandlesEnabled(p) === false, 'false');
+      p.uiMode = 'edit';
+      ok('C9 back in edit they return', !!hitGroundAreaVertexInsert(p, view, mid), 'yes');
+
+      // Hidden ground layer never captures input (the zonesInteractive rule).
+      p.store.layers2d = { ground: false };
+      paint(p);
+      const gPts = g().points.length;
+      down(p, view, mid.x, mid.y);
+      ok('C10 a hidden ground layer inserts nothing', g().points.length === gPts, `${g().points.length}`);
+      up(p);
+      p.store.layers2d = {};
+    }
+
+    // ═══ D. Caps — a shape at its authoring cap shows no inserts ════════════
+    section = 'D';
+    {
+      // A 12-vertex void (POLY_VERTEX_CAP_VOID) — at the cap.
+      const ring = n => Array.from({ length: n }, (_, i) => {
+        const a = (i / n) * Math.PI * 2;
+        return { x: Math.round(5000 + 2500 * Math.cos(a)), y: Math.round(4500 + 2000 * Math.sin(a)) };
+      });
+      const p = await mkPlanner([baseFloor({
+        voidAreas: [
+          { id: 'v12', name: 'Full', points: ring(12) },
+          { id: 'v4', name: 'Room', points: sq(9000, 500, 2400, 2400) },
+        ],
+      })]);
+      ok('D1 the void cap is 12 (as the draw latch enforces)', POLY_VERTEX_CAP_VOID === 12, `${POLY_VERTEX_CAP_VOID}`);
+      p.activeVoidAreaId = 'v12';
+      let view = paint(p);
+      const v12 = p.floor().voidAreas[0];
+      const hs = midpointHandles(v12.points, true);
+      let anyHit = false;
+      for (const h of hs) if (hitVoidAreaVertexInsert(p, view, { x: h.x, y: h.y })) anyHit = true;
+      ok('D2 a void AT the 12-vertex cap exposes no insert handle', !anyHit, 'none');
+      for (const h of hs) { down(p, view, h.x, h.y); up(p); }
+      ok('D3 pressing every midpoint of a capped void adds nothing',
+         p.floor().voidAreas[0].points.length === 12, `${p.floor().voidAreas[0].points.length}`);
+
+      p.activeVoidAreaId = 'v4';
+      view = paint(p);
+      down(p, view, 10200, 500);
+      ok('D4 an UNDER-cap void still inserts',
+         p.floor().voidAreas[1].points.length === 5, `${p.floor().voidAreas[1].points.length}`);
+      up(p);
+      ok('D5 the ground cap is 20, the path cap 40',
+         POLY_VERTEX_CAP_GROUND === 20 && POLY_VERTEX_CAP_PATH === 40 && POLY_CAPS.void === 12,
+         `${POLY_VERTEX_CAP_GROUND}/${POLY_VERTEX_CAP_PATH}`);
+    }
+
+    // ═══ E. Presence zone (closed) + wall (open polyline) ═══════════════════
+    section = 'E';
+    {
+      const p = await mkPlanner([baseFloor({
+        presenceZones: [{ id: 'pz1', name: 'Z', points: sq(1000, 1000, 4000, 3000), entity_id: null }],
+        walls: [{ id: 'w1', points: [{ x: 1000, y: 6000 }, { x: 7000, y: 6000 }, { x: 7000, y: 8000 }] }],
+      })]);
+      p.activePZoneId = 'pz1';
+      const view = paint(p);
+      const z = () => p.floor().presenceZones[0];
+
+      ok('E1 a 4-point zone offers 4 midpoints (closed ring)',
+         midpointHandles(z().points, true).length === 4, '4');
+      // Insert on the WRAP edge (v3 → v0): midpoint (1000, 2500), splice idx 4.
+      down(p, view, 1000, 2500);
+      ok('E2 the wrap-edge insert appends at the END of the ring',
+         z().points.length === 5 && near(z().points[4].x, 1000) && near(z().points[4].y, 2500),
+         JSON.stringify(z().points[4]));
+      ok('E3 it starts the pzoneVert drag at the new index',
+         p.drag && p.drag.kind === 'pzoneVert' && p.drag.idx === 4, JSON.stringify(p.drag && p.drag.idx));
+      up(p);
+
+      // Walls: OPEN polyline — 3 points → 2 midpoints, no wrap edge.
+      const w = () => p.floor().walls[0];
+      ok('E4 a 3-point wall offers 2 midpoints (open polyline, no wrap)',
+         midpointHandles(w().points, false).length === 2, `${midpointHandles(w().points, false).length}`);
+      ok('E5 the wall midpoints are on the real segments',
+         !!hitWallVertInsert(p, view, { x: 4000, y: 6000 }) && !!hitWallVertInsert(p, view, { x: 7000, y: 7000 }),
+         'both');
+      ok('E6 there is NO wrap handle between the wall\'s two ENDS',
+         hitWallVertInsert(p, view, { x: 4000, y: 7000 }) === null, 'null');
+      const undoBase = p._undoStack.length;
+      down(p, view, 4000, 6000);
+      ok('E7 a wall insert splices into wall.points at idx 1',
+         w().points.length === 4 && near(w().points[1].x, 4000) && near(w().points[1].y, 6000),
+         JSON.stringify(w().points[1]));
+      ok('E8 the spliced wall vertex enters the ORDINARY wallv drag',
+         p.drag && p.drag.kind === 'wallv' && p.drag.idx === 1, JSON.stringify(p.drag && [p.drag.kind, p.drag.idx]));
+      move(p, view, 4000, 5000);
+      up(p);
+      // resolveWallPoint applies the 15° angle snap + 10 mm wall grid, so the
+      // vertex lands on the nearest on-angle ray rather than exactly under the
+      // cursor — assert it MOVED off the segment, not an exact coordinate.
+      ok('E9 the wall vertex lands near the drag end (resolveWallPoint path)',
+         w().points.length === 4 && Math.abs(w().points[1].y - 5000) < 400, JSON.stringify(w().points[1]));
+      ok('E10 wall insert + drag adds exactly ONE undo step',
+         p._undoStack.length === undoBase + 1, `${p._undoStack.length} from ${undoBase}`);
+
+      // A real wall vertex still wins over a nearby midpoint.
+      const before = clone(w().points);
+      down(p, view, before[0].x, before[0].y);
+      ok('E11 pressing a real wall vertex drags it (no splice)',
+         p.drag.kind === 'wallv' && p.drag.idx === 0 && w().points.length === before.length,
+         `${p.drag.idx}/${w().points.length}`);
+      up(p);
+
+      // Locked walls expose neither anchors nor inserts.
+      p.floor().walls[0].locked = true;
+      ok('E12 a LOCKED wall exposes no insert handle',
+         hitWallVertInsert(p, view, { x: 4000, y: 6000 }) === null &&
+         hitWallVertInsert(p, view, { x: 7000, y: 7000 }) === null, 'null');
+      p.floor().walls[0].locked = false;
+    }
+
+    // ═══ F. Path-backed ground areas insert into the CENTERLINE ═════════════
+    section = 'F';
+    {
+      const p = await mkPlanner([baseFloor({})]);
+      // Build a real path-backed area through the planner so `points` is the
+      // genuine buffered ribbon (never hand-authored).
+      p.tool = 'path';
+      p.drawingPath = { points: [{ x: 2000, y: 2000 }, { x: 8000, y: 2000 }] };
+      p.finishPath();
+      p.tool = 'select';
+      const g = () => p.floor().groundAreas[0];
+      ok('F1 finishPath produced a path-backed area',
+         !!g() && !!g().path && g().path.centerline.length === 2, JSON.stringify(g() && g().path));
+      p.activeGroundAreaId = g().id;
+      const view = paint(p);
+
+      ok('F2 a path-backed area exposes NO raw polygon vertex handle',
+         hitGroundAreaVertex(p, view, { x: g().points[0].x, y: g().points[0].y }) === null, 'null');
+      ok('F3 …and no raw polygon INSERT handle either',
+         hitGroundAreaVertexInsert(p, view, { x: 5000, y: 2000 }) === null ||
+         hitPathVertexInsert(p, view, { x: 5000, y: 2000 }) !== null, 'centerline only');
+      const pi = hitPathVertexInsert(p, view, { x: 5000, y: 2000 });
+      ok('F4 the CENTERLINE midpoint offers the insert handle', !!pi && pi.at.idx === 1,
+         JSON.stringify(pi && pi.at));
+
+      const ribbonBefore = clone(g().points);
+      const fBase = p._undoStack.length;   // finishPath() already saved once
+      down(p, view, 5000, 2000);
+      ok('F5 the insert splices into path.centerline (not points)',
+         g().path.centerline.length === 3 && near(g().path.centerline[1].x, 5000),
+         JSON.stringify(g().path.centerline));
+      ok('F6 it starts the pathVert drag at the new index',
+         p.drag && p.drag.kind === 'pathVert' && p.drag.idx === 1, JSON.stringify(p.drag && [p.drag.kind, p.drag.idx]));
+      move(p, view, 5000, 5000);
+      up(p);
+      ok('F7 the ribbon polygon REGENERATED from the new centerline',
+         JSON.stringify(g().points) !== JSON.stringify(ribbonBefore) && g().points.length > 4,
+         `${g().points.length} verts`);
+      ok('F8 path insert + drag adds exactly ONE undo step',
+         p._undoStack.length === fBase + 1, `${p._undoStack.length} from ${fBase}`);
+      p.undo();
+      ok('F9 undo restores the 2-point centerline',
+         p.floor().groundAreas[0].path.centerline.length === 2,
+         `${p.floor().groundAreas[0].path.centerline.length}`);
+    }
+
+    // ═══ G. Pool inserts + declutter threshold ═════════════════════════════
+    section = 'G';
+    {
+      const p = await mkPlanner([baseFloor({
+        pools: [{ id: 'pl1', name: 'Pool', points: sq(2000, 2000, 5000, 3000) }],
+      })]);
+      p.activePoolId = 'pl1';
+      const view = paint(p);
+      const pl = () => p.floor().pools[0];
+      ok('G1 a pool offers 4 midpoints', midpointHandles(pl().points, true).length === 4, '4');
+      down(p, view, 4500, 2000);
+      ok('G2 a pool insert splices at idx 1 and drags it',
+         pl().points.length === 5 && p.drag.kind === 'poolVert' && p.drag.idx === 1,
+         `${pl().points.length}/${p.drag.idx}`);
+      move(p, view, 4500, 1200); up(p);
+      ok('G3 pool insert + drag is ONE undo step', p._undoStack.length === 1, `${p._undoStack.length}`);
+
+      // Declutter: edges shorter than INSERT_HANDLE_MIN_PX get no handle.
+      const minMm = insertHandleMinLenMm(view);
+      ok('G4 the declutter threshold converts px → world mm at the live zoom',
+         minMm > 0 && Math.abs(minMm * view.scale / (window.devicePixelRatio || 1) - INSERT_HANDLE_MIN_PX) < 1e-6,
+         `${minMm.toFixed(1)} mm`);
+      const tiny = [{ x: 100, y: 100 }, { x: 100 + minMm * 0.5, y: 100 }, { x: 3000, y: 3000 }];
+      ok('G5 an edge shorter than the threshold gets no handle',
+         midpointHandles(tiny, false, minMm).length === 1, `${midpointHandles(tiny, false, minMm).length}`);
+    }
+
+    // ═══ H. Whole-shape BODY moves (single-delta translate) ════════════════
+    section = 'H';
+    {
+      const p = await mkPlanner([baseFloor({
+        groundAreas: [
+          // Deliberately OFF the 10 mm grid so a per-point re-snap would distort.
+          { id: 'g1', name: 'Lawn', kind: 'grass',
+            points: [{ x: 2003, y: 2007 }, { x: 7001, y: 2002 }, { x: 6998, y: 5999 }, { x: 1997, y: 6003 }] },
+          { id: 'gl', name: 'Locked', kind: 'rock', points: sq(9000, 500, 2000, 2000), locked: true },
+        ],
+        pools: [{ id: 'pl1', name: 'Pool', points: sq(8500, 5000, 2500, 2500) }],
+        voidAreas: [{ id: 'v1', name: 'Well', points: sq(500, 7000, 1600, 1600) }],
+        presenceZones: [{ id: 'pz1', name: 'Z', points: sq(9200, 2600, 2200, 1800), entity_id: null }],
+      })]);
+      let view = paint(p);
+      const g = () => p.floor().groundAreas.find(x => x.id === 'g1');
+      const before = clone(g().points);
+
+      // First press on an UNSELECTED body only selects.
+      down(p, view, 4500, 4000);
+      ok('H1 the FIRST body press only SELECTS (no move drag)',
+         p.activeGroundAreaId === 'g1' && p.drag === null, `${p.activeGroundAreaId}/${p.drag}`);
+      up(p);
+      ok('H2 …and moves nothing', JSON.stringify(g().points) === JSON.stringify(before), 'unchanged');
+
+      // Second press on the SELECTED body starts the whole-shape move.
+      down(p, view, 4500, 4000);
+      ok('H3 pressing an ALREADY-SELECTED body starts groundMove',
+         p.drag && p.drag.kind === 'groundMove' && p.drag.path === false,
+         JSON.stringify(p.drag && [p.drag.kind, p.drag.path]));
+      move(p, view, 5200, 3700);
+      const after = clone(g().points);
+      const dx = after[0].x - before[0].x, dy = after[0].y - before[0].y;
+      ok('H4 EVERY point moved by the identical delta (shape rigid)',
+         after.every((pt, i) => near(pt.x - before[i].x, dx) && near(pt.y - before[i].y, dy)),
+         `d=${dx},${dy}`);
+      ok('H5 the delta is snapped to the 10 mm grid, not each point',
+         dx % 10 === 0 && dy % 10 === 0 && after.some(pt => pt.x % 10 !== 0),
+         `${dx},${dy} · off-grid preserved`);
+      ok('H6 pairwise edge vectors are byte-identical (no distortion)',
+         JSON.stringify(after.map((pt, i) => [pt.x - after[0].x, pt.y - after[0].y])) ===
+         JSON.stringify(before.map((pt, i) => [pt.x - before[0].x, pt.y - before[0].y])), 'rigid');
+      up(p);
+      ok('H7 a body move is ONE undo step', p._undoStack.length === 1, `${p._undoStack.length}`);
+      p.undo();
+      ok('H8 undo restores the original outline',
+         JSON.stringify(p.floor().groundAreas[0].points) === JSON.stringify(before), 'restored');
+
+      // Locked refuses even when selected.
+      p.activeGroundAreaId = 'gl';
+      view = paint(p);
+      const lockedBefore = clone(p.floor().groundAreas[1].points);
+      down(p, view, 10000, 1500);
+      ok('H9 a LOCKED selected body starts no move drag', p.drag === null, `${p.drag}`);
+      move(p, view, 10600, 1900); up(p);
+      ok('H10 …and its points are unchanged',
+         JSON.stringify(p.floor().groundAreas[1].points) === JSON.stringify(lockedBefore), 'unchanged');
+
+      // Pool / void / presence zone bodies.
+      const cases = [
+        ['pool', 'pools', 'pl1', 'activePoolId', 'poolMove', { x: 9700, y: 6200 }],
+        ['void', 'voidAreas', 'v1', 'activeVoidAreaId', 'voidMove', { x: 1300, y: 7800 }],
+        ['pzone', 'presenceZones', 'pz1', 'activePZoneId', 'pzoneMove', { x: 10300, y: 3500 }],
+      ];
+      let i = 11;
+      for (const [label, coll, id, activeKey, kind, at] of cases) {
+        p.activeGroundAreaId = null; p.activePoolId = null; p.activeVoidAreaId = null; p.activePZoneId = null;
+        p[activeKey] = id;
+        view = paint(p);
+        const item = () => p.floor()[coll].find(x => x.id === id);
+        const pre = clone(item().points);
+        down(p, view, at.x, at.y);
+        ok(`H${i++} ${label}: a selected body starts ${kind}`,
+           p.drag && p.drag.kind === kind, JSON.stringify(p.drag && p.drag.kind));
+        move(p, view, at.x + 500, at.y - 400);
+        const post = clone(item().points);
+        const ddx = post[0].x - pre[0].x, ddy = post[0].y - pre[0].y;
+        ok(`H${i++} ${label}: all points share one delta`,
+           post.every((pt, k) => near(pt.x - pre[k].x, ddx) && near(pt.y - pre[k].y, ddy)) && (ddx !== 0 || ddy !== 0),
+           `d=${ddx},${ddy}`);
+        up(p);
+      }
+      ok(`H${i++} the three further body moves recorded one undo step each`,
+         p._undoStack.length === 3, `${p._undoStack.length}`);
+    }
+
+    // ═══ I. Path-backed body move translates the CENTERLINE ════════════════
+    section = 'I';
+    {
+      const p = await mkPlanner([baseFloor({})]);
+      p.tool = 'path';
+      p.drawingPath = { points: [{ x: 2000, y: 2000 }, { x: 8000, y: 2000 }, { x: 8000, y: 6000 }] };
+      p.finishPath();
+      p.tool = 'select';
+      const g = () => p.floor().groundAreas[0];
+      p.activeGroundAreaId = g().id;
+      const view = paint(p);
+      const clBefore = clone(g().path.centerline);
+      const ptsBefore = clone(g().points);
+
+      const iBase = p._undoStack.length;   // finishPath() already saved once
+      // (5000,2000) and (8000,4000) are centerline MIDPOINTS — their insert
+      // handles legitimately win — so press the ribbon at a plain body point.
+      down(p, view, 3500, 2000);
+      ok('I1 a selected path-backed body starts groundMove with path:true',
+         p.drag && p.drag.kind === 'groundMove' && p.drag.path === true,
+         JSON.stringify(p.drag && [p.drag.kind, p.drag.path]));
+      move(p, view, 4100, 2500);
+      const clAfter = clone(g().path.centerline);
+      const cdx = clAfter[0].x - clBefore[0].x, cdy = clAfter[0].y - clBefore[0].y;
+      ok('I2 the CENTERLINE translated by one delta',
+         clAfter.every((pt, k) => near(pt.x - clBefore[k].x, cdx) && near(pt.y - clBefore[k].y, cdy)) &&
+         (cdx !== 0 || cdy !== 0), `d=${cdx},${cdy}`);
+      ok('I3 the derived ribbon regenerated and moved with it',
+         g().points.length === ptsBefore.length &&
+         g().points.every((pt, k) => near(pt.x - ptsBefore[k].x, cdx) && near(pt.y - ptsBefore[k].y, cdy)),
+         'ribbon follows');
+      up(p);
+      ok('I4 a path body move adds exactly ONE undo step',
+         p._undoStack.length === iBase + 1, `${p._undoStack.length} from ${iBase}`);
+      p.undo();
+      ok('I5 undo restores the original centerline',
+         JSON.stringify(p.floor().groundAreas[0].path.centerline) === JSON.stringify(clBefore), 'restored');
+    }
+
+    // ═══ J. Room label at the ANCHOR + draggable anchor ════════════════════
+    section = 'J';
+    {
+      // An L-shaped room: the loop centroid and the anchor are far apart, so
+      // "label at the anchor" is unambiguous.
+      const L = [
+        { x: 1000, y: 1000 }, { x: 9000, y: 1000 }, { x: 9000, y: 3000 },
+        { x: 3000, y: 3000 }, { x: 3000, y: 8000 }, { x: 1000, y: 8000 }, { x: 1000, y: 1000 },
+      ];
+      const p = await mkPlanner([baseFloor({
+        walls: [{ id: 'w1', points: L }],
+        rooms: [{ id: 'r1', name: 'Great Room', anchor: { x: 7500, y: 2000 } }],
+      })]);
+      const view = paint(p);
+      const loops = closedWallLoops(p.floor().walls);
+      const loop = loopContaining(loops, 7500, 2000);
+      ok('J1 the L-shaped anchor resolves into a closed loop', !!loop, `${loops.length} loops`);
+      const c = loop ? centroid(loop) : { x: 0, y: 0 };
+      ok('J2 the loop centroid is far from the anchor (the case that matters)',
+         Math.hypot(c.x - 7500, c.y - 2000) > 2000, `${Math.round(Math.hypot(c.x - 7500, c.y - 2000))} mm`);
+
+      ok('J3 drawAll publishes the label px extents', roomLabelHalfPx.has('r1'), 'yes');
+      ok('J4 hitRoomLabel hits AT the anchor',
+         !!hitRoomLabel(p, view, { x: 7500, y: 2000 }), 'hit');
+      ok('J5 …and NOT at the loop centroid',
+         hitRoomLabel(p, view, { x: c.x, y: c.y }) === null, 'miss');
+
+      // Layer gate: hiding `labels` clears the map → undraggable.
+      p.store.layers2d = { labels: false };
+      paint(p);
+      ok('J6 a hidden `labels` layer clears the pick map', !roomLabelHalfPx.has('r1'), 'cleared');
+      ok('J7 …so the label is undraggable', hitRoomLabel(p, view, { x: 7500, y: 2000 }) === null, 'null');
+      p.store.layers2d = {};
+      paint(p);
+
+      // Drag the anchor.
+      down(p, view, 7500, 2000);
+      ok('J8 pressing the label starts the roomAnchor drag',
+         p.drag && p.drag.kind === 'roomAnchor' && p.drag.id === 'r1',
+         JSON.stringify(p.drag && [p.drag.kind, p.drag.id]));
+      move(p, view, 2000, 6000);
+      ok('J9 the anchor follows the cursor live',
+         Math.hypot(p.floor().rooms[0].anchor.x - 2000, p.floor().rooms[0].anchor.y - 6000) < 60,
+         JSON.stringify(p.floor().rooms[0].anchor));
+      up(p);
+      const a = p.floor().rooms[0].anchor;
+      ok('J10 the release grid-snaps the anchor', a.x % 10 === 0 && a.y % 10 === 0, `${a.x},${a.y}`);
+      ok('J11 a label drag is ONE undo step', p._undoStack.length === 1, `${p._undoStack.length}`);
+      p.undo();
+      ok('J12 undo restores the original anchor',
+         p.floor().rooms[0].anchor.x === 7500 && p.floor().rooms[0].anchor.y === 2000,
+         JSON.stringify(p.floor().rooms[0].anchor));
+
+      // The label PAINTS at the anchor. Room labels use very low alphas over a
+      // dark floor, so a brightness threshold would miss them — diff against a
+      // NO-ROOMS baseline instead (the layers2d boxDiff technique).
+      const shot = () => { paint(p); return ctx.getImageData(0, 0, CW, CH).data.slice(); };
+      const boxDiff = (a, b, wx, wy) => {
+        const q = mmToPx(view, wx, wy);
+        const x0 = Math.max(0, Math.round(q.x - 70)), x1 = Math.min(CW, Math.round(q.x + 70));
+        const y0 = Math.max(0, Math.round(q.y - 14)), y1 = Math.min(CH, Math.round(q.y + 14));
+        let n = 0;
+        for (let yy = y0; yy < y1; yy++) for (let xx = x0; xx < x1; xx++) {
+          const i = (yy * CW + xx) * 4;
+          if (a[i] !== b[i] || a[i + 1] !== b[i + 1] || a[i + 2] !== b[i + 2]) n++;
+        }
+        return n;
+      };
+      const keep = clone(p.floor().rooms);
+      p.floor().rooms = [];
+      const baseShot = shot();
+      p.floor().rooms = clone(keep);            // anchor (7500, 2000)
+      const atAnchor = shot();
+      ok('J13 label ink appears AT the anchor, and nothing at the centroid',
+         boxDiff(baseShot, atAnchor, 7500, 2000) > 20 &&
+         boxDiff(baseShot, atAnchor, c.x, c.y) === 0,
+         `${boxDiff(baseShot, atAnchor, 7500, 2000)} vs ${boxDiff(baseShot, atAnchor, c.x, c.y)}`);
+      p.floor().rooms[0].anchor = { x: 2000, y: 6000 };
+      const moved = shot();
+      ok('J14 moving the anchor moves the painted label',
+         boxDiff(baseShot, moved, 7500, 2000) === 0 && boxDiff(baseShot, moved, 2000, 6000) > 20,
+         `${boxDiff(baseShot, moved, 7500, 2000)} / ${boxDiff(baseShot, moved, 2000, 6000)}`);
+
+      // Re-homing: an anchor dragged into a different loop re-homes the room.
+      const twoRooms = closedWallLoops(p.floor().walls);
+      ok('J15 the moved anchor still resolves to a loop (re-home is live)',
+         !!loopContaining(twoRooms, 2000, 6000), 'in loop');
+      p.floor().rooms[0].anchor = { x: 11000, y: 8500 };   // outside every loop
+      paint(p);
+      ok('J16 an anchor outside every loop still publishes extents (the amber marker is draggable too)',
+         roomLabelHalfPx.has('r1'), 'yes');
+      ok('J17 …and is still hittable so the user can drag it back',
+         !!hitRoomLabel(p, view, { x: 11000, y: 8500 }), 'hit');
+    }
+
+    // ═══ K. Room label hit ORDER — never swallows a fixture click ═══════════
+    section = 'K';
+    {
+      const p = await mkPlanner([baseFloor({
+        walls: [rectWall('w1', 1000, 1000, 8000, 6000)],
+        rooms: [{ id: 'r1', name: 'Den', anchor: { x: 5000, y: 4000 } }],
+        // A light sitting exactly under the label text.
+        lights: [{ id: 'l1', x: 5000, y: 4000, entity_id: null }],
+        groundAreas: [{ id: 'g1', name: 'Lawn', kind: 'grass', points: sq(1200, 1200, 7600, 5600) }],
+      })]);
+      const view = paint(p);
+      down(p, view, 5000, 4000);
+      ok('K1 a fixture under the label still wins the press',
+         p.drag && p.drag.kind === 'fixture', JSON.stringify(p.drag && p.drag.kind));
+      up(p);
+
+      // With no fixture there, the label beats the ground paint beneath it.
+      p.floor().lights = [];
+      paint(p);
+      down(p, view, 5000, 4000);
+      ok('K2 with no fixture, the label beats the ground area under it',
+         p.drag && p.drag.kind === 'roomAnchor', JSON.stringify(p.drag && p.drag.kind));
+      up(p);
+      ok('K3 the ground area was NOT selected by that press',
+         p.activeGroundAreaId !== 'g1', `${p.activeGroundAreaId}`);
+    }
+
+    // ═══ L. 3D room sprite sits at the anchor ══════════════════════════════
+    section = 'L';
+    {
+      const three = await import('./assets/three-renderer.js' + V);
+      const r = new three.ThreeDRenderer(document.getElementById('gl'));
+      await r.load();
+      const fw = 12000, fd = 9000;
+      const anchor = { x: 2500, y: 6500 };
+      const floor = {
+        id: 'f1', name: 'R', w: fw, d: fd,
+        walls: [{ id: 'w1', points: [
+          { x: 1000, y: 1000 }, { x: 9000, y: 1000 }, { x: 9000, y: 8000 },
+          { x: 1000, y: 8000 }, { x: 1000, y: 1000 }] }],
+        furniture: [], lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+        doors: [], windows: [], bg: null, model3d: null, look3d: null,
+        rooms: [{ id: 'r1', name: 'Study', anchor }],
+        groundAreas: [], voidAreas: [], pools: [],
+      };
+      r.updateFloor(floor, { preset: 'day', floorColor: '#8a7860', floorTex: 'none', wallColor: '#cfd2d6' });
+      const sprites = [];
+      r._floorGroup.traverse(o => { if (o.isSprite) sprites.push(o); });
+      ok('L1 the room label sprite was built', sprites.length >= 1, `${sprites.length}`);
+      // _w(wx, wy, h) = (fw/2 − wx, h, wy − fd/2)
+      const want = { x: fw / 2 - anchor.x, z: anchor.y - fd / 2 };
+      const s = sprites[0];
+      ok('L2 the sprite sits at the ANCHOR in scene coords',
+         s && Math.abs(s.position.x - want.x) < 1 && Math.abs(s.position.z - want.z) < 1,
+         s ? `${s.position.x.toFixed(0)},${s.position.z.toFixed(0)} want ${want.x},${want.z}` : 'none');
+      // The loop centroid is (5000, 4500) — a clearly different place.
+      ok('L3 …and NOT at the loop centroid',
+         s && Math.hypot(s.position.x - (fw / 2 - 5000), s.position.z - (4500 - fd / 2)) > 1000,
+         'distinct');
+      r.destroy();
+    }
+
+    // ═══ M. repairFloor round-trip (nothing new persisted) ═════════════════
+    section = 'M';
+    {
+      const p = await mkPlanner([baseFloor({
+        rooms: [{ id: 'r1', name: 'Den', anchor: { x: 3000, y: 3000 } }],
+        groundAreas: [{ id: 'g1', name: 'L', kind: 'grass', points: sq(1000, 1000, 3000, 3000) }],
+      })]);
+      const round = repairFloor(clone(p.floor()));
+      ok('M1 room anchors survive repairFloor',
+         round.rooms[0].anchor.x === 3000 && round.rooms[0].anchor.y === 3000,
+         JSON.stringify(round.rooms[0].anchor));
+      ok('M2 the insert/move features add NO persisted fields',
+         !('insert' in round.groundAreas[0]) && Object.keys(round.rooms[0]).length === 3,
+         Object.keys(round.rooms[0]).join(','));
+    }
+  } catch (err) {
+    results.push({ name: 'harness threw', pass: false, extra: String(err && err.stack || err) });
+  }
+
+  const passed = results.filter(r => r.pass).length;
+  const total = results.length;
+  document.getElementById('rows').innerHTML = results.map(r =>
+    `<div class="row"><span class="name">${r.name}</span>` +
+    `<span class="${r.pass ? 'pass' : 'fail'}">${r.pass ? 'PASS' : 'FAIL'} <span class="extra">${r.extra}</span></span></div>`).join('');
+  const s = document.getElementById('summary');
+  s.textContent = `VERTEXINSERT ${passed === total ? 'PASS' : 'FAIL'} ${passed}/${total}`;
+  s.className = passed === total ? 'okbg' : 'badbg';
+  document.title = `VERTEXINSERT ${passed === total ? 'PASS' : 'FAIL'} ${passed}/${total}`;
+</script>

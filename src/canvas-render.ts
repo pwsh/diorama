@@ -35,6 +35,8 @@ import {
   parseNowPlaying, isMediaPlayerId,
   resolveRulerEnds, outerWallSegments, wallDimSide, structureExtents,
   peekFloors,
+  midpointHandles, POLY_VERTEX_CAP_GROUND, POLY_VERTEX_CAP_POOL, POLY_VERTEX_CAP_VOID,
+  POLY_VERTEX_CAP_PATH, POLY_VERTEX_CAP_PZONE,
 } from './geometry.js';
 import { compass8, fmtDistanceM, fmtAccuracyM } from './geo.js';
 import { resolveNorth, northMarkerPos, markerScaleOf } from './compass.js';
@@ -304,6 +306,66 @@ export function mmToPx(view: View, wx: number, wy: number) {
   return mmToCanvas(wx, wy, view.ox, view.oy, view.scale);
 }
 
+// Room-name label px half-extents, published per painted label (the
+// envChipHalfPx idiom: the room's WORLD anchor is the position, this is the
+// screen-space extent). Feeds hitRoomLabel → the `roomAnchor` drag. CLEARED in
+// drawAll OUTSIDE the `labels` layer gate, so a hidden layer is undraggable.
+export const roomLabelHalfPx = new Map<string, { w: number; h: number }>();
+
+// --- Midpoint vertex-INSERT handles -----------------------------------------
+// A dim hollow "+" ghost at the midpoint of every edge of a selected shape.
+// Pressing one splices a vertex there and starts the ordinary vertex drag, so
+// the user places the new point in the SAME gesture. Deliberately smaller and
+// dimmer than the solid vertex handles so the two never read as the same thing.
+export const INSERT_HANDLE_MIN_PX = 24;   // edges shorter than this on screen get no handle
+export const INSERT_HANDLE_R_PX = 4;      // drawn half-size (px, pre-DPR)
+
+// Screen-px declutter threshold expressed in world mm for the current zoom.
+export function insertHandleMinLenMm(view: View): number {
+  const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
+  return INSERT_HANDLE_MIN_PX * dpr / Math.max(view.scale, 1e-9);
+}
+
+// The insert affordance is an EDIT tool: only edit mode + the Select tool (the
+// only place mousedown can act on it) ever paints or hit-tests it.
+export function insertHandlesEnabled(p: Planner): boolean {
+  return p.uiMode === 'edit' && p.tool === 'select';
+}
+
+// Per-kind cap resolution: insertion must never push a shape past what a fresh
+// draw could produce (the draw latches / finish* handlers enforce these).
+export const POLY_CAPS = {
+  ground: POLY_VERTEX_CAP_GROUND,
+  pool: POLY_VERTEX_CAP_POOL,
+  void: POLY_VERTEX_CAP_VOID,
+  path: POLY_VERTEX_CAP_PATH,
+  pzone: POLY_VERTEX_CAP_PZONE,
+} as const;
+
+function drawInsertHandles(ctx: CanvasRenderingContext2D, view: View,
+                           pts: { x: number; y: number }[], closed: boolean): void {
+  const hs = midpointHandles(pts, closed, insertHandleMinLenMm(view));
+  if (!hs.length) return;
+  const dpr = window.devicePixelRatio || 1;
+  const r = INSERT_HANDLE_R_PX * dpr;
+  ctx.save();
+  ctx.lineWidth = 1;
+  for (const h of hs) {
+    const q = mmToPx(view, h.x, h.y);
+    ctx.fillStyle = 'rgba(10,16,24,0.45)';
+    ctx.strokeStyle = 'rgba(255,255,255,0.42)';
+    ctx.beginPath();
+    ctx.rect(q.x - r, q.y - r, r * 2, r * 2);
+    ctx.fill(); ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(q.x - r * 0.5, q.y); ctx.lineTo(q.x + r * 0.5, q.y);
+    ctx.moveTo(q.x, q.y - r * 0.5); ctx.lineTo(q.x, q.y + r * 0.5);
+    ctx.strokeStyle = 'rgba(255,255,255,0.7)';
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
 export function drawAll(ctx: CanvasRenderingContext2D, p: Planner, view: View,
                         bgImg: HTMLImageElement | null): void {
   const c = ctx.canvas;
@@ -343,6 +405,10 @@ export function drawAll(ctx: CanvasRenderingContext2D, p: Planner, view: View,
   // reach the per-floor `peek2d` flags).
   if (on(L.peekFloors)) drawPeekFloors(ctx, p, view);
   if (on(L.walls)) drawWalls(ctx, p, view);
+  // Room labels are draggable anchors — the pick map is rebuilt every frame and
+  // cleared HERE, outside the layer gate, so a hidden `labels` layer is also
+  // undraggable (the flightHitPx rule).
+  roomLabelHalfPx.clear();
   if (on(L.labels)) drawRooms(ctx, p, view);
   // Doors + windows share ONE key: they are a single "openings" concept to a
   // user, and in 3D they share `_doorGroup` (which also carries curtains and
@@ -3258,6 +3324,8 @@ function drawPools(ctx: CanvasRenderingContext2D, p: Planner, view: View): void 
         ctx.fillStyle = '#ffb74d'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 1;
         ctx.fill(); ctx.stroke();
       }
+      if (insertHandlesEnabled(p) && pl.points.length < POLY_CAPS.pool)
+        drawInsertHandles(ctx, view, pl.points, true);
     }
   }
   // In-progress draw preview (drawingPoolArea) — mirrors the ground latch.
@@ -3378,12 +3446,18 @@ function drawGroundAreas(ctx: CanvasRenderingContext2D, p: Planner, view: View):
           ctx.fill(); ctx.stroke();
         }
         ctx.restore();
+        // Insert handles ride the CENTERLINE (the polygon is derived — pinned
+        // decision 3): an OPEN polyline, so N points → N−1 midpoints.
+        if (insertHandlesEnabled(p) && g.path.centerline.length < POLY_CAPS.path)
+          drawInsertHandles(ctx, view, g.path.centerline, false);
       } else {
         for (const pt of pts) {
           ctx.beginPath(); ctx.arc(pt.x, pt.y, 5 * dpr, 0, 2 * Math.PI);
           ctx.fillStyle = '#ffb74d'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 1;
           ctx.fill(); ctx.stroke();
         }
+        if (insertHandlesEnabled(p) && g.points.length < POLY_CAPS.ground)
+          drawInsertHandles(ctx, view, g.points, true);
       }
     }
   }
@@ -3493,6 +3567,8 @@ function drawVoidAreas(ctx: CanvasRenderingContext2D, p: Planner, view: View): v
         ctx.fillStyle = '#ffb74d'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 1;
         ctx.fill(); ctx.stroke();
       }
+      if (insertHandlesEnabled(p) && vd.points.length < POLY_CAPS.void)
+        drawInsertHandles(ctx, view, vd.points, true);
     }
   }
   // In-progress draw preview (drawingVoidArea) — mirrors the ground-area latch.
@@ -3567,6 +3643,8 @@ function drawPresenceZones(ctx: CanvasRenderingContext2D, p: Planner, view: View
         ctx.fillStyle = '#ffb74d'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 1;
         ctx.fill(); ctx.stroke();
       }
+      if (insertHandlesEnabled(p) && z.points.length < POLY_CAPS.pzone)
+        drawInsertHandles(ctx, view, z.points, true);
     }
   }
   // In-progress draw preview (drawingPresenceZone) — mirrors the wall-draw latch.
@@ -4008,23 +4086,40 @@ function drawRooms(ctx: CanvasRenderingContext2D, p: Planner, view: View): void 
     const { text, placeholder } = roomLabel(rm, p.roomAreaName(rm));
     const loop = loopContaining(loops, rm.anchor.x, rm.anchor.y);
     if (loop) {
-      // Label at the loop centroid confirms the walls enclose the anchor.
-      // Placeholder (unnamed) rooms draw italic + dimmer.
-      const c = centroid(loop);
-      const px = mmToPx(view, c.x, c.y);
+      // The label sits AT THE ANCHOR — the point the user clicked when placing
+      // the room (and can drag). The loop centroid was the old position; it
+      // ignored the user's intent and drifted with every wall edit. The room ↔
+      // loop pairing is unchanged (the anchor still picks the loop), so the
+      // heat-map label, occupancy glow and activity zones (all loop-keyed) are
+      // untouched. Placeholder (unnamed) rooms draw italic + dimmer.
+      const px = mmToPx(view, rm.anchor.x, rm.anchor.y);
       ctx.fillStyle = placeholder ? 'rgba(207,216,230,0.32)' : 'rgba(207,216,230,0.5)';
       ctx.font = `${placeholder ? 'italic ' : ''}600 ${11 * dpr}px sans-serif`;
-      ctx.fillText(text.toUpperCase(), px.x, px.y);
+      const label = text.toUpperCase();
+      ctx.fillText(label, px.x, px.y);
+      // Publish px half-extents so the label itself becomes a drag target
+      // (the envChipHalfPx idiom — world anchor + screen extent).
+      const tw = ctx.measureText(label).width;
+      roomLabelHalfPx.set(rm.id, {
+        w: Math.max(tw / 2 + 6 * dpr, 14 * dpr), h: 9 * dpr,
+      });
     } else {
       // No enclosing loop: amber marker at the anchor itself so the user can
       // see the room exists but its walls don't close around it.
       const px = mmToPx(view, rm.anchor.x, rm.anchor.y);
       ctx.fillStyle = 'rgba(255,183,77,0.8)';
       ctx.font = `${placeholder ? 'italic ' : ''}600 ${11 * dpr}px sans-serif`;
-      ctx.fillText(`⚠ ${text.toUpperCase()}`, px.x, px.y);
+      const warn = `⚠ ${text.toUpperCase()}`;
+      ctx.fillText(warn, px.x, px.y);
       ctx.fillStyle = 'rgba(255,183,77,0.55)';
       ctx.font = `${9 * dpr}px sans-serif`;
       ctx.fillText('not enclosed by walls', px.x, px.y + 12 * dpr);
+      // The un-enclosed marker is draggable too (that IS how you fix it).
+      ctx.font = `${placeholder ? 'italic ' : ''}600 ${11 * dpr}px sans-serif`;
+      const tw = ctx.measureText(warn).width;
+      roomLabelHalfPx.set(rm.id, {
+        w: Math.max(tw / 2 + 6 * dpr, 14 * dpr), h: 9 * dpr,
+      });
     }
   }
   ctx.restore();
@@ -4125,6 +4220,11 @@ function drawWalls(ctx: CanvasRenderingContext2D, p: Planner, view: View): void 
         ctx.fillRect(pt.x - 4, pt.y - 4, 8, 8);
         ctx.strokeRect(pt.x - 4, pt.y - 4, 8, 8);
       }
+      // Midpoint insert ghosts. A wall is an OPEN polyline (N points → N−1
+      // edges) and has no "selected wall" concept — its vertex anchors already
+      // show on every unlocked wall, so the inserts follow the same rule (and
+      // are edit+Select only, so kiosk/view stay clean).
+      if (insertHandlesEnabled(p)) drawInsertHandles(ctx, view, w.points, false);
     }
     // (Wall-vertex drag length chips moved to the single live-dimension site —
     // see liveDimChips / drawLiveDims at the end of drawAll.)

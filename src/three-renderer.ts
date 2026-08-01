@@ -6727,8 +6727,9 @@ export class ThreeDRenderer {
       // Cache the room ↔ loop pairing for per-frame target-room resolution.
       this._roomZones.push({ roomId: rm.id, loop });
       if (!showLabels) continue;
-      const c = centroid(loop);
-      const wp = this._w(c.x, c.y, 50);
+      // At the ANCHOR (the point the user placed / can drag in 2D), not the
+      // loop centroid — the two views must name the room in the same spot.
+      const wp = this._w(rm.anchor.x, rm.anchor.y, 50);
       const lbl = roomLabel(rm);
       const sprite = this._makeRoomLabelSprite(lbl.text, lbl.placeholder);
       sprite.position.set(wp.x, wp.y, wp.z);

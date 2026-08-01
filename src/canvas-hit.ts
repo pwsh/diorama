@@ -2,11 +2,13 @@ import { switchSize, distMM, pointToSeg, transformVerts, centroid, localToWorld,
          bgLocalToWorld, bgWorldToLocal, furnitureWorldToLocal,
          furnitureCorners, furnitureLocalToWorld, doorEndpoint,
          doorOpenDeltaDeg, doorOpenFraction, isDoubleLeafDoorKind, windowEndpoints, pointInPolygon, resolveRulerEnds, SPRINKLER_DEFAULTS, FLAGPOLE_DEFAULTS, ROBOT_DEFAULTS,
-         lightIconKind, isFirepitKind, FIREPIT_SIZE_MM } from './geometry.js';
+         lightIconKind, isFirepitKind, FIREPIT_SIZE_MM,
+         midpointHandles } from './geometry.js';
 import type { Planner } from './planner.js';
 import type { Vec2, Wall, Sensor, Furniture, BgImage, MotionSensor, EnvSensor, BleProxy, AlarmPanel, CalendarPanel, ThermostatFixture, SafetySensor, AlertBeacon, RobotFixture, CameraFixture, ProjectorFixture, ValveFixture, PlugFixture, SprinklerZone, FlagpoleFixture, PresenceZone, InfoCard, ActionButton, Door, Window as WindowType, Floor, Ruler } from './types.js';
 import type { FloorEdge } from './geometry.js';
-import { envChipHalfPx, infoCardHalfPx, actionButtonHalfPx, flightHitPx, type View } from './canvas-render.js';
+import { envChipHalfPx, infoCardHalfPx, actionButtonHalfPx, flightHitPx, roomLabelHalfPx,
+         insertHandleMinLenMm, insertHandlesEnabled, POLY_CAPS, type View } from './canvas-render.js';
 import { vacMapAffine, vacWorldToPixel, vacSegHasPixel } from './valetudo-map.js';
 
 export function hitPx(view: View): number {
@@ -680,6 +682,103 @@ export function hitVoidAreaVertex(p: Planner, view: View, mm: Vec2): { area: imp
   const h = hitPx(view);
   for (let i = 0; i < vd.points.length; i++) {
     if (distMM(vd.points[i], mm) < h) return { area: vd, idx: i };
+  }
+  return null;
+}
+
+// --- Midpoint vertex-INSERT handle hits --------------------------------------
+// Each of these mirrors the matching real-vertex hit test and MUST be run AFTER
+// it in the mousedown chain: an existing vertex inside its own radius always
+// wins over a nearby midpoint (they can only compete on short edges, which the
+// draw-side minimum-length filter already declutters). The hit radius is
+// deliberately smaller than the real handles' for the same reason.
+const INSERT_HIT_FACTOR = 0.7;
+
+export interface InsertHit { idx: number; x: number; y: number }
+
+function insertHitIn(pts: Vec2[], closed: boolean, view: View, mm: Vec2): InsertHit | null {
+  const h = hitPx(view) * INSERT_HIT_FACTOR;
+  for (const cand of midpointHandles(pts, closed, insertHandleMinLenMm(view))) {
+    if (distMM(cand, mm) < h) return cand;
+  }
+  return null;
+}
+
+// Wall midpoint (OPEN polyline: N points → N−1 handles). Walls have no active
+// selection, so every unlocked wall exposes handles, exactly like its vertex
+// anchors. Walls have no vertex cap.
+export function hitWallVertInsert(p: Planner, view: View, mm: Vec2): { wall: Wall; at: InsertHit } | null {
+  if (!insertHandlesEnabled(p)) return null;
+  for (const w of p.floor().walls) {
+    if (w.locked) continue;
+    const at = insertHitIn(w.points, false, view, mm);
+    if (at) return { wall: w, at };
+  }
+  return null;
+}
+
+export function hitPresenceZoneVertexInsert(p: Planner, view: View, mm: Vec2): { zone: PresenceZone; at: InsertHit } | null {
+  if (!insertHandlesEnabled(p)) return null;
+  const id = p.activePZoneId; if (!id) return null;
+  const z = (p.floor().presenceZones ?? []).find(x => x.id === id);
+  if (!z || z.locked || z.hidden || z.points.length >= POLY_CAPS.pzone) return null;
+  const at = insertHitIn(z.points, true, view, mm);
+  return at ? { zone: z, at } : null;
+}
+
+export function hitGroundAreaVertexInsert(p: Planner, view: View, mm: Vec2): { area: import('./types.js').GroundArea; at: InsertHit } | null {
+  if (!insertHandlesEnabled(p)) return null;
+  const id = p.activeGroundAreaId; if (!id) return null;
+  const g = (p.floor().groundAreas ?? []).find(x => x.id === id);
+  if (!g || g.locked || g.hidden || g.path) return null;   // path-backed → hitPathVertexInsert
+  if (g.points.length >= POLY_CAPS.ground) return null;
+  const at = insertHitIn(g.points, true, view, mm);
+  return at ? { area: g, at } : null;
+}
+
+// Path-backed ground areas insert into the CENTERLINE (an OPEN polyline) — the
+// derived ribbon polygon is regenerated from it (pinned decision 3).
+export function hitPathVertexInsert(p: Planner, view: View, mm: Vec2): { area: import('./types.js').GroundArea; at: InsertHit } | null {
+  if (!insertHandlesEnabled(p)) return null;
+  const id = p.activeGroundAreaId; if (!id) return null;
+  const g = (p.floor().groundAreas ?? []).find(x => x.id === id);
+  if (!g || g.locked || g.hidden || !g.path) return null;
+  if (g.path.centerline.length >= POLY_CAPS.path) return null;
+  const at = insertHitIn(g.path.centerline, false, view, mm);
+  return at ? { area: g, at } : null;
+}
+
+export function hitPoolVertexInsert(p: Planner, view: View, mm: Vec2): { pool: import('./types.js').Pool; at: InsertHit } | null {
+  if (!insertHandlesEnabled(p)) return null;
+  const id = p.activePoolId; if (!id) return null;
+  const pl = (p.floor().pools ?? []).find(x => x.id === id);
+  if (!pl || pl.locked || pl.hidden || pl.points.length >= POLY_CAPS.pool) return null;
+  const at = insertHitIn(pl.points, true, view, mm);
+  return at ? { pool: pl, at } : null;
+}
+
+export function hitVoidAreaVertexInsert(p: Planner, view: View, mm: Vec2): { area: import('./types.js').VoidArea; at: InsertHit } | null {
+  if (!insertHandlesEnabled(p)) return null;
+  const id = p.activeVoidAreaId; if (!id) return null;
+  const vd = (p.floor().voidAreas ?? []).find(x => x.id === id);
+  if (!vd || vd.locked || vd.hidden || vd.points.length >= POLY_CAPS.void) return null;
+  const at = insertHitIn(vd.points, true, view, mm);
+  return at ? { area: vd, at } : null;
+}
+
+// A room's NAME LABEL, as a rect around the room's anchor sized from the px
+// extents the last frame published. An empty map (labels layer hidden, or the
+// floor has no rooms) means no hits — that is the layer gate. Rooms carry no
+// `locked` flag, so there is nothing to refuse. Topmost-first.
+export function hitRoomLabel(p: Planner, view: View, mm: Vec2): { room: import('./types.js').Room } | null {
+  const rooms = p.floor().rooms ?? [];
+  for (let i = rooms.length - 1; i >= 0; i--) {
+    const rm = rooms[i];
+    const ext = roomLabelHalfPx.get(rm.id);
+    if (!ext) continue;
+    const hw = ext.w / Math.max(view.scale, 1e-9);
+    const hh = ext.h / Math.max(view.scale, 1e-9);
+    if (Math.abs(mm.x - rm.anchor.x) <= hw && Math.abs(mm.y - rm.anchor.y) <= hh) return { room: rm };
   }
   return null;
 }

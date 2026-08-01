@@ -17,6 +17,9 @@ import {
   hitVoidArea, hitVoidAreaVertex,
   hitRulerEnd, hitRulerBody,
   hitDoor, hitDoorEnd, hitDoorLock, hitWindow, hitWindowEnd, hitFloorEdge,
+  hitWallVertInsert, hitPresenceZoneVertexInsert, hitGroundAreaVertexInsert,
+  hitPathVertexInsert, hitPoolVertexInsert, hitVoidAreaVertexInsert,
+  hitRoomLabel,
 } from './canvas-hit.js';
 import type { Planner, Drag } from './planner.js';
 import { NEW_ROOM, NEW_LANDMARK } from './planner.js';
@@ -460,6 +463,23 @@ function tryVacuumSegmentClean(p: Planner, mm: Vec2): boolean {
   return true;
 }
 
+// Body-under-cursor helpers for the whole-shape move cursor: only the item that
+// is ALREADY selected reads as draggable (the first click just selects).
+function selectedAreaBodyAt(p: Planner, view: View, mm: Vec2): boolean {
+  const pl = hitPool(p, view, mm);
+  if (pl) return p.activePoolId === pl.id && !pl.locked;
+  const g = hitGroundArea(p, view, mm);
+  if (g) return p.activeGroundAreaId === g.id && !g.locked;
+  const vd = hitVoidArea(p, view, mm);
+  if (vd) return p.activeVoidAreaId === vd.id && !vd.locked;
+  return false;
+}
+
+function selectedZoneBodyAt(p: Planner, view: View, mm: Vec2): boolean {
+  const z = hitPresenceZone(p, view, mm);
+  return !!z && p.activePZoneId === z.id && !z.locked;
+}
+
 export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: View, e: MouseEvent): void {
   if (p.uiMode !== 'edit') return;  // kiosk/view: no drags, no selections
   if (p.editZone) return;
@@ -518,6 +538,18 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
       p.selectedVertex = { kind: 'pzone', itemId: pzv.zone.id, index: pzv.idx }; p.markSelectionHot();
       canvas.style.cursor = 'grabbing'; e.preventDefault(); return;
     }
+    // Midpoint INSERT ghost — tested AFTER the real vertices so an existing
+    // vertex always wins. Splices at the midpoint and hands the new index to
+    // the SAME drag, so insert + placement is one gesture / one undo step (no
+    // save() here — the drag release saves).
+    const pzi = hitPresenceZoneVertexInsert(p, view, mm);
+    if (pzi) {
+      const startPts = pzi.zone.points.map(pt => ({ ...pt }));
+      pzi.zone.points.splice(pzi.at.idx, 0, { x: snap(pzi.at.x, 10), y: snap(pzi.at.y, 10) });
+      p.drag = { kind: 'pzoneVert', id: pzi.zone.id, idx: pzi.at.idx, startMm: mm, startPts };
+      p.selectedVertex = { kind: 'pzone', itemId: pzi.zone.id, index: pzi.at.idx }; p.markSelectionHot();
+      canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
+    }
   }
   // Ground-area vertex handles (active area, ground layer visible) — drag to
   // reshape. Mirrors the presence-zone vertex path.
@@ -528,6 +560,14 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
                  startMm: mm, startPts: gv.area.points.map(pt => ({ ...pt })) };
       p.selectedVertex = { kind: 'ground', itemId: gv.area.id, index: gv.idx }; p.markSelectionHot();
       canvas.style.cursor = 'grabbing'; e.preventDefault(); return;
+    }
+    const gi = hitGroundAreaVertexInsert(p, view, mm);
+    if (gi) {
+      const startPts = gi.area.points.map(pt => ({ ...pt }));
+      gi.area.points.splice(gi.at.idx, 0, { x: snap(gi.at.x, 10), y: snap(gi.at.y, 10) });
+      p.drag = { kind: 'groundVert', id: gi.area.id, idx: gi.at.idx, startMm: mm, startPts };
+      p.selectedVertex = { kind: 'ground', itemId: gi.area.id, index: gi.at.idx }; p.markSelectionHot();
+      canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
     }
   }
   // Path centerline handles (active path-backed ground area) — drag to reshape,
@@ -540,6 +580,17 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
       p.selectedVertex = { kind: 'path', itemId: pv.area.id, index: pv.idx }; p.markSelectionHot();
       canvas.style.cursor = 'grabbing'; e.preventDefault(); return;
     }
+    // Path-backed areas insert into the CENTERLINE; the ribbon regenerates
+    // live through the pathVert drag (and finally on release).
+    const pi = hitPathVertexInsert(p, view, mm);
+    if (pi && pi.area.path) {
+      const startPts = pi.area.path.centerline.map(pt => ({ ...pt }));
+      pi.area.path.centerline.splice(pi.at.idx, 0, { x: snap(pi.at.x, 10), y: snap(pi.at.y, 10) });
+      p.regenGroundAreaPath(pi.area);
+      p.drag = { kind: 'pathVert', id: pi.area.id, idx: pi.at.idx, startMm: mm, startPts };
+      p.selectedVertex = { kind: 'path', itemId: pi.area.id, index: pi.at.idx }; p.markSelectionHot();
+      canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
+    }
   }
   // Pool vertex handles (active pool, ground layer visible) — drag to reshape.
   if (groundInteractive(p)) {
@@ -549,6 +600,14 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
                  startMm: mm, startPts: pv.pool.points.map(pt => ({ ...pt })) };
       p.selectedVertex = { kind: 'pool', itemId: pv.pool.id, index: pv.idx }; p.markSelectionHot();
       canvas.style.cursor = 'grabbing'; e.preventDefault(); return;
+    }
+    const pli = hitPoolVertexInsert(p, view, mm);
+    if (pli) {
+      const startPts = pli.pool.points.map(pt => ({ ...pt }));
+      pli.pool.points.splice(pli.at.idx, 0, { x: snap(pli.at.x, 10), y: snap(pli.at.y, 10) });
+      p.drag = { kind: 'poolVert', id: pli.pool.id, idx: pli.at.idx, startMm: mm, startPts };
+      p.selectedVertex = { kind: 'pool', itemId: pli.pool.id, index: pli.at.idx }; p.markSelectionHot();
+      canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
     }
   }
   // Void-area vertex handles (active void, ground layer visible) — drag to
@@ -560,6 +619,14 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
                  startMm: mm, startPts: vv.area.points.map(pt => ({ ...pt })) };
       p.selectedVertex = { kind: 'void', itemId: vv.area.id, index: vv.idx }; p.markSelectionHot();
       canvas.style.cursor = 'grabbing'; e.preventDefault(); return;
+    }
+    const vi = hitVoidAreaVertexInsert(p, view, mm);
+    if (vi) {
+      const startPts = vi.area.points.map(pt => ({ ...pt }));
+      vi.area.points.splice(vi.at.idx, 0, { x: snap(vi.at.x, 10), y: snap(vi.at.y, 10) });
+      p.drag = { kind: 'voidVert', id: vi.area.id, idx: vi.at.idx, startMm: mm, startPts };
+      p.selectedVertex = { kind: 'void', itemId: vi.area.id, index: vi.at.idx }; p.markSelectionHot();
+      canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
     }
   }
   // Ruler endpoint handles (point ends only) — high priority small targets.
@@ -601,6 +668,19 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
                startMm: mm, startPts: wv.wall.points.map(pt => ({ ...pt })) };
     p.selectedVertex = { kind: 'wall', itemId: wv.wall.id, index: wv.idx }; p.markSelectionHot();
     canvas.style.cursor = 'grabbing'; e.preventDefault(); return;
+  }
+  // Wall midpoint INSERT ghost — after the real anchors (an existing vertex
+  // wins) and before the whole-wall body move, so pressing the "+" adds a
+  // point instead of sliding the wall. The spliced vertex enters the ORDINARY
+  // wallv drag, so resolveWallPoint's angle/grid prefs + the release weld
+  // apply exactly as for any other vertex edit.
+  const wvi = hitWallVertInsert(p, view, mm);
+  if (wvi) {
+    const startPts = wvi.wall.points.map(pt => ({ ...pt }));
+    wvi.wall.points.splice(wvi.at.idx, 0, { x: wvi.at.x, y: wvi.at.y });
+    p.drag = { kind: 'wallv', wallId: wvi.wall.id, idx: wvi.at.idx, startMm: mm, startPts };
+    p.selectedVertex = { kind: 'wall', itemId: wvi.wall.id, index: wvi.at.idx }; p.markSelectionHot();
+    canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
   }
   const fc = hitFurnitureCorner(p, view, mm);
   if (fc) {
@@ -800,7 +880,16 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
   if (zonesInteractive(p)) {
     const pzH = hitPresenceZone(p, view, mm);
     if (pzH) {
-      if (p.activePZoneId !== pzH.id) { p.activePZoneId = pzH.id; p.emitConfig(); p.markSelectionHot(); }
+      if (p.activePZoneId !== pzH.id) {
+        // First click SELECTS only — area/zone paint keeps its deliberately low
+        // hit priority, and a big shape can never swallow a fixture drag.
+        p.activePZoneId = pzH.id; p.emitConfig(); p.markSelectionHot();
+      } else if (!pzH.locked) {
+        // Already selected → whole-shape move (single-delta translate).
+        p.drag = { kind: 'pzoneMove', id: pzH.id, startMm: mm,
+                   startPts: pzH.points.map(pt => ({ ...pt })) };
+        canvas.style.cursor = 'grabbing';
+      }
       e.preventDefault(); return;
     }
   }
@@ -816,6 +905,17 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
     p.drag = { kind: 'bgMove', startMm: mm, start: { x: bgBody.x, y: bgBody.y } };
     canvas.style.cursor = 'grabbing'; e.preventDefault(); return;
   }
+  // Room name label → drag the room's ANCHOR. Late in the order (after every
+  // fixture / furniture / opening / wall / sensor hit) so a label can never
+  // swallow their clicks, but ABOVE ground / pool / void paint because it is a
+  // small explicit target sitting on top of them. The hit map is empty when the
+  // `labels` layer is hidden, which is the layer gate. Rooms have no lock flag.
+  const rlH = hitRoomLabel(p, view, mm);
+  if (rlH) {
+    p.drag = { kind: 'roomAnchor', id: rlH.room.id, startMm: mm,
+               start: { x: rlH.room.anchor.x, y: rlH.room.anchor.y } };
+    canvas.style.cursor = 'grabbing'; e.preventDefault(); return;
+  }
   // Pool body — select it (shows vertex handles). Checked BEFORE ground so a
   // pool drawn over a grass area selects the pool (pools draw on top of ground).
   // Clears any stale ground/void selection so Delete targets the pool. Only when
@@ -824,6 +924,11 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
     const plH = hitPool(p, view, mm);
     if (plH) {
       if (p.activePoolId !== plH.id) { p.activePoolId = plH.id; p.markSelectionHot(); }
+      else if (!plH.locked) {
+        p.drag = { kind: 'poolMove', id: plH.id, startMm: mm,
+                   startPts: plH.points.map(pt => ({ ...pt })) };
+        canvas.style.cursor = 'grabbing';
+      }
       p.activeGroundAreaId = null; p.activeVoidAreaId = null;
       p.emitConfig();
       e.preventDefault(); return;
@@ -836,6 +941,14 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
     const gH = hitGroundArea(p, view, mm);
     if (gH) {
       if (p.activeGroundAreaId !== gH.id) { p.activeGroundAreaId = gH.id; p.markSelectionHot(); }
+      else if (!gH.locked) {
+        // A path-backed area translates its CENTERLINE (the polygon is derived
+        // and regenerated); a plain polygon translates its own points.
+        const pathBacked = !!gH.path;
+        p.drag = { kind: 'groundMove', id: gH.id, path: pathBacked, startMm: mm,
+                   startPts: (pathBacked ? gH.path!.centerline : gH.points).map(pt => ({ ...pt })) };
+        canvas.style.cursor = 'grabbing';
+      }
       p.activePoolId = null; p.activeVoidAreaId = null;
       p.emitConfig();
       e.preventDefault(); return;
@@ -848,6 +961,11 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
     const vH = hitVoidArea(p, view, mm);
     if (vH) {
       if (p.activeVoidAreaId !== vH.id) { p.activeVoidAreaId = vH.id; p.markSelectionHot(); }
+      else if (!vH.locked) {
+        p.drag = { kind: 'voidMove', id: vH.id, startMm: mm,
+                   startPts: vH.points.map(pt => ({ ...pt })) };
+        canvas.style.cursor = 'grabbing';
+      }
       p.activeGroundAreaId = null; p.activePoolId = null;
       p.emitConfig();
       e.preventDefault(); return;
@@ -1105,6 +1223,55 @@ export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: V
         const vd = (f.voidAreas ?? []).find(x => x.id === drag.id);
         if (vd && !vd.locked && vd.points[drag.idx]) {
           vd.points[drag.idx] = { x: snap(mm.x, 10), y: snap(mm.y, 10) };
+        }
+        break;
+      }
+      // Whole-shape moves: ONE delta, snapped to the 10 mm vertex grid, applied
+      // to every start point. Snapping the DELTA (not each point) is what keeps
+      // a non-grid-aligned outline bit-for-bit rigid.
+      case 'pzoneMove': {
+        const z = (f.presenceZones ?? []).find(x => x.id === drag.id);
+        if (z && !z.locked) {
+          const dx = snap(mm.x - drag.startMm.x, 10), dy = snap(mm.y - drag.startMm.y, 10);
+          z.points = drag.startPts.map(pt => ({ x: pt.x + dx, y: pt.y + dy }));
+        }
+        break;
+      }
+      case 'groundMove': {
+        const g = (f.groundAreas ?? []).find(x => x.id === drag.id);
+        if (g && !g.locked) {
+          const dx = snap(mm.x - drag.startMm.x, 10), dy = snap(mm.y - drag.startMm.y, 10);
+          const moved = drag.startPts.map(pt => ({ x: pt.x + dx, y: pt.y + dy }));
+          if (drag.path && g.path) { g.path.centerline = moved; p.regenGroundAreaPath(g); }
+          else g.points = moved;
+        }
+        break;
+      }
+      case 'poolMove': {
+        const pl = (f.pools ?? []).find(x => x.id === drag.id);
+        if (pl && !pl.locked) {
+          const dx = snap(mm.x - drag.startMm.x, 10), dy = snap(mm.y - drag.startMm.y, 10);
+          pl.points = drag.startPts.map(pt => ({ x: pt.x + dx, y: pt.y + dy }));
+        }
+        break;
+      }
+      case 'voidMove': {
+        const vd = (f.voidAreas ?? []).find(x => x.id === drag.id);
+        if (vd && !vd.locked) {
+          const dx = snap(mm.x - drag.startMm.x, 10), dy = snap(mm.y - drag.startMm.y, 10);
+          vd.points = drag.startPts.map(pt => ({ x: pt.x + dx, y: pt.y + dy }));
+        }
+        break;
+      }
+      case 'roomAnchor': {
+        // Moving the label moves the anchor, and the anchor is what picks the
+        // room's wall loop — dragging into another loop legitimately re-homes
+        // the room (including its per-room flooring), dragging outside every
+        // loop shows the amber "not enclosed" state live.
+        const rm = (f.rooms ?? []).find(x => x.id === drag.id);
+        if (rm) {
+          rm.anchor = { x: drag.start.x + (mm.x - drag.startMm.x),
+                        y: drag.start.y + (mm.y - drag.startMm.y) };
         }
         break;
       }
@@ -1428,10 +1595,17 @@ export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: V
     else if (groundInteractive(p) && hitPathVertex(p, view, mm)) canvas.style.cursor = 'grab';
     else if (groundInteractive(p) && hitPoolVertex(p, view, mm)) canvas.style.cursor = 'grab';
     else if (groundInteractive(p) && hitVoidAreaVertex(p, view, mm)) canvas.style.cursor = 'grab';
+    // Midpoint insert ghosts (after the real vertex handles, mirroring mousedown).
+    else if (zonesInteractive(p) && hitPresenceZoneVertexInsert(p, view, mm)) canvas.style.cursor = 'copy';
+    else if (groundInteractive(p) && hitGroundAreaVertexInsert(p, view, mm)) canvas.style.cursor = 'copy';
+    else if (groundInteractive(p) && hitPathVertexInsert(p, view, mm)) canvas.style.cursor = 'copy';
+    else if (groundInteractive(p) && hitPoolVertexInsert(p, view, mm)) canvas.style.cursor = 'copy';
+    else if (groundInteractive(p) && hitVoidAreaVertexInsert(p, view, mm)) canvas.style.cursor = 'copy';
     else if (hitSensorRotateHandle(p, view, mm)) canvas.style.cursor = 'grab';
     else if (zonesInteractive(p) && hitObjectRadiusHandle(p, view, mm)) canvas.style.cursor = 'ew-resize';
     else if (zonesInteractive(p) && (hitObject(p, view, mm) || hitVertexOrZone(p, view, mm))) canvas.style.cursor = 'grab';
     else if (hitWallVert(p, view, mm)) canvas.style.cursor = 'grab';
+    else if (hitWallVertInsert(p, view, mm)) canvas.style.cursor = 'copy';
     else if (hitFurnitureCorner(p, view, mm)) canvas.style.cursor = 'nwse-resize';
     else if (hitDoorLock(p, view, mm)) canvas.style.cursor = 'pointer';
     else if (hitDoorEnd(p, view, mm)) canvas.style.cursor = 'grab';
@@ -1441,6 +1615,10 @@ export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: V
     else if (hitFixture(p, mm, Math.max(250, hitPx(view) * 3))) canvas.style.cursor = 'grab';
     else if (hitFurniture(p, mm) || hitWall(p, mm) || hitSensor(p, view, mm)) canvas.style.cursor = 'grab';
     else if (hitBgBody(p, mm)) canvas.style.cursor = 'grab';
+    else if (hitRoomLabel(p, view, mm)) canvas.style.cursor = 'grab';
+    // A SELECTED area body is draggable as a whole (unselected: click to select).
+    else if (groundInteractive(p) && selectedAreaBodyAt(p, view, mm)) canvas.style.cursor = 'grab';
+    else if (zonesInteractive(p) && selectedZoneBodyAt(p, view, mm)) canvas.style.cursor = 'grab';
     else {
       const fe = hitFloorEdge(p.floor(), view, mm);   // boundsLocked no longer gates (see mousedown)
       canvas.style.cursor = fe
@@ -1698,6 +1876,18 @@ export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement, e?: Mouse
   } else if (drag.kind === 'voidVert') {
     const vd = (f.voidAreas ?? []).find(x => x.id === drag.id);
     if (vd && vd.points[drag.idx]) vd.points[drag.idx] = { x: snap(vd.points[drag.idx].x, 10), y: snap(vd.points[drag.idx].y, 10) };
+    p.save();
+  } else if (drag.kind === 'pzoneMove' || drag.kind === 'poolMove' || drag.kind === 'voidMove') {
+    // Points already carry the snapped delta — nothing to re-snap (re-snapping
+    // per point would distort a non-grid-aligned outline). One undo step.
+    p.save();
+  } else if (drag.kind === 'groundMove') {
+    const g = (f.groundAreas ?? []).find(x => x.id === drag.id);
+    if (g && drag.path && g.path) p.regenGroundAreaPath(g);   // final ribbon regen
+    p.save();
+  } else if (drag.kind === 'roomAnchor') {
+    const rm = (f.rooms ?? []).find(x => x.id === drag.id);
+    if (rm) rm.anchor = { x: snap(rm.anchor.x, 10), y: snap(rm.anchor.y, 10) };
     p.save();
   } else if (drag.kind === 'envResize') {
     p.save();

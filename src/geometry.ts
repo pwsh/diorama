@@ -154,6 +154,49 @@ export function centroid(verts: Vec2[]): Vec2 {
   return { x: s.x / verts.length, y: s.y / verts.length };
 }
 
+// ---------------------------------------------------------------------------
+// Midpoint vertex-INSERT handles (the map-editor idiom). Every polyline /
+// polygon that already has draggable vertices exposes a small "+" ghost at the
+// midpoint of each edge; pressing one splices a vertex there and immediately
+// starts the ordinary vertex drag for it, so an insert + placement is ONE
+// gesture (and therefore ONE undo step — the drag release saves).
+//
+// `closed` distinguishes the two families: an OPEN polyline (walls, path
+// centerlines) with N points has N−1 edges; a CLOSED polygon (ground / pool /
+// void / presence zone) has N edges including the wrap-around N−1 → 0.
+// `idx` is the SPLICE index — `pts.splice(h.idx, 0, {x, y})` puts the new
+// vertex between the edge's two endpoints in both families (the wrap edge
+// appends at the end, which is the same ring position).
+//
+// `minLenMm` drops midpoints on edges too short to be worth a handle (callers
+// pass a screen-px threshold converted through view.scale, so the declutter is
+// zoom-relative). Pure — no view / DOM knowledge.
+export interface VertexInsertHandle { idx: number; x: number; y: number }
+
+export function midpointHandles(pts: Vec2[], closed: boolean, minLenMm = 0): VertexInsertHandle[] {
+  const out: VertexInsertHandle[] = [];
+  const n = pts.length;
+  if (n < 2) return out;
+  const last = closed ? n : n - 1;
+  for (let i = 0; i < last; i++) {
+    const a = pts[i], b = pts[(i + 1) % n];
+    if (!a || !b) continue;
+    if (minLenMm > 0 && Math.hypot(b.x - a.x, b.y - a.y) < minLenMm) continue;
+    out.push({ idx: i + 1, x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+  }
+  return out;
+}
+
+// Vertex caps as ACTUALLY enforced by the draw latches / finish* handlers —
+// insertion must never push a shape past what a fresh draw could produce.
+// (Presence zones have no cap in either path; POLY_VERTEX_CAP_PZONE is
+// Infinity to say so explicitly rather than by omission.)
+export const POLY_VERTEX_CAP_GROUND = 20;
+export const POLY_VERTEX_CAP_POOL = 20;
+export const POLY_VERTEX_CAP_VOID = 12;
+export const POLY_VERTEX_CAP_PATH = 40;
+export const POLY_VERTEX_CAP_PZONE = Infinity;
+
 // 15° edge snap; with one neighbor length is preserved along the snapped ray;
 // with two neighbors we intersect the two snapped rays (angle-only edit).
 export function snapVertex15(prev: Vec2 | null, next: Vec2 | null, cursor: Vec2): Vec2 {

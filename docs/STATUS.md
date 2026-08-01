@@ -330,6 +330,26 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Vertex insert + anchor labels + whole-shape drags** (2026-08-01,
+  user-requested; unreleased — on main past v0.52.0). Midpoint "+"
+  insert handles on every vertex-draggable polyline/polygon (walls,
+  ground areas incl. path centerlines, pools, voids, presence zones
+  — pure midpointHandles in geometry.ts; splice + immediate vertex
+  drag = one undo step; real vertex always wins the hit; caps/locked
+  respected; discovered the "3-12 pzone vertex" doc claim was never
+  enforced — actual caps ground/pool 20, void 12, path 40, pzone
+  unlimited, now documented as constants). Room labels render AT THE
+  ANCHOR in both views (were loop-centroid — off-center for concave
+  rooms) and are DRAGGABLE (roomAnchor drag via roomLabelHalfPx
+  extents; re-homes the room + its flooring to whichever loop holds
+  the anchor; heat-map temp label stays at centroid deliberately).
+  Whole-shape body drags for ground/pzone/pool/void: press the
+  already-selected body → single-delta translate, shape bit-rigid,
+  path-backed moves the centerline + regens; locked refuses. New
+  vertex-insert-test 109/109; layers2d 84/84, ruler-dims 107/107,
+  area-binding 116/116, undo 44/44, rooms 10/10, door-kinds 97/97,
+  path-pool 62/62, yard 4/4, void 10/10, terrain 119/119,
+  sensor-focus 14/14 unchanged.
 - **Particle continuity across rebuilds (audit findings)** (2026-08-01,
   user-directed "work on the audit findings"; released in v0.52.0). All five visually-stateful dirty-key findings fixed
   with one shared mechanism (ParticleCloudState + mulberry32 seeded

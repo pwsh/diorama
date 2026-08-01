@@ -274,6 +274,17 @@ export type Drag =
   | { kind: 'pathVert'; id: string; idx: number; startMm: Vec2; startPts: Vec2[] }
   | { kind: 'poolVert'; id: string; idx: number; startMm: Vec2; startPts: Vec2[] }
   | { kind: 'voidVert'; id: string; idx: number; startMm: Vec2; startPts: Vec2[] }
+  // Whole-shape body moves: translate EVERY vertex by ONE snapped delta (the
+  // wallMove idiom) so the outline can never distort. Started by pressing the
+  // body of an ALREADY-SELECTED item — the first click still just selects, which
+  // keeps area paint's deliberately low hit priority intact. `path` marks a
+  // path-backed ground area whose startPts is the CENTERLINE (ribbon regenerated).
+  | { kind: 'groundMove'; id: string; path: boolean; startMm: Vec2; startPts: Vec2[] }
+  | { kind: 'pzoneMove'; id: string; startMm: Vec2; startPts: Vec2[] }
+  | { kind: 'poolMove'; id: string; startMm: Vec2; startPts: Vec2[] }
+  | { kind: 'voidMove'; id: string; startMm: Vec2; startPts: Vec2[] }
+  // Room name label → the room's ANCHOR (which is what picks its wall loop).
+  | { kind: 'roomAnchor'; id: string; startMm: Vec2; start: Vec2 }
   | { kind: 'rulerEnd'; rulerId: string; end: 'a' | 'b' }
   | { kind: 'env'; id: string; startMm: Vec2; start: Vec2 }
   | { kind: 'envResize'; id: string; startDist: number; startScale: number }
