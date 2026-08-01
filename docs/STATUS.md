@@ -330,6 +330,29 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **3D interaction parity audit + door/window clicks** (2026-08-01,
+  user-reported "doors respond in 2D but not 3D — full pass all
+  objects"; unreleased — on main past v0.52.0). Full 2D↔3D matrix
+  audited (every canvas-interact click/dblclick/kiosk branch vs the
+  raycast dispatch): ~20 kinds already at parity; TWO real gaps —
+  door panels (all 8 kinds) and windows (all 7 incl. bay) — now
+  3D-clickable via userData tags on the hinge/window groups routing
+  through the IDENTICAL toggleItem calls 2D makes (kiosk fires, view
+  refuses, hidden openings layer untappable). Lock-beats-panel by
+  construction (deadbolt kind on the mesh itself); no invisible
+  closed-span catchers (3D = click what you see; pick order is
+  spatial vs 2D's layered — documented). Curtains/shades resolve to
+  their window (2D span parity). New kinds wired into Alt+click
+  identify + the touch tap gate. Deliberate 2D-only (no device
+  action): pool equipment (sidebar toggles), camera/calendar/info/
+  flagpole/sensor selection, env dblclick-bind (optional follow-up),
+  canvas-editing surfaces. FIXTURE_CLICK_KIND_LIST export pins
+  union↔walker. Also repaired fence-gate-test's gap band (the wall
+  midpoint insert handle from the vertex-insert batch landed in the
+  sampled pixels — sample now uses a non-Select tool; 58/58
+  restored). New opening-click-test 39/39; door-kinds 97/97, window
+  53/53, curtain 36/36, covers 22/22, lockoven 31/31, identify
+  45/45, media-raycast 7/7 unchanged.
 - **Banner/vehicle colors + ground-writing persistence fix**
   (2026-08-01, user-requested + user-reported; unreleased — on main
   past v0.52.0). BUG: _migrateBgTexts rebuilt every bgTexts row from

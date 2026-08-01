@@ -182,7 +182,7 @@ export const STAR_RAMP_MIN = 0.02;
 export type FixtureClickKind =
   | 'light' | 'switch' | 'media' | 'alarm' | 'thermostat' | 'safety' | 'alert'
   | 'robot' | 'lock' | 'appliance' | 'action' | 'projector' | 'valve' | 'plug'
-  | 'sprinkler' | 'flight';
+  | 'sprinkler' | 'flight' | 'door' | 'window';
 export interface FixtureClickInfo {
   kind: FixtureClickKind;
   entity_id: string | null;
@@ -194,7 +194,12 @@ export interface FixtureClickInfo {
 const FIXTURE_CLICK_KINDS = new Set<string>([
   'light', 'switch', 'media', 'alarm', 'thermostat', 'safety', 'alert', 'robot',
   'lock', 'appliance', 'action', 'projector', 'valve', 'plug', 'sprinkler', 'flight',
+  'door', 'window',
 ]);
+// Test hook / documentation surface: the SAME set the walker tests, frozen as an
+// array so a harness can assert the union and the walker can never drift apart.
+export const FIXTURE_CLICK_KIND_LIST: readonly string[] =
+  Object.freeze([...FIXTURE_CLICK_KINDS]);
 // Tap gate for the manual pointerdown/pointerup pair (see the listener in
 // `load()`). A FINGER tap routinely travels well past the few px a mouse click
 // does and lingers longer, so a touch pointer gets the SAME tolerances
@@ -2966,8 +2971,13 @@ export class ThreeDRenderer {
     // Sprinkler heads are clickable → toggle; ride the ground layer.
     if (this._sprinklerGroup.visible) roots.push(this._sprinklerGroup);
     for (const g of this._mediaClickables) roots.push(g);
-    // Door lock deadbolts (userData.kind='lock') ride the always-visible door
-    // group; the door panel itself carries no clickable tag, so only the bolt hits.
+    // Doors + windows ride the `openings` layer (_doorGroup). Three tag levels
+    // live in here: the door hinge assembly (kind='door'), the window assembly
+    // (kind='window') and — nested inside a door — the lock deadbolt meshes
+    // (kind='lock'). The walker starts at the hit mesh and climbs, so a bolt
+    // resolves to 'lock' before its parent door, exactly like 2D's hitDoorLock
+    // priority over hitDoor. A layer-hidden openings group drops out of the roots
+    // here, matching 2D's hidden-layer-is-untappable rule.
     if (this._doorGroup.visible) roots.push(this._doorGroup);
     // Live aircraft (roadmap P4 wave 3): every rig's assembly carries
     // userData.kind='flight' + its hex, so a hit on ANY part — fuselage, wing,
@@ -8118,6 +8128,15 @@ export class ThreeDRenderer {
       const cy = sill + glassH / 2;                     // vertical center of glazing
       // Pane center group at (w.x, w.y); rotation matches wall axis.
       const grp = new THREE.Group();
+      // The whole window assembly is CLICKABLE (userData.kind='window'): sashes,
+      // mullions, bay casework/bench, roller shade AND curtain panels all walk up
+      // to this one tag (the curtain's own userData.kind='curtain'/'curtainRod' is
+      // deliberately NOT in FIXTURE_CLICK_KINDS, so the walker passes through it).
+      // That mirrors 2D, where `hitWindow` is span-based — any pixel over the
+      // window toggles the window itself.
+      grp.userData.kind = 'window';
+      grp.userData.fixtureId = w.id;
+      grp.userData.entity_id = w.entity_id ?? null;
       // Vertical base = the host wall segment's base (the sibling of the door
       // hinge above): a window in a free-standing graded wall rides down with it.
       // (w.x, w.y) is already the pane centre on the wall axis. Panes, frames,
@@ -8422,6 +8441,15 @@ export class ThreeDRenderer {
       // flip the panel renders on the wrong side of the hinge and the open
       // swing animates in the opposite direction from the 2D plan.
       const hinge = new THREE.Group();
+      // The whole door assembly is CLICKABLE (userData.kind='door'): the raycast
+      // walker climbs from whatever mesh the ray hit — panel, gate picket, garage
+      // slat, sliding slab, french muntin, outline shell — to this one tag, so a
+      // click anywhere on the door toggles it exactly like the 2D span-based
+      // `hitDoor` does. The lock deadbolts carry their own kind='lock' ON THE MESH,
+      // so the walker finds 'lock' first and a bolt click still wins over the panel.
+      hinge.userData.kind = 'door';
+      hinge.userData.fixtureId = d.id;
+      hinge.userData.entity_id = d.entity_id ?? null;
       // Vertical base = the host wall segment's base, so a gate hangs in its
       // fence (which follows the surroundings grade) rather than at slab level.
       // Resolved from the door's SPAN CENTRE — d.x/d.y is the hinge — and 0

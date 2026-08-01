@@ -1,0 +1,448 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>OPENCLICK …</title>
+<style>
+  body { margin:0; background:#0d1116; color:#cfd8dc; font:13px/1.5 sans-serif; padding:14px; }
+  h1 { font-size:15px; margin:0 0 10px; }
+  #summary { font-size:14px; font-weight:bold; margin:10px 0; padding:8px 10px; border-radius:5px; }
+  .okbg { background:#12331f; color:#69f0ae; } .badbg { background:#3a1414; color:#ff8a80; }
+  .row { display:flex; justify-content:space-between; gap:10px; padding:2px 0; border-bottom:1px solid #1c2530; }
+  .pass { color:#69f0ae; } .fail { color:#ff5252; }
+  .name { color:#90caf9; } .extra { color:#ffd54f; font-size:11px; }
+  #stage { position:fixed; left:-4000px; top:0; width:1000px; height:760px; }
+</style>
+<h1>3D opening interaction — door / window raycast tagging, lock precedence, click routing</h1>
+<div id="summary">Running…</div>
+<div id="rows"></div>
+<div id="stage"></div>
+
+<!-- Drives the REAL ThreeDRenderer (door/window build + raycast tagging) AND the
+     REAL <diorama-three-view> click routing over a REAL Planner, so the 3D door
+     toggle can be compared against the 2D Planner.toggleItem semantics.
+     Harness build (from the repo root; NEVER reuse stale bundles):
+       H=/tmp/diorama-harness-openclick
+       rm -rf "$H"; mkdir -p "$H"
+       cp test-pages/opening-click-test.html "$H"/
+       T=$(mktemp -d); cp -r src/* "$T"/; cp tsconfig.json "$T"/
+       cp test-pages/fake-avatar-store.ts "$T"/avatar-store.ts
+       printf "export { Planner } from '../planner.js';\nexport { ThreeDRenderer, FIXTURE_CLICK_KIND_LIST } from '../three-renderer.js';\nimport './three-view.js';\n" > "$T"/ui/oc-entry.ts
+       npx esbuild "$T"/ui/oc-entry.ts --bundle --format=esm --tsconfig="$T"/tsconfig.json \
+         --alias:lit=$PWD/node_modules/lit/index.js \
+         --alias:lit/decorators.js=$PWD/node_modules/lit/decorators.js \
+         --alias:three=$PWD/node_modules/three/build/three.module.js \
+         --alias:three/examples/jsm/controls/OrbitControls.js=$PWD/node_modules/three/examples/jsm/controls/OrbitControls.js \
+         --alias:three/examples/jsm/loaders/OBJLoader.js=$PWD/node_modules/three/examples/jsm/loaders/OBJLoader.js \
+         --alias:three/examples/jsm/loaders/MTLLoader.js=$PWD/node_modules/three/examples/jsm/loaders/MTLLoader.js \
+         --outfile="$H"/openclick.mod.js
+     Run headless (serve over http — Chrome blocks dynamic module imports on file://);
+     needs a GL context: --enable-unsafe-swiftshader.
+       (cd "$H" && python3 -m http.server 8861 &)
+       google-chrome --headless=new --disable-gpu --use-angle=swiftshader \
+         --enable-unsafe-swiftshader --run-all-compositor-stages-before-draw \
+         --window-size=1200,900 --virtual-time-budget=30000 --dump-dom \
+         "http://localhost:8861/opening-click-test.html" | grep -o "<title>[^<]*" -->
+<script type="module">
+  const V = '?v=' + Date.now();
+  const M = await import('./openclick.mod.js' + V);
+  const { Planner, ThreeDRenderer, FIXTURE_CLICK_KIND_LIST } = M;
+
+  const results = [];
+  const ok = (name, cond, extra = '') => results.push({ name, pass: !!cond, extra: String(extra) });
+  window.__R = results;
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  async function waitFor(cond, tries = 900) {
+    for (let i = 0; i < tries; i++) { if (cond()) return true; await sleep(6); }
+    return !!cond();
+  }
+  const clone = x => JSON.parse(JSON.stringify(x));
+
+  // The EXACT walker _raycastFixture runs: climb from the hit mesh to the first
+  // ancestor whose userData.kind is in the click union.
+  const KINDS = new Set(FIXTURE_CLICK_KIND_LIST);
+  function walk(obj) {
+    let o = obj;
+    while (o) { const u = o.userData; if (u && KINDS.has(u.kind)) return u; o = o.parent; }
+    return null;
+  }
+  const meshesOf = (root) => { const out = []; root.traverse(o => { if (o.isMesh) out.push(o); }); return out; };
+
+  // ── Fixtures ───────────────────────────────────────────────────────────────
+  const DOOR_KINDS = ['swing', 'gate', 'garage', 'sliding', 'pocket', 'double', 'french', 'sliding_glass'];
+  const WIN_KINDS = ['single', 'double_hung', 'casement_pair', 'sliding', 'picture', 'bay', 'bay_bench'];
+  const FW = 26000, FD = 9000;
+  const mkDoors = () => DOOR_KINDS.map((k, i) => ({
+    id: 'd_' + k, x: 1500 + i * 2600, y: 500, w: k === 'garage' ? 2400 : 1200,
+    rotation: 0, kind: k, entity_id: i % 2 === 0 ? ('cover.' + k) : null, label: k,
+  }));
+  const mkWindows = () => WIN_KINDS.map((k, i) => ({
+    id: 'w_' + k, x: 1500 + i * 2600, y: 8500, w: 1800, rotation: 0, kind: k,
+    entity_id: i % 2 === 0 ? ('binary_sensor.w_' + k) : null, label: k,
+  }));
+  const PERIM = [{x:400,y:400},{x:25600,y:400},{x:25600,y:8600},{x:400,y:8600},{x:400,y:400}];
+  const baseFloor = (extra = {}) => ({
+    id: 'f1', name: 'Openings', w: FW, d: FD,
+    walls: [{ id: 'wLoop', points: PERIM.map(q => ({ ...q })), kind: 'full' }],
+    furniture: [], lights: [], switches: [], sensors: [], motionSensors: [],
+    roamers: [], envSensors: [], doors: mkDoors(), windows: mkWindows(),
+    bg: null, rooms: [], bleProxies: [], alarmPanels: [], calendarPanels: [],
+    thermostats: [], safetySensors: [], alertBeacons: [], robots: [],
+    presenceZones: [], cameras: [], projectors: [], valves: [], plugs: [],
+    sprinklerZones: [], flagpoles: [], infoCards: [], actionButtons: [],
+    rulers: [], groundAreas: [], voidAreas: [], pools: [],
+    ...extra,
+  });
+
+  try {
+  // ══ 1. The click union carries the new kinds ══════════════════════════════
+  ok('1a FIXTURE_CLICK_KIND_LIST contains "door"', KINDS.has('door'), FIXTURE_CLICK_KIND_LIST.join(','));
+  ok('1b FIXTURE_CLICK_KIND_LIST contains "window"', KINDS.has('window'));
+  ok('1c the pre-existing kinds are all still in the union',
+     ['light','switch','media','alarm','thermostat','safety','alert','robot','lock',
+      'appliance','action','projector','valve','plug','sprinkler','flight'].every(k => KINDS.has(k)));
+
+  // ══ 2. Renderer build: every door kind is a tagged, walkable assembly ══════
+  const host = document.createElement('div');
+  host.style.cssText = 'position:relative;width:1000px;height:760px';
+  document.getElementById('stage').appendChild(host);
+  const r = new ThreeDRenderer(host);
+  await r.load();
+  r.resize(1000, 760);
+
+  const stateOf = (id) => null;                       // everything closed
+  const stateOpen = (id) => ({ state: 'on', attributes: {} });
+
+  const buildOpenings = (openings, provider) => {
+    r.updateFloor(baseFloor(), { preset: 'day' });
+    r.updateDoorsWindows(openings.doors, openings.windows, provider);
+  };
+
+  // Locate each assembly by its userData tag (they are direct _doorGroup children).
+  const assemblies = () => r._doorGroup.children
+    .filter(c => c.userData && (c.userData.kind === 'door' || c.userData.kind === 'window'));
+
+  for (const provider of [stateOf, stateOpen]) {
+    const label = provider === stateOf ? 'closed' : 'open';
+    buildOpenings({ doors: mkDoors(), windows: mkWindows() }, provider);
+    const asm = assemblies();
+    const byId = Object.fromEntries(asm.map(a => [a.userData.fixtureId, a]));
+    ok(`2-${label}: all ${DOOR_KINDS.length} door kinds build a kind="door" assembly`,
+       DOOR_KINDS.every(k => byId['d_' + k]?.userData.kind === 'door'),
+       DOOR_KINDS.filter(k => byId['d_' + k]?.userData.kind !== 'door').join(',') || 'all ok');
+    ok(`2-${label}: door assemblies carry their entity_id`,
+       byId['d_swing']?.userData.entity_id === 'cover.swing' &&
+       byId['d_gate']?.userData.entity_id === null,
+       `${byId['d_swing']?.userData.entity_id} / ${byId['d_gate']?.userData.entity_id}`);
+    // Every non-lock mesh of every door must walk up to that door's tag.
+    const bad = [];
+    for (const k of DOOR_KINDS) {
+      const a = byId['d_' + k];
+      if (!a) { bad.push(k + ':missing'); continue; }
+      const panels = meshesOf(a).filter(m => m.userData.kind !== 'lock');
+      if (!panels.length) { bad.push(k + ':nomesh'); continue; }
+      for (const m of panels) {
+        const u = walk(m);
+        if (!u || u.kind !== 'door' || u.fixtureId !== 'd_' + k) { bad.push(k + ':' + (u?.kind ?? 'null')); break; }
+      }
+    }
+    ok(`2-${label}: EVERY panel/slat/picket/leaf mesh walks up to its own door`,
+       bad.length === 0, bad.join(' ') || `${DOOR_KINDS.length} kinds clean`);
+
+    // Windows.
+    const badw = [];
+    for (const k of WIN_KINDS) {
+      const a = byId['w_' + k];
+      if (!a || a.userData.kind !== 'window') { badw.push(k + ':asm'); continue; }
+      const ms = meshesOf(a);
+      if (!ms.length) { badw.push(k + ':nomesh'); continue; }
+      for (const m of ms) {
+        const u = walk(m);
+        if (!u || u.kind !== 'window' || u.fixtureId !== 'w_' + k) { badw.push(k + ':' + (u?.kind ?? 'null')); break; }
+      }
+    }
+    ok(`2-${label}: EVERY sash/mullion/casework mesh walks up to its own window`,
+       badw.length === 0, badw.join(' ') || `${WIN_KINDS.length} kinds clean`);
+  }
+
+  // ══ 3. Lock deadbolt still WINS over the panel it lives on ════════════════
+  {
+    const doors = mkDoors();
+    for (const d of doors) { d.lockEntity = null; d.lockLocalState = 'locked'; }
+    buildOpenings({ doors, windows: [] }, stateOf);
+    const asm = assemblies();
+    const missBolt = [], wrongWalk = [];
+    for (const a of asm) {
+      const bolts = meshesOf(a).filter(m => m.userData.kind === 'lock');
+      // The GARAGE kind deliberately builds no deadbolt (an overhead door has no
+      // latch stile — its branch returns before addLockBolts). Pre-existing, and
+      // exactly why the door PANEL had to become clickable: a garage door had no
+      // 3D click target at all before this batch.
+      if (a.userData.fixtureId === 'd_garage') {
+        ok('3a0 the garage kind has no deadbolt (panel click is its only 3D route)',
+           bolts.length === 0, String(bolts.length));
+        continue;
+      }
+      if (!bolts.length) { missBolt.push(a.userData.fixtureId); continue; }
+      for (const b of bolts) {
+        const u = walk(b);
+        if (!u || u.kind !== 'lock' || u.fixtureId !== a.userData.fixtureId) {
+          wrongWalk.push(a.userData.fixtureId + ':' + (u?.kind ?? 'null')); break;
+        }
+      }
+    }
+    ok('3a every other door kind builds lock deadbolts when a lock state exists',
+       missBolt.length === 0, missBolt.join(',') || 'all 7 latching kinds');
+    ok('3b a deadbolt mesh resolves to kind="lock" (NOT the enclosing door)',
+       wrongWalk.length === 0, wrongWalk.join(' ') || 'lock beats panel everywhere');
+    // …and the same door still resolves 'door' from a non-bolt mesh.
+    const sw = asm.find(a => a.userData.fixtureId === 'd_swing');
+    const panel = meshesOf(sw).find(m => m.userData.kind !== 'lock');
+    ok('3c the same door still resolves "door" from its panel',
+       walk(panel)?.kind === 'door', walk(panel)?.kind);
+  }
+
+  // ══ 4. Curtains / shades / benches route to the WINDOW (2D span parity) ════
+  {
+    const windows = [
+      { id: 'w_cur', x: 4000, y: 8500, w: 1800, rotation: 0, kind: 'single', entity_id: null,
+        curtain: { style: 'split', color: '#b9a58c' }, curtainPos: 0 },
+      { id: 'w_shade', x: 9000, y: 8500, w: 1800, rotation: 0, kind: 'single', entity_id: null,
+        coverEntity: 'cover.shade' },
+      { id: 'w_bench', x: 14000, y: 8500, w: 2000, rotation: 0, kind: 'bay_bench', entity_id: null },
+    ];
+    r.updateFloor(baseFloor({ doors: [], windows }), { preset: 'day' });
+    r.updateDoorsWindows([], windows, (id) => id === 'cover.shade'
+      ? { state: 'open', attributes: { current_position: 20 } } : null);
+    const asm = assemblies();
+    const cur = asm.find(a => a.userData.fixtureId === 'w_cur');
+    const shade = asm.find(a => a.userData.fixtureId === 'w_shade');
+    const bench = asm.find(a => a.userData.fixtureId === 'w_bench');
+    // The curtain group is tagged kind='curtain' — deliberately NOT clickable, so
+    // the walker must pass THROUGH it and land on the window.
+    let drape = null, rod = null;
+    cur?.traverse(o => { if (o.userData?.kind === 'curtain' && !drape) drape = o;
+                         if (o.userData?.kind === 'curtainRod' && !rod) rod = o; });
+    ok('4a a curtain panel exists and is tagged kind="curtain"', !!drape);
+    ok('4b "curtain" is NOT in the click union (the walker passes through it)',
+       !KINDS.has('curtain') && !KINDS.has('curtainRod'));
+    const drapeMesh = drape ? meshesOf(drape)[0] : null;
+    ok('4c a curtain FABRIC mesh resolves to its window',
+       walk(drapeMesh)?.kind === 'window' && walk(drapeMesh)?.fixtureId === 'w_cur',
+       `${walk(drapeMesh)?.kind}:${walk(drapeMesh)?.fixtureId}`);
+    ok('4d the curtain ROD resolves to its window',
+       walk(rod)?.kind === 'window' && walk(rod)?.fixtureId === 'w_cur', walk(rod)?.kind);
+    ok('4e every roller-shade mesh resolves to its window',
+       shade && meshesOf(shade).every(m => walk(m)?.fixtureId === 'w_shade'));
+    let cushion = null;
+    bench?.traverse(o => { if (o.userData?.bayBench && !cushion) cushion = o; });
+    ok('4f the bay-bench cushion resolves to its window (2D hitWindow is span-based)',
+       !!cushion && walk(cushion)?.kind === 'window' && walk(cushion)?.fixtureId === 'w_bench',
+       `${walk(cushion)?.kind}`);
+  }
+
+  // ══ 5. A REAL raycast through a door / window resolves the new kinds ═══════
+  {
+    buildOpenings({ doors: mkDoors(), windows: mkWindows() }, stateOf);
+    r.applyViewPreset('top');
+    r._scene.updateMatrixWorld(true);
+    r._camera.updateMatrixWorld(true);
+    r._camera.matrixWorldInverse.copy(r._camera.matrixWorld).invert();
+    const cam = r._camera, rc = r._raycaster;
+    // Reproduce the roots _raycastFixture builds (the door group is one of them).
+    const rootsNow = () => {
+      const roots = [];
+      if (r._lightGroup.visible) roots.push(r._lightGroup);
+      if (r._doorGroup.visible) roots.push(r._doorGroup);
+      return roots;
+    };
+    const pickAt = (obj) => {
+      const v = obj.getWorldPosition(obj.position.clone()); v.project(cam);
+      rc.setFromCamera({ x: v.x, y: v.y }, cam);
+      const hits = rc.intersectObjects(rootsNow(), true);
+      for (const h of hits) { const u = walk(h.object); if (u) return u; }
+      return null;
+    };
+    const asm = assemblies();
+    const swing = asm.find(a => a.userData.fixtureId === 'd_swing');
+    const swPanel = meshesOf(swing).find(m => m.userData.kind !== 'lock');
+    const hitD = pickAt(swPanel);
+    ok('5a raycast through a swing-door panel → kind "door"',
+       hitD?.kind === 'door' && hitD.fixtureId === 'd_swing', `${hitD?.kind}:${hitD?.fixtureId}`);
+    const win = asm.find(a => a.userData.fixtureId === 'w_picture');
+    const winMesh = meshesOf(win)[0];
+    const hitW = pickAt(winMesh);
+    ok('5b raycast through a picture-window pane → kind "window"',
+       hitW?.kind === 'window' && hitW.fixtureId === 'w_picture', `${hitW?.kind}:${hitW?.fixtureId}`);
+
+    // ══ 6. Hidden `openings` layer → untappable (hidden-layer discipline) ════
+    r.setLayerVisibility({ openings: false });
+    ok('6a hiding the openings layer hides _doorGroup', r._doorGroup.visible === false);
+    ok('6b …which drops doors out of the raycast roots entirely',
+       rootsNow().indexOf(r._doorGroup) === -1 && pickAt(swPanel) === null,
+       String(pickAt(swPanel)?.kind));
+    r.setLayerVisibility({ openings: true });
+    ok('6c re-showing the layer restores the door pick',
+       r._doorGroup.visible === true && pickAt(swPanel)?.kind === 'door');
+  }
+  r.destroy();
+
+  // ══ 7. REAL <diorama-three-view> click routing over a REAL Planner ════════
+  class FakeHa {
+    constructor(seed) {
+      this.map = new Map();
+      for (const [k, v] of Object.entries(seed || {})) this.map.set(k, clone(v));
+      this.states = {}; this._s = []; this._c = []; this.calls = [];
+    }
+    connect() { for (const cb of this._c) cb('connected'); for (const cb of this._s) cb(this.states, undefined); }
+    onState(fn) { this._s.push(fn); } onConn(fn) { this._c.push(fn); }
+    callService(d, s, data) { this.calls.push(d + '.' + s + ':' + (data?.entity_id ?? '')); return Promise.resolve(); }
+    async getHistory() { return {}; } async getWeatherForecasts() { return null; }
+    async getDevices() { return []; } async getEntityRegistry() { return []; }
+    async updateEntityRegistry() { return true; }
+    async getFloorRegistry() { return []; } async getAreaRegistry() { return []; }
+    async getCalendarEvents() { return {}; }
+    async getUserData(k) { return this.map.has(k) ? clone(this.map.get(k)) : null; }
+    async setUserData(k, v) { this.map.set(k, clone(v)); return true; }
+    async refreshStates() {} async subscribeMqtt() { return () => {}; } async publishMqtt() {}
+    async listRepairsIssues() { return []; }
+    async subscribePersistentNotifications() { return () => {}; }
+  }
+  const makeStore = (f) => ({
+    v: 2, floors: [f], currentFloorId: f.id, activeSensorId: null,
+    coverage: true, imperial: false, showDetails: false, useRawTargets: false,
+  });
+
+  localStorage.removeItem('diorama:store:v1');
+  localStorage.removeItem('diorama:configs');
+  const rtFloor = baseFloor({
+    doors: [
+      { id: 'dU', x: 3000, y: 500, w: 1200, rotation: 0, kind: 'swing', entity_id: null, label: 'Unbound' },
+      { id: 'dB', x: 7000, y: 500, w: 1200, rotation: 0, kind: 'sliding', entity_id: 'cover.front', label: 'Bound' },
+      { id: 'dL', x: 11000, y: 500, w: 1200, rotation: 0, kind: 'swing', entity_id: null,
+        lockLocalState: 'locked', label: 'Locked' },
+    ],
+    windows: [
+      { id: 'wU', x: 3000, y: 8500, w: 1800, rotation: 0, kind: 'single', entity_id: null, label: 'Unbound' },
+    ],
+  });
+  const p = new Planner();
+  p.viewPersist = false;
+  const ha = new FakeHa({ diorama: makeStore(rtFloor) });
+  p.connectWith(ha);
+  await waitFor(() => p.configIndex !== null && p.store.floors[0].id === 'f1');
+
+  const tvHost = document.createElement('div');
+  tvHost.style.cssText = 'position:relative;width:1000px;height:760px';
+  document.getElementById('stage').appendChild(tvHost);
+  const tv = document.createElement('diorama-three-view');
+  tv.planner = p;
+  tvHost.appendChild(tv);
+  const mounted = await waitFor(() => tv._renderer && tv._renderer.loaded, 2000);
+  ok('7a <diorama-three-view> mounted with a live renderer', mounted);
+  const fire = (info) => tv._renderer._onFixtureClick?.(info);
+  const dbl = (info) => tv._renderer._onFixtureDblClick?.(info);
+  const doorOf = (id) => p.floor().doors.find(d => d.id === id);
+  const winOf = (id) => p.floor().windows.find(w => w.id === id);
+
+  // 7b/c — an UNBOUND door toggles its localState, exactly like the 2D
+  // doorMove click-vs-drag branch (both call Planner.toggleItem).
+  fire({ kind: 'door', entity_id: null, fixtureId: 'dU' });
+  ok('7b 3D click on an unbound door flips localState → on', doorOf('dU').localState === 'on',
+     String(doorOf('dU').localState));
+  fire({ kind: 'door', entity_id: null, fixtureId: 'dU' });
+  ok('7c …and a second click flips it back off', doorOf('dU').localState === 'off',
+     String(doorOf('dU').localState));
+
+  // 7d — a BOUND door dispatches the entity's own domain service (cover.toggle),
+  // the same toggleItem→toggleEntity route the 2D click takes.
+  ha.calls.length = 0;
+  fire({ kind: 'door', entity_id: 'cover.front', fixtureId: 'dB' });
+  ok('7d 3D click on a bound door calls cover.toggle (never a localState flip)',
+     ha.calls.some(c => c.startsWith('cover.toggle:cover.front')) && doorOf('dB').localState === undefined,
+     ha.calls.join('|'));
+
+  // 7e — windows.
+  fire({ kind: 'window', entity_id: null, fixtureId: 'wU' });
+  ok('7e 3D click on an unbound window flips localState → on', winOf('wU').localState === 'on',
+     String(winOf('wU').localState));
+
+  // 7f — a LOCKED door's panel still toggles (2D parity: the `locked` flag blocks
+  // dragging in mousemove, never the click-toggle).
+  fire({ kind: 'door', entity_id: null, fixtureId: 'dL' });
+  ok('7f a door with a lock state still opens from a panel click',
+     doorOf('dL').localState === 'on', String(doorOf('dL').localState));
+
+  // 7g — the deadbolt route is unchanged and independent of the panel route.
+  const beforeLock = doorOf('dL').lockLocalState;
+  fire({ kind: 'lock', entity_id: null, fixtureId: 'dL' });
+  ok('7g the "lock" route still toggles the deadbolt, not the door',
+     doorOf('dL').lockLocalState === 'unlocked' && beforeLock === 'locked' &&
+     doorOf('dL').localState === 'on',
+     `${beforeLock}→${doorOf('dL').lockLocalState}`);
+
+  // 7h — VIEW mode refuses (toggleItem's own guard).
+  p.uiMode = 'view';
+  const beforeView = winOf('wU').localState;
+  fire({ kind: 'window', entity_id: null, fixtureId: 'wU' });
+  fire({ kind: 'door', entity_id: null, fixtureId: 'dU' });
+  ok('7h view mode refuses BOTH the door and window 3D routes',
+     winOf('wU').localState === beforeView && doorOf('dU').localState === 'off',
+     `${winOf('wU').localState}/${doorOf('dU').localState}`);
+
+  // 7i — KIOSK fires (session-only: save() no-ops outside edit).
+  p.uiMode = 'kiosk';
+  fire({ kind: 'door', entity_id: null, fixtureId: 'dU' });
+  ok('7i kiosk fires the door route', doorOf('dU').localState === 'on', String(doorOf('dU').localState));
+  p.uiMode = 'edit';
+  fire({ kind: 'door', entity_id: null, fixtureId: 'dU' });   // back to 'off'
+
+  // 7j/k — Alt+click IDENTIFY reaches the new kinds instead of toggling.
+  p.identifyFx = null;
+  tv._lastAltKey = true;
+  const beforeIdent = doorOf('dU').localState;
+  fire({ kind: 'door', entity_id: null, fixtureId: 'dU' });
+  ok('7j Alt+click on a door identifies it (and never toggles)',
+     p.identifyFx?.kind === 'door' && p.identifyFx.id === 'dU' &&
+     doorOf('dU').localState === beforeIdent,
+     `${p.identifyFx?.kind}:${p.identifyFx?.id}`);
+  p.identifyFx = null;
+  fire({ kind: 'window', entity_id: null, fixtureId: 'wU' });
+  ok('7k Alt+click on a window identifies it',
+     p.identifyFx?.kind === 'window' && p.identifyFx.id === 'wU',
+     `${p.identifyFx?.kind}:${p.identifyFx?.id}`);
+  tv._lastAltKey = false;
+  p.identifyFx = null;
+
+  // 7l — dblclick on an opening is a NO-OP (2D has no door/window dblclick), so
+  // it must not open a binding picker.
+  let pickerOpened = false;
+  tv.addEventListener('open-entity-picker', () => { pickerOpened = true; });
+  const beforeDbl = { d: doorOf('dU').localState, w: winOf('wU').localState };
+  dbl({ kind: 'door', entity_id: null, fixtureId: 'dU' });
+  dbl({ kind: 'window', entity_id: null, fixtureId: 'wU' });
+  ok('7l 3D dblclick on a door/window opens no picker and changes nothing',
+     !pickerOpened && doorOf('dU').localState === beforeDbl.d && winOf('wU').localState === beforeDbl.w,
+     `picker=${pickerOpened}`);
+
+  // 7m — a NON-interactive (view-mode card) three-view refuses entirely.
+  tv.interactive = false;
+  const beforeNI = doorOf('dU').localState;
+  fire({ kind: 'door', entity_id: null, fixtureId: 'dU' });
+  ok('7m interactive=false (view-mode card) refuses the door route',
+     doorOf('dU').localState === beforeNI);
+  tv.interactive = true;
+
+  } catch (e) {
+    ok('THREW', false, (e && e.stack ? e.stack.split('\n').slice(0, 3).join(' | ') : String(e)));
+  }
+
+  const passed = results.filter(x => x.pass).length;
+  const allPass = passed === results.length;
+  document.getElementById('rows').innerHTML = results.map(x =>
+    `<div class="row"><span class="${x.pass ? 'pass' : 'fail'}">${x.pass ? 'PASS' : 'FAIL'}</span>` +
+    `<span class="name">${x.name}</span><span class="extra">${x.extra}</span></div>`).join('');
+  const s = document.getElementById('summary');
+  s.className = allPass ? 'okbg' : 'badbg';
+  s.textContent = `OPENCLICK ${allPass ? 'PASS' : 'FAIL'} ${passed}/${results.length}`;
+  document.title = `OPENCLICK ${allPass ? 'PASS' : 'FAIL'} ${passed}/${results.length}` +
+    (allPass ? '' : ' | ' + results.filter(x => !x.pass).map(x => x.name + '(' + x.extra + ')').join(' ;; '));
+</script>

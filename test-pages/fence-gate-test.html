@@ -330,12 +330,19 @@
         }
       return nDiff;
     };
+    // The band compares FENCE pixels, not edit affordances — since the
+    // vertex-insert batch, edit+Select paints a midpoint "+" insert handle on
+    // every unlocked wall, and this wall's single-edge midpoint (x 6000) lands
+    // inside the gate band. Sample with a non-Select tool so only the fence
+    // geometry differs between the with-wall and no-wall paints.
+    P.tool = 'delete';
     for (const kind of ['fence_picket', 'fence_privacy', 'fence_chainlink', 'hedge']) {
       const control = bandDiff(paint(kind, []), paint(null, []));
       const gated = bandDiff(paint(kind, [gate2]), paint(null, [gate2]));
       ok(`gap2d_control_${kind}`, control > 20, String(control));
       ok(`gap2d_clear_${kind}`, gated === 0, String(gated));
     }
+    P.tool = 'select';
   }
 
   const n = results.length, pcount = results.filter(x => x.startsWith('ok')).length;

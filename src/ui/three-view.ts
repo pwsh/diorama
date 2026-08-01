@@ -38,6 +38,7 @@ const IDENTIFY_KIND_FOR_CLICK: Record<string, IdentifyKind> = {
   alarm: 'alarm', thermostat: 'thermostat', safety: 'safety', alert: 'alert',
   robot: 'robot', action: 'action', projector: 'projector', valve: 'valve',
   plug: 'plug', sprinkler: 'sprinkler', lock: 'door',
+  door: 'door', window: 'window',
 };
 
 @customElement('diorama-three-view')
@@ -415,6 +416,26 @@ export class ThreeView extends LitElement {
         if (dr) p.toggleDoorLock(dr);
         return;
       }
+      // Door panel (all eight kinds: swing / gate / garage / sliding / pocket /
+      // double / french / sliding_glass) → open/close. Routed through the SAME
+      // Planner.toggleItem the 2D `doorMove` click-vs-drag branch and the 2D
+      // kiosk branch use, so bound covers (partial position) and unbound
+      // localState flips can never diverge between the views. toggleItem refuses
+      // in view mode; kiosk fires (session-only — save() no-ops outside edit).
+      // The lock deadbolt keeps its own 'lock' tag and is resolved above.
+      if (kind === 'door') {
+        const dr = p.floor().doors.find(x => x.id === fixtureId);
+        if (dr) p.toggleItem(dr);
+        return;
+      }
+      // Window sash → open/close. Same reasoning as doors; 2D's `hitWindow` is
+      // span-based, so ANY part of the window assembly (sash, mullion, bay
+      // casework, roller shade, curtain drape) maps to the one window toggle.
+      if (kind === 'window') {
+        const wn = p.floor().windows.find(x => x.id === fixtureId);
+        if (wn) p.toggleItem(wn);
+        return;
+      }
       // Stove/oven body → toggle its persistent doorOpen flag (the oven door).
       // The on/off entity binding is reached via dblclick / sidebar, not here.
       if (kind === 'appliance') {
@@ -472,6 +493,10 @@ export class ThreeView extends LitElement {
       // Aircraft have no dblclick action — the first tap already opened the
       // detail card, and there is nothing to bind.
       if (kind === 'flight') return;
+      // Doors + windows have NO 2D dblclick action either (the 2D dblclick chain
+      // never tests hitDoor/hitWindow — binding lives in the sidebar editors), so
+      // a second 3D tap must stay a no-op rather than inventing a picker here.
+      if (kind === 'door' || kind === 'window') return;
       const f = p.floor();
 
       // Bound media furniture (TVs): open the media control modal. Unbound in
