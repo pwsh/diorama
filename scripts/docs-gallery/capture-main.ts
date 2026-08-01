@@ -18,7 +18,7 @@
 import { GIFEncoder, quantize, applyPalette } from 'gifenc';
 import { AVATAR_PACK_MANIFEST } from '../../src/avatar-packs/manifest.js';
 import {
-  FURNITURE_KINDS, furnitureCat, isWetBathKind, ENV_KINDS, envValueText, robotLedColor,
+  FURNITURE_KINDS, furnitureCat, isWetBathKind, ENV_KINDS, envValueText, robotLedColor, isFirepitKind,
 } from '../../src/geometry.js';
 import type { LightIconKind } from '../../src/types.js';
 
@@ -306,7 +306,7 @@ const WALL_LIGHT = new Set<LightIconKind>(['sconce', 'wall_sconce', 'step', 'flo
 // they get their own tighter, lower orbit that fills the frame with the trim
 // ring / stake head and still fits the upward beam (inground cone tops out at
 // ~1600 mm, ground_spot's beam leaves frame by design).
-const GROUND_LIGHT = new Set<LightIconKind>(['inground', 'ground_spot']);
+const GROUND_LIGHT = new Set<LightIconKind>(['inground', 'ground_spot', 'firepit_round', 'firepit_square']);
 // Per-kind camera framing overrides {targetY, radius, elevDeg}. The default
 // room-scale orbit ([0,1200,0] r6800 e22) works for every kind that throws a
 // floor pool — the pool is what makes a small ceiling fixture read. The exhaust
@@ -320,6 +320,10 @@ const LIGHT_FRAMING: Partial<Record<LightIconKind, [number, number, number]>> = 
   exhaust: [2400, 1400, -45],
   exhaust_light: [2400, 1400, -45],
   exhaust_wall: [2000, 1100, 2],
+  // Fire pits are 900 mm ground features whose flames top out ~900 mm: a tight,
+  // low orbit fills the frame with the stone rim + fire (the ground-kind rule).
+  firepit_round: [500, 3200, 16],
+  firepit_square: [500, 3200, 16],
 };
 function capLight(sub: Subject, o: CapOpts): string {
   const gifPx = o.size ?? 400, N = o.frames ?? 34, fps = o.fps ?? 12;
@@ -343,7 +347,10 @@ function capLight(sub: Subject, o: CapOpts): string {
     label: '', length: 1600,
   };
   f.lights = [light];
-  const isFire = kind === 'fireplace';
+  // Fire pits share the hearth's capture script: night preset, and a plain
+  // steady ON window (their look IS the flicker — a colour sweep would fight
+  // the renderer's forced warm tint, which ignores rgb_color for fire kinds).
+  const isFire = kind === 'fireplace' || isFirepitKind(kind);
   R.updateFloor(f, isFire ? NIGHT : DUSK, undefined, undefined, nullState);
   const [tgtY, radius, elevDeg] = LIGHT_FRAMING[kind] ?? [1200, 6800, 22];
   const target: [number, number, number] = [0, tgtY, 0];
@@ -714,6 +721,8 @@ const LIGHT_KINDS: { id: LightIconKind; label: string; glyph: string }[] = [
   { id: 'exhaust', label: 'Exhaust fan', glyph: '❊' },
   { id: 'exhaust_wall', label: 'Wall exhaust fan', glyph: '⊛' },
   { id: 'exhaust_light', label: 'Exhaust + light', glyph: '❈' },
+  { id: 'firepit_round', label: 'Fire pit (round)', glyph: '◉' },
+  { id: 'firepit_square', label: 'Fire pit (square)', glyph: '▣' },
 ];
 const CAT_PAGE: Record<string, string> = { furniture: 'furniture', appliance: 'appliances', bathroom: 'bathroom', outdoor: 'outdoor' };
 const CAT_TITLE: Record<string, string> = {

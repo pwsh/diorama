@@ -254,7 +254,9 @@ export type LightIconKind =
   | 'heatlamp'        // ceiling bathroom heat lamp: red bulb domes, forced warm-red glow + pool
   | 'exhaust'         // ceiling exhaust grille: spinning blades behind slats, no floor disc
   | 'exhaust_wall'    // wall-mount exhaust: round housing + louver shutter, wall-snaps flush, no disc
-  | 'exhaust_light';  // ceiling exhaust + center light globe (fan_light precedent)
+  | 'exhaust_light'   // ceiling exhaust + center light globe (fan_light precedent)
+  | 'firepit_round'   // outdoor fire pit: stone ring + logs, flickering flames (fireplace pattern)
+  | 'firepit_square'; // outdoor fire pit: squared stone bowl + logs, flickering flames
 
 // Logical-state light binding (Display & Controls arc, batch DC-B). A light
 // whose ON / color / flash derives from ANY entity's state through the shared

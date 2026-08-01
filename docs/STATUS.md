@@ -324,6 +324,21 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Firepit models** (2026-08-01, user-requested "round and square
+  firepit models with a fire animation that can be turned on and
+  off"; unreleased — on main past v0.51.0). Two LightIconKinds on
+  the fireplace pattern (firepit_round ◉ / firepit_square ▣, shared
+  900 mm footprint via FIREPIT_SIZE_MM/isFirepitKind): deterministic
+  index-hashed stone ring / boxed stone bowl + logs; ON = ember bed,
+  4 swaying flame cones, warm PointLight, flicker-scaled floor pool;
+  OFF = cold dark basin. Bindable light./switch. or unbound
+  localState, click-toggle everywhere; per-frame flame flicker via
+  the fireplace force-rebuild predicate; ground-standing (rides yard
+  grades, terrain §H7b); no wall snap; 450 mm hit radius; gallery
+  hand-lists at 28 light kinds (guard parity verified; CDP regen
+  deferred). Noted follow-up: no warm_hands anchor (a radial pit has
+  no hearth front). Tests: firepit 52/52 (new), terrain 119/119
+  (+2), toolbar 53/53 (28 light cards), layers2d 84/84.
 - **Weather dirty-key decoupled from configRev** (2026-08-01,
   user-reported "weather overlays redraw at entity changes";
   unreleased — on main past v0.51.0). The _keyBgText precedent

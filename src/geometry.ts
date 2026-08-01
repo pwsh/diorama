@@ -785,6 +785,21 @@ export function lightIconKind(l: { iconKind?: LightIconKind }): LightIconKind {
   return l.iconKind ?? LIGHT_DEFAULTS.iconKind;
 }
 
+// Fire pits (round + square) — outdoor ground fire features built on the
+// FIREPLACE pattern: forced warm orange-red regardless of the bound entity's
+// colour, per-frame flame flicker (three-view forces the rebuild while one is
+// ON, like a fireplace / heatlamp), and GROUND-STANDING (they follow the yard
+// grade, see GROUND_STANDING_LIGHT_KINDS in three-renderer.ts). Unlike a
+// fireplace they never wall-snap — a fire pit stands in the open.
+// FIREPIT_SIZE_MM is the shared footprint (outer diameter / square side) the
+// 3D build, the 2D plan glyph and the 2D hit radius all key off, so they can
+// never disagree.
+export const FIREPIT_SIZE_MM = 900;
+export const FIREPIT_KINDS = new Set<LightIconKind>(['firepit_round', 'firepit_square']);
+export function isFirepitKind(kind: string | undefined): boolean {
+  return kind != null && FIREPIT_KINDS.has(kind as LightIconKind);
+}
+
 // Stairs-family kinds a step light can mount flush against.
 export const STEP_LIGHT_EDGE_KINDS = new Set<FurnitureKind>(['stairs', 'stairs_half', 'stair_landing']);
 

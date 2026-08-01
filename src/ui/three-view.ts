@@ -6,7 +6,7 @@ import { customElement } from './define.js';
 // startup path never downloads it.
 import type { ThreeDRenderer, ZoneWorld, HaloWorld, TargetWorld, ActivityContext,
   InteractiveItem, GpsPinWorld, GpsLandmarkWorld, GeoEventWorld, WeatherFxState, VacMapEntry } from '../three-renderer.js';
-import { localToWorld, transformVerts, pointInPolygon, sensorColor, hexToInt, motionColor, lightIconKind, furnitureKind, resolveFurnitureDef, furnitureCat, isBinKind, isSpeakerKind, isWetBathKind, isVehicleKind, isClimateApplianceKind, isMechanicalApplianceKind, mechanicalBindDomains, isBladedFanKind, isStairsKind, alarmStateColor, valveOpenness, sprinklerRunning, sprinklerHeadKind, sprinklerArcDeg, sprinklerRadius, sprinklerRotation, flagpoleHoistFraction, doorSpanCenter, isDroopPlant, plantThirsty, PLANT_MOISTURE_DEFAULT_THRESHOLD, hasFunctionalFront, frontVectorPlan } from '../geometry.js';
+import { localToWorld, transformVerts, pointInPolygon, sensorColor, hexToInt, motionColor, lightIconKind, isFirepitKind, furnitureKind, resolveFurnitureDef, furnitureCat, isBinKind, isSpeakerKind, isWetBathKind, isVehicleKind, isClimateApplianceKind, isMechanicalApplianceKind, mechanicalBindDomains, isBladedFanKind, isStairsKind, alarmStateColor, valveOpenness, sprinklerRunning, sprinklerHeadKind, sprinklerArcDeg, sprinklerRadius, sprinklerRotation, flagpoleHoistFraction, doorSpanCenter, isDroopPlant, plantThirsty, PLANT_MOISTURE_DEFAULT_THRESHOLD, hasFunctionalFront, frontVectorPlan } from '../geometry.js';
 import { compass8, fmtDistanceM } from '../geo.js';
 import { resolveNorth, markerScaleOf } from '../compass.js';
 import { parseNowPlaying, isMediaPlayerId } from '../geometry.js';
@@ -1963,13 +1963,16 @@ export class ThreeView extends LitElement {
 
       // Lights + switches: structural + state/brightness/color per entity.
       // Fireplace lights flicker via Math.random() inside the builder, so an
-      // active fireplace forces a rebuild every frame (cheap: few lights). A
-      // logical-state light flagged `flash` (via its rule) pulses the SAME way,
-      // so it also forces the per-frame rebuild.
+      // active fireplace forces a rebuild every frame (cheap: few lights). Fire
+      // pits (round + square) build their flames the same way, and a heat lamp
+      // breathes off the absolute clock — all three need the per-frame rebuild.
+      // A logical-state light flagged `flash` (via its rule) pulses the SAME
+      // way, so it also forces it.
       const lightFlashing = (l: typeof f.lights[number]) =>
         !!(p.effectiveState(l)?.attributes as Record<string, unknown> | undefined)?._flash;
       const hasLiveFireplace = f.lights.some(l =>
-        ((l.iconKind === 'fireplace' || l.iconKind === 'heatlamp') && p.effectiveState(l)?.state === 'on') || lightFlashing(l));
+        ((l.iconKind === 'fireplace' || l.iconKind === 'heatlamp' || isFirepitKind(l.iconKind)) &&
+          p.effectiveState(l)?.state === 'on') || lightFlashing(l));
       const keyLights = hasLiveFireplace ? `${Math.random()}` :
         `${p.configRev}|` + f.lights.map(l => {
           // effectiveState folds logic (derived on/color/flash from ANY entity),

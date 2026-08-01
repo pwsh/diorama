@@ -114,6 +114,8 @@ const LIGHT_KINDS: { id: LightIconKind; label: string; glyph: string }[] = [
   { id: 'inground', label: 'In-ground uplight', glyph: '⤒' }, { id: 'ground_spot', label: 'Ground spot', glyph: '⟰' },
   { id: 'heatlamp', label: 'Heat lamp', glyph: '♨' }, { id: 'exhaust', label: 'Exhaust (ceiling)', glyph: '❊' },
   { id: 'exhaust_wall', label: 'Exhaust (wall)', glyph: '⊛' }, { id: 'exhaust_light', label: 'Exhaust + light', glyph: '❈' },
+  { id: 'firepit_round', label: 'Fire pit (round)', glyph: '◉' },
+  { id: 'firepit_square', label: 'Fire pit (square)', glyph: '▣' },
 ];
 
 const WALL_KINDS: { id: WallKind; label: string }[] = [

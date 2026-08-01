@@ -1,7 +1,8 @@
 import { switchSize, distMM, pointToSeg, transformVerts, centroid, localToWorld,
          bgLocalToWorld, bgWorldToLocal, furnitureWorldToLocal,
          furnitureCorners, furnitureLocalToWorld, doorEndpoint,
-         doorOpenDeltaDeg, doorOpenFraction, isDoubleLeafDoorKind, windowEndpoints, pointInPolygon, resolveRulerEnds, SPRINKLER_DEFAULTS, FLAGPOLE_DEFAULTS, ROBOT_DEFAULTS } from './geometry.js';
+         doorOpenDeltaDeg, doorOpenFraction, isDoubleLeafDoorKind, windowEndpoints, pointInPolygon, resolveRulerEnds, SPRINKLER_DEFAULTS, FLAGPOLE_DEFAULTS, ROBOT_DEFAULTS,
+         lightIconKind, isFirepitKind, FIREPIT_SIZE_MM } from './geometry.js';
 import type { Planner } from './planner.js';
 import type { Vec2, Wall, Sensor, Furniture, BgImage, MotionSensor, EnvSensor, BleProxy, AlarmPanel, CalendarPanel, ThermostatFixture, SafetySensor, AlertBeacon, RobotFixture, CameraFixture, ProjectorFixture, ValveFixture, PlugFixture, SprinklerZone, FlagpoleFixture, PresenceZone, InfoCard, ActionButton, Door, Window as WindowType, Floor, Ruler } from './types.js';
 import type { FloorEdge } from './geometry.js';
@@ -133,7 +134,12 @@ export function hitFixture(p: Planner, mm: Vec2, hitMM: number): FixtureHit | nu
   for (let i = 0; i < f.lights.length; i++) {
     const l = f.lights[i];
     const d2 = (l.x - mm.x) ** 2 + (l.y - mm.y) ** 2;
-    if (d2 < bd) { bd = d2; best = { kind: 'light', idx: i }; }
+    // Fire pits draw a real-scale FIREPIT_SIZE_MM footprint, so the whole basin
+    // stays clickable even when the generic hit radius is smaller (the oversized
+    // switch-plate idiom just below).
+    const r2 = isFirepitKind(lightIconKind(l))
+      ? Math.max(bd, (FIREPIT_SIZE_MM / 2) ** 2) : bd;
+    if (d2 < r2 && (best === null || d2 < bd)) { bd = d2; best = { kind: 'light', idx: i }; }
   }
   for (let i = 0; i < f.switches.length; i++) {
     const sw = f.switches[i];

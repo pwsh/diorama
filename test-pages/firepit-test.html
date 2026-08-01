@@ -1,0 +1,312 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>firepit test</title>
+<style>html,body{margin:0;background:#111;color:#ccc;font:12px sans-serif}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<!--
+  Two new LightIconKinds: firepit_round + firepit_square — outdoor fire features
+  on the FIREPLACE pattern (forced warm tint, per-frame flame flicker, bindable /
+  click-to-toggle) but GROUND-STANDING and never wall-snapped.
+
+  Pure helpers via geometry.mod.js; the 3D builds via the BUILT three-renderer
+  chunk; the 2D footprint + hit test via ONE COMBINED canvas bundle (canvas-render
+  and canvas-hit must share a module instance — the door-kinds / flights-ui
+  precedent) driven by the real Planner.
+
+  NB the grade-following half of the contract (a pit + its floor pool riding
+  Scene3D.groundLevelMm out in the yard) lives in terrain-test.html §H7b, next to
+  the lamp/sconce pair it generalizes.
+
+  Harness build (from the repo root; NEVER reuse stale bundles):
+    npm run build
+    H=/tmp/diorama-harness-firepit
+    rm -rf "$H"; mkdir -p "$H"; cp -r dist/* "$H"/
+    cp test-pages/firepit-test.html "$H"/
+    npx esbuild src/geometry.ts --bundle --format=esm --outfile="$H"/geometry.mod.js
+    T=$(mktemp -d); cp -r src/* "$T"/; cp tsconfig.json "$T"/
+    cp test-pages/fake-avatar-store.ts "$T"/avatar-store.ts
+    printf "export * from './canvas-render.js';\nexport * from './canvas-hit.js';\n" > "$T"/canvas2d-entry.ts
+    npx esbuild "$T"/planner.ts        --bundle --format=esm --outfile="$H"/planner.mod.js
+    npx esbuild "$T"/canvas2d-entry.ts --bundle --format=esm --outfile="$H"/canvas-render.mod.js
+  Run headless (serve over http — Chrome blocks dynamic module imports on file://):
+    (cd "$H" && python3 -m http.server 8947 &)
+    google-chrome --headless=new --disable-gpu --use-angle=swiftshader \
+      --enable-unsafe-swiftshader --run-all-compositor-stages-before-draw \
+      --window-size=1200,900 --virtual-time-budget=30000 --dump-dom \
+      "http://localhost:8947/firepit-test.html" | grep -o "<title>[^<]*"
+-->
+<script type="module">
+ try {
+  const V = '?v=' + Date.now();
+  const geo = await import('./geometry.mod.js' + V);
+  const mod = await import('./assets/three-renderer.js' + V);
+  const { Planner } = await import('./planner.mod.js' + V);
+  const C2D = await import('./canvas-render.mod.js' + V);
+  const { drawAll, computeView, mmToPx, hitFixture } = C2D;
+  const { isFirepitKind, FIREPIT_KINDS, FIREPIT_SIZE_MM,
+          snapFireplaceToWall, snapFloodlightToWall, snapSwitchToWall, lightIconKind } = geo;
+
+  const tests = [];
+  const ok = (name, cond, detail = '') => tests.push({ name, ok: !!cond, detail: String(detail) });
+  const near = (a, b, t = 1e-6) => Math.abs(a - b) <= t;
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  async function waitFor(cond, tries = 600) {
+    for (let i = 0; i < tries; i++) { if (cond()) return true; await sleep(4); }
+    return !!cond();
+  }
+  const KINDS = ['firepit_round', 'firepit_square'];
+
+  // ═══ 1. Pure membership + shared constants ════════════════════════════════
+  ok('P1 isFirepitKind accepts both pits',
+     isFirepitKind('firepit_round') && isFirepitKind('firepit_square'));
+  ok('P2 isFirepitKind rejects the hearth + everything else',
+     !isFirepitKind('fireplace') && !isFirepitKind('bulb') && !isFirepitKind('lamp')
+     && !isFirepitKind('heatlamp') && !isFirepitKind(undefined) && !isFirepitKind(''));
+  ok('P3 FIREPIT_KINDS holds exactly the two kinds',
+     FIREPIT_KINDS.size === 2 && KINDS.every(k => FIREPIT_KINDS.has(k)), FIREPIT_KINDS.size);
+  ok('P4 FIREPIT_SIZE_MM is the shared 900 mm footprint', FIREPIT_SIZE_MM === 900, FIREPIT_SIZE_MM);
+  ok('P5 lightIconKind round-trips a pit', lightIconKind({ iconKind: 'firepit_square' }) === 'firepit_square');
+
+  // ── Wall-snap ISOLATION: a pit stands in the open. snapFireplaceToWall is
+  // keyed on iconKind === 'fireplace', so a pit dropped right on a wall must
+  // not move (and neither the flood nor the switch snapper may claim it).
+  {
+    const wall = [{ points: [{ x: 0, y: 2000 }, { x: 6000, y: 2000 }], kind: 'full' }];
+    const at = (kind) => ({ x: 3000, y: 2150, rotation: 0, iconKind: kind });
+    const pitR = at('firepit_round'), pitS = at('firepit_square'), hearth = at('fireplace');
+    const snappedR = snapFireplaceToWall(pitR, wall);
+    const snappedS = snapFireplaceToWall(pitS, wall);
+    const snappedH = snapFireplaceToWall(hearth, wall);
+    ok('P6 fire pits never wall-snap (fireplace snapper is kind-keyed)',
+       snappedR === false && snappedS === false &&
+       pitR.x === 3000 && pitR.y === 2150 && pitR.rotation === 0 &&
+       pitS.x === 3000 && pitS.y === 2150,
+       `r=${snappedR} s=${snappedS} pos=${pitR.x},${pitR.y}`);
+    ok('P7 …while the hearth itself still does (negative control)',
+       snappedH === true && hearth.y !== 2150, `${hearth.x},${hearth.y}`);
+    const pitF = at('firepit_round');
+    ok('P8 the floodlight snapper ignores pits too',
+       snapFloodlightToWall(pitF, wall) === false && pitF.y === 2150);
+    // Sanity: the wall really is in snap range for a kind that DOES snap.
+    const sw = { id: 's1', x: 3000, y: 2150, rotation: 0 };
+    ok('P9 control: the wall is within snap range', snapSwitchToWall(sw, [], wall, 500) === true);
+  }
+
+  // ═══ 2. 3D builds ═════════════════════════════════════════════════════════
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+  r.resize(1280, 880);
+  const FW = 6000, FD = 6000;
+  const floor3d = (lights) => ({
+    id: 'f1', name: 'T', w: FW, d: FD,
+    walls: [], furniture: [], lights, switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], rooms: [], groundAreas: [], voidAreas: [], pools: [],
+    bg: null, model3d: null, look3d: null,
+  });
+  const scene3d = { preset: 'night', floorColor: '#3a3f4a', floorTex: 'none', wallColor: '#7a8494' };
+  const mkPit = (kind, over = {}) =>
+    ({ id: 'fp', x: FW / 2, y: FD / 2, entity_id: 'light.pit', iconKind: kind, label: '', ...over });
+  const build = (light, state) => {
+    r.updateFloor(floor3d([light]), scene3d);
+    r.updateLightsSwitches([light], [], id => (id === 'light.pit' ? state : null));
+    const kids = r._lightGroup.children;
+    const body = kids.find(c => c.type === 'Group');
+    const meshes = body ? body.children.filter(c => c.isMesh) : [];
+    return {
+      body, meshes, kids,
+      flames: meshes.filter(c => c.userData.firepitFlame),
+      embers: meshes.filter(c => c.userData.firepitEmber),
+      pointLights: kids.filter(c => c.isPointLight),
+      pools: kids.filter(c => c.isMesh && c.geometry.type === 'CircleGeometry'),
+      boxes: meshes.filter(c => c.geometry.type === 'BoxGeometry'),
+      cyls: meshes.filter(c => c.geometry.type === 'CylinderGeometry'),
+    };
+  };
+  const ON = { state: 'on', attributes: { brightness: 255 } };
+  const OFF = { state: 'off', attributes: {} };
+
+  for (const kind of KINDS) {
+    const on = build(mkPit(kind), ON);
+    ok(`B1 ${kind} ON builds flames (≥4 emissive cones)`, on.flames.length >= 4, on.flames.length);
+    ok(`B2 ${kind} ON builds an ember bed`, on.embers.length === 1, on.embers.length);
+    ok(`B3 ${kind} ON casts a point light`, on.pointLights.length === 1, on.pointLights.length);
+    ok(`B4 ${kind} ON draws a floor pool disc`, on.pools.length === 1, on.pools.length);
+    // The pool must be the light-pool disc at the walking surface, not the ember.
+    ok(`B5 ${kind} floor pool sits at the surface (y≈3)`, near(on.pools[0]?.position.y, 3), on.pools[0]?.position.y);
+    ok(`B6 ${kind} flames are transparent (no inverted-hull shells on fire)`,
+       on.flames.every(f => f.material.transparent && f.children.length === 0));
+
+    const off = build(mkPit(kind), OFF);
+    ok(`B7 ${kind} OFF has no flames / ember / point light / pool`,
+       off.flames.length === 0 && off.embers.length === 0 &&
+       off.pointLights.length === 0 && off.pools.length === 0,
+       `fl=${off.flames.length} em=${off.embers.length} pl=${off.pointLights.length} po=${off.pools.length}`);
+    ok(`B8 ${kind} OFF still builds the masonry + logs + basin`, off.meshes.length >= 7, off.meshes.length);
+    // A cold pit's basin must not glow.
+    const basinOff = off.meshes.find(m => Math.abs(m.position.y - 30) < 1e-6);
+    ok(`B9 ${kind} OFF basin emissive is dark`,
+       !!basinOff && basinOff.material.emissiveIntensity <= 0.06, basinOff?.material.emissiveIntensity);
+
+    // Ground feature: the body origin sits ON the floor and IGNORES the
+    // sidebar Height row (inground / ground_spot precedent).
+    const hi = build(mkPit(kind, { height: 2500 }), OFF);
+    const lo = build(mkPit(kind, { height: 150 }), OFF);
+    ok(`B10 ${kind} body sits at ground level regardless of Height`,
+       near(hi.body.position.y, 0) && near(lo.body.position.y, 0),
+       `${hi.body.position.y}/${lo.body.position.y}`);
+
+    // Deterministic masonry: the builder reruns EVERY frame while lit, so two
+    // identical rebuilds must place the same stones (no Math.random geometry).
+    const sig = (b) => b.meshes.map(m =>
+      `${m.geometry.type}:${m.position.x.toFixed(4)},${m.position.y.toFixed(4)},${m.position.z.toFixed(4)}` +
+      `:${m.rotation.y.toFixed(4)},${m.rotation.z.toFixed(4)}`).join('|');
+    const a1 = sig(build(mkPit(kind), OFF)), a2 = sig(build(mkPit(kind), OFF));
+    ok(`B11 ${kind} rebuild is geometrically identical (no random stones)`, a1 === a2 && a1.length > 40);
+
+    // Forced warm colour: a BLUE bound light still reads as fire (the hearth rule).
+    const blue = build(mkPit(kind), { state: 'on', attributes: { brightness: 255, rgb_color: [0, 40, 255] } });
+    const c = blue.pointLights[0]?.color;
+    ok(`B12 ${kind} forces warm fire colour over the entity's rgb_color`,
+       !!c && c.r > 0.6 && c.r > c.g && c.g > c.b && c.b < 0.35,
+       c ? `${c.r.toFixed(2)},${c.g.toFixed(2)},${c.b.toFixed(2)}` : 'none');
+
+    // Click target: the whole basin, not just the generic 400 mm sphere.
+    const hit = off.meshes.find(m => m.material.opacity === 0 && m.userData.kind === 'light');
+    const hitR = hit ? Math.max(
+      hit.geometry.parameters.width ?? 0, (hit.geometry.parameters.radiusTop ?? 0) * 2) : 0;
+    ok(`B13 ${kind} carries a full-footprint invisible click target`,
+       !!hit && near(hitR, FIREPIT_SIZE_MM), hitR);
+
+    // Unbound + localState: the fireplace/localState contract.
+    const localOn = build(mkPit(kind, { entity_id: null, localState: 'on' }), null);
+    ok(`B14 ${kind} unbound localState:'on' lights the pit`,
+       localOn.flames.length >= 4 && localOn.pointLights.length === 1);
+  }
+
+  // Round vs square really differ: the ring is 9 stones + a cylindrical basin,
+  // the bowl is 4 runs + a boxed basin.
+  {
+    const rr = build(mkPit('firepit_round'), OFF);
+    const sq = build(mkPit('firepit_square'), OFF);
+    const bigCyl = (b) => b.cyls.filter(c => (c.geometry.parameters.radiusTop ?? 0) > 300);
+    ok('B15 round pit lays 9 ring stones', rr.boxes.length === 9, rr.boxes.length);
+    ok('B16 round pit basin + hit target are cylindrical',
+       bigCyl(rr).length === 2, bigCyl(rr).length);
+    ok('B17 square pit builds 4 rim runs + boxed basin + boxed hit target',
+       sq.boxes.length === 6 && bigCyl(sq).length === 0, `${sq.boxes.length}/${bigCyl(sq).length}`);
+    // Stone ring stays inside the 900 mm footprint.
+    const maxR = Math.max(...rr.boxes.map(m => Math.hypot(m.position.x, m.position.z)));
+    ok('B18 ring radius matches the shared footprint', maxR < FIREPIT_SIZE_MM / 2 && maxR > 300, maxR.toFixed(1));
+    // No two rim runs of the square bowl share a coplanar visible face: the
+    // side runs overrun the opening so their caps are buried in the front/back.
+    const sideLen = sq.boxes
+      .map(m => m.geometry.parameters)
+      .filter(pm => pm.width < pm.depth).map(pm => pm.depth);
+    ok('B19 square side runs overrun the opening (coincident-face gotcha)',
+       sideLen.length === 2 && sideLen.every(d => d > FIREPIT_SIZE_MM - 2 * 110 + 1),
+       sideLen.join(','));
+  }
+
+  // ═══ 3. 2D plan: real Planner + the real drawAll / hitFixture ═════════════
+  class FakeHa {
+    constructor(seed) { this.map = new Map(); for (const [k, v] of Object.entries(seed || {})) this.map.set(k, JSON.parse(JSON.stringify(v))); this.states = {}; this._s = []; this._c = []; }
+    connect() { for (const cb of this._c) cb('connected'); for (const cb of this._s) cb(this.states, undefined); }
+    onState(fn) { this._s.push(fn); } onConn(fn) { this._c.push(fn); }
+    callService() { return Promise.resolve(); }
+    async getHistory() { return {}; } async getWeatherForecasts() { return null; }
+    async getDevices() { return []; } async getEntityRegistry() { return []; } async updateEntityRegistry() { return true; }
+    async getAreaRegistry() { return []; } async getFloorRegistry() { return []; }
+    async getUserData(k) { return this.map.has(k) ? JSON.parse(JSON.stringify(this.map.get(k))) : null; }
+    async setUserData(k, v) { this.map.set(k, JSON.parse(JSON.stringify(v))); return true; }
+    async refreshStates() {} async subscribeMqtt() { return () => {}; } async publishMqtt() {}
+    async getCalendarEvents() { return {}; }
+    async subscribePersistentNotifications() { return () => {}; }
+    async listRepairsIssues() { return []; }
+  }
+  const flat2d = (lights) => ({ id: 'f1', name: 'Home', w: 8000, d: 5000,
+    walls: [], furniture: [], lights, switches: [], sensors: [], motionSensors: [],
+    envSensors: [], bleProxies: [], doors: [], windows: [], rooms: [], bg: null });
+  async function mkPlanner(lights, states) {
+    localStorage.removeItem('diorama:store:v1'); localStorage.removeItem('diorama:configs');
+    const seed = { v: 2, floors: [flat2d(lights)], currentFloorId: 'f1', activeSensorId: null,
+      coverage: true, imperial: false, showDetails: false, useRawTargets: false };
+    const p = new Planner();
+    const ha = new FakeHa({ diorama: seed });
+    ha.states = states || {};
+    p.connectWith(ha);
+    await waitFor(() => p.configIndex !== null);
+    return p;
+  }
+  const cvs = document.createElement('canvas'); cvs.width = 600; cvs.height = 400;
+  const ctx = cvs.getContext('2d', { willReadFrequently: true });
+  const view = computeView(cvs, 8000, 5000, null, 1);
+  const snap = () => ctx.getImageData(0, 0, cvs.width, cvs.height).data.slice();
+  const diffCount = (base) => {
+    const d = ctx.getImageData(0, 0, cvs.width, cvs.height).data;
+    let n = 0;
+    for (let i = 0; i < d.length; i += 4)
+      if (d[i] !== base[i] || d[i + 1] !== base[i + 1] || d[i + 2] !== base[i + 2]) n++;
+    return n;
+  };
+  const warmCount = () => {
+    const d = ctx.getImageData(0, 0, cvs.width, cvs.height).data;
+    let n = 0;
+    for (let i = 0; i < d.length; i += 4)
+      if (d[i] > 180 && d[i + 1] < d[i] - 40 && d[i + 2] < d[i] - 90) n++;
+    return n;
+  };
+  const PX = (x, y) => {
+    const q = mmToPx(view, x, y);
+    const d = ctx.getImageData(Math.round(q.x), Math.round(q.y), 1, 1).data;
+    return [d[0], d[1], d[2]];
+  };
+  const L2 = (kind, over = {}) =>
+    Object.assign({ id: 'lp', x: 4000, y: 2500, entity_id: null, iconKind: kind, label: '' }, over);
+
+  const P0 = await mkPlanner([]);
+  drawAll(ctx, P0, view, null);
+  const blank = snap();
+
+  for (const kind of KINDS) {
+    const pOff = await mkPlanner([L2(kind)]);
+    drawAll(ctx, pOff, view, null);
+    const offPixels = diffCount(blank), offWarm = warmCount();
+    ok(`D1 ${kind} paints a cold plan footprint`, offPixels > 200, offPixels);
+    // Real-scale footprint: painted out to the 450 mm rim, blank well past it.
+    const rim = PX(4000 + 380, 2500), out = PX(4000 + 900, 2500);
+    ok(`D2 ${kind} footprint reaches the real 450 mm rim`,
+       rim[0] + rim[1] + rim[2] > 0 && (rim[0] !== out[0] || rim[1] !== out[1] || rim[2] !== out[2]),
+       `rim=${rim} out=${out}`);
+
+    const pOn = await mkPlanner([L2(kind, { localState: 'on' })]);
+    drawAll(ctx, pOn, view, null);
+    ok(`D3 ${kind} ON adds a warm glow the cold pit does not have`,
+       warmCount() > offWarm + 50, `${offWarm}→${warmCount()}`);
+  }
+
+  // Hit test: the whole 900 mm basin is clickable, and an ordinary bulb at the
+  // same offset is NOT (the generic 300 mm light radius).
+  {
+    const pPit = await mkPlanner([L2('firepit_round')]);
+    const pBulb = await mkPlanner([L2('bulb')]);
+    const at = (p, dx) => hitFixture(p, { x: 4000 + dx, y: 2500 }, 300);
+    ok('D4 a click on the pit rim hits it', at(pPit, 420)?.kind === 'light', JSON.stringify(at(pPit, 420)));
+    ok('D5 …the same click misses an ordinary bulb', at(pBulb, 420) === null, JSON.stringify(at(pBulb, 420)));
+    ok('D6 a click well outside the pit still misses', at(pPit, 700) === null, JSON.stringify(at(pPit, 700)));
+    ok('D7 dead-centre still hits both', at(pPit, 0)?.kind === 'light' && at(pBulb, 0)?.kind === 'light');
+  }
+
+  let pass = 0; const fails = [];
+  for (const t of tests) { if (t.ok) pass++; else fails.push(t.name); }
+  const total = tests.length;
+  const title = pass === total ? `FIREPIT PASS ${pass}/${total}`
+    : `FIREPIT FAIL ${pass}/${total} [${fails.join(',')}]`;
+  document.title = title;
+  document.body.insertAdjacentHTML('beforeend',
+    `<pre style="position:fixed;left:8px;top:8px;color:#8f8;max-height:96vh;overflow:auto">${title}\n` +
+    tests.map(t => `${t.ok ? 'PASS' : 'FAIL'} ${t.name} — ${t.detail}`).join('\n') + `</pre>`);
+ } catch (e) {
+  document.title = 'FIREPIT ERROR ' + (e && e.message ? e.message : String(e));
+  console.error(e);
+ }
+</script>

@@ -9,6 +9,7 @@ import type {
 } from './types.js';
 import {
   lightHeight, lightRadius, lightIntensity, lightIconKind, lightRotation, lightLength, lightTilt,
+  isFirepitKind, FIREPIT_SIZE_MM,
   switchHeight, switchRotation, switchSize,
   motionColor, motionIntensity, hexToInt, bleProxyHeight, BLE_PROXY_DEFAULTS,
   furnitureDef, resolveFurnitureDef, furnitureColor, furnitureCat, isBinKind, binStateIsFull, isSpeakerKind, isSinkKind, isWetBathKind, isRiserKind, doorOpenDeltaDeg,
@@ -1034,8 +1035,11 @@ const RAMP_OPEN_SLAB_MM = 80;
 // Everything else — bulb / spot / pendant / strip / recessed / fan / heatlamp /
 // exhaust (ceiling) and sconce / wall_sconce / flood / fireplace / exhaust_wall
 // / step (wall-snapped; `step` rides snapStepLightToSurface) — is mounted on the
-// house and stays slab-relative.
-const GROUND_STANDING_LIGHT_KINDS = new Set<string>(['lamp', 'inground', 'ground_spot']);
+// house and stays slab-relative. Fire pits stand in the yard, so they follow the
+// grade too (body, ember bed, flames, point light and floor pool all take the
+// same offset).
+const GROUND_STANDING_LIGHT_KINDS = new Set<string>(
+  ['lamp', 'inground', 'ground_spot', 'firepit_round', 'firepit_square']);
 
 // Build context for a declarative primitive (shared by the initial-rig
 // accessory build AND a runtime prop-equip via _buildPrimitiveMesh). Carries the
@@ -17173,7 +17177,9 @@ export class ThreeDRenderer {
       // Fireplace forces warm orange-red regardless of HA color, plus a
       // per-frame flicker (this builder runs every render frame).
       let flickerMul = 1;
-      if (kind === 'fireplace' && isOn) {
+      // Fire pits share the hearth's fire: same forced warm tint + flicker (they
+      // are in three-view's per-frame rebuild set for exactly this reason).
+      if ((kind === 'fireplace' || isFirepitKind(kind)) && isOn) {
         const f1 = 0.7 + Math.random() * 0.3;
         r = 1.0 * f1; g = 0.45 * f1; b = 0.15 * f1;
         flickerMul = 0.85 + Math.random() * 0.30;
@@ -17408,6 +17414,153 @@ export class ThreeDRenderer {
               new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
             hit.userData = ud;
             g.add(hit);
+            break;
+          }
+          case 'firepit_round':
+          case 'firepit_square': {
+            // Outdoor fire pit — a GROUND feature, so the body origin sits on
+            // the surface the fixture stands on (bodyY = 0; the caller adds the
+            // yard grade via lightGY, see GROUND_STANDING_LIGHT_KINDS). The
+            // sidebar Height row is therefore ignored for these kinds, exactly
+            // like inground / ground_spot. This builder reruns EVERY frame while
+            // ON (three-view forces it, the fireplace idiom), so the flame sines
+            // animate for free and the per-rebuild flicker reads as fire.
+            bodyY = 0;
+            const square = kind === 'firepit_square';
+            const S = FIREPIT_SIZE_MM;   // outer diameter / square side (900)
+            const RIM_H = 260;           // stone rim height
+            const WALL_T = 110;          // rim thickness
+            const stoneMat = this._mat({
+              color: square ? 0x6f6c67 : 0x7c756c, roughness: 0.95, metalness: 0.02,
+            });
+            const ashMat = this._mat({
+              color: 0x1b1613, roughness: 0.98,
+              emissive: isOn ? 0xff5a1a : 0x120a06,
+              emissiveIntensity: isOn ? 0.30 * flickerMul : 0.05,
+            });
+            // Deterministic per-stone wobble. A rebuild happens on EVERY frame
+            // while the pit is lit, so Math.random here would reshuffle the
+            // masonry 60×/s — hash the stone index instead.
+            const jit = (i: number, k: number) => {
+              const s = Math.sin(i * 12.9898 + k * 78.233) * 43758.5453;
+              return s - Math.floor(s);
+            };
+            if (square) {
+              // Four rim runs. The two side runs are LONGER than the clear
+              // opening so their end caps are buried inside the front/back
+              // runs — butting them flush would leave coplanar faces (the
+              // coincident-face gotcha hatches under flat toon shading).
+              for (const sz of [-1, 1]) {
+                const run = new THREE.Mesh(new THREE.BoxGeometry(S, RIM_H, WALL_T), stoneMat);
+                run.position.set(0, RIM_H / 2, sz * (S / 2 - WALL_T / 2));
+                run.userData = ud;
+                g.add(run);
+                const side = new THREE.Mesh(new THREE.BoxGeometry(WALL_T, RIM_H, S - WALL_T), stoneMat);
+                side.position.set(sz * (S / 2 - WALL_T / 2), RIM_H / 2, 0);
+                side.userData = ud;
+                g.add(side);
+              }
+            } else {
+              // Nine chunky stones laid around the ring, each aimed at the
+              // centre with a stable size / lean wobble so the circle reads
+              // hand-built rather than machined.
+              const N = 9, ringR = S / 2 - WALL_T / 2;
+              for (let i = 0; i < N; i++) {
+                const a = (i / N) * Math.PI * 2;
+                const sw = WALL_T * (1.45 + 0.55 * jit(i, 1));
+                const sh = RIM_H * (0.80 + 0.36 * jit(i, 2));
+                const sd = WALL_T * (0.95 + 0.40 * jit(i, 3));
+                const stone = new THREE.Mesh(new THREE.BoxGeometry(sw, sh, sd), stoneMat);
+                stone.position.set(Math.sin(a) * ringR, sh / 2, Math.cos(a) * ringR);
+                stone.rotation.y = a + (jit(i, 4) - 0.5) * 0.30;
+                stone.rotation.z = (jit(i, 5) - 0.5) * 0.14;
+                stone.userData = ud;
+                g.add(stone);
+              }
+            }
+            // Ash basin. Deliberately OVERSIZED so its rim overlaps the stone
+            // bodies (no coplanar inner faces, no seam gap either).
+            const basin = square
+              ? new THREE.Mesh(new THREE.BoxGeometry(S - WALL_T, 60, S - WALL_T), ashMat)
+              : new THREE.Mesh(
+                new THREE.CylinderGeometry(S / 2 - WALL_T * 0.55, S / 2 - WALL_T * 0.85, 60, 24), ashMat);
+            basin.position.y = 30;
+            basin.userData = ud;
+            g.add(basin);
+            // Crossed logs over the basin.
+            const logMat = this._mat({ color: 0x4a352b, roughness: 0.95 });
+            const logL = S * 0.64;
+            for (const [ry, ox, oz, oy] of
+                 [[0.40, -25, 25, 100], [-0.75, 30, -20, 96], [1.45, 0, 0, 158]] as const) {
+              const log = new THREE.Mesh(new THREE.CylinderGeometry(44, 38, logL, 9), logMat);
+              log.rotation.z = Math.PI / 2;   // lay the cylinder along local X…
+              log.rotation.y = ry;            // …then yaw it into the crossing
+              log.position.set(ox, oy, oz);
+              log.userData = ud;
+              g.add(log);
+            }
+            if (isOn) {
+              const tNow = performance.now() / 1000;
+              // Ember bed: a flat glowing disc just under the logs.
+              const emberR = S / 2 - WALL_T * 0.9;
+              const ember = new THREE.Mesh(
+                square ? new THREE.PlaneGeometry(emberR * 2, emberR * 2)
+                  : new THREE.CircleGeometry(emberR, 32),
+                new THREE.MeshBasicMaterial({
+                  color: 0xff7a26, transparent: true,
+                  opacity: Math.min(0.85, (0.42 + 0.3 * (bri / 255)) * intensity * flickerMul),
+                  side: THREE.DoubleSide, depthWrite: false,
+                }));
+              ember.rotation.x = -Math.PI / 2;
+              ember.position.y = 66;
+              ember.userData.outlineSkip = true;
+              ember.userData.firepitEmber = true;
+              g.add(ember);
+              // Flames: emissive cones breathing / swaying on slow sines (the
+              // fireplace flame idiom), clustered over the log pile.
+              const flames: { ox: number; oz: number; r: number; h: number; om: number; ph: number; col: number }[] = [
+                { ox: -140, oz:   70, r: 80, h: 300, om: 1.7, ph: 0.0, col: 0xe65100 },
+                { ox:  130, oz:  -60, r: 74, h: 265, om: 2.1, ph: 2.1, col: 0xef6c00 },
+                { ox:   10, oz:  120, r: 70, h: 245, om: 2.4, ph: 3.6, col: 0xf57c00 },
+                { ox:    0, oz:    0, r: 118, h: 470, om: 1.4, ph: 4.2, col: 0xffa726 },
+              ];
+              for (const fl of flames) {
+                const h3 = fl.h * (1 + 0.18 * Math.sin(tNow * fl.om + fl.ph)) * Math.min(1.4, intensity + 0.4);
+                const sway = 34 * Math.sin(tNow * fl.om * 0.8 + fl.ph * 1.7);
+                const flame = new THREE.Mesh(
+                  new THREE.ConeGeometry(fl.r, h3, 10),
+                  this._mat({
+                    color: fl.col, emissive: fl.col,
+                    emissiveIntensity: 1.6 * flickerMul,
+                    transparent: true, opacity: 0.85, depthWrite: false,
+                  }));
+                flame.position.set(fl.ox + sway * 0.4, 150 + h3 / 2, fl.oz + sway * 0.25);
+                flame.rotation.z = sway * 0.0012;
+                flame.userData.firepitFlame = true;
+                g.add(flame);
+              }
+              // Hot core.
+              const coreH = 250 * (1 + 0.14 * Math.sin(tNow * 1.9 + 1.1));
+              const core = new THREE.Mesh(
+                new THREE.ConeGeometry(58, coreH, 8),
+                this._mat({
+                  color: 0xffd54f, emissive: 0xffd54f, emissiveIntensity: 2.2 * flickerMul,
+                  transparent: true, opacity: 0.95, depthWrite: false,
+                }));
+              core.position.set(0, 130 + coreH / 2, 0);
+              core.userData.firepitFlame = true;
+              g.add(core);
+            }
+            // Generous invisible click target over the whole basin (the 400 mm
+            // sphere the caller adds is centred at ground level, so the rim of a
+            // 900 mm pit would otherwise be a miss).
+            const pitHit = new THREE.Mesh(
+              square ? new THREE.BoxGeometry(S, RIM_H, S)
+                : new THREE.CylinderGeometry(S / 2, S / 2, RIM_H, 12),
+              new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
+            pitHit.position.y = RIM_H / 2;
+            pitHit.userData = ud;
+            g.add(pitHit);
             break;
           }
           case 'fan':
@@ -18093,7 +18246,10 @@ export class ThreeDRenderer {
           // Plain extractor fans move air, not light — no point light (exhaust_light
           // keeps one for its globe; heatlamp keeps one for the warm pool).
           const pl = new THREE.PointLight(color.getHex(), li, dist, 1.5);
-          pl.position.set(p.x, p.y - 50, p.z);
+          // A fire pit's body origin sits ON the ground (bodyY = 0), so the
+          // generic −50 mm drop would sink the source under the grade — put it
+          // up in the flame bowl where the fire actually is.
+          pl.position.set(p.x, isFirepitKind(kind) ? p.y + 320 : p.y - 50, p.z);
           this._lightGroup.add(pl);
         }
         // Skip floor pool for sconce (wall), plain fan (no light), exhaust fans

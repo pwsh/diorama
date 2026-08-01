@@ -512,6 +512,29 @@
          near(zero.pool, 3) && near(lo.pool - zero.pool, LOW) &&
          near(lo.lamp - zero.lamp, LOW) && zero.lamp != null,
          `lamp=${zero.lamp}/${lo.lamp} pool=${zero.pool}/${lo.pool}`);
+      // H7b: fire pits are ground features too (GROUND_STANDING_LIGHT_KINDS) —
+      // body origin sits ON the surface (bodyY = 0), so it and its floor pool
+      // both take the grade offset. Square + round share the code path.
+      {
+        const readPit = (kind, gl) => {
+          const pit = { id: 'fp', x: OUT.x, y: OUT.y, entity_id: null, iconKind: kind,
+                        localState: 'on' };
+          r.updateFloor(mkFloor([], { walls: houseWalls, lights: [pit] }), sceneAt(gl));
+          r.updateLightsSwitches([pit], [], () => null);
+          const lit = r._lightGroup.children;
+          return {
+            body: lit.find(c => c.type === 'Group')?.position.y,
+            pool: lit.find(c => c.isMesh && c.geometry.type === 'CircleGeometry')?.position.y,
+          };
+        };
+        for (const kind of ['firepit_round', 'firepit_square']) {
+          const lo = readPit(kind, LOW), zero = readPit(kind, 0);
+          ok(`H7b outdoor ${kind} + its floor pool ride the grade`,
+             near(zero.body, 0) && near(lo.body - zero.body, LOW) &&
+             near(zero.pool, 3) && near(lo.pool - zero.pool, LOW),
+             `body=${zero.body}/${lo.body} pool=${zero.pool}/${lo.pool}`);
+        }
+      }
       ok('H8 wall-mounted sconce + wall switch never move',
          near(zero.sconce, lo.sconce) && near(zero.sw, lo.sw) && near(lo.sw, 1200),
          `sconce=${zero.sconce}/${lo.sconce} switch=${zero.sw}/${lo.sw}`);

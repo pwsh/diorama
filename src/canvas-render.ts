@@ -2,6 +2,7 @@ import {
   GRID_MM, mmToCanvas, fmtLen, distMM, transformVerts, centroid,
   pointInPolygon, localToWorld, bgLocalToWorld,
   lightRadius, lightIntensity, lightIconKind, lightRotation, lightLength, switchRotation, switchSize, switchLabelPos,
+  isFirepitKind, FIREPIT_SIZE_MM,
   motionColor, motionIntensity, sensorColor, BLE_PROXY_DEFAULTS,
   ALARM_DEFAULTS, alarmStateColor, CALENDAR_DEFAULTS,
   lockGlyphColor, lockGlyphSecured, lockGlyphTransitional, lockGlyphJammed,
@@ -129,6 +130,7 @@ const LIGHT_GLYPH: Record<LightIconKind, string> = {
   jar: '🫙', oval: '🥚', fan: '❋', fan_light: '✺', string: '✨', under_cabinet: '▂',
   wall_sconce: '◨', step: '▤', flood: '🔆', inground: '⤒', ground_spot: '⟰',
   heatlamp: '♨', exhaust: '❊', exhaust_wall: '⊛', exhaust_light: '❈',
+  firepit_round: '◉', firepit_square: '▣',
 };
 
 export interface View {
@@ -6340,6 +6342,98 @@ function drawFireplace2D(ctx: CanvasRenderingContext2D, cx0: number, cy0: number
   ctx.restore();
 }
 
+// Plan-view fire pit (round + square): a real-scale FIREPIT_SIZE_MM footprint —
+// stone rim + ash basin + crossed logs — with a warm flickering inner glow while
+// the bound light is ON and a cold dark basin while off. Same idioms as
+// drawFireplace2D: true mm scale (never a fixed-px icon) and time-based sines,
+// since the canvas redraws every RAF. Stone jitter is index-hashed, mirroring
+// the 3D builder's determinism.
+function drawFirepit2D(ctx: CanvasRenderingContext2D, cx0: number, cy0: number,
+                       view: View, square: boolean, isOn: boolean,
+                       unavail: boolean, bound: boolean): void {
+  const t = performance.now() / 1000;
+  const R = Math.max(9, (FIREPIT_SIZE_MM / 2) * view.scale);   // outer half-extent, px
+  const rimW = R * 0.245;                                      // rim thickness (110/450)
+  ctx.save();
+  ctx.translate(cx0, cy0);
+  // Ash basin (the pit interior) — drawn first, the rim overlaps its edge.
+  ctx.beginPath();
+  if (square) ctx.rect(-R, -R, R * 2, R * 2);
+  else ctx.arc(0, 0, R, 0, 2 * Math.PI);
+  ctx.fillStyle = '#17120f';
+  ctx.fill();
+  // Stone rim.
+  ctx.lineWidth = rimW;
+  ctx.strokeStyle = unavail ? '#7a3a3a' : bound ? '#7c756c' : '#6a6a72';
+  ctx.beginPath();
+  if (square) ctx.rect(-R + rimW / 2, -R + rimW / 2, (R - rimW / 2) * 2, (R - rimW / 2) * 2);
+  else ctx.arc(0, 0, R - rimW / 2, 0, 2 * Math.PI);
+  ctx.stroke();
+  // Stone joints — nine ticks around the ring for the round pit, four corner
+  // marks for the square one. Deterministic, no per-frame jitter.
+  ctx.lineWidth = Math.max(0.7, rimW * 0.13);
+  ctx.strokeStyle = 'rgba(20,18,16,0.55)';
+  const joints = square ? 4 : 9;
+  for (let i = 0; i < joints; i++) {
+    const a = (i / joints) * Math.PI * 2 + (square ? Math.PI / 4 : 0);
+    const ux = Math.cos(a), uy = Math.sin(a);
+    ctx.beginPath();
+    ctx.moveTo(ux * (R - rimW), uy * (R - rimW));
+    ctx.lineTo(ux * R, uy * R);
+    ctx.stroke();
+  }
+  const inner = R - rimW;
+  if (isOn) {
+    // Ember bed: a warm radial wash filling the basin, breathing slowly.
+    const emberA = 0.45 + 0.12 * Math.sin(t * 1.6);
+    const grd = ctx.createRadialGradient(0, 0, 0, 0, 0, Math.max(1, inner));
+    grd.addColorStop(0, `rgba(255,196,86,${(emberA + 0.25).toFixed(3)})`);
+    grd.addColorStop(0.55, `rgba(255,112,26,${emberA.toFixed(3)})`);
+    grd.addColorStop(1, 'rgba(191,54,12,0.05)');
+    ctx.fillStyle = grd;
+    ctx.beginPath(); ctx.arc(0, 0, inner, 0, 2 * Math.PI); ctx.fill();
+  }
+  // Crossed logs over the basin (drawn over the embers, like the 3D pile).
+  ctx.strokeStyle = isOn ? '#5a3c2c' : '#4e342e';
+  ctx.lineWidth = Math.max(1.2, inner * 0.19);
+  ctx.lineCap = 'round';
+  for (const a of [0.40, -0.75, 1.45]) {
+    const ux = Math.cos(a), uy = Math.sin(a), L = inner * 0.78;
+    ctx.beginPath();
+    ctx.moveTo(-ux * L, -uy * L);
+    ctx.lineTo(ux * L, uy * L);
+    ctx.stroke();
+  }
+  if (isOn) {
+    // Flame tongues seen from above: three swaying blobs + a hot core.
+    for (const fl of [
+      { ox: -0.32, oz: 0.16, rad: 0.34, om: 1.7, ph: 0.0, col: '230,81,0' },
+      { ox: 0.30, oz: -0.14, rad: 0.30, om: 2.1, ph: 2.1, col: '239,108,0' },
+      { ox: 0.02, oz: 0.27, rad: 0.28, om: 2.4, ph: 3.6, col: '245,124,0' },
+    ]) {
+      const rr = inner * fl.rad * (1 + 0.18 * Math.sin(t * fl.om + fl.ph));
+      const sway = inner * 0.08 * Math.sin(t * fl.om * 0.8 + fl.ph * 1.7);
+      ctx.fillStyle = `rgba(${fl.col},0.8)`;
+      ctx.beginPath();
+      ctx.arc(inner * fl.ox + sway, inner * fl.oz, Math.max(0.8, rr), 0, 2 * Math.PI);
+      ctx.fill();
+    }
+    const coreR = inner * 0.30 * (1 + 0.14 * Math.sin(t * 1.9 + 1.1));
+    ctx.fillStyle = 'rgba(255,213,79,0.95)';
+    ctx.beginPath(); ctx.arc(0, 0, Math.max(0.8, coreR), 0, 2 * Math.PI); ctx.fill();
+  } else {
+    // Cold pit: a few faint embers pulsing at half a hertz (the hearth idiom).
+    const pulse = 0.22 + 0.10 * Math.sin(t * 0.9);
+    ctx.fillStyle = `rgba(255,112,67,${pulse.toFixed(3)})`;
+    for (const [ex, ey] of [[-0.34, 0.12], [0.08, -0.28], [0.30, 0.22]] as const) {
+      ctx.beginPath();
+      ctx.arc(inner * ex, inner * ey, Math.max(0.9, inner * 0.09), 0, 2 * Math.PI);
+      ctx.fill();
+    }
+  }
+  ctx.restore();
+}
+
 function drawFixtures(ctx: CanvasRenderingContext2D, p: Planner, view: View,
                       showLights = true, showSwitches = true): void {
   const dpr = window.devicePixelRatio || 1;
@@ -6359,8 +6453,8 @@ function drawFixtures(ctx: CanvasRenderingContext2D, p: Planner, view: View,
     const kelvin = typeof attrs.color_temp_kelvin === 'number' ? attrs.color_temp_kelvin as number : null;
     const kind = lightIconKind(l);
     let r = 255, g = 230, b = 180;
-    if (kind === 'fireplace' && isOn) {
-      // Hearth always glows warm; flicker tint via mild noise.
+    if ((kind === 'fireplace' || isFirepitKind(kind)) && isOn) {
+      // Hearth / fire pit always glows warm; flicker tint via mild noise.
       const f1 = 0.85 + Math.random() * 0.15;
       r = Math.round(255 * f1); g = Math.round(120 * f1); b = Math.round(40 * f1);
     } else if (rgb && isOn) [r, g, b] = rgb;
@@ -6381,6 +6475,9 @@ function drawFixtures(ctx: CanvasRenderingContext2D, p: Planner, view: View,
     }
     if (kind === 'fireplace') {
       drawFireplace2D(ctx, pt.x, pt.y, view, isOn, !!unavail, !!st, lightRotation(l));
+    } else if (isFirepitKind(kind)) {
+      // Real-scale plan footprint (no rotation — a fire pit has no front).
+      drawFirepit2D(ctx, pt.x, pt.y, view, kind === 'firepit_square', isOn, !!unavail, !!st);
     } else if (kind === 'under_cabinet') {
       // Slim bar along the rotation; warm glow stroke when on.
       const rotR = lightRotation(l) * Math.PI / 180;
