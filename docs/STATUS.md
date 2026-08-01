@@ -330,6 +330,24 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Banner/vehicle colors + ground-writing persistence fix**
+  (2026-08-01, user-requested + user-reported; unreleased — on main
+  past v0.52.0). BUG: _migrateBgTexts rebuilt every bgTexts row from
+  a hard-coded field whitelist on EVERY load — 10 fields silently
+  dropped (aircraft, scale, grassAreaId, faceCamera, rotationDeg +
+  the 5 new colors), exactly the reported "resets to auto rotate and
+  auto fit on reload"; now a whole-entry shallow-copy passthrough
+  (id+mode validated only; 13 negative-controlled regression pins).
+  FEATURE: five optional per-entry colors on banner/train/chopper
+  (colorMain/colorDetail vehicle paint; bannerBg/bannerText/
+  bannerFrame cloth + lettering + trim, train flank plates too);
+  absent = byte-identical (golden-pinned); archetype tow planes via
+  a trailing tint {body, accent} on _buildAircraftModel (no-tint =
+  the literal old expressions, flights-render 513/513); sky/grass
+  untouched; five color rows with clear in Settings ▸ Display;
+  _keyBgText gains the terms (still no configRev), _bgTextPhase
+  resume across recolor pinned. Tests: bgtext-multi 309/309 (+63),
+  bgtext 30/30, flights-render 513/513.
 - **Universal alignment guides + Alt+click identify** (2026-08-01,
   user-requested; unreleased — on main past v0.52.0). Alignment
   rewritten: global cross-category pool (wall corners + room anchors

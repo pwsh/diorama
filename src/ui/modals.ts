@@ -2353,6 +2353,57 @@ export class SettingsDrawer extends LitElement {
     ];
     // Resolved strings (per entry, in list order) for the live preview.
     const resolved = new Map(p.bgTextsResolved().map(r => [r.id, r.text]));
+    // ── Per-entry colour rows (banner / train / chopper) ──────────────────
+    // Each row is a swatch + a ✕ that clears back to undefined, so an untouched
+    // entry serializes exactly like a pre-feature one (and the renderer paints
+    // the shipped palette). `dflt` is only the swatch's starting value — it is
+    // never written to the store, so the picker opens on the real shipped hue.
+    type ColorKey = 'colorMain' | 'colorDetail' | 'bannerBg' | 'bannerText' | 'bannerFrame';
+    const colorRow = (e: BgTextEntry, key: ColorKey, label: string,
+                      dflt: string, title: string) => html`
+      <div class="row" style="margin-top:2px">
+        <label title=${title}>${label}</label>
+        <input type="color" style="width:44px;padding:0;height:22px"
+               .value=${e[key] ?? dflt}
+               @change=${(ev: Event) => upd(() => {
+                 e[key] = (ev.target as HTMLInputElement).value || undefined;
+               })}>
+        ${e[key]
+          ? html`<button class="btn" style="font-size:10px;padding:2px 6px"
+                         title="Use the default colour"
+                         @click=${() => upd(() => { e[key] = undefined; })}>✕</button>`
+          : html`<span style="font-size:10px;color:var(--text-dim)">default</span>`}
+      </div>`;
+    // Shipped defaults per style, so the swatch shows what is actually on screen.
+    const COLOR_DEFAULTS: Record<'banner' | 'train' | 'chopper', Record<ColorKey, string>> = {
+      banner:  { colorMain: '#dad7cf', colorDetail: '#c94f3d',
+                 bannerBg: '#c0281f', bannerText: '#fff7e6', bannerFrame: '#f5c400' },
+      chopper: { colorMain: '#2f6fb0', colorDetail: '#e6291a',
+                 bannerBg: '#c0281f', bannerText: '#fff7e6', bannerFrame: '#f5c400' },
+      train:   { colorMain: '#8a2b2b', colorDetail: '#24272b',
+                 bannerBg: '#f5efe0', bannerText: '#22303a', bannerFrame: '#8a2b2b' },
+    };
+    const colorRows = (e: BgTextEntry) => {
+      if (e.mode !== 'banner' && e.mode !== 'train' && e.mode !== 'chopper') return nothing;
+      const d = COLOR_DEFAULTS[e.mode];
+      const isTrain = e.mode === 'train';
+      const surface = isTrain ? 'car-side sign' : 'towed banner';
+      return html`
+        ${colorRow(e, 'colorMain', 'Vehicle color', d.colorMain,
+          isTrain ? 'Body colour of the engine and the message cars.'
+                  : e.mode === 'chopper' ? 'Cabin colour of the news helicopter.'
+                  : 'Fuselage colour of the tow plane (also applies to a chosen aircraft silhouette).')}
+        ${colorRow(e, 'colorDetail', 'Accent color', d.colorDetail,
+          isTrain ? 'Trim colour — roof, chimney, cowcatcher, wheels — and the darker last car.'
+                  : e.mode === 'chopper' ? 'NEWS stripes and the tail boom.'
+                  : 'Wing and tailplane colour (also the accent on a chosen aircraft silhouette).')}
+        ${colorRow(e, 'bannerBg', 'Banner background', d.bannerBg,
+          `Background of the ${surface} the message is painted on.`)}
+        ${colorRow(e, 'bannerText', 'Banner text color', d.bannerText,
+          `Lettering colour on the ${surface}.`)}
+        ${colorRow(e, 'bannerFrame', 'Banner frame', d.bannerFrame,
+          `Edge trim stripes framing the ${surface}.`)}`;
+    };
     const row = (e: BgTextEntry, idx: number) => {
       const cur = resolved.get(e.id);
       return html`
@@ -2436,6 +2487,7 @@ export class SettingsDrawer extends LitElement {
                      e.scale = n === 1 ? undefined : n;
                    })}>
           </div>
+          ${colorRows(e)}
           ${e.mode === 'grass' ? html`
             <div class="row" style="margin-top:2px">
               <label title="Constrain the writing to a ground area: the text is clipped to that area's real shape and painted through its own surface material (else auto-placed in the widest open yard margin). Ground areas are per-floor — a choice on another floor falls back to auto here.">Fit to area</label>

@@ -1907,9 +1907,18 @@ export class ThreeView extends LitElement {
             // yaw is stamped on the rig), so both fields must rebuild on change.
             // A follow row carries neither ⇒ this suffix is '::' exactly as the
             // pre-feature key already was for the fields it didn't have.
+            // Per-entry colours are BUILD-time inputs too (materials + the
+            // banner/plate CanvasTextures are baked at build), so an edit must
+            // rebuild THIS entry's rig — and only this one: the hash is
+            // per-entry, so recolouring one message leaves its neighbours'
+            // terms byte-identical. bgTextsResolved only ever emits them for
+            // banner/train/chopper, so sky/grass rows keep the pre-feature
+            // all-empty suffix.
             return `${e.id}:${e.mode}:${e.text}:${e.maxCars ?? ''}:${e.aircraft ?? ''}`
               + `:${e.scale ?? ''}:${e.grassAreaId ?? ''}:${ga}`
               + `:${e.faceCamera === false ? 'f' : ''}:${e.rotationDeg ?? ''}`
+              + `:${e.colorMain ?? ''}:${e.colorDetail ?? ''}`
+              + `:${e.bannerBg ?? ''}:${e.bannerText ?? ''}:${e.bannerFrame ?? ''}`
               + (e.mode === 'grass' ? `:${bgGroundKey}` : '');
           }).join('|');
       if (keyBgText !== this._keyBgText) {

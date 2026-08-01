@@ -749,6 +749,36 @@ function bgArchetype(v: unknown): AircraftArchetype | null {
     ? v as AircraftArchetype : null;
 }
 
+// ── Background-text colour customization (BgTextEntry.colorMain / colorDetail /
+// bannerBg / bannerText / bannerFrame) ────────────────────────────────────────
+// The renderer owns the format validation (the `aircraft` precedent): anything
+// that isn't a literal `#rgb` / `#rrggbb` resolves to null = "use the shipped
+// default", so a hand-edited config can never paint a canvas with a garbage
+// fillStyle (which silently keeps the PREVIOUS fill) or hand THREE a NaN colour.
+const BG_HEX_RE = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i;
+function bgHex(v: unknown): string | null {
+  return typeof v === 'string' && BG_HEX_RE.test(v.trim()) ? v.trim() : null;
+}
+function bgHexInt(v: unknown): number | undefined {
+  const h = bgHex(v);
+  return h == null ? undefined : hexToInt(h);
+}
+// The resolved per-entry palette handed to the vehicle + texture builders.
+// Every field null/undefined ⇒ the shipped colours, byte-for-byte.
+type BgColors = {
+  main?: number; detail?: number;              // vehicle body / accent (THREE ints)
+  bg?: string; text?: string; frame?: string;  // canvas fills (hex strings)
+};
+function bgColors(e: { colorMain?: string; colorDetail?: string;
+                       bannerBg?: string; bannerText?: string; bannerFrame?: string }): BgColors {
+  return {
+    main: bgHexInt(e.colorMain), detail: bgHexInt(e.colorDetail),
+    bg: bgHex(e.bannerBg) ?? undefined,
+    text: bgHex(e.bannerText) ?? undefined,
+    frame: bgHex(e.bannerFrame) ?? undefined,
+  };
+}
+
 // ── Live aircraft (roadmap P4) ────────────────────────────────────────────
 // One PERSISTENT rig per ICAO hex (the humanoid idiom — mutated in place across
 // polls, never rebuilt per update). Two coordinate lives run side by side:
@@ -13405,6 +13435,12 @@ export class ThreeDRenderer {
                   // Ground-writing orientation (grass only, both optional —
                   // absent = follow the camera, i.e. the shipped behaviour).
                   faceCamera?: boolean; rotationDeg?: number;
+                  // Per-entry colour customization (banner / train / chopper).
+                  // All optional; absent = the shipped palette byte-for-byte.
+                  // Validated here (bgColors) — the planner passes them through
+                  // as authored, so a stale planner simply sends none.
+                  colorMain?: string; colorDetail?: string;
+                  bannerBg?: string; bannerText?: string; bannerFrame?: string;
                 }[],
                 storm: boolean, windRad = 0, windKmh = 0,
                 // Ground context for AUTO-placed ground writing: the surface
@@ -13443,13 +13479,16 @@ export class ThreeDRenderer {
       // as a group-level multiplier at BUILD; every per-frame advance writes
       // position / rotation / opacity only, so nothing overwrites it.
       const sc = bgModelScale(e.scale);
+      // Per-entry palette (validated here). sky + grass deliberately never read
+      // it — sky is an additive glow, grass takes its ink from the ground.
+      const col = bgColors(e);
       let rig: BgRig | null = null;
       if (e.mode === 'sky')          rig = this._buildBgSky(text, i, n, diag, sc);
-      else if (e.mode === 'banner')  rig = this._buildBgAircraft('plane', text, i, n, diag, sc, bgArchetype(e.aircraft));
-      else if (e.mode === 'chopper') rig = this._buildBgAircraft('chopper', text, i, n, diag, sc, null);
+      else if (e.mode === 'banner')  rig = this._buildBgAircraft('plane', text, i, n, diag, sc, bgArchetype(e.aircraft), col);
+      else if (e.mode === 'chopper') rig = this._buildBgAircraft('chopper', text, i, n, diag, sc, null, col);
       else if (e.mode === 'grass')   rig = this._buildBgGrass(text, i, grassSlot++, e.grassArea, sc,
                                                               bgGroundFixedYaw(e.faceCamera, e.rotationDeg));
-      else if (e.mode === 'train')   rig = this._buildBgTrain(text, i, e.maxCars, sc);
+      else if (e.mode === 'train')   rig = this._buildBgTrain(text, i, e.maxCars, sc, col);
       if (rig) {
         // Resume where this entry left off (a FRESH id starts at its build
         // stagger, exactly as before).
@@ -13522,9 +13561,16 @@ export class ThreeDRenderer {
   // flies the ordinary banner orbit (it is NOT re-routed to the news-chopper
   // flight profile — `mode: 'chopper'` remains the dedicated news build); only
   // its rotor axes differ, carried by rig.rotorY. `sc` scales the whole rig.
+  //
+  // `col` is the entry's optional palette (all fields absent = the shipped
+  // paint, byte-for-byte): `main` recolours the vehicle body (toy-plane
+  // fuselage / chopper cabin / the archetype's livery body), `detail` the accent
+  // (wing + tail / NEWS stripes + tail boom / the archetype's livery accent),
+  // and bg/text/frame are handed to the banner painter.
   private _buildBgAircraft(kind: 'plane' | 'chopper', text: string,
                            i: number, n: number, diag: number, sc = 1,
-                           archetype: AircraftArchetype | null = null): BgRig {
+                           archetype: AircraftArchetype | null = null,
+                           col: BgColors = {}): BgRig {
     const useArch = kind === 'plane' ? archetype : null;
     let asm = new THREE.Group();
     const baseR = Math.max(6000, diag * 0.75);
@@ -13534,7 +13580,7 @@ export class ThreeDRenderer {
     // rotation.y=π/2). Two FrontSide planes back-to-back so the text reads
     // left-to-right from BOTH flanks (a single DoubleSide plane showed the reverse
     // face mirrored — the train-flank technique un-mirrors it). bh = banner height.
-    const tex = this._makeBgTextTexture(text, 'banner');
+    const tex = this._makeBgTextTexture(text, 'banner', col);
     const cv = tex.image as HTMLCanvasElement;
     const aspect = cv.width / cv.height;
     const bh = 1400;
@@ -13554,7 +13600,11 @@ export class ThreeDRenderer {
       // A real flight silhouette flying the tow-plane's orbit. `military` and
       // `dim` are both false: a message plane is neither traffic nor a privacy
       // subject, so it always wears the civil paint.
-      const built = this._buildAircraftModel(useArch, false, false);
+      // Tint is best-effort: it reaches the livery body/accent slots every
+      // fixed-wing branch names, never the shared dark (props / skids / gear) or
+      // the glass. Absent ⇒ the civil paint exactly as shipped.
+      const built = this._buildAircraftModel(useArch, false, false,
+        (col.main != null || col.detail != null) ? { body: col.main, accent: col.detail } : undefined);
       asm = built.asm;
       props = built.props;
       prop = built.props[0];
@@ -13568,8 +13618,8 @@ export class ThreeDRenderer {
       asm.add(banner);
       radius = baseR * factor; alt = 6000 + 800 * i + this._yardGroundY(); dir = 1; bobAmp = 120;
     } else if (kind === 'plane') {
-      const bodyMat = this._mat({ color: 0xdad7cf });
-      const accent = this._mat({ color: 0xc94f3d });
+      const bodyMat = this._mat({ color: col.main ?? 0xdad7cf });   // fuselage + fin
+      const accent = this._mat({ color: col.detail ?? 0xc94f3d });  // wing + tailplane
       asm.add(new THREE.Mesh(new THREE.BoxGeometry(180, 180, 900), bodyMat));
       const wing = new THREE.Mesh(new THREE.BoxGeometry(1300, 60, 260), accent);
       wing.position.set(0, 40, -40); asm.add(wing);
@@ -13599,14 +13649,17 @@ export class ThreeDRenderer {
       radius = baseR * factor; alt = 6000 + 800 * i + this._yardGroundY(); dir = 1; bobAmp = 120; propRate = 22;
     } else {
       // News helicopter: cabin bubble + tail boom + skids + a NEWS-style stripe.
-      const bodyMat = this._mat({ color: 0x2f6fb0 });     // news blue
+      const bodyMat = this._mat({ color: col.main ?? 0x2f6fb0 });     // news blue (cabin)
       const dark = this._mat({ color: 0x2a2d31 });
-      const stripeMat = this._mat({ color: 0xe6291a });   // NEWS accent
+      const stripeMat = this._mat({ color: col.detail ?? 0xe6291a });  // NEWS accent
+      // The tail assembly (boom + fin) rides the ACCENT when one is set and the
+      // body otherwise, so the shipped all-blue chopper is byte-identical.
+      const tailMat = col.detail != null ? stripeMat : bodyMat;
       const cabin = new THREE.Mesh(new THREE.SphereGeometry(280, 16, 12), bodyMat);
       cabin.position.set(0, 320, -260); cabin.scale.set(1, 0.85, 1.15); asm.add(cabin);
-      const boom = new THREE.Mesh(new THREE.BoxGeometry(90, 90, 900), bodyMat);
+      const boom = new THREE.Mesh(new THREE.BoxGeometry(90, 90, 900), tailMat);
       boom.position.set(0, 380, 340); asm.add(boom);
-      const fin = new THREE.Mesh(new THREE.BoxGeometry(40, 220, 130), bodyMat);
+      const fin = new THREE.Mesh(new THREE.BoxGeometry(40, 220, 130), tailMat);
       fin.position.set(0, 470, 760); asm.add(fin);
       for (const sx of [-1, 1]) {                          // NEWS stripe on both cabin flanks
         const stripe = new THREE.Mesh(new THREE.BoxGeometry(10, 90, 320), stripeMat);
@@ -14021,7 +14074,12 @@ export class ThreeDRenderer {
   // (left of travel) gets chunk[i] (engine→tail order), the local +X flank gets
   // chunk[N−1−i] (reversed) so a viewer on that side ALSO reads engine→tail.
   // Glyphs are never mirrored (pure ±90° rotations, FrontSide).
-  private _buildBgTrain(text: string, i: number, maxCars?: number, sc = 1): BgRig {
+  //
+  // `col` is the entry's optional palette: `main` = engine + car BODIES,
+  // `detail` = the dark trim (roof / chimney / cowcatcher / wheels) AND the
+  // darker last car, bg/text/frame = the flank text plates. Absent = shipped.
+  private _buildBgTrain(text: string, i: number, maxCars?: number, sc = 1,
+                        col: BgColors = {}): BgRig {
     const CHARS_PER_CAR = 6;
     const mc = Math.min(12, Math.max(2, Math.round(maxCars ?? 8)));
     const N = Math.min(mc, Math.max(1, Math.ceil(text.length / CHARS_PER_CAR)));
@@ -14032,10 +14090,10 @@ export class ThreeDRenderer {
     }
     const loop = this._buildTrainLoop();
     const vehicles: BgTrainVehicle[] = [];
-    vehicles.push(this._buildTrainEngine());
+    vehicles.push(this._buildTrainEngine(col));
     for (let k = 0; k < N; k++) {
       // local +X flank ← chunk[N−1−k]; local −X flank ← chunk[k].
-      vehicles.push(this._buildTrainCar(chunks[N - 1 - k], chunks[k], k === N - 1, k));
+      vehicles.push(this._buildTrainCar(chunks[N - 1 - k], chunks[k], k === N - 1, k, col));
     }
     // Scale each vehicle ×1.8 so the message reads from a zoomed-out camera. The
     // vehicle origins sit at ground level, so a uniform scale keeps them on the
@@ -14061,10 +14119,10 @@ export class ThreeDRenderer {
 
   // Steam engine (boiler + cab + chimney + cowcatcher + 4 wheels). Origin at
   // ground (y=0), nose = local −Z (direction of travel).
-  private _buildTrainEngine(): BgTrainVehicle {
+  private _buildTrainEngine(col: BgColors = {}): BgTrainVehicle {
     const g = new THREE.Group();
-    const body = this._mat({ color: 0x8a2b2b });
-    const dark = this._mat({ color: 0x24272b });
+    const body = this._mat({ color: col.main ?? 0x8a2b2b });
+    const dark = this._mat({ color: col.detail ?? 0x24272b });
     const boiler = new THREE.Mesh(new THREE.CylinderGeometry(150, 150, 520, 16), body);
     boiler.rotation.x = Math.PI / 2; boiler.position.set(0, 240, -120); g.add(boiler);
     const cab = new THREE.Mesh(new THREE.BoxGeometry(360, 300, 300), body);
@@ -14080,16 +14138,22 @@ export class ThreeDRenderer {
   // One message car (box + roof + wheels + two flank text planes). Last car is
   // tinted darker (caboose-ish). Origin at ground; nose = local −Z.
   private _buildTrainCar(plusXChunk: string, minusXChunk: string,
-                         isLast: boolean, carIndex: number): BgTrainVehicle {
+                         isLast: boolean, carIndex: number,
+                         col: BgColors = {}): BgTrainVehicle {
     const g = new THREE.Group();
-    const body = this._mat({ color: isLast ? 0x4f3418 : 0x7a5a2a });
-    const dark = this._mat({ color: 0x24272b });
+    // The LAST car is the caboose: it follows the accent when one is set (that
+    // is what "darker last car" means once the palette is user-chosen), every
+    // other car the main body colour.
+    const body = this._mat({
+      color: isLast ? (col.detail ?? 0x4f3418) : (col.main ?? 0x7a5a2a),
+    });
+    const dark = this._mat({ color: col.detail ?? 0x24272b });
     const box = new THREE.Mesh(new THREE.BoxGeometry(360, 300, 620), body);
     box.position.set(0, 300, 0); g.add(box);
     const roof = new THREE.Mesh(new THREE.BoxGeometry(390, 44, 650), dark);
     roof.position.set(0, 470, 0); g.add(roof);
-    g.add(this._makeTrainFlankPlane(plusXChunk, 1, carIndex));    // normal +X
-    g.add(this._makeTrainFlankPlane(minusXChunk, -1, carIndex));  // normal −X
+    g.add(this._makeTrainFlankPlane(plusXChunk, 1, carIndex, col));    // normal +X
+    g.add(this._makeTrainFlankPlane(minusXChunk, -1, carIndex, col));  // normal −X
     const wheels = this._buildTrainWheels(g, [-200, 200], dark);
     return { obj: g, wheels };
   }
@@ -14112,8 +14176,9 @@ export class ThreeDRenderer {
   // One flank text plane. sign=+1 → normal local +X (rotation.y=+π/2);
   // sign=−1 → normal local −X (rotation.y=−π/2). FrontSide so the far flank's
   // back never bleeds through. Carries userData.chunk/flank for the test.
-  private _makeTrainFlankPlane(chunk: string, sign: number, carIndex: number): THREE.Mesh {
-    const tex = this._makeTrainChunkTexture(chunk);
+  private _makeTrainFlankPlane(chunk: string, sign: number, carIndex: number,
+                               col: BgColors = {}): THREE.Mesh {
+    const tex = this._makeTrainChunkTexture(chunk, col);
     const cv = tex.image as HTMLCanvasElement;
     const ph = 300, pw = ph * (cv.width / cv.height);
     const plane = new THREE.Mesh(new THREE.PlaneGeometry(pw, ph),
@@ -14129,7 +14194,9 @@ export class ThreeDRenderer {
   }
 
   // Paint one car's message chunk — high-contrast cream panel, deterministic.
-  private _makeTrainChunkTexture(chunk: string): THREE.CanvasTexture {
+  // `col` maps the SAME three banner slots onto the plate: bg = panel, frame =
+  // the trim stripes, text = the lettering. Absent = the shipped cream/red/slate.
+  private _makeTrainChunkTexture(chunk: string, col: BgColors = {}): THREE.CanvasTexture {
     const cv = document.createElement('canvas');
     const g = cv.getContext('2d')!;
     const txt = chunk || ' ';
@@ -14139,10 +14206,10 @@ export class ThreeDRenderer {
     const pad = 44;
     cv.width = Math.max(tw + pad * 2, 220); cv.height = 200;
     g.font = font;
-    g.fillStyle = '#f5efe0'; g.fillRect(0, 0, cv.width, cv.height);            // cream panel
-    g.fillStyle = '#8a2b2b';                                                    // trim stripes
+    g.fillStyle = col.bg ?? '#f5efe0'; g.fillRect(0, 0, cv.width, cv.height);   // cream panel
+    g.fillStyle = col.frame ?? '#8a2b2b';                                        // trim stripes
     g.fillRect(0, 0, cv.width, 12); g.fillRect(0, cv.height - 12, cv.width, 12);
-    g.fillStyle = '#22303a'; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillStyle = col.text ?? '#22303a'; g.textAlign = 'center'; g.textBaseline = 'middle';
     g.fillText(txt, cv.width / 2, cv.height / 2 + 4);
     const tex = new THREE.CanvasTexture(cv);
     tex.colorSpace = THREE.SRGBColorSpace;
@@ -14226,7 +14293,13 @@ export class ThreeDRenderer {
   // (transparent, per-surface ink) — the opaque mowed-lawn painter this function
   // used to carry for that mode is RETIRED: ground writing must never bring its
   // own background.
-  private _makeBgTextTexture(text: string, mode: 'sky' | 'banner'): THREE.CanvasTexture {
+  //
+  // `col` (optional) recolours the BANNER strip: `bg` the cloth, `text` the
+  // lettering, `frame` the top/bottom trim stripes that already framed it.
+  // Every field absent = the shipped red/gold/cream, pixel-for-pixel. The sky
+  // branch ignores it entirely (an additive white glow has no palette).
+  private _makeBgTextTexture(text: string, mode: 'sky' | 'banner',
+                             col: BgColors = {}): THREE.CanvasTexture {
     const cv = document.createElement('canvas');
     const g = cv.getContext('2d')!;
     const txt = (text || '').slice(0, 40) || ' ';
@@ -14266,10 +14339,10 @@ export class ThreeDRenderer {
       cv.width = Math.max(tw + pad * 2, h * 4);    // keep the strip wide (≥4:1)
       cv.height = h;
       g.font = font;
-      g.fillStyle = '#c0281f'; g.fillRect(0, 0, cv.width, cv.height);   // red mesh banner
-      g.fillStyle = '#f5c400';                     // top/bottom trim stripes
+      g.fillStyle = col.bg ?? '#c0281f'; g.fillRect(0, 0, cv.width, cv.height);   // red mesh banner
+      g.fillStyle = col.frame ?? '#f5c400';        // top/bottom trim stripes (the banner's frame)
       g.fillRect(0, 0, cv.width, 12); g.fillRect(0, cv.height - 12, cv.width, 12);
-      g.fillStyle = '#fff7e6'; g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.fillStyle = col.text ?? '#fff7e6'; g.textAlign = 'center'; g.textBaseline = 'middle';
       g.fillText(txt, cv.width / 2, cv.height / 2 + 4);
     }
     const tex = new THREE.CanvasTexture(cv);
@@ -15774,8 +15847,15 @@ export class ThreeDRenderer {
   // model could not see: wing position on GA singles (both self-report `A1`)
   // and underwing pods vs. REAR-fuselage engines on jets (both `A3` — the CRJ /
   // ERJ family really is bizjet-shaped, §3.3).
+  // `tint` (OPTIONAL, trailing — every live-traffic caller omits it) overrides
+  // the archetype's civil/military BODY and ACCENT hues. Used only by the
+  // background-text tow plane, where the user may recolour their message prop;
+  // absent = the shipped paint, byte-for-byte. Best-effort by construction: it
+  // reaches the two colours every fixed-wing branch actually names (`body` /
+  // `accent`), never the shared `dark` (props, skids, gear) or `glass`.
   private _buildAircraftModel(archetype: AircraftArchetype, military: boolean,
-                              dim = false): {
+                              dim = false,
+                              tint?: { body?: number; accent?: number }): {
     asm: THREE.Group; props: THREE.Object3D[];
     tailRotor: THREE.Object3D | null; propRate: number;
   } {
@@ -15794,6 +15874,11 @@ export class ThreeDRenderer {
     // painted. Same exemption the status beacons, label plates and towed banners
     // already carry; the airframe simply never had it (wave-A finding).
     const mk = (color: number) => this._mat({ color, fog: false, ...trans });
+    // The two named livery slots. With no tint these are EXACTLY the expressions
+    // every branch used to inline (the civil-or-military ternaries around MIL
+    // and 0x4d5940), so the shipped fleet is untouched.
+    const mkBody = (c: number) => mk(tint?.body ?? (military ? MIL : c));
+    const mkAccent = (c: number) => mk(tint?.accent ?? (military ? 0x4d5940 : c));
     const dark = mk(0x33363b);
     const glass = this._mat({ color: 0x2a3946, fog: false,
       transparent: true, opacity: dim ? FLIGHT_PRIVACY_OPACITY * 0.8 : 0.85 });
@@ -15852,8 +15937,8 @@ export class ThreeDRenderer {
       // Light single. The ONE fork `category` alone can never resolve: the wing
       // sits ON TOP of the fuselage (Cessna) or UNDER it (Cherokee/Cirrus).
       const high = archetype === 'ga-high';
-      const body = mk(military ? MIL : (high ? 0xdad7cf : 0xe6e2d8));
-      const accent = mk(military ? 0x4d5940 : (high ? 0xc94f3d : 0x2f6fb0));
+      const body = mkBody((high ? 0xdad7cf : 0xe6e2d8));
+      const accent = mkAccent((high ? 0xc94f3d : 0x2f6fb0));
       const fw = M.fusHalfW * 2, fh = high ? 300 : 270;
       box(fw, fh, M.fusLen, body, 0, 0, 0);                   // fuselage (child 0)
       box(fw * 0.86, fh * 0.5, 520, glass, 0, fh * 0.32, -260); // cabin greenhouse
@@ -15880,8 +15965,8 @@ export class ThreeDRenderer {
       propRate = 22;
     } else if (archetype === 'twin-prop') {
       // Low/mid wing, TWO wing-mounted engines (Baron / King Air / Seneca).
-      const body = mk(military ? MIL : 0xe4e6e9);
-      const accent = mk(military ? 0x4d5940 : 0x24527e);
+      const body = mkBody(0xe4e6e9);
+      const accent = mkAccent(0x24527e);
       box(M.fusHalfW * 2, 320, M.fusLen, body, 0, 0, 0);
       box(300, 160, 560, glass, 0, 105, -420);
       nose(150, 320, body, -1160);
@@ -15896,8 +15981,8 @@ export class ThreeDRenderer {
     } else if (archetype === 'turboprop') {
       // HIGH wing + two turboprops + T-TAIL (ATR / Dash-8, §3.2) — the shape a
       // naive "regional turboprop" reading gets wrong.
-      const body = mk(military ? MIL : 0xeceef1);
-      const accent = mk(military ? 0x4d5940 : 0x1f7a6a);
+      const body = mkBody(0xeceef1);
+      const accent = mkAccent(0x1f7a6a);
       box(M.fusHalfW * 2, 360, M.fusLen, body, 0, 0, 0);
       box(340, 170, 620, glass, 0, 120, -700);
       nose(170, 340, body, -1370);
@@ -15913,8 +15998,8 @@ export class ThreeDRenderer {
       // Tube + swept low wing + UNDERWING pods + conventional tail. Widebody =
       // the same family, longer/fatter, four pods (§3.2 / §3.4's A380 call).
       const wide = archetype === 'widebody';
-      const body = mk(military ? MIL : 0xe8ecf0);
-      const accent = mk(military ? 0x4d5940 : (wide ? 0x1f5aa0 : 0x2f6fb0));
+      const body = mkBody(0xe8ecf0);
+      const accent = mkAccent((wide ? 0x1f5aa0 : 0x2f6fb0));
       const len = M.fusLen, hw = M.fusHalfW;
       box(hw * 2, hw * 2, len, body, 0, 0, 0);
       box(hw * 1.7, hw * 0.7, 420, glass, 0, hw * 0.5, -len * 0.36);
@@ -15938,8 +16023,8 @@ export class ThreeDRenderer {
       // Rear-FUSELAGE engines + T-tail. Learjet/Citation/Gulfstream — AND the
       // Bombardier CRJ / older Embraer ERJ families (§3.3), which the shipped
       // 3-way model drew as underwing-pod narrowbodies.
-      const body = mk(military ? MIL : 0xf0f2f5);
-      const accent = mk(military ? 0x4d5940 : 0x3b4a5c);
+      const body = mkBody(0xf0f2f5);
+      const accent = mkAccent(0x3b4a5c);
       box(M.fusHalfW * 2, M.fusHalfW * 2, M.fusLen, body, 0, 0, 0);
       box(250, 130, 420, glass, 0, 90, -600);
       nose(140, 320, body, -1110);
@@ -15956,7 +16041,7 @@ export class ThreeDRenderer {
       propRate = 0;
     } else {
       // Light helicopter — the shipped chopper composition at the wave-2 scale.
-      const body = mk(military ? MIL : 0x35506e);
+      const body = mkBody(0x35506e);
       const cabin = new THREE.Mesh(new THREE.SphereGeometry(430, 16, 12), body);
       cabin.position.set(0, 470, -330); cabin.scale.set(1, 0.85, 1.15);
       asm.add(cabin);

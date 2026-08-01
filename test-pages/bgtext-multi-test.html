@@ -1766,6 +1766,331 @@
        rows.get('r5').faceCamera === undefined && rows.get('r5').rotationDeg === undefined);
   }
 
+  // ════════════ PART 1: per-entry field ROUND-TRIP through the load path ════
+  // Regression pin for the user report "does not hold setting changes like where
+  // it should be placed and size; resets to auto rotate and auto fit on reload".
+  // Planner._migrateBgTexts (inside _normalizeStore — the SINGLE normalizer every
+  // load / import / undo runs through) used to rebuild each row from a hard-coded
+  // whitelist (id/mode/text/entityId/format/maxCars) and silently DROP every
+  // per-entry field added after that list was written: aircraft, scale,
+  // grassAreaId, faceCamera, rotationDeg — and now the five colour fields. It is
+  // a whole-entry shallow-copy passthrough now (the idiom every other item array
+  // in the store already follows), so this matrix must stay exhaustive: ADD ANY
+  // NEW BgTextEntry FIELD HERE.
+  {
+    const full = {
+      id: 'rt1', mode: 'banner', text: 'ROUND TRIP',
+      entityId: 'sensor.msg',
+      format: { prefix: '> ', suffix: ' <', showUnit: false },
+      maxCars: 5,
+      aircraft: 'widebody',
+      scale: 2.5,
+      grassAreaId: 'ga_7',
+      faceCamera: false,
+      rotationDeg: 135,
+      colorMain: '#112233', colorDetail: '#445566',
+      bannerBg: '#778899', bannerText: '#aabbcc', bannerFrame: '#ddeeff',
+    };
+    // JSON round-trip FIRST — that is literally what HA user_data and the
+    // localStorage body cache do between a save and the next load.
+    const stored = JSON.parse(JSON.stringify(mkStore({ bgTexts: [full] })));
+    const back = p._normalizeStore(stored, 'f1').bgTexts[0];
+    for (const k of ['text', 'entityId', 'maxCars', 'aircraft', 'scale', 'grassAreaId',
+                     'faceCamera', 'rotationDeg', 'colorMain', 'colorDetail',
+                     'bannerBg', 'bannerText', 'bannerFrame']) {
+      ok(`round-trip keeps ${k}`, back[k] === full[k], `${k}=${JSON.stringify(back[k])}`);
+    }
+    ok('round-trip keeps id + mode', back.id === 'rt1' && back.mode === 'banner');
+    ok('round-trip keeps format (nested object)',
+       back.format && back.format.prefix === '> ' && back.format.suffix === ' <'
+       && back.format.showUnit === false, JSON.stringify(back.format));
+    ok('round-trip drops NO key at all',
+       JSON.stringify(Object.keys(back).sort()) === JSON.stringify(Object.keys(full).sort()),
+       Object.keys(back).sort().join(','));
+    // Load → (undo snapshot) → load must be a fixed point.
+    const twice = p._normalizeStore(
+      JSON.parse(JSON.stringify({ ...stored, bgTexts: [back] })), 'f1').bgTexts[0];
+    ok('normalize is idempotent over every field',
+       JSON.stringify(twice) === JSON.stringify(back), JSON.stringify(twice));
+    // Shallow COPY, never an alias of the caller's row.
+    const src = mkStore({ bgTexts: [{ ...full }] });
+    const out = p._normalizeStore(src, 'f1').bgTexts[0];
+    out.scale = 99;
+    ok('normalize copies rather than aliases the entry',
+       src.bgTexts[0].scale === 2.5, `src=${src.bgTexts[0].scale}`);
+    // The two VALIDATED fields still gate: a row with no id / a bogus mode is
+    // dropped (that behaviour predates the fix and must survive it).
+    const filtered = p._normalizeStore(mkStore({ bgTexts: [
+      { mode: 'sky', text: 'NOID' },
+      { id: 'bad', mode: 'nonsense', text: 'X' },
+      { id: 'good', mode: 'train', text: 'Y', maxCars: 3, scale: 1.5 },
+    ] }), 'f1').bgTexts;
+    ok('normalize still drops rows with no id / an unknown mode',
+       filtered.length === 1 && filtered[0].id === 'good', JSON.stringify(filtered));
+    ok('a surviving row keeps its post-whitelist fields',
+       filtered[0].maxCars === 3 && filtered[0].scale === 1.5);
+    // Grass placement + orientation specifically (the shape the user reported).
+    const grass = p._normalizeStore(JSON.parse(JSON.stringify(mkStore({ bgTexts: [
+      { id: 'g1', mode: 'grass', text: 'YARD', grassAreaId: 'area9',
+        faceCamera: false, rotationDeg: 90, scale: 3 },
+    ] }))), 'f1').bgTexts[0];
+    ok('reload keeps ground-writing placement + static rotation + size',
+       grass.grassAreaId === 'area9' && grass.faceCamera === false
+       && grass.rotationDeg === 90 && grass.scale === 3, JSON.stringify(grass));
+  }
+
+  // ════════════ PART 2: colour resolution (real Planner.bgTextsResolved) ════
+  {
+    p.store.bgTexts = [
+      { id: 'c1', mode: 'banner', text: 'B', colorMain: '#101010', colorDetail: '#202020',
+        bannerBg: '#303030', bannerText: '#404040', bannerFrame: '#505050' },
+      { id: 'c2', mode: 'train', text: 'T', colorMain: '#101010', bannerFrame: '#505050' },
+      { id: 'c3', mode: 'chopper', text: 'C', bannerBg: '#303030' },
+      { id: 'c4', mode: 'sky', text: 'S', colorMain: '#101010', bannerBg: '#303030' },
+      { id: 'c5', mode: 'grass', text: 'G', colorMain: '#101010', bannerText: '#404040' },
+      { id: 'c6', mode: 'banner', text: 'P' },
+    ];
+    const rows = new Map(p.bgTextsResolved().map(x => [x.id, x]));
+    ok('resolve: a banner row carries all five colours',
+       rows.get('c1').colorMain === '#101010' && rows.get('c1').colorDetail === '#202020'
+       && rows.get('c1').bannerBg === '#303030' && rows.get('c1').bannerText === '#404040'
+       && rows.get('c1').bannerFrame === '#505050', JSON.stringify(rows.get('c1')));
+    ok('resolve: a train row carries the colours it set (and only those)',
+       rows.get('c2').colorMain === '#101010' && rows.get('c2').bannerFrame === '#505050'
+       && rows.get('c2').colorDetail === undefined && rows.get('c2').bannerBg === undefined);
+    ok('resolve: a chopper row carries its colour', rows.get('c3').bannerBg === '#303030');
+    ok('resolve: a SKY row carries NO colour (additive glow — no palette)',
+       rows.get('c4').colorMain === undefined && rows.get('c4').bannerBg === undefined);
+    ok('resolve: a GRASS row carries NO colour (ink comes from the ground)',
+       rows.get('c5').colorMain === undefined && rows.get('c5').bannerText === undefined);
+    ok('resolve: an uncoloured banner row carries nothing (pre-feature shape)',
+       Object.keys(rows.get('c6')).every(k => !k.startsWith('color') && !k.startsWith('banner')),
+       Object.keys(rows.get('c6')).join(','));
+  }
+
+  // ════════════ PART 2: per-entry key hash sensitivity ════════════
+  // MIRROR of the per-entry term three-view._keyBgText builds (the `_buildNav`
+  // replica idiom): a colour edit must rebuild THAT entry's rig, and must leave
+  // every OTHER entry's term byte-identical.
+  {
+    const term = (e) => `${e.id}:${e.mode}:${e.text}:${e.maxCars ?? ''}:${e.aircraft ?? ''}`
+      + `:${e.scale ?? ''}:${e.grassAreaId ?? ''}:`
+      + `:${e.faceCamera === false ? 'f' : ''}:${e.rotationDeg ?? ''}`
+      + `:${e.colorMain ?? ''}:${e.colorDetail ?? ''}`
+      + `:${e.bannerBg ?? ''}:${e.bannerText ?? ''}:${e.bannerFrame ?? ''}`;
+    p.store.bgTexts = [
+      { id: 'k1', mode: 'banner', text: 'ONE' },
+      { id: 'k2', mode: 'train', text: 'TWO' },
+    ];
+    const before = p.bgTextsResolved().map(term);
+    p.store.bgTexts[0].colorMain = '#ff0000';
+    const afterMain = p.bgTextsResolved().map(term);
+    ok('key: a colorMain edit changes that entry\'s term', afterMain[0] !== before[0]);
+    ok('key: the neighbour entry\'s term is untouched', afterMain[1] === before[1]);
+    for (const k of ['colorDetail', 'bannerBg', 'bannerText', 'bannerFrame']) {
+      const prev = p.bgTextsResolved().map(term);
+      p.store.bgTexts[0][k] = '#00ff00';
+      const now = p.bgTextsResolved().map(term);
+      ok(`key: a ${k} edit changes the entry term`, now[0] !== prev[0]);
+    }
+    // An UNCOLOURED entry hashes with the all-empty colour suffix, so adding the
+    // feature never changed how a pre-feature config keys relative to itself.
+    p.store.bgTexts = [{ id: 'k3', mode: 'sky', text: 'PLAIN' }];
+    ok('key: an uncoloured entry ends in the empty colour suffix',
+       term(p.bgTextsResolved()[0]).endsWith(':::::'), term(p.bgTextsResolved()[0]));
+  }
+
+  // ════════════ PART 2: renderer colour application ════════════
+  const simsHex = (h) => r._simsColor(h).getHex();
+  const rigOf = (mode) => r._bgRigs.find(x => x.mode === mode);
+  // Solid-material colours in a rig assembly (text planes carry a map, not a hue).
+  const hexList = (root) => {
+    const out = [];
+    root.traverse(o => {
+      if (o.isMesh && o.material && o.material.color
+          && !o.userData.textPlane && !o.userData.outline) out.push(o.material.color.getHex());
+    });
+    return out;
+  };
+  const countHex = (root, h) => hexList(root).filter(x => x === simsHex(h)).length;
+  const hasHex = (root, h) => countHex(root, h) > 0;
+  const bannerCv = (rig) => rig.banner.userData.bannerFront.material.map.image;
+  const rgbOf = (h) => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
+  const pxAt = (cv, x, y) => {
+    const d = cv.getContext('2d').getImageData(x, y, 1, 1).data; return [d[0], d[1], d[2]];
+  };
+  const sameRgb = (a, b) => a[0] === b[0] && a[1] === b[1] && a[2] === b[2];
+  const hasRgb = (cv, hex) => {
+    const [R, G, B] = rgbOf(hex);
+    const d = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data;
+    for (let i = 0; i < d.length; i += 4) if (d[i] === R && d[i + 1] === G && d[i + 2] === B) return true;
+    return false;
+  };
+  // Flank plate canvas of a given train car (0 = first message car).
+  const flankCv = (train, car) => {
+    let out = null;
+    train.vehicles[car + 1].obj.traverse(o => {
+      if (o.userData && o.userData.flank === 'plusX') out = o.material.map.image;
+    });
+    return out;
+  };
+
+  // ── defaults byte-identical (goldens = the shipped palette) ──
+  {
+    r.updateBgTexts([
+      ent('banner', 'DEFAULTS'), ent('chopper', 'DEFAULTS'), ent('train', 'DEFAULTS'),
+    ], false, 0, 0);
+    const ban = rigOf('banner'), cho = rigOf('chopper'), trn = rigOf('train');
+    ok('default classic plane: fuselage #dad7cf + accent #c94f3d',
+       hasHex(ban.asm, 0xdad7cf) && hasHex(ban.asm, 0xc94f3d));
+    ok('default chopper: cabin #2f6fb0 + stripes #e6291a',
+       hasHex(cho.asm, 0x2f6fb0) && hasHex(cho.asm, 0xe6291a));
+    ok('default chopper: the tail boom + fin stay on the BODY hue (2 stripe meshes only)',
+       countHex(cho.asm, 0xe6291a) === 2, `n=${countHex(cho.asm, 0xe6291a)}`);
+    ok('default train: engine #8a2b2b, cars #7a5a2a, last car #4f3418, trim #24272b',
+       hasHex(trn.train.vehicles[0].obj, 0x8a2b2b)
+       && hasHex(trn.train.vehicles[1].obj, 0x7a5a2a)
+       && hasHex(trn.train.vehicles[trn.train.vehicles.length - 1].obj, 0x4f3418)
+       && hasHex(trn.train.vehicles[0].obj, 0x24272b));
+    const bc = bannerCv(ban);
+    ok('default banner cloth is #c0281f with #f5c400 trim and #fff7e6 text',
+       sameRgb(pxAt(bc, 5, 100), rgbOf('#c0281f'))
+       && sameRgb(pxAt(bc, 5, 4), rgbOf('#f5c400'))
+       && hasRgb(bc, '#fff7e6'),
+       `bg=${pxAt(bc, 5, 100)} frame=${pxAt(bc, 5, 4)}`);
+    const fc = flankCv(trn.train, 0);
+    ok('default train plate is #f5efe0 with #8a2b2b trim and #22303a text',
+       sameRgb(pxAt(fc, 5, 100), rgbOf('#f5efe0'))
+       && sameRgb(pxAt(fc, 5, 4), rgbOf('#8a2b2b'))
+       && hasRgb(fc, '#22303a'),
+       `bg=${pxAt(fc, 5, 100)} frame=${pxAt(fc, 5, 4)}`);
+    // The chopper shares the banner painter with the plane.
+    ok('default chopper banner uses the same shipped cloth palette',
+       sameRgb(pxAt(bannerCv(cho), 5, 100), rgbOf('#c0281f')));
+  }
+
+  // ── every field lands where it is specified ──
+  const COL = {
+    colorMain: '#123456', colorDetail: '#654321',
+    bannerBg: '#0a0b0c', bannerText: '#f0e1d2', bannerFrame: '#1e90ff',
+  };
+  {
+    r.updateBgTexts([
+      ent('banner', 'PAINTED', { ...COL }),
+      ent('chopper', 'PAINTED', { ...COL }),
+      ent('train', 'PAINTED', { ...COL }),
+    ], false, 0, 0);
+    const ban = rigOf('banner'), cho = rigOf('chopper'), trn = rigOf('train');
+    ok('classic plane: colorMain paints the fuselage, colorDetail the wing/tail',
+       hasHex(ban.asm, 0x123456) && hasHex(ban.asm, 0x654321)
+       && !hasHex(ban.asm, 0xdad7cf) && !hasHex(ban.asm, 0xc94f3d));
+    ok('chopper: colorMain paints the cabin, colorDetail the stripes',
+       hasHex(cho.asm, 0x123456) && hasHex(cho.asm, 0x654321)
+       && !hasHex(cho.asm, 0x2f6fb0) && !hasHex(cho.asm, 0xe6291a));
+    ok('chopper: the tail boom + fin follow the accent once one is set',
+       countHex(cho.asm, 0x654321) === 4, `n=${countHex(cho.asm, 0x654321)}`);
+    ok('train: colorMain paints the engine AND the message cars',
+       hasHex(trn.train.vehicles[0].obj, 0x123456)
+       && hasHex(trn.train.vehicles[1].obj, 0x123456)
+       && !hasHex(trn.train.vehicles[0].obj, 0x8a2b2b)
+       && !hasHex(trn.train.vehicles[1].obj, 0x7a5a2a));
+    ok('train: colorDetail paints the trim AND the darker last car',
+       hasHex(trn.train.vehicles[0].obj, 0x654321)
+       && hasHex(trn.train.vehicles[trn.train.vehicles.length - 1].obj, 0x654321)
+       && !hasHex(trn.train.vehicles[0].obj, 0x24272b));
+    const bc = bannerCv(ban);
+    ok('banner cloth takes bannerBg / bannerFrame / bannerText',
+       sameRgb(pxAt(bc, 5, 100), rgbOf(COL.bannerBg))
+       && sameRgb(pxAt(bc, 5, 4), rgbOf(COL.bannerFrame))
+       && hasRgb(bc, COL.bannerText),
+       `bg=${pxAt(bc, 5, 100)} frame=${pxAt(bc, 5, 4)}`);
+    ok('the chopper banner takes the same three cloth colours',
+       sameRgb(pxAt(bannerCv(cho), 5, 100), rgbOf(COL.bannerBg))
+       && sameRgb(pxAt(bannerCv(cho), 5, 4), rgbOf(COL.bannerFrame)));
+    const fc = flankCv(trn.train, 0);
+    ok('train flank plate takes bannerBg / bannerFrame / bannerText',
+       sameRgb(pxAt(fc, 5, 100), rgbOf(COL.bannerBg))
+       && sameRgb(pxAt(fc, 5, 4), rgbOf(COL.bannerFrame))
+       && hasRgb(fc, COL.bannerText),
+       `bg=${pxAt(fc, 5, 100)} frame=${pxAt(fc, 5, 4)}`);
+    ok('every message car (incl. the last) carries the recoloured plate',
+       trn.train.vehicles.slice(1).every((v, k) =>
+         sameRgb(pxAt(flankCv(trn.train, k), 5, 100), rgbOf(COL.bannerBg))));
+  }
+
+  // ── each field is INDEPENDENT (setting one leaves the others shipped) ──
+  {
+    r.updateBgTexts([ent('banner', 'ONLYBG', { bannerBg: '#0a0b0c' })], false, 0, 0);
+    const bc = bannerCv(rigOf('banner'));
+    ok('bannerBg alone: cloth recoloured, trim + text still shipped',
+       sameRgb(pxAt(bc, 5, 100), rgbOf('#0a0b0c'))
+       && sameRgb(pxAt(bc, 5, 4), rgbOf('#f5c400')) && hasRgb(bc, '#fff7e6'));
+    ok('bannerBg alone: the airframe is still the shipped paint',
+       hasHex(rigOf('banner').asm, 0xdad7cf) && hasHex(rigOf('banner').asm, 0xc94f3d));
+
+    r.updateBgTexts([ent('banner', 'ONLYMAIN', { colorMain: '#123456' })], false, 0, 0);
+    ok('colorMain alone: fuselage recoloured, accent still shipped',
+       hasHex(rigOf('banner').asm, 0x123456) && hasHex(rigOf('banner').asm, 0xc94f3d));
+    ok('colorMain alone: the cloth is still the shipped palette',
+       sameRgb(pxAt(bannerCv(rigOf('banner')), 5, 100), rgbOf('#c0281f')));
+
+    r.updateBgTexts([ent('train', 'ONLYDET', { colorDetail: '#654321' })], false, 0, 0);
+    const t = rigOf('train').train;
+    ok('train colorDetail alone: trim + last car recoloured, bodies still shipped',
+       hasHex(t.vehicles[0].obj, 0x654321) && hasHex(t.vehicles[0].obj, 0x8a2b2b)
+       && hasHex(t.vehicles[1].obj, 0x7a5a2a));
+  }
+
+  // ── garbage hex is REFUSED (never a silent canvas/THREE corruption) ──
+  {
+    r.updateBgTexts([ent('banner', 'JUNK', {
+      colorMain: 'rgb(1,2,3)', colorDetail: '', bannerBg: 'notacolor',
+      bannerText: '#12345', bannerFrame: 'red',
+    })], false, 0, 0);
+    const bc = bannerCv(rigOf('banner'));
+    ok('a malformed hex falls back to the shipped colour everywhere',
+       hasHex(rigOf('banner').asm, 0xdad7cf) && hasHex(rigOf('banner').asm, 0xc94f3d)
+       && sameRgb(pxAt(bc, 5, 100), rgbOf('#c0281f'))
+       && sameRgb(pxAt(bc, 5, 4), rgbOf('#f5c400')) && hasRgb(bc, '#fff7e6'));
+    // #rgb shorthand IS valid.
+    r.updateBgTexts([ent('banner', 'SHORT', { colorMain: '#0f0' })], false, 0, 0);
+    ok('the #rgb shorthand is accepted', hasHex(rigOf('banner').asm, 0x00ff00));
+  }
+
+  // ── archetype tow planes take the tint best-effort ──
+  {
+    r.updateBgTexts([ent('banner', 'JET', { aircraft: 'narrowbody' })], false, 0, 0);
+    ok('archetype default livery: body #e8ecf0 + accent #2f6fb0',
+       hasHex(rigOf('banner').asm, 0xe8ecf0) && hasHex(rigOf('banner').asm, 0x2f6fb0));
+    r.updateBgTexts([ent('banner', 'JET', {
+      aircraft: 'narrowbody', colorMain: '#123456', colorDetail: '#654321',
+    })], false, 0, 0);
+    ok('archetype livery takes colorMain (body) + colorDetail (accent)',
+       hasHex(rigOf('banner').asm, 0x123456) && hasHex(rigOf('banner').asm, 0x654321)
+       && !hasHex(rigOf('banner').asm, 0xe8ecf0) && !hasHex(rigOf('banner').asm, 0x2f6fb0));
+    ok('archetype tint leaves the shared dark parts (props / gear) alone',
+       hasHex(rigOf('banner').asm, 0x33363b));
+    // Only one of the two slots set → the other keeps its livery hue.
+    r.updateBgTexts([ent('banner', 'JET', {
+      aircraft: 'widebody', colorMain: '#123456',
+    })], false, 0, 0);
+    ok('archetype: colorMain alone leaves the accent at the shipped livery',
+       hasHex(rigOf('banner').asm, 0x123456) && hasHex(rigOf('banner').asm, 0x1f5aa0));
+  }
+
+  // ── a colour rebuild still resumes the flight/lap mid-course (_bgTextPhase) ──
+  {
+    const e1 = ent('banner', 'PHASE');
+    r.updateBgTexts([e1], false, 0, 0);
+    step(400);
+    const midAngle = rigOf('banner').angle;
+    r.updateBgTexts([{ ...e1, colorMain: '#123456' }], false, 0, 0);
+    ok('a colour edit resumes the orbit angle (no snap back to the build stagger)',
+       Math.abs(rigOf('banner').angle - midAngle) < 1e-6,
+       `mid=${midAngle} after=${rigOf('banner').angle}`);
+    ok('…and the rebuilt rig really is recoloured', hasHex(rigOf('banner').asm, 0x123456));
+  }
+
   // ════════════ report ════════════
   const pass = tests.filter(t => t.ok).length, total = tests.length;
   const allPass = pass === total;

@@ -1612,6 +1612,18 @@ export interface BgTextEntry {
   // aimed when one floor's plan is re-oriented.
   faceCamera?: boolean;
   rotationDeg?: number;
+  // ── Per-entry COLOR customization (modes 'banner' | 'train' | 'chopper') ──
+  // Hex strings ('#rgb' / '#rrggbb'). EVERY field is optional and ABSENT
+  // reproduces the shipped palette byte-for-byte (the renderer owns the format
+  // validation, exactly like `aircraft`). Deliberately IGNORED by the other two
+  // styles: 'sky' is an additive white glow (a tint would read as a bug) and
+  // 'grass' takes its ink from the surface painted underneath it (groundTextInk),
+  // which is the whole point of the ground-writing contrast system.
+  colorMain?: string;    // vehicle primary — tow-plane fuselage, train engine + car bodies, chopper cabin
+  colorDetail?: string;  // vehicle accent  — plane wing/tail, train trim + darker last car, chopper stripes + boom
+  bannerBg?: string;     // towed banner cloth background; ALSO the train flank text-plate background
+  bannerText?: string;   // banner lettering colour;       ALSO the train flank plate text
+  bannerFrame?: string;  // banner edge trim stripes;      ALSO the train flank plate border stripes
 }
 
 // ── Multiple-configuration registry (Batch B) ─────────────────────────────

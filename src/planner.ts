@@ -486,6 +486,11 @@ export type BgTextResolved = {
   // explicit `false` opt-out, so a row that follows the camera hashes/serializes
   // identically to a pre-feature one.
   faceCamera?: boolean; rotationDeg?: number;
+  // Per-entry colour customization (banner / train / chopper only — see
+  // BgTextEntry). Absent = the shipped palette; the renderer owns the hex-format
+  // validation, so these pass straight through as authored.
+  colorMain?: string; colorDetail?: string;
+  bannerBg?: string; bannerText?: string; bannerFrame?: string;
 };
 
 // Single-source-of-truth Planner. Lit components subscribe via addEventListener.
@@ -2079,14 +2084,19 @@ export class Planner extends EventTarget {
   private _migrateBgTexts(remote: Store): BgTextEntry[] | undefined {
     if (Array.isArray(remote.bgTexts)) {
       const modes: BgTextEntryMode[] = ['sky', 'banner', 'grass', 'train', 'chopper'];
+      // WHOLE-ENTRY passthrough (shallow copy so we never alias the caller's
+      // objects). This used to rebuild each row FIELD-BY-FIELD from a hard-coded
+      // whitelist — every per-entry field added after that list was written
+      // (aircraft / scale / grassAreaId / faceCamera / rotationDeg, and now the
+      // five colour fields) was silently DROPPED on every load, undo and import,
+      // so placement / size / static-rotation "reset to auto" on reload
+      // (user-reported). Item arrays elsewhere in the store pass through
+      // untouched for exactly this reason; only `id` + `mode` are validated,
+      // because those two are what the rig keying and the mode switch depend on.
       const out = remote.bgTexts
         .filter(e => e && typeof e.id === 'string' && modes.includes(e.mode))
         .slice(0, 6)
-        .map(e => ({
-          id: e.id, mode: e.mode,
-          text: e.text, entityId: e.entityId, format: e.format,
-          maxCars: e.maxCars,
-        }));
+        .map(e => ({ ...e }));
       return out.length ? out : undefined;
     }
     const bt = remote.bgText;
@@ -2639,6 +2649,16 @@ export class Planner extends EventTarget {
       // camera" default (and the _keyBgText hash) stay byte-identical to the
       // shipped build. rotationDeg passes straight through; the renderer owns
       // the finite guard + the degrees→yaw mapping.
+      // Colour customization travels for the three VEHICLE styles only. sky is
+      // an additive glow and grass reads its ink off the surface below, so both
+      // carry nothing — their hash + build stay byte-identical to pre-feature.
+      if (e.mode === 'banner' || e.mode === 'train' || e.mode === 'chopper') {
+        if (e.colorMain)   row.colorMain = e.colorMain;
+        if (e.colorDetail) row.colorDetail = e.colorDetail;
+        if (e.bannerBg)    row.bannerBg = e.bannerBg;
+        if (e.bannerText)  row.bannerText = e.bannerText;
+        if (e.bannerFrame) row.bannerFrame = e.bannerFrame;
+      }
       if (e.mode === 'grass' && e.faceCamera === false) {
         row.faceCamera = false;
         if (e.rotationDeg != null) row.rotationDeg = e.rotationDeg;
