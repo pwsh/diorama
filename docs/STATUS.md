@@ -324,6 +324,25 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Weather dirty-key decoupled from configRev** (2026-08-01,
+  user-reported "weather overlays redraw at entity changes";
+  unreleased — on main past v0.51.0). The _keyBgText precedent
+  applied: _keyWeather's composition is now the pure exported
+  weatherRebuildKey(fx, floor, effPreset) in weather.ts — no
+  configRev; floor DIMS, isDay (lightning energy) and a 3°
+  sun-elevation bucket (star ramp/sun disc) were the terms configRev
+  had papered over; observer bucket tightened 1dp→4dp;
+  weatherWindBucket shared with _keyFlagpoles. Verified NOT consumed
+  (no term): ground level, wall loops (puddles are bbox+id-seeded).
+  New weather-fx ?c=key 51/51; all other cases + weather 200/200
+  unchanged. SIBLING-KEY TRIAGE (follow-up candidates, unchanged):
+  visually-stateful configRev re-seeds remain in _keyFloor (fountain
+  plume + shower spray Math.random), _keyThermo (vent puffs),
+  _keySprinklers (droplet fans), _keyGround/_keyPool (water-shimmer
+  texture clones reset offset → visible jump); a dozen others rebuild
+  identically (invisible, allocation churn only); _keyBgText/_keyZones/
+  _keyHalos already clean. Also flagged: precip DPR cap not in any key
+  (cosmetic, monitor-move only).
 - **Rooms & flooring refinement + bindable outdoors** (2026-08-01,
   user-directed; unreleased — on main past v0.51.0). Rooms section
   moved under Layers. Per-room flooring: Room.floorColor/floorTex

@@ -16,7 +16,10 @@ import { floorsUnionCenter, resolvePivotMode } from '../geometry.js';
 import { floorElevationMm, resolveGroundLevelMm, bgGroundInkKey } from '../geometry.js';
 import { resolveScreenContent } from '../surfaces.js';
 import { resolveScenePreset, resolveTimeBucket } from '../time-of-day.js';
-import { conditionIntensity, weatherEffectEnabled, worstAlertSeverity } from '../weather.js';
+import {
+  conditionIntensity, weatherEffectEnabled, worstAlertSeverity, weatherRebuildKey,
+  weatherWindBucket,
+} from '../weather.js';
 import { roadCapForRadius } from '../neighborhood.js';
 import { FLIGHTS_DEFAULT_RADIUS_NM, flightShellMm } from '../flights.js';
 import { loadModel } from '../model-store.js';
@@ -1807,33 +1810,17 @@ export class ThreeView extends LitElement {
       // The effective lighting preset already folds the weather dim into
       // _keyFloor above, so no extra floor plumbing is needed here.
       const fx = this._weatherFxState(layers);
-      // Wind drift is baked into each cloud at build time, so a coarse wind
-      // speed/bearing bucket joins the key (rebuild on a meaningful wind change).
-      const windBucket = `${Math.round(fx.windKmh / 10)}:` +
-        `${fx.windBearingPlanRad == null ? 'n' : Math.round(fx.windBearingPlanRad * 4)}`;
-      // W3 extended inputs, coarsely bucketed so rebuilds stay rare (per-frame
-      // motion / eased lighting continue in the renderer's _advanceWeather).
-      const b = (v: number | null | undefined, d: number) =>
-        v == null ? 'n' : Math.round(v / d);
-      const effKey = (Object.keys(fx.effects ?? {}) as Array<keyof NonNullable<typeof fx.effects>>)
-        .map(k => (fx.effects![k] ? '1' : '0')).join('');
-      // Phase 3: fold the effective preset (drives dome colors + sun/moon
-      // day/night gating), the moon phase (8 states, ~daily), and the resolved
-      // skyBackdrop flag into the key so the sky rebuilds on those changes.
-      // Observer presence + coarse lat/lon + plan-north θ fold in so the catalog
-      // sky (re)builds when calibration/location changes; time progression is
-      // handled by the renderer's own 60 s recompute, not this key.
-      const obsBucket = fx.observer
-        ? `${fx.observer.lat.toFixed(1)},${fx.observer.lon.toFixed(1)},${b((fx.skyRotRad ?? 0) * 180 / Math.PI, 2)}`
-        : '-';
-      const skyBucket = `${effPreset}:${fx.moonPhase ?? '-'}:${fx.skyBackdrop ? '1' : '0'}:${obsBucket}`;
-      const w3Bucket = `${b(fx.cloudCoverage, 10)}:${b(fx.visibilityKm, 2)}:` +
-        `${b(fx.windGustKmh, 10)}:${b(fx.apparentC, 3)}:${b(fx.sunAzimuthDeg, 5)}:` +
-        `${fx.sunElevationDeg == null ? 'n' : (fx.sunElevationDeg > 0 ? 'u' : 'd')}:` +
-        `${fx.rainSoon ? 'r' : '-'}:${effKey}:${skyBucket}`;
-      const keyWeather = `${p.configRev}|${f.id}|${fx.condition}|` +
-        `${Math.round(fx.intensity01 * 4)}|${windBucket}|${w3Bucket}|` +
-        `${fx.alertSeverity ?? '-'}`;   // DC-D: rebuild the beacon on a severity change
+      // The key composition is the PURE weatherRebuildKey (weather.ts) so the
+      // test page can pin it without mounting this component. It carries NO
+      // configRev term — deliberately (user-reported 2026-08-01: "the weather
+      // overlays also are redrawing at entity changes and those should be
+      // separate"); see that function's header for the full reasoning and the
+      // per-input rationale. Everything the builders consume is hashed there:
+      // the resolved fx state (condition/intensity/wind/effects/W3 fields/sun/
+      // alert/sky/observer) + the floor frame (id + dims) the spawn box, fog
+      // planes, cloud-shadow box, storm-bank distance, frost perimeter and
+      // puddle scatter all derive from, plus the effective lighting preset.
+      const keyWeather = weatherRebuildKey(fx, f, effPreset);
       if (keyWeather !== this._keyWeather) {
         this._keyWeather = keyWeather;
         r.updateWeather(fx);
@@ -1963,7 +1950,7 @@ export class ThreeView extends LitElement {
       // Ripple + eased hoist + wind yaw all animate in the renderer's per-frame
       // _advanceFlagpoles — the key only gates the (re)build.
       const flagList = f.flagpoles ?? [];
-      const keyFlagpoles = `${p.configRev}|${f.id}|${windBucket}|` + flagList.map(fp => {
+      const keyFlagpoles = `${p.configRev}|${f.id}|${weatherWindBucket(fx)}|` + flagList.map(fp => {
         const frac = flagpoleHoistFraction(fp, fp.entityId ? states[fp.entityId] ?? null : null);
         return `${fp.id}:${Math.round(fp.x)}:${Math.round(fp.y)}:${fp.flag ?? 'usa'}:` +
           `${fp.height ?? 6000}:${fp.halfMast ? 1 : 0}:${fp.hidden ? 1 : 0}:${Math.round(frac * 20)}`;

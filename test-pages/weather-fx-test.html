@@ -16,6 +16,14 @@
   // so particle motion / fog easing / lightning flashes are deterministic. The
   // background _animate RAF cannot interleave — this whole body is synchronous
   // (no awaits after updateWeather), so every read reflects only manual steps.
+  //
+  // Cases: ?c=pouring | fog | lightning | sunny | sky | w3 | alert | key
+  //
+  // ?c=key pins the PURE _keyWeather composition (weather.ts weatherRebuildKey —
+  // three-view calls it, so this page can test it without mounting a Lit
+  // component). That case needs a second bundle beside the built dist:
+  //   npx esbuild src/weather.ts --bundle --format=esm \
+  //     --outfile=<harness>/weather.mod.js
   const q = new URLSearchParams(location.search);
   const scene = q.get('c') || 'pouring';
   const mod = await import('./assets/three-renderer.js?v=' + Date.now());
@@ -475,6 +483,129 @@
     // skyBackdrop off → the whole group hides.
     r.updateWeather(fx({ condition: 'sunny', isDay: true, skyBackdrop: false }));
     ok('skyBackdrop off hides group', !r._skyGroup.visible, `vis=${r._skyGroup.visible}`);
+  }
+
+  // ── ?c=key — the pure _keyWeather composition ────────────────────────────
+  // The user report: "the weather overlays also are redrawing at entity changes
+  // and those should be separate". The cure (the pinned _keyBgText pattern) is
+  // that the key carries NO configRev term and hashes exactly what the weather
+  // + sky BUILDERS consume. These tests are the guard: unrelated config churn
+  // cannot reach the key (there is no input for it), every genuinely-consumed
+  // input moves it, and sub-bucket jitter does not.
+  if (scene === 'key') {
+    const { weatherRebuildKey, weatherWindBucket } = await import('./weather.mod.js');
+
+    const FLOOR = { id: 'f1', w: 10000, d: 8000 };
+    const BASE = {
+      condition: 'rainy', intensity01: 0.55, windKmh: 22, windBearingPlanRad: 0.3,
+      isDay: true,
+      effects: {
+        precip: true, fog: true, lightning: true, wind: true, clouds: true,
+        frost: false, puddles: true, precipForecast: false,
+        sunPosition: true, sunDisc: true,
+      },
+      cloudCoverage: 62, visibilityKm: 9, windGustKmh: 30, apparentC: 11,
+      rainSoon: false, sunAzimuthDeg: 140, sunElevationDeg: 24,
+      alertSeverity: undefined, skyBackdrop: true, moonPhase: 'full_moon',
+      observer: { lat: 43.0731, lon: -89.4012 }, skyRotRad: 0.21,
+    };
+    const K = (over, floor, preset) =>
+      weatherRebuildKey(Object.assign({}, BASE, over || {}), floor || FLOOR, preset || 'day');
+    const base = K();
+
+    // (a) NO configRev — structurally: the function takes exactly (fx, floor,
+    // effPreset). There is no revision/counter argument, so a bound-entity
+    // config emit CANNOT move the key. Determinism backs it up.
+    ok('a: signature is (fx, floor, effPreset) — no configRev input',
+       weatherRebuildKey.length === 3, `arity=${weatherRebuildKey.length}`);
+    ok('a: identical inputs → identical key (repeat call)', K() === base, base);
+    ok('a: a fresh fx OBJECT with equal values → identical key',
+       weatherRebuildKey(JSON.parse(JSON.stringify(BASE)), { id: 'f1', w: 10000, d: 8000 }, 'day') === base, '');
+    ok('a: key contains no digits-only rev prefix (starts with the floor id)',
+       base.startsWith('f1|'), base.slice(0, 24));
+
+    // (b) floor frame — the spawn box / fog planes / cloud-shadow box / storm
+    // distance / frost perimeter size off w,d; puddles seed off the id.
+    ok('b: floor WIDTH change → key changes', K(null, { id: 'f1', w: 12000, d: 8000 }) !== base, '');
+    ok('b: floor DEPTH change → key changes', K(null, { id: 'f1', w: 10000, d: 9000 }) !== base, '');
+    ok('b: floor ID change → key changes', K(null, { id: 'f2', w: 10000, d: 8000 }) !== base, '');
+
+    // (c) astronomical observer + plan-north θ (the catalog sky).
+    ok('c: observer LAT change → key changes',
+       K({ observer: { lat: 43.0810, lon: -89.4012 } }) !== base, '');
+    ok('c: observer LON change → key changes',
+       K({ observer: { lat: 43.0731, lon: -89.3900 } }) !== base, '');
+    ok('c: observer → null (calibration lost) → key changes', K({ observer: null }) !== base, '');
+    ok('c: plan-north θ change → key changes', K({ skyRotRad: 0.55 }) !== base, '');
+    ok('c: sub-metre observer jitter (< 4 dp) does NOT rebuild',
+       K({ observer: { lat: 43.073101, lon: -89.401199 } }) === base, '');
+
+    // (d) every other consumed input moves the key.
+    const moves = [
+      ['condition', { condition: 'snowy' }],
+      ['intensity01 bucket', { intensity01: 1.0 }],
+      ['isDay (flash energy)', { isDay: false }],
+      ['windKmh bucket', { windKmh: 44 }],
+      ['wind bearing bucket', { windBearingPlanRad: 2.4 }],
+      ['cloudCoverage bucket', { cloudCoverage: 95 }],
+      ['visibilityKm bucket', { visibilityKm: 0.4 }],
+      ['windGustKmh bucket (gust envelope)', { windGustKmh: 70 }],
+      ['apparentC bucket (frost)', { apparentC: -12 }],
+      ['rainSoon (storm bank)', { rainSoon: true }],
+      ['sunAzimuthDeg bucket', { sunAzimuthDeg: 200 }],
+      ['sunElevationDeg 3° bucket', { sunElevationDeg: 34 }],
+      ['sunElevationDeg horizon SIGN flip', { sunElevationDeg: -0.5 }],
+      ['sunElevationDeg → null', { sunElevationDeg: null }],
+      ['alertSeverity (DC-D beacon)', { alertSeverity: 'warning' }],
+      ['skyBackdrop toggle', { skyBackdrop: false }],
+      ['moonPhase', { moonPhase: 'waning_crescent' }],
+    ];
+    for (const [name, over] of moves) ok(`d: ${name} → key changes`, K(over) !== base, '');
+    ok('d: effective lighting preset → key changes', K(null, null, 'night') !== base, '');
+    // Every per-effect toggle (the layer flag + effects3d master fold into these
+    // in three-view's _weatherFxState, so they need no term of their own).
+    for (const k of Object.keys(BASE.effects)) {
+      const eff = Object.assign({}, BASE.effects); eff[k] = !eff[k];
+      ok(`d: effect toggle "${k}" → key changes`, K({ effects: eff }) !== base, '');
+    }
+
+    // (e) sub-bucket jitter must NOT rebuild — the whole point is that the
+    // particle clouds keep their seeded positions through ordinary drift.
+    const holds = [
+      ['windKmh +1', { windKmh: 23 }],
+      ['cloudCoverage +2', { cloudCoverage: 64 }],
+      ['visibilityKm +0.5', { visibilityKm: 9.5 }],
+      ['apparentC +1', { apparentC: 12 }],
+      ['sunAzimuthDeg +1', { sunAzimuthDeg: 141 }],
+      ['sunElevationDeg +0.5', { sunElevationDeg: 24.5 }],
+    ];
+    for (const [name, over] of holds) ok(`e: ${name} holds the key`, K(over) === base, K(over));
+
+    // (f) the shared wind bucket — _keyFlagpoles reuses the exact same helper,
+    // so the two keys can never disagree about "a meaningful wind change".
+    ok('f: weatherWindBucket is embedded in the key verbatim',
+       base.includes('|' + weatherWindBucket(BASE) + '|'), weatherWindBucket(BASE));
+    ok('f: weatherWindBucket is stable under sub-bucket jitter',
+       weatherWindBucket({ windKmh: 22, windBearingPlanRad: 0.3 })
+       === weatherWindBucket({ windKmh: 23, windBearingPlanRad: 0.31 }), '');
+    ok('f: weatherWindBucket tolerates a null bearing',
+       weatherWindBucket({ windKmh: 0, windBearingPlanRad: null }).endsWith(':n'), '');
+
+    // (g) the no-weather resolved state (three-view's wnow == null fallback) is
+    // itself well-keyed — it must not collide with a live sunny state.
+    const NONE = {
+      condition: 'sunny', intensity01: 0, windKmh: 0, windBearingPlanRad: null,
+      isDay: true, effects: {
+        precip: false, fog: false, lightning: false, wind: false, clouds: false,
+        frost: false, puddles: false, precipForecast: false,
+        sunPosition: false, sunDisc: false,
+      }, skyBackdrop: true, moonPhase: null, observer: null, skyRotRad: 0,
+    };
+    const noneKey = weatherRebuildKey(NONE, FLOOR, 'day');
+    ok('g: the no-weather state keys distinctly from live sunny',
+       noneKey !== K({ condition: 'sunny', intensity01: 0 }), noneKey.slice(0, 40));
+    ok('g: the no-weather state is stable across calls',
+       weatherRebuildKey(NONE, FLOOR, 'day') === noneKey, '');
   }
 
   // ── report ──────────────────────────────────────────────────────────────

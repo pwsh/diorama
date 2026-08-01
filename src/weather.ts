@@ -925,3 +925,102 @@ export function conditionIntensity(condition: HaCondition | string): number {
     default:                return 0.4;   // unknown → light drizzle-ish
   }
 }
+
+// ── The 3D weather-group rebuild key (pure; three-view owns the call site) ──
+// Structural subset of the renderer's WeatherFxState — every field the weather
+// / sky BUILDERS consume. Declared here (rather than importing the renderer
+// type) so this module stays three.js-free and the test page can bundle it
+// alone; WeatherFxState satisfies it structurally.
+export interface WeatherKeyFx {
+  condition: string;
+  intensity01: number;
+  windKmh: number;
+  windBearingPlanRad: number | null;
+  isDay: boolean;
+  effects?: Record<WeatherEffectKey, boolean>;
+  cloudCoverage?: number | null;
+  visibilityKm?: number | null;
+  windGustKmh?: number | null;
+  apparentC?: number | null;
+  rainSoon?: boolean;
+  sunAzimuthDeg?: number | null;
+  sunElevationDeg?: number | null;
+  alertSeverity?: 'advisory' | 'watch' | 'warning';
+  skyBackdrop?: boolean;
+  moonPhase?: string | null;
+  observer?: { lat: number; lon: number } | null;
+  skyRotRad?: number;
+}
+
+// The floor frame the weather builders derive their geometry from: the
+// precipitation spawn box + fog planes + cloud-shadow box + storm-bank distance
+// + frost perimeter all size off w/d, and the puddle scatter is seeded from the
+// floor id (so a resize MUST rebuild, and a floor switch re-seeds).
+export interface WeatherKeyFloor { id: string; w: number; d: number }
+
+// Coarse wind speed/bearing bucket. Wind drift is baked into each precipitation
+// cloud / cloud shadow at BUILD time (and into the flagpole yaw), so a
+// meaningful wind change has to rebuild — a small one must not. Shared by
+// _keyWeather and _keyFlagpoles so the two can never disagree.
+export function weatherWindBucket(
+  fx: Pick<WeatherKeyFx, 'windKmh' | 'windBearingPlanRad'>,
+): string {
+  return `${Math.round(fx.windKmh / 10)}:` +
+    `${fx.windBearingPlanRad == null ? 'n' : Math.round(fx.windBearingPlanRad * 4)}`;
+}
+
+// Build the `_keyWeather` dirty key.
+//
+// **NO configRev term — deliberately** (user-reported 2026-08-01: "the weather
+// overlays also are redrawing at entity changes and those should be separate").
+// configRev is bumped by any config-path entity emit — a thermostat attribute,
+// a switch flip, a GPS fix — every ~25–30 s in a live house, and that tore the
+// whole _weatherGroup down and rebuilt it: the precipitation Points clouds
+// RE-SEED their random spawn positions (a visible re-randomise mid-downpour),
+// the cloud shadows / storm bank / frost / puddles rebuild, and the sky targets
+// re-snap. Exactly the `_keyBgText` disease, and exactly the same cure — hash
+// what the builders actually consume and nothing else.
+//
+// A LEGITIMATE rebuild (the condition changes, the floor resizes) still
+// re-seeds the particles; that is accepted today and unchanged. Everything
+// continuous downstream (fog density, dome colour, dayness, sun/moon position
+// and opacity, the alert beacon) is EASED per frame in _advanceWeather, so the
+// coarse buckets below step without popping.
+export function weatherRebuildKey(
+  fx: WeatherKeyFx, floor: WeatherKeyFloor, effPreset: string,
+): string {
+  const b = (v: number | null | undefined, d: number) =>
+    v == null ? 'n' : Math.round(v / d);
+  const windBucket = weatherWindBucket(fx);
+  // Per-effect toggles. These already FOLD the weatherFx layer flag + the
+  // effects3d master + the presence of live weather (three-view's `groupOn`),
+  // and the alert-beacon gate folds into alertSeverity — so neither the layer
+  // nor the master needs its own term. (All-effects-off + a layer flip builds
+  // nothing either way, so a skipped rebuild there is a no-op.)
+  const effKey = (Object.keys(fx.effects ?? {}) as Array<WeatherEffectKey>)
+    .map(k => (fx.effects![k] ? '1' : '0')).join('');
+  // Sky: the effective preset (dome colours + sun/moon day-night gating), the
+  // moon phase (8 states, ~daily), the resolved skyBackdrop flag, and the
+  // astronomical observer (lat/lon to 4 dp + plan-north θ to ~2°) so the
+  // catalog sky rebuilds when calibration or location changes. Time
+  // progression is the renderer's own 60 s recompute, never this key.
+  const obsBucket = fx.observer
+    ? `${fx.observer.lat.toFixed(4)},${fx.observer.lon.toFixed(4)},` +
+      `${b((fx.skyRotRad ?? 0) * 180 / Math.PI, 2)}`
+    : '-';
+  const skyBucket = `${effPreset}:${fx.moonPhase ?? '-'}:${fx.skyBackdrop ? '1' : '0'}:${obsBucket}`;
+  // Sun elevation is consumed at FINE granularity (the star-ramp through civil
+  // twilight, the sun-disc horizon ramp, the disc tint + position, the
+  // decorative moon arc), so the sign alone is not enough now that configRev no
+  // longer refreshes _weatherFx incidentally: keep the sign (the horizon gate,
+  // which a ±3° bucket straddles) AND add a 3° bucket (~12 min of sun travel,
+  // the same cadence the pre-existing 5° azimuth term already implies).
+  const w3Bucket = `${b(fx.cloudCoverage, 10)}:${b(fx.visibilityKm, 2)}:` +
+    `${b(fx.windGustKmh, 10)}:${b(fx.apparentC, 3)}:${b(fx.sunAzimuthDeg, 5)}:` +
+    `${fx.sunElevationDeg == null ? 'n' : (fx.sunElevationDeg > 0 ? 'u' : 'd')}` +
+    `${b(fx.sunElevationDeg, 3)}:` +
+    `${fx.rainSoon ? 'r' : '-'}:${effKey}:${skyBucket}`;
+  return `${floor.id}|${floor.w}x${floor.d}|${fx.condition}|` +
+    `${Math.round(fx.intensity01 * 4)}|${fx.isDay ? 'd' : 'n'}|${windBucket}|${w3Bucket}|` +
+    `${fx.alertSeverity ?? '-'}`;   // DC-D: rebuild the beacon on a severity change
+}
