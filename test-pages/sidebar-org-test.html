@@ -657,6 +657,26 @@
            return h.height >= 26;
          }), secs[0].querySelector('h3').getBoundingClientRect().height);
     }
+    // L10/L11 (2026-08-01 user-reported): toggling a section must not move its
+    // OWN header — the vertical padding ABOVE a header has to be identical in
+    // both states (the old 12px expanded padding made the clicked pill jump).
+    {
+      const pick = [...sb.querySelectorAll('h3.collapsible-header')]
+        .find(h => h.textContent.trim() === 'Tools');
+      const t0 = pick.getBoundingClientRect().top;
+      pick.click(); await frames(3);   // expand
+      const t1 = [...sb.querySelectorAll('h3.collapsible-header')]
+        .find(h => h.textContent.trim() === 'Tools').getBoundingClientRect().top;
+      ok('L10 expanding a section keeps its header in place (<= 1 px shift)',
+         Math.abs(t1 - t0) <= 1, `Δ=${(t1 - t0).toFixed(2)}px`);
+      const pick2 = [...sb.querySelectorAll('h3.collapsible-header')]
+        .find(h => h.textContent.trim() === 'Tools');
+      pick2.click(); await frames(3);  // collapse again
+      const t2 = [...sb.querySelectorAll('h3.collapsible-header')]
+        .find(h => h.textContent.trim() === 'Tools').getBoundingClientRect().top;
+      ok('L11 collapsing it again returns the header to the same spot',
+         Math.abs(t2 - t0) <= 1, `Δ=${(t2 - t0).toFixed(2)}px`);
+    }
     sb.querySelector('[data-expand-all]').click(); await frames(3);
   } catch (err) {
     ok('harness threw', false, (err && (err.stack || err.message)) || String(err));

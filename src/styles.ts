@@ -44,17 +44,19 @@ export const SHARED_CSS = `
    root is the single scroll container. (overflow-x:hidden here would force
    overflow-y to compute to auto → per-section scrollbars; flex-shrink
    default 1 would squeeze sections into the viewport height.) */
-.section { padding: 12px; border-bottom: 1px solid var(--border);
+.section { padding: 3px 12px; border-bottom: none;
            min-width: 0; flex-shrink: 0; }
-/* A COLLAPSED section is nothing but its glass pill, so the 12px block padding
-   (sized for a section BODY) just stacked whitespace: 12 + 1px rule + 12 = 25px
-   between consecutive pills. Trim the vertical padding to 3px and drop the
-   divider rule — the emboss relief already reads as a discrete item — leaving a
-   6px gap. That still clears the pill's own drop shadow (0 2px 5px ⇒ ~4.5px of
-   visible reach below the box), so no pill's shadow lands on its neighbour.
+/* The 3px vertical padding applies in BOTH states (user-reported: expanding a
+   section restored the old 12px block padding, so the clicked header JUMPED
+   down — the space above a header must be identical collapsed vs expanded for
+   it to stay put under the pointer). An EXPANDED section only adds a little
+   padding-bottom after its body (below the header, so the header itself never
+   moves); the divider rule is gone in both states — the pill relief already
+   reads as a discrete item. 3px still clears the pill's own drop shadow
+   (0 2px 5px ⇒ ~4.5px of visible reach below the box).
    Horizontal padding and the pill's own 7px/10px inner padding (the touch
    target) are untouched, and expanded sections keep the full 12px rhythm. */
-.section.collapsed { padding-top: 3px; padding-bottom: 3px; border-bottom: none; }
+.section:not(.collapsed) { padding-bottom: 8px; }
 .section h3 { font-size: 11px; color: var(--text-dim); text-transform: uppercase;
               letter-spacing: 0.08em; margin-bottom: 8px; }
 .row { display: flex; align-items: center; gap: 6px; font-size: 12px; padding: 3px 0;

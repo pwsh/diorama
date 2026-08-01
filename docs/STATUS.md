@@ -324,6 +324,13 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Sidebar header no-jump fix** (2026-08-01, user-reported "expanding
+  a section restores the space above/below and the header jumps";
+  unreleased — on main past v0.51.0). The 3 px vertical padding moved
+  to the BASE .section rule (both states, no divider in either) so a
+  toggled header stays put; expanded adds only padding-bottom 8px
+  below the body. sidebar-org 152/152 (+2: L10/L11 pin toggle
+  Δ ≤ 1 px both directions; L5–L9 rhythm assertions unchanged).
 - **Wall-cutaway flash fix** (2026-07-31, user-reported "foreground
   walls flash translucent→opaque→translucent at irregular 1–12 s
   intervals, layers irrelevant, several releases old"; unreleased —
