@@ -12,6 +12,9 @@
              T=$(mktemp -d); cp -r src/* "$T"/; cp test-pages/fake-avatar-store.ts "$T"/avatar-store.ts
              npx esbuild "$T"/planner.ts --bundle --format=esm --outfile=<H>/planner.mod.js
        (3) 3D build/advance via the built three-renderer chunk (./assets/three-renderer.js).
+       (4) a VERBATIM text copy of the three-view source, for the _keyPool
+           composition guard (R19 — waterTempEntity must never come back):
+             cp src/ui/three-view.ts <H>/three-view.src.txt
      Asserts machine-checkable in document.title. -->
 <script type="module">
  try {
@@ -126,6 +129,90 @@
     assert('R6 pool water shimmer drifts', r._poolWaterTextures[0].offset.y > before, `${before.toFixed(4)}→${r._poolWaterTextures[0].offset.y.toFixed(4)}`);
     // R7: no light bound / on → no underwater disc.
     assert('R7 no light disc when unbound', f.light === 0, f.light);
+  }
+
+  // ══ POOL WATER — shimmer offset PERSISTS across rebuilds ════════════════
+  // Rendering-continuity batch. _keyPool folds configRev, so ANY store edit
+  // rebuilt the basin — and the fresh surface clone was born at offset.y = 0,
+  // visibly SNAPPING the ripple. The drift phase now lives in _poolWaterPhase
+  // keyed by pool id (its own map: pools and ground areas rebuild under
+  // different keys and must not share a namespace).
+  {
+    r.clearTransientGroups();
+    const pool = { id: 'plw', kind: 'pool', points: poolPts, depthMm: 1400 };
+    r.updatePools([pool], () => null);
+    assert('R12 cold pool clone starts at offset 0', r._poolWaterTextures[0].offset.y === 0,
+      r._poolWaterTextures[0].offset.y);
+    for (let i = 0; i < 40; i++) r._advancePoolWater(0.05);
+    const drifted = r._poolWaterTextures[0].offset.y;
+    assert('R12b pool shimmer drifted away from 0', drifted > 0.03, drifted.toFixed(5));
+    // R13: rebuild with IDENTICAL input → the new clone resumes the phase.
+    r.updatePools([pool], () => null);
+    assert('R13 rebuild resumes pool drift phase (no snap to 0)',
+      r._poolWaterTextures[0].offset.y === drifted,
+      `${drifted.toFixed(5)} → ${r._poolWaterTextures[0].offset.y.toFixed(5)}`);
+    // R14: phases are per pool id and live in the POOL map, never the ground one.
+    const pool2 = { id: 'plw2', kind: 'spa', points: poolPts.map(p => ({ x: p.x + 6000, y: p.y })) };
+    r.updatePools([pool, pool2], () => null);
+    const byKey = Object.fromEntries(r._poolWaterTextures.map(t => [t.userData.waterKey, t]));
+    assert('R14 phase is per pool id', byKey.plw.offset.y === drifted && byKey.plw2.offset.y === 0,
+      `plw=${byKey.plw.offset.y.toFixed(5)} plw2=${byKey.plw2.offset.y}`);
+    assert('R14b pool phases do not leak into the ground map',
+      Object.keys(r._waterPhase).length === 0, Object.keys(r._waterPhase).join(','));
+    // R15: a deleted pool is pruned; a floor switch clears the map.
+    r.updatePools([pool2], () => null);
+    assert('R15 deleted pool prunes its phase', r._poolWaterPhase.plw === undefined,
+      Object.keys(r._poolWaterPhase).join(','));
+    r.clearTransientGroups();
+    assert('R16 floor switch clears _poolWaterPhase',
+      Object.keys(r._poolWaterPhase).length === 0, Object.keys(r._poolWaterPhase).join(','));
+  }
+
+  // ══ _keyPool: waterTempEntity is NOT a 3D input ═════════════════════════
+  // The chemistry chip (temp / pH / ORP / salt) is 2D-only and the 2D RAF reads
+  // live state every frame, so folding the RAW water temp into _keyPool re-keyed
+  // the whole basin rebuild on 0.1° sensor chatter for no visual change. Two
+  // halves to the guard: the renderer provably ignores it, and the key no longer
+  // mentions it while still folding the inputs the build DOES consume.
+  {
+    r.clearTransientGroups();
+    const geoOf = () => {
+      const out = [];
+      r._poolGroup.traverse(o => {
+        if (!o.isMesh) return;
+        const m = o.material;
+        out.push(`${o.position.y.toFixed(3)}|${m.color && m.color.getHexString()}|${(m.emissiveIntensity ?? 0).toFixed(3)}|${(m.opacity ?? 1).toFixed(3)}`);
+      });
+      return out.join(';');
+    };
+    const pl = { id: 'pt', kind: 'pool', points: poolPts, depthMm: 1400,
+                 heaterEntity: 'climate.pt', waterTempEntity: 'sensor.pt_temp' };
+    const st = (temp, action) => id => (
+      id === 'sensor.pt_temp' ? { state: String(temp), attributes: {} } :
+      id === 'climate.pt' ? { state: 'heat', attributes: { hvac_action: action } } : null);
+    r.updatePools([pl], st(27.4, 'idle'));
+    const a = geoOf();
+    r.updatePools([pl], st(31.9, 'idle'));      // temp jitter ONLY
+    const b = geoOf();
+    assert('R17 3D build ignores waterTempEntity (identical geometry/materials)', a === b,
+      `${a.slice(0, 60)} vs ${b.slice(0, 60)}`);
+    r.updatePools([pl], st(27.4, 'heating'));   // a REAL 3D input
+    assert('R18 heater state DOES change the 3D build', geoOf() !== a);
+
+    // Source guard: the key expression must not reference waterTempEntity again,
+    // while still folding heater / pump / lights / geometry.
+    try {
+      const src = await (await fetch('./three-view.src.txt' + V)).text();
+      const i = src.indexOf('const keyPool');
+      const block = i >= 0 ? src.slice(i, src.indexOf('if (keyPool !==', i)) : '';
+      assert('R19 _keyPool block located in source', block.length > 100, block.length);
+      assert('R19b _keyPool no longer folds waterTempEntity', !block.includes('waterTempEntity'));
+      assert('R19c _keyPool still folds heater/pump/lights/points',
+        block.includes('poolHeaterStateOf') && block.includes('poolPumpOnOf') &&
+        block.includes('lightEntities') && block.includes('pl.points'));
+    } catch (e) {
+      assert('R19 three-view source guard', false, String(e && e.message || e));
+    }
   }
 
   // R8/R9: heater glow — bound heater 'heating' → water emissive > 0; 'off' → 0.

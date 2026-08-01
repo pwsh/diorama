@@ -174,6 +174,74 @@
     r.setLayerVisibility({ sensors: true });
     ok('sensors layer on shows thermostat group', r._thermoGroup.visible === true);
 
+    // ══ 2b. Vent puff CONTINUITY (rendering-continuity batch) ═══════════════
+    // _keyThermo folds configRev AND the bucketed state hash, so ANY store edit
+    // or thermostat state change rebuilt the clouds — and the build re-staggered
+    // every puff with Math.random(), a visible re-randomize. Now: deterministic
+    // seeding (cold builds identical) + state persistence keyed by unit id
+    // (a rebuild with an unchanged vent adopts the live buffers, delta 0).
+    {
+      const one = [{ id: 'vc', x: 1000, y: 1000, entity_id: 'climate.vc', rotation: 0 }];
+      const cool = { 'climate.vc': climate('cool', { hvac_action: 'cooling', current_temperature: 26, temperature: 21 }) };
+      const heat = { 'climate.vc': climate('heat', { hvac_action: 'heating', current_temperature: 18, temperature: 22 }) };
+      const sp = s => id => s[id] || null;
+
+      // V1: two COLD builds (state cleared between) are byte-identical.
+      r.clearTransientGroups();
+      r.updateThermostats(one, sp(cool));
+      const coldA = Float32Array.from(r._ventClouds[0].pos);
+      const lifeA = Float32Array.from(r._ventClouds[0].life);
+      r.clearTransientGroups();
+      r.updateThermostats(one, sp(cool));
+      let sameP = true, sameL = true;
+      for (let i = 0; i < coldA.length; i++) if (coldA[i] !== r._ventClouds[0].pos[i]) { sameP = false; break; }
+      for (let i = 0; i < lifeA.length; i++) if (lifeA[i] !== r._ventClouds[0].life[i]) { sameL = false; break; }
+      ok('V1 cold vent builds deterministic (pos + life stagger)', sameP && sameL, `pos=${sameP} life=${sameL}`);
+
+      // V2: settle, then rebuild with IDENTICAL inputs → no puff pop.
+      for (let i = 0; i < 12; i++) r._advanceVents(0.1);
+      const settled = Float32Array.from(r._ventClouds[0].pos);
+      let movedOff = false;
+      for (let i = 0; i < settled.length; i++) if (Math.abs(settled[i] - coldA[i]) > 1) { movedOff = true; break; }
+      ok('V2a puffs actually drifted off their seed', movedOff);
+      r.updateThermostats(one, sp(cool));
+      let maxD = 0;
+      for (let i = 0; i < settled.length; i++) maxD = Math.max(maxD, Math.abs(settled[i] - r._ventClouds[0].pos[i]));
+      ok('V2 rebuild is seamless (buffer delta 0)', maxD === 0, `maxΔ=${maxD}`);
+      ok('V3 buffers adopted by reference', r._ventClouds[0].pos === r._ventState.vc.pos);
+
+      // V4: going IDLE keeps the state, so firing back up resumes mid-drift.
+      r.updateThermostats(one, sp({ 'climate.vc': climate('cool', { hvac_action: 'idle' }) }));
+      const keptIdle = !!r._ventState.vc && r._ventClouds.length === 0;
+      r.updateThermostats(one, sp(cool));
+      let backD = 0;
+      for (let i = 0; i < settled.length; i++) backD = Math.max(backD, Math.abs(settled[i] - r._ventClouds[0].pos[i]));
+      ok('V4 idle→cooling resumes mid-drift', keptIdle && backD === 0, `kept=${keptIdle} maxΔ=${backD}`);
+
+      // V5: cool→heat IS a genuine change (different airflow direction/speed) —
+      // it re-seeds, but deterministically, never randomly.
+      r.updateThermostats(one, sp(heat));
+      const h1 = Float32Array.from(r._ventClouds[0].pos);
+      r.updateThermostats(one, sp(cool));
+      r.updateThermostats(one, sp(heat));
+      let heatSame = true;
+      for (let i = 0; i < h1.length; i++) if (h1[i] !== r._ventClouds[0].pos[i]) { heatSame = false; break; }
+      ok('V5 airflow-kind change re-seeds deterministically', heatSame);
+
+      // V6: deleted unit pruned; floor switch clears the map.
+      r.updateThermostats([], sp(cool));
+      ok('V6 deleted unit pruned from _ventState', Object.keys(r._ventState).length === 0,
+         Object.keys(r._ventState).join(','));
+      r.updateThermostats(one, sp(cool));
+      r.clearTransientGroups();
+      ok('V7 floor switch clears _ventState', Object.keys(r._ventState).length === 0,
+         Object.keys(r._ventState).join(','));
+
+      // Restore the section's scene so later assertions see the original build.
+      r.updateFloor(baseFloor(units), { preset: 'day' }, undefined, undefined, id => states[id] || null);
+      r.updateThermostats(units, id => states[id] || null);
+    }
+
     // ══ 3. Planner climate dispatch table (fake HaApi) ═══════════════════════
     class FakeHa {
       constructor() { this.states = {}; this._s = []; this._c = []; this.calls = []; this.map = new Map(); }

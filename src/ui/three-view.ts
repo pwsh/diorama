@@ -1685,17 +1685,20 @@ export class ThreeView extends LitElement {
       }
 
       // Pools / spas (T4): structural geometry + a bound-entity state hash (heater
-      // state, pump on/off, per-light on-bitmask, water temp) so the basin glow /
-      // underwater light rebuild on a state change. Bound ids are config-path in
+      // state, pump on/off, per-light on-bitmask) so the basin glow / underwater
+      // light rebuild on a state change. Bound ids are config-path in
       // _isSlowEntity. Rides the `ground` layer; the per-frame shimmer drift is
       // NOT keyed (_advancePoolWater mutates the surface texture offset directly).
+      // NB `waterTempEntity` is deliberately NOT in this key: updatePools never
+      // reads it (the temp/pH/ORP/salt chip is 2D-only, and the 2D RAF reads live
+      // state every frame), so folding its RAW state in re-keyed the whole basin
+      // rebuild on 0.1° sensor chatter for no visual change at all.
       const poolList = f.pools ?? [];
       const keyPool = `${p.configRev}|` + poolList.map(pl => {
         const hs = p.poolHeaterStateOf(pl);
         const pump = p.poolPumpOnOf(pl) ? 1 : 0;
         const litBits = (pl.lightEntities ?? []).map(id => states[id]?.state === 'on' ? 1 : 0).join('');
-        const wt = pl.waterTempEntity ? (states[pl.waterTempEntity]?.state ?? '') : '';
-        return `${pl.id}:${pl.kind}:${pl.hidden ? 'h' : ''}:${hs}:${pump}:${litBits}:${wt}:${pl.depthMm ?? 0}:${pl.raisedMm ?? 0}:${poolWaterColor(pl)}:${pl.points.map(v => `${v.x | 0},${v.y | 0}`).join(';')}`;
+        return `${pl.id}:${pl.kind}:${pl.hidden ? 'h' : ''}:${hs}:${pump}:${litBits}:${pl.depthMm ?? 0}:${pl.raisedMm ?? 0}:${poolWaterColor(pl)}:${pl.points.map(v => `${v.x | 0},${v.y | 0}`).join(';')}`;
       }).join('|');
       if (keyPool !== this._keyPool) {
         this._keyPool = keyPool;

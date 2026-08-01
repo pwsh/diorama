@@ -324,6 +324,23 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Particle continuity across rebuilds (audit findings)** (2026-08-01,
+  user-directed "work on the audit findings"; unreleased — on main
+  past v0.51.0). All five visually-stateful dirty-key findings fixed
+  with one shared mechanism (ParticleCloudState + mulberry32 seeded
+  off _hashStr(fixtureId) + per-fixture state maps adopting live
+  pos/vel/life buffers BY REFERENCE when the rebuild signature
+  matches — continuity exact, delta 0, advance functions unchanged):
+  fountain plume, shower spray, HVAC vent puffs (+ appliance vents,
+  an extension sharing the seeding path), sprinkler droplet fans
+  (incl. persisted rotor sweep phase). Water-shimmer drift offset
+  persists per owner (_waterPhase/_poolWaterPhase) so ground/pool
+  water no longer snaps on rebuild. _keyPool's raw waterTempEntity
+  term REMOVED (verified not consumed by the 3D build; 2D chip reads
+  live, id stays config-path). Tests: yardlife 59/59 (+23), thermo
+  73/73 (+8), bath-water 69/69 (+7), path-pool 62/62 (+12); terrain
+  119/119, cutaway 32/32, climate-appliance 64/64, mechanical
+  100/100, sink 48/48, churn 48/48 unchanged.
 - **Firepit models** (2026-08-01, user-requested "round and square
   firepit models with a fire animation that can be turned on and
   off"; unreleased — on main past v0.51.0). Two LightIconKinds on

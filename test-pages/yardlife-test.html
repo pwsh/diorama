@@ -84,6 +84,48 @@
     assert('W6 no water → zero clones', r._waterPatchTextures.length === 0, r._waterPatchTextures.length);
   }
 
+  // ══ WATER SHIMMER — offset PERSISTS across rebuilds ════════════════════
+  // Rendering-continuity batch. _keyGround folds configRev, so ANY store edit
+  // rebuilt the patches — and the fresh clone used to be born at offset.y = 0,
+  // visibly SNAPPING the ripple back. The drift phase now lives in _waterPhase
+  // keyed by OWNER (area id / the 'yf' yardFill sentinel).
+  {
+    r.clearTransientGroups();
+    const wa = { id: 'wp', kind: 'water',
+      points: [{ x: 4000, y: 500 }, { x: 7000, y: 500 }, { x: 7000, y: 3000 }, { x: 4000, y: 3000 }] };
+    r.updateGroundAreas([wa]);
+    // W7: a cold first build starts at 0 (nothing persisted yet).
+    assert('W7 cold clone starts at offset 0', r._waterPatchTextures[0].offset.y === 0,
+      r._waterPatchTextures[0].offset.y);
+    for (let i = 0; i < 40; i++) r._advanceGroundWater(0.05);
+    const drifted = r._waterPatchTextures[0].offset.y;
+    assert('W7b drifted away from 0', drifted > 0.05, drifted.toFixed(4));
+    // W8: rebuild with IDENTICAL input → the new clone resumes at the drifted
+    // offset (a different texture instance, the same phase).
+    r.updateGroundAreas([wa]);
+    const resumed = r._waterPatchTextures[0].offset.y;
+    assert('W8 rebuild resumes drift phase (no snap to 0)', resumed === drifted,
+      `${drifted.toFixed(5)} → ${resumed.toFixed(5)}`);
+    // W9: the phase is per OWNER — a second water area keeps its own phase, and
+    // a patch + its skirt share the single clone so they can never desync.
+    const wb = { id: 'wq', kind: 'water',
+      points: [{ x: 8000, y: 500 }, { x: 11000, y: 500 }, { x: 11000, y: 3000 }, { x: 8000, y: 3000 }] };
+    r.updateGroundAreas([wa, wb]);
+    const byKey = Object.fromEntries(r._waterPatchTextures.map(t => [t.userData.waterKey, t]));
+    assert('W9 phase is per owner id', byKey.wp.offset.y === drifted && byKey.wq.offset.y === 0,
+      `wp=${byKey.wp.offset.y.toFixed(5)} wq=${byKey.wq.offset.y}`);
+    // W10: a DELETED area's phase is pruned — re-adding it starts clean.
+    r.updateGroundAreas([wb]);
+    r.updateGroundAreas([wa, wb]);
+    const wpFresh = r._waterPatchTextures.find(t => t.userData.waterKey === 'wp');
+    assert('W10 deleted area prunes its phase', wpFresh.offset.y === 0, wpFresh.offset.y);
+    // W11: floor switch clears every phase (per-floor, the _sinkFill rule).
+    for (let i = 0; i < 10; i++) r._advanceGroundWater(0.05);
+    r.clearTransientGroups();
+    assert('W11 floor switch clears _waterPhase', Object.keys(r._waterPhase).length === 0,
+      Object.keys(r._waterPhase).join(','));
+  }
+
   // ══ FOUNTAIN PARTICLES ═════════════════════════════════════════════════
   {
     r.clearTransientGroups();
@@ -110,6 +152,59 @@
     // F5: list resets on floor switch.
     r.clearTransientGroups();
     assert('F5 _fountains reset on floor switch', r._fountains.length === 0, r._fountains.length);
+  }
+
+  // ══ FOUNTAIN — deterministic seed + rebuild CONTINUITY ═════════════════
+  // Rendering-continuity batch. The plume is built inside _buildFurniture under
+  // _keyFloor (folds configRev), so it was re-randomized by every bound-entity
+  // change / store edit. Two guarantees now: a cold build is deterministic, and
+  // a rebuild with unchanged inputs adopts the live buffers (delta EXACTLY 0).
+  {
+    const ftFloor = () => mkFloor({ furniture: [fu('ft1', 'fountain', 4000, 4000, 1200, 1200)] });
+    // F6: two COLD builds (state cleared between) are byte-identical — no
+    // Math.random left in the seeding path.
+    r.clearTransientGroups();
+    r.updateFloor(ftFloor(), scene3d);
+    const coldA = Float32Array.from(r._fountains[0].pos);
+    r.clearTransientGroups();
+    r.updateFloor(ftFloor(), scene3d);
+    const coldB = r._fountains[0].pos;
+    let coldSame = coldA.length === coldB.length;
+    for (let i = 0; coldSame && i < coldA.length; i++) if (coldA[i] !== coldB[i]) coldSame = false;
+    assert('F6 cold builds deterministic (identical buffers)', coldSame);
+    // F7: settle the plume, then rebuild with IDENTICAL inputs → no pop at all.
+    for (let i = 0; i < 40; i++) r._advanceFountains(0.05);
+    const settled = Float32Array.from(r._fountains[0].pos);
+    let movedFromSeed = false;
+    for (let i = 0; i < settled.length; i++) if (Math.abs(settled[i] - coldA[i]) > 1) { movedFromSeed = true; break; }
+    assert('F7a plume actually moved off its seed', movedFromSeed);
+    r.updateFloor(ftFloor(), scene3d);
+    const after = r._fountains[0].pos;
+    let maxD = 0;
+    for (let i = 0; i < settled.length; i++) maxD = Math.max(maxD, Math.abs(settled[i] - after[i]));
+    assert('F7 rebuild is seamless (buffer delta 0)', maxD === 0, `maxΔ=${maxD}`);
+    // F8: the buffers are ADOPTED BY REFERENCE (no copy, no realloc).
+    assert('F8 rebuild adopts the same Float32Array', after === r._fountainState.ft1.pos);
+    // F9: a GENUINE change (resized piece) misses the signature → fresh seed,
+    // still deterministic (the plume restarts identically, never randomly).
+    const bigFloor = () => mkFloor({ furniture: [fu('ft1', 'fountain', 4000, 4000, 2400, 2400)] });
+    r.updateFloor(bigFloor(), scene3d);
+    const big1 = Float32Array.from(r._fountains[0].pos);
+    r.updateFloor(ftFloor(), scene3d);      // back to small (re-seeds)
+    r.updateFloor(bigFloor(), scene3d);     // and big again
+    const big2 = r._fountains[0].pos;
+    let bigSame = true;
+    for (let i = 0; i < big1.length; i++) if (big1[i] !== big2[i]) { bigSame = false; break; }
+    assert('F9 genuine change re-seeds deterministically', bigSame);
+    // F10: a DELETED fountain's state is pruned at the end of updateFloor.
+    r.updateFloor(mkFloor(), scene3d);
+    assert('F10 deleted fountain pruned from state map',
+      Object.keys(r._fountainState).length === 0, Object.keys(r._fountainState).join(','));
+    // F11: floor switch clears the whole map.
+    r.updateFloor(ftFloor(), scene3d);
+    r.clearTransientGroups();
+    assert('F11 floor switch clears _fountainState',
+      Object.keys(r._fountainState).length === 0, Object.keys(r._fountainState).join(','));
   }
 
   // ══ SPRINKLER — pure helpers ═══════════════════════════════════════════
@@ -158,6 +253,67 @@
     r.setLayerVisibility({ ground: true });
     const on = r._sprinklerGroup.visible === true;
     assert('S8 3D layer gating (ground)', off && on, `${off}/${on}`);
+  }
+
+  // ══ SPRINKLER — deterministic seed + rebuild CONTINUITY + sweep phase ══
+  // Rendering-continuity batch. _keySprinklers = configRev|keyGround|… so a
+  // running fan re-randomized (and the rotor jet teleported) on any store edit.
+  {
+    r.clearTransientGroups();
+    r.updateFloor(mkFloor(), scene3d);
+    const stOn = () => ({ state: 'on', attributes: {} });
+    const zone = { id: 'sz', x: 3000, y: 3000, entity_id: 'switch.sz', headKind: 'rotor', arcDeg: 90 };
+    // S9: two COLD builds (state cleared between) are byte-identical.
+    r.updateSprinklerZones([zone], stOn);
+    const coldA = Float32Array.from(r._sprinklerClouds[0].pos);
+    const sweepA = r._sprinklerClouds[0].st.sweep;
+    r.clearTransientGroups();
+    r.updateFloor(mkFloor(), scene3d);
+    r.updateSprinklerZones([zone], stOn);
+    const coldB = r._sprinklerClouds[0].pos;
+    let coldSame = true;
+    for (let i = 0; i < coldA.length; i++) if (coldA[i] !== coldB[i]) { coldSame = false; break; }
+    assert('S9 cold builds deterministic (droplets + sweep)',
+      coldSame && r._sprinklerClouds[0].st.sweep === sweepA, `sweep ${sweepA.toFixed(4)}`);
+    // S10: settle, then rebuild with identical inputs → droplets AND the rotor
+    // sweep phase both continue (delta 0), not restart.
+    for (let i = 0; i < 40; i++) r._advanceSprinklers(0.05);
+    const settled = Float32Array.from(r._sprinklerClouds[0].pos);
+    const sweptTo = r._sprinklerClouds[0].st.sweep;
+    assert('S10a sweep advanced past its seed', sweptTo > sweepA + 1.9, `${sweepA.toFixed(3)}→${sweptTo.toFixed(3)}`);
+    r.updateSprinklerZones([zone], stOn);
+    const after = r._sprinklerClouds[0].pos;
+    let maxD = 0;
+    for (let i = 0; i < settled.length; i++) maxD = Math.max(maxD, Math.abs(settled[i] - after[i]));
+    assert('S10 rebuild is seamless (droplet delta 0)', maxD === 0, `maxΔ=${maxD}`);
+    assert('S11 rotor sweep phase survives the rebuild',
+      r._sprinklerClouds[0].st.sweep === sweptTo, `${sweptTo.toFixed(4)} → ${r._sprinklerClouds[0].st.sweep.toFixed(4)}`);
+    assert('S12 buffers adopted by reference', after === r._sprinklerState.sz.pos);
+    // S13: an OFF pass builds no cloud but KEEPS the state, so switching back on
+    // resumes the spray mid-flight rather than re-seeding it.
+    r.updateSprinklerZones([zone], () => ({ state: 'off', attributes: {} }));
+    assert('S13a off keeps persisted state', !!r._sprinklerState.sz && r._sprinklerClouds.length === 0);
+    r.updateSprinklerZones([zone], stOn);
+    let backD = 0;
+    for (let i = 0; i < settled.length; i++) backD = Math.max(backD, Math.abs(settled[i] - r._sprinklerClouds[0].pos[i]));
+    assert('S13 off→on resumes mid-flight', backD === 0, `maxΔ=${backD}`);
+    // S14: a GENUINE geometry change (arc edited) re-seeds — deterministically.
+    const wide = { ...zone, arcDeg: 270 };
+    r.updateSprinklerZones([wide], stOn);
+    const w1 = Float32Array.from(r._sprinklerClouds[0].pos);
+    r.updateSprinklerZones([zone], stOn);
+    r.updateSprinklerZones([wide], stOn);
+    let wideSame = true;
+    for (let i = 0; i < w1.length; i++) if (w1[i] !== r._sprinklerClouds[0].pos[i]) { wideSame = false; break; }
+    assert('S14 arc edit re-seeds deterministically', wideSame);
+    // S15: a deleted zone is pruned; a floor switch clears the map.
+    r.updateSprinklerZones([], stOn);
+    assert('S15 deleted zone pruned', Object.keys(r._sprinklerState).length === 0,
+      Object.keys(r._sprinklerState).join(','));
+    r.updateSprinklerZones([zone], stOn);
+    r.clearTransientGroups();
+    assert('S16 floor switch clears _sprinklerState', Object.keys(r._sprinklerState).length === 0,
+      Object.keys(r._sprinklerState).join(','));
   }
 
   // S6: head Y resolves via _groundYAt — terrace vs grade.

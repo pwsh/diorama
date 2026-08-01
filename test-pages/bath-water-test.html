@@ -17,8 +17,9 @@
   //             hash, the click tag, the dblclick binder and the 2D paths
   //
   //   Bundles this page needs next to it in the harness dir:
-  //     npx esbuild src/geometry.ts --bundle --format=esm --outfile=<h>/geometry.mod.js
-  //     npx esbuild src/planner.ts  --bundle --format=esm --outfile=<h>/planner.mod.js
+  //     npx esbuild src/geometry.ts      --bundle --format=esm --outfile=<h>/geometry.mod.js
+  //     npx esbuild src/planner.ts       --bundle --format=esm --outfile=<h>/planner.mod.js
+  //     npx esbuild src/canvas-render.ts --bundle --format=esm --outfile=<h>/canvas-render.mod.js
   //   plus a fresh `npm run build` dist copied to <h>/assets/.
   const mod = await import('./assets/three-renderer.js?v=' + Date.now());
   const geo = await import('./geometry.mod.js?v=' + Date.now());
@@ -161,6 +162,54 @@
     assert('shower: the rebuilt cloud resumes visible (no pop to empty)',
       r._showers[0].points.visible === true && r._showers[0].mat.opacity > 0.4,
       `opacity=${r._showers[0].mat.opacity.toFixed(2)}`);
+  }
+
+  // ── shower spray: DROPLET continuity across a _keyFloor rebuild ──────────
+  // Rendering-continuity batch. The run BLEND already survived a rebuild (above),
+  // but the droplet COLUMN itself was re-seeded with Math.random() every time —
+  // so a rebuilt-while-running shower visibly re-scattered its water. The column
+  // state now persists (buffers adopted by reference) and the pre-fill /
+  // recycle jitter draws from a deterministic per-fixture cursor instead.
+  // NB the recycle-height jitter from the original batch is UNCHANGED in
+  // behaviour (`headY - rnd * max(60, fall)`) — it only swapped RNG sources; it
+  // exists to stop the column collapsing into horizontal bands at a steady dt.
+  function testShowerSeed() {
+    const piece = () => [{ id: 'sh3', x: 2000, y: 2000, w: K.shower.w, h: K.shower.h, kind: 'shower' }];
+    // C1: two COLD builds (state cleared between) produce identical pre-fills.
+    r.clearTransientGroups();
+    build(piece(), {});
+    const coldA = Float32Array.from(r._showers[0].pos);
+    r.clearTransientGroups();
+    build(piece(), {});
+    let coldSame = true;
+    for (let i = 0; i < coldA.length; i++) if (coldA[i] !== r._showers[0].pos[i]) { coldSame = false; break; }
+    assert('shower: cold builds are deterministic (identical pre-filled column)', coldSame);
+    // C2: the pre-fill still SPANS the pan→head band (the jitter is real, not
+    // a degenerate constant now that Math.random is gone).
+    const rig0 = r._showers[0];
+    let lo = Infinity, hi = -Infinity;
+    for (let i = 0; i < rig0.count; i++) { const y = rig0.pos[i * 3 + 1]; lo = Math.min(lo, y); hi = Math.max(hi, y); }
+    assert('shower: pre-fill spans most of the head→pan band',
+      (hi - lo) > (rig0.headY - rig0.panY) * 0.6, `span=${(hi - lo).toFixed(0)} band=${(rig0.headY - rig0.panY).toFixed(0)}`);
+    // C3: run it, then rebuild with identical inputs → droplets do not move.
+    advance(30, 0.05, ctxOn('sh3'));
+    const settled = Float32Array.from(r._showers[0].pos);
+    let movedOff = false;
+    for (let i = 0; i < settled.length; i++) if (Math.abs(settled[i] - coldA[i]) > 1) { movedOff = true; break; }
+    assert('shower: the column actually moved off its seed', movedOff);
+    build(piece(), {});
+    let maxD = 0;
+    for (let i = 0; i < settled.length; i++) maxD = Math.max(maxD, Math.abs(settled[i] - r._showers[0].pos[i]));
+    assert('shower: rebuild is seamless (droplet buffer delta 0)', maxD === 0, `maxΔ=${maxD}`);
+    assert('shower: buffers adopted by reference', r._showers[0].pos === r._showerState.sh3.pos);
+    // C4: deleting the piece prunes its state; a floor switch clears the map.
+    build([], {});
+    assert('shower: deleted piece pruned from _showerState',
+      Object.keys(r._showerState).length === 0, Object.keys(r._showerState).join(','));
+    build(piece(), {});
+    r.clearTransientGroups();
+    assert('shower: floor switch clears _showerState',
+      Object.keys(r._showerState).length === 0, Object.keys(r._showerState).join(','));
   }
 
   // ── bathtub: fill rises + faucet stream ──────────────────────────────────
@@ -317,6 +366,7 @@
   testClickTags();
   testShower();
   testShowerRebuild();
+  testShowerSeed();
   testBathtub();
   testToilet();
   testToiletRebuild();

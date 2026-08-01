@@ -1794,6 +1794,42 @@ const ENTITY_GATED_ACTIVITIES: ReadonlySet<ExtActivityKind> = new Set<ExtActivit
 // the piece. The reach still targets the device itself.
 const INTERACT_FRONT_STANDOFF = 700;
 
+// ── Recycling-particle-cloud continuity (rendering-continuity batch) ────────
+// Every recycling particle cloud in the renderer (fountain plume, shower spray,
+// HVAC + appliance vent puffs, sprinkler fans) is built under a dirty key that
+// folds `configRev` — so ANY store edit or bound-entity change rebuilds it, and
+// a naive rebuild visibly RE-RANDOMIZES the cloud. Two rules make a rebuild
+// seamless; both live in this one record:
+//
+//  1. DETERMINISTIC SEEDING — build-time seeding draws from `rng`, a mulberry32
+//     cursor seeded off the cloud's stable key (the rock_cluster / firepit-stone
+//     precedent), never from Math.random(). Two cold builds of the same fixture
+//     therefore produce byte-identical buffers.
+//  2. STATE PERSISTENCE — deterministic seeds alone still SNAP mid-flight
+//     particles back to their seed positions. This record is kept in a
+//     renderer-lifetime map keyed by fixture id and ADOPTED BY REFERENCE on
+//     rebuild whenever `sig` (the cloud's parameter signature) is unchanged.
+//     That is a strictly stronger form of the `_bgTextPhase` / `_puddleFade`
+//     persistent-clock idiom: it carries the WHOLE live state rather than a
+//     scalar phase, so the per-frame advance functions stay untouched and the
+//     continuity is EXACT (delta 0) instead of a fast-forward approximation.
+//     A genuine parameter change (head moved, arc/radius/count edited) misses
+//     the signature and restarts fresh — deterministically.
+//
+// `sweep` is the generic persistent scalar clock alongside the buffers (the
+// sprinkler rotor's sweep phase — the visible sweeping arc). Maps are pruned to
+// live fixtures at the end of each rebuild and cleared in clearTransientGroups()
+// + destroy(). Buffers are ALIASED onto the cloud entries, so the advance keeps
+// mutating this record in place and the map is always current with no copy-back.
+interface ParticleCloudState {
+  pos: Float32Array;
+  vel: Float32Array;
+  life: Float32Array | null;
+  rng: number;      // mulberry32 cursor (uint32) — survives rebuilds with the buffers
+  sweep: number;    // generic accumulated phase (sprinkler rotor sweep)
+  sig: string;      // parameter signature; a mismatch = genuine change = fresh seed
+}
+
 export class ThreeDRenderer {
   loaded = false;
 
@@ -1893,7 +1929,12 @@ export class ThreeDRenderer {
   // and disposed only in destroy(); _clearGroup frees the cloud geometry+material
   // but NOT the shared map. Rides the sensors layer.
   private _thermoGroup = new THREE.Group();
+  // `key`/`st`: persisted-state plumbing (see ParticleCloudState) — pos/vel/life
+  // ALIAS the record's buffers, so a _keyThermo rebuild (which folds configRev,
+  // and a state-bucket change) re-adopts the puffs mid-flight instead of
+  // re-staggering them.
   private _ventClouds: {
+    key: string; st: ParticleCloudState;
     kind: 'heat' | 'cool' | 'fan'; points: THREE.Points;
     pos: Float32Array; vel: Float32Array; life: Float32Array;
     count: number; ox: number; oy: number; oz: number;   // vent origin (scene coords)
@@ -2395,8 +2436,11 @@ export class ThreeDRenderer {
   // unbound localState → entityOn) OR while a rig is engaged in a `shower`/
   // `bathe` activity anchored to it, OR dwells nearby (RAW positions only —
   // anti-feedback, exactly like the sink's wash_hands trigger).
+  // `st`: the persisted droplet-column state (see ParticleCloudState) — `pos`
+  // ALIASES `st.pos`, so a _keyFloor rebuild re-adopts the falling column
+  // mid-flight instead of re-randomizing it, and the recycle RNG resumes.
   private _showers: {
-    fuId: string; wx: number; wy: number;
+    fuId: string; st: ParticleCloudState; wx: number; wy: number;
     points: THREE.Points; mat: THREE.PointsMaterial; ring: THREE.Mesh;
     pos: Float32Array; count: number;
     headY: number; panY: number; cx: number; cz: number; spread: number;
@@ -2465,7 +2509,11 @@ export class ThreeDRenderer {
   // idiom, but parented into the piece group (local coords) so they ride the
   // piece rotation. Reset each updateFloor (geometry disposed with _floorGroup);
   // advanced by _advanceApplianceVents (zero alloc, position-buffer in place).
-  private _applianceVents: { points: THREE.Points; pos: Float32Array; vel: Float32Array;
+  // `key`/`st`: persisted-state plumbing (see ParticleCloudState) — the same
+  // rebuild-continuity treatment as the thermostat vents (these ride _keyFloor,
+  // which folds configRev, so they popped on every store edit too).
+  private _applianceVents: { key: string; st: ParticleCloudState;
+                             points: THREE.Points; pos: Float32Array; vel: Float32Array;
                              life: Float32Array; count: number; ox: number; oy: number; oz: number;
                              dirX: number; dirY: number; dirZ: number; spread: number; speed: number }[] = [];
   // Emissive/opacity BREATHE materials (space-heater coil, wall-heater grille,
@@ -3572,6 +3620,17 @@ export class ThreeDRenderer {
     // Sprinkler spray clouds live under _sprinklerGroup (just cleared) — drop the
     // tracking list so _advanceSprinklers can't iterate freed geometry.
     this._sprinklerClouds = [];
+    // Persisted particle-cloud state + water-shimmer phases are PER-FLOOR (a
+    // different floor = different fixtures / different area ids), so a floor
+    // switch resets them — the same rule as _sinkFill / _plantBlend / _fanSpin.
+    // Within a floor they deliberately outlive every rebuild.
+    this._fountainState = {};
+    this._showerState = {};
+    this._sprinklerState = {};
+    this._ventState = {};
+    this._applianceVentState = {};
+    this._waterPhase = {};
+    this._poolWaterPhase = {};
     // updateFloor rebuilds this every call, but null it on floor switch so a
     // stale grid can't briefly route targets against the previous floor.
     this._nav = null;
@@ -4134,6 +4193,55 @@ export class ThreeDRenderer {
     return tex;
   }
 
+  // ── Particle-cloud state persistence (see ParticleCloudState) ─────────────
+  // One renderer-lifetime map per recycling cloud system, keyed by fixture id.
+  // Pruned to live fixtures at the end of the owning rebuild; cleared wholesale
+  // in clearTransientGroups() (floor switch) + destroy().
+  private _fountainState: Record<string, ParticleCloudState> = {};
+  private _showerState: Record<string, ParticleCloudState> = {};
+  private _sprinklerState: Record<string, ParticleCloudState> = {};
+  private _ventState: Record<string, ParticleCloudState> = {};        // thermostat vents
+  private _applianceVentState: Record<string, ParticleCloudState> = {};
+
+  // mulberry32 over the record's own cursor. Deterministic, zero-alloc, and —
+  // because the cursor lives IN the persisted record — a rebuild that adopts an
+  // existing state resumes the same random stream rather than restarting it.
+  private _rndFrom(st: { rng: number }): number {
+    let t = (st.rng = (st.rng + 0x6d2b79f5) >>> 0);
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  }
+
+  // Fetch (or create) the persisted state for a cloud. `fresh` tells the caller
+  // whether it must run its seeding loop: false = the previous build's live
+  // buffers were adopted BY REFERENCE (exact continuity, no re-seed), true = a
+  // brand-new fixture or a genuine parameter change, seeded deterministically
+  // from the key. The buffer-length guard makes a count change fail safe even if
+  // a signature ever forgets to include it.
+  private _cloudState(map: Record<string, ParticleCloudState>, key: string, sig: string,
+                      count: number, withLife: boolean): { st: ParticleCloudState; fresh: boolean } {
+    const prev = map[key];
+    if (prev && prev.sig === sig && prev.pos.length === count * 3
+        && (prev.life != null) === withLife) return { st: prev, fresh: false };
+    const st: ParticleCloudState = {
+      pos: new Float32Array(count * 3),
+      vel: new Float32Array(count * 3),
+      life: withLife ? new Float32Array(count) : null,
+      rng: (this._hashStr(key) ^ 0x9e3779b9) >>> 0,
+      sweep: 0,
+      sig,
+    };
+    map[key] = st;
+    return { st, fresh: true };
+  }
+
+  // Drop persisted cloud state for fixtures that no longer exist. Called at the
+  // end of each owning rebuild (rare — never per frame), so the Set alloc is fine.
+  private _pruneCloudState(map: Record<string, ParticleCloudState>, live: Set<string>): void {
+    for (const k of Object.keys(map)) if (!live.has(k)) delete map[k];
+  }
+
   // Procedural ground / yard covering textures (the "yard" arc). Same cache
   // pattern + lifecycle as _floorTexture — built once, disposed only in
   // destroy(). Each kind is its own cache key so its `.repeat` is independent.
@@ -4148,17 +4256,28 @@ export class ThreeDRenderer {
   // disposed here (only in destroy()).
   private _waterPatchTextures: THREE.Texture[] = [];
   private _WATER_DRIFT = 0.035;   // uv/s — gentle vertical ripple drift
+  // Accumulated drift OFFSET per texture OWNER (ground-area id, or the 'yf'
+  // yardFill sentinel), renderer-lifetime. Disposing + recreating the clone on
+  // every _keyGround rebuild used to reset `offset.y` to 0, so the ripple visibly
+  // SNAPPED back on any configRev bump; the fresh clone is now born at the
+  // persisted offset instead (the `_puddleFade` / `_curtainBlend` idiom for a
+  // texture scroll). Keyed by OWNER, not by texture instance, because a patch and
+  // its skirt deliberately share one clone and must ripple in unison. Pruned to
+  // live owners in updateGroundAreas; cleared in clearTransientGroups + destroy.
+  private _waterPhase: Record<string, number> = {};
   private _disposeWaterPatchTextures(): void {
     for (const t of this._waterPatchTextures) t.dispose();
     this._waterPatchTextures = [];
   }
-  private _waterTexClone(): THREE.Texture {
+  private _waterTexClone(ownerKey: string): THREE.Texture {
     const shared = this._groundTexture('water');
     const c = shared.clone();
     c.needsUpdate = true;
     c.wrapS = c.wrapT = THREE.RepeatWrapping;
     c.colorSpace = THREE.SRGBColorSpace;
     c.repeat.set(1 / 800, 1 / 800);
+    c.offset.y = this._waterPhase[ownerKey] ?? 0;   // resume, never restart at 0
+    c.userData.waterKey = ownerKey;
     this._waterPatchTextures.push(c);
     return c;
   }
@@ -4168,6 +4287,7 @@ export class ThreeDRenderer {
       let o = t.offset.y + dt * this._WATER_DRIFT;
       if (o > 1) o -= 1;
       t.offset.y = o;
+      this._waterPhase[t.userData.waterKey as string] = o;   // string key lookup, no alloc
     }
   }
 
@@ -4177,17 +4297,24 @@ export class ThreeDRenderer {
   // a pool's clone out from under _poolGroup. Disposed in updatePools rebuild +
   // clearTransientGroups + destroy. Drifted each frame (zero alloc).
   private _poolWaterTextures: THREE.Texture[] = [];
+  // Per-pool accumulated drift offset — the _waterPhase idiom on its own map
+  // (pools rebuild under their own _keyPool, so the two must not share a
+  // namespace). Pruned to live pool ids in updatePools; cleared in
+  // clearTransientGroups + destroy.
+  private _poolWaterPhase: Record<string, number> = {};
   private _disposePoolWaterTextures(): void {
     for (const t of this._poolWaterTextures) t.dispose();
     this._poolWaterTextures = [];
   }
-  private _poolWaterTexClone(): THREE.Texture {
+  private _poolWaterTexClone(ownerKey: string): THREE.Texture {
     const shared = this._groundTexture('water');
     const c = shared.clone();
     c.needsUpdate = true;
     c.wrapS = c.wrapT = THREE.RepeatWrapping;
     c.colorSpace = THREE.SRGBColorSpace;
     c.repeat.set(1 / 800, 1 / 800);
+    c.offset.y = this._poolWaterPhase[ownerKey] ?? 0;   // resume, never restart at 0
+    c.userData.waterKey = ownerKey;
     this._poolWaterTextures.push(c);
     return c;
   }
@@ -4197,6 +4324,7 @@ export class ThreeDRenderer {
       let o = t.offset.y + dt * (this._WATER_DRIFT * 0.7);   // calmer than open water
       if (o > 1) o -= 1;
       t.offset.y = o;
+      this._poolWaterPhase[t.userData.waterKey as string] = o;
     }
   }
 
@@ -4291,20 +4419,24 @@ export class ThreeDRenderer {
   // after build. The Points live under _floorGroup (rebuilt under _keyFloor); the
   // tracking list is reset in updateFloor + clearTransientGroups so the advance
   // never iterates freed geometry.
+  // `key`/`st`: the persisted-state plumbing (see ParticleCloudState) — `pos`/
+  // `vel` ALIAS `st.pos`/`st.vel`, so the advance below keeps mutating the
+  // persisted record in place and a _keyFloor rebuild re-adopts it mid-flight.
   private _fountains: {
+    key: string; st: ParticleCloudState;
     points: THREE.Points; pos: Float32Array; vel: Float32Array; count: number;
     originY: number; basinY: number; spread: number;
   }[] = [];
   private _FOUNTAIN_G = 4200;   // mm/s² downward (tuned for a ~0.5–1 m plume)
-  private _seedFountainDrop(f: { pos: Float32Array; vel: Float32Array;
+  private _seedFountainDrop(f: { st: ParticleCloudState; pos: Float32Array; vel: Float32Array;
                                  originY: number; spread: number }, i: number): void {
-    const j = i * 3;
-    f.pos[j]     = (Math.random() - 0.5) * f.spread * 0.35;
-    f.pos[j + 1] = f.originY + Math.random() * 40;
-    f.pos[j + 2] = (Math.random() - 0.5) * f.spread * 0.35;
-    const ang = Math.random() * Math.PI * 2;
-    const rad = Math.random() * f.spread * 1.6;   // outward speed → fans out
-    const up = 1900 + Math.random() * 1500;
+    const j = i * 3, st = f.st;   // no closure — this runs per recycled droplet
+    f.pos[j]     = (this._rndFrom(st) - 0.5) * f.spread * 0.35;
+    f.pos[j + 1] = f.originY + this._rndFrom(st) * 40;
+    f.pos[j + 2] = (this._rndFrom(st) - 0.5) * f.spread * 0.35;
+    const ang = this._rndFrom(st) * Math.PI * 2;
+    const rad = this._rndFrom(st) * f.spread * 1.6;   // outward speed → fans out
+    const up = 1900 + this._rndFrom(st) * 1500;
     f.vel[j]     = Math.cos(ang) * rad;
     f.vel[j + 1] = up;
     f.vel[j + 2] = Math.sin(ang) * rad;
@@ -4332,19 +4464,25 @@ export class ThreeDRenderer {
   // ONLY for running zones (drip = no plume) in updateSprinklerZones; advanced by
   // _advanceSprinklers (guarded on "any cloud exists" = "any zone running").
   // Positions/velocities are SCENE coords (world +X → scene −X, world +Y → +Z).
+  // `key`/`st`: the persisted-state plumbing (see ParticleCloudState). `pos`/
+  // `vel` ALIAS `st.pos`/`st.vel` and the ROTOR SWEEP PHASE lives in `st.sweep`
+  // — that phase is the visible sweeping arc, so it must survive a rebuild just
+  // like the droplets do (a _keySprinklers bump on any configRev would otherwise
+  // teleport the jet).
   private _sprinklerClouds: {
+    key: string; st: ParticleCloudState;
     points: THREE.Points; pos: Float32Array; vel: Float32Array; count: number;
     hx: number; hy: number; hz: number;   // head scene origin (spray root)
     arc: number; rot: number; radius: number; rotor: boolean;
-    sweepT: number; sweepW: number;
+    sweepW: number;
   }[] = [];
   private _SPRINKLER_G = 5200;   // mm/s² downward
   private _seedSprinklerDrop(cl: (typeof this._sprinklerClouds)[number], i: number, sweepBias: number): void {
-    const half = cl.arc / 2;
+    const half = cl.arc / 2, st = cl.st;   // no closure — runs per recycled droplet
     const a = cl.rotor
-      ? cl.rot + sweepBias + (Math.random() - 0.5) * 0.22   // narrow rotor jet
-      : cl.rot + (Math.random() * 2 - 1) * half;            // full fan
-    const reach = cl.radius * (0.35 + Math.random() * 0.65);
+      ? cl.rot + sweepBias + (this._rndFrom(st) - 0.5) * 0.22   // narrow rotor jet
+      : cl.rot + (this._rndFrom(st) * 2 - 1) * half;            // full fan
+    const reach = cl.radius * (0.35 + this._rndFrom(st) * 0.65);
     const T = 0.55 + (reach / cl.radius) * 0.6;             // 0.55..1.15 s flight
     const vh = reach / T;
     const vy = 0.5 * this._SPRINKLER_G * T;                 // returns to head height at T
@@ -4353,9 +4491,9 @@ export class ThreeDRenderer {
     cl.vel[j]     = -Math.sin(a) * vh;
     cl.vel[j + 1] = vy;
     cl.vel[j + 2] =  Math.cos(a) * vh;
-    cl.pos[j]     = cl.hx + (Math.random() - 0.5) * 40;
-    cl.pos[j + 1] = cl.hy + Math.random() * 30;
-    cl.pos[j + 2] = cl.hz + (Math.random() - 0.5) * 40;
+    cl.pos[j]     = cl.hx + (this._rndFrom(st) - 0.5) * 40;
+    cl.pos[j + 1] = cl.hy + this._rndFrom(st) * 30;
+    cl.pos[j + 2] = cl.hz + (this._rndFrom(st) - 0.5) * 40;
   }
   private _advanceSprinklers(dt: number): void {
     if (!this._sprinklerGroup.visible || !this._sprinklerClouds.length) return;
@@ -4363,8 +4501,8 @@ export class ThreeDRenderer {
     for (const cl of this._sprinklerClouds) {
       let sweepBias = 0;
       if (cl.rotor) {
-        cl.sweepT += dt;
-        sweepBias = Math.sin(cl.sweepT * cl.sweepW) * Math.max(0, cl.arc / 2 - 0.15);
+        cl.st.sweep += dt;   // persisted phase — survives a rebuild
+        sweepBias = Math.sin(cl.st.sweep * cl.sweepW) * Math.max(0, cl.arc / 2 - 0.15);
       }
       for (let i = 0; i < cl.count; i++) {
         const j = i * 3;
@@ -4408,26 +4546,41 @@ export class ThreeDRenderer {
       this._sprinklerGroup.add(nub);
       if (!running || kind === 'drip') continue;   // drip zones show no spray plume
       const count = 70;
-      const pos = new Float32Array(count * 3);
-      const vel = new Float32Array(count * 3);
+      const hy = groundY + nubH;
+      const arc = sprinklerArcDeg(z) * Math.PI / 180;
+      const rot = sprinklerRotation(z) * Math.PI / 180;
+      const radius = sprinklerRadius(z);
+      // Persisted fan state (see ParticleCloudState). _keySprinklers folds
+      // configRev, so ANY store edit rebuilt (and re-randomized) a running fan;
+      // with an unchanged head signature the previous build's droplet buffers +
+      // rotor sweep phase are adopted by reference and the spray never jumps.
+      const sprSig = `${count}|${Math.round(head.x)}|${Math.round(hy)}|${Math.round(head.z)}|` +
+        `${arc.toFixed(4)}|${rot.toFixed(4)}|${Math.round(radius)}|${kind === 'rotor' ? 1 : 0}`;
+      const { st: sprSt, fresh: sprFresh } =
+        this._cloudState(this._sprinklerState, z.id, sprSig, count, false);
+      const pos = sprSt.pos, vel = sprSt.vel;
       const cloud = {
+        key: z.id, st: sprSt,
         points: null as unknown as THREE.Points, pos, vel, count,
-        hx: head.x, hy: groundY + nubH, hz: head.z,
-        arc: sprinklerArcDeg(z) * Math.PI / 180,
-        rot: sprinklerRotation(z) * Math.PI / 180,
-        radius: sprinklerRadius(z),
+        hx: head.x, hy, hz: head.z,
+        arc, rot, radius,
         rotor: kind === 'rotor',
-        sweepT: Math.random() * 10, sweepW: 2.1,
+        sweepW: 2.1,
       };
-      for (let i = 0; i < count; i++) {
-        this._seedSprinklerDrop(cloud, i, 0);
-        // Pre-advance a random flight slice so the fan is already full at t0.
-        const t = Math.random() * 0.9;
-        const j = i * 3;
-        cloud.vel[j + 1] -= this._SPRINKLER_G * t;
-        cloud.pos[j]     += cloud.vel[j]     * t;
-        cloud.pos[j + 1]  = Math.max(cloud.hy, cloud.pos[j + 1] + cloud.vel[j + 1] * t);
-        cloud.pos[j + 2] += cloud.vel[j + 2] * t;
+      if (sprFresh) {
+        // Deterministic sweep start (was Math.random()*10) — a cold rebuild of
+        // an unchanged zone lands the jet at the same angle every time.
+        sprSt.sweep = this._rndFrom(sprSt) * 10;
+        for (let i = 0; i < count; i++) {
+          this._seedSprinklerDrop(cloud, i, 0);
+          // Pre-advance a deterministic flight slice so the fan is full at t0.
+          const t = this._rndFrom(sprSt) * 0.9;
+          const j = i * 3;
+          cloud.vel[j + 1] -= this._SPRINKLER_G * t;
+          cloud.pos[j]     += cloud.vel[j]     * t;
+          cloud.pos[j + 1]  = Math.max(cloud.hy, cloud.pos[j + 1] + cloud.vel[j + 1] * t);
+          cloud.pos[j + 2] += cloud.vel[j + 2] * t;
+        }
       }
       const geo = new THREE.BufferGeometry();
       geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
@@ -4443,6 +4596,10 @@ export class ThreeDRenderer {
       cloud.points = pts;
       this._sprinklerClouds.push(cloud);
     }
+    // Keep persisted droplet state only for zones still on this floor. A zone
+    // that stops RUNNING keeps its state (the plume returns mid-flight when it
+    // starts again); a DELETED zone drops it.
+    this._pruneCloudState(this._sprinklerState, new Set(zones.map(z => z.id)));
   }
 
   // Build (or fetch) the CanvasTexture for a flag id via the pure flag painter.
@@ -4750,7 +4907,7 @@ export class ThreeDRenderer {
       const loops = gl < 0 ? [] : closedWallLoops(walls ?? []);
       const yf = GROUND_KINDS[yardFill] ?? GROUND_KINDS.grass;
       const yfIsWater0 = yardFill === 'water';
-      const ytex = yfIsWater0 ? this._waterTexClone() : this._groundTexture(yardFill);
+      const ytex = yfIsWater0 ? this._waterTexClone('yf') : this._groundTexture(yardFill);
       if (!yfIsWater0) ytex.repeat.set(1 / 800, 1 / 800);
       const yShape = new THREE.Shape();
       // Floor-rect outer contour in shape coords (sx = fw/2 − wx, sy = fd/2 − wy),
@@ -4790,7 +4947,7 @@ export class ThreeDRenderer {
       const isWater = a.kind === 'water';
       // Water gets a per-patch clone (shimmer drift); the shared skirt below
       // reuses this same clone so the patch + its skirt ripple in unison.
-      const tex = isWater ? this._waterTexClone() : this._groundTexture(a.kind);
+      const tex = isWater ? this._waterTexClone(a.id) : this._groundTexture(a.kind);
       if (!isWater) tex.repeat.set(1 / 800, 1 / 800);   // raw-mm ShapeGeometry UVs → one tile / 800 mm
       const elev = a.elevationMm ?? 0;
       const ctr = centroid(a.points);
@@ -4871,6 +5028,13 @@ export class ThreeDRenderer {
         this._groundGroup.add(skirt);
       }
     }
+    // Drop shimmer phase for owners that no longer exist. `yf` is retained
+    // unconditionally — it is a single sentinel whose whole cost is one number,
+    // and dropping it would restart the yard ripple every time the yardFill kind
+    // is toggled off and back on.
+    const liveWater = new Set<string>(['yf']);
+    for (const a of areas) if (a.kind === 'water') liveWater.add(a.id);
+    for (const k of Object.keys(this._waterPhase)) if (!liveWater.has(k)) delete this._waterPhase[k];
   }
 
   // Pool / spa basins (T4, docs/research/pool-spa.md). Per pool: a dark basin
@@ -4995,7 +5159,7 @@ export class ThreeDRenderer {
       // Water surface — a shimmering translucent plane just below the rim. Heater
       // glow tints its emissive channel (heating full / idle dim / off none).
       {
-        const tex = this._poolWaterTexClone();
+        const tex = this._poolWaterTexClone(pl.id);
         const heatEmis = hs === 'heating' ? 0.55 : hs === 'idle' ? 0.22 : 0;
         const surf = new THREE.Mesh(new THREE.ShapeGeometry(mkShape()), this._mat({
           color: water, map: tex, side: THREE.DoubleSide,
@@ -5030,6 +5194,10 @@ export class ThreeDRenderer {
         this._poolGroup.add(disc);
       }
     }
+    // Drop shimmer phase for pools that no longer exist (a hidden pool keeps
+    // its phase — it is re-registered on unhide and resumes where it left off).
+    const livePools = new Set(pools.map(pl => pl.id));
+    for (const k of Object.keys(this._poolWaterPhase)) if (!livePools.has(k)) delete this._poolWaterPhase[k];
   }
 
   // Per-room temperature heat-map patches (derived visual layer, opt-in). One
@@ -6566,6 +6734,16 @@ export class ThreeDRenderer {
       sprite.position.set(wp.x, wp.y, wp.z);
       this._floorGroup.add(sprite);
     }
+
+    // Persisted particle-cloud state for _floorGroup clouds (fountain plumes,
+    // shower columns, appliance vent puffs): the lists above were just rebuilt
+    // and each entry carries its key, so anything NOT re-registered belongs to a
+    // deleted/hidden piece and its buffers can go. Entries for pieces that are
+    // merely idle (a shower that isn't running) are re-registered every rebuild
+    // and therefore survive — that is what keeps them mid-flight.
+    this._pruneCloudState(this._fountainState, new Set(this._fountains.map(e => e.key)));
+    this._pruneCloudState(this._showerState, new Set(this._showers.map(e => e.fuId)));
+    this._pruneCloudState(this._applianceVentState, new Set(this._applianceVents.map(e => e.key)));
 
     // Rebuild the humanoid navigation grid from the same walls + furniture.
     // Hidden walls don't block (consistent with hidden furniture).
@@ -9305,17 +9483,25 @@ export class ThreeDRenderer {
         // top spout (y≈HT) and recycling at the lower basin (y≈HT*0.2). Reuses
         // the weather rain droplet texture; advanced zero-alloc in _advanceFountains.
         const sprayCount = 40;
-        const spos = new Float32Array(sprayCount * 3);
-        const svel = new Float32Array(sprayCount * 3);
+        // Persisted plume state (see ParticleCloudState): identical geometry →
+        // the previous build's live buffers are adopted by reference, so a
+        // _keyFloor rebuild leaves every droplet exactly mid-flight. A fresh
+        // fixture (or a resized piece) seeds deterministically off the key.
+        const fountainKey = fu.id ?? `fo_${Math.round(fu.x)}_${Math.round(fu.y)}`;
+        const fSig = `${sprayCount}|${Math.round(HT)}|${Math.round(W)}`;
+        const { st: fSt, fresh: fFresh } =
+          this._cloudState(this._fountainState, fountainKey, fSig, sprayCount, false);
+        const spos = fSt.pos, svel = fSt.vel;
         const fEntry = {
+          key: fountainKey, st: fSt,
           points: null as unknown as THREE.Points, pos: spos, vel: svel,
           count: sprayCount, originY: HT * 1.0, basinY: HT * 0.2, spread: W * 0.16,
         };
-        for (let i = 0; i < sprayCount; i++) {
+        if (fFresh) for (let i = 0; i < sprayCount; i++) {
           this._seedFountainDrop(fEntry, i);
-          // Pre-advance each droplet by a random slice of flight so the plume is
-          // already full at t0 (staggered, not a synchronized launch).
-          const t = Math.random() * 0.85;
+          // Pre-advance each droplet by a deterministic slice of flight so the
+          // plume is already full at t0 (staggered, not a synchronized launch).
+          const t = this._rndFrom(fSt) * 0.85;
           const j = i * 3;
           svel[j + 1] -= this._FOUNTAIN_G * t;
           spos[j]     += svel[j]     * t;
@@ -9882,11 +10068,20 @@ export class ThreeDRenderer {
         // water can fade in/out without a rebuild.
         const headY = HT - 360, spread = Math.min(W, D) * 0.34;
         const dropCount = 34;
-        const dpos = new Float32Array(dropCount * 3);
-        for (let i = 0; i < dropCount; i++) {
-          const j = i * 3, a = Math.random() * Math.PI * 2, rr = Math.sqrt(Math.random()) * spread;
+        // Persisted column state (see ParticleCloudState). Unchanged stall
+        // geometry → adopt the previous build's live buffer by reference, so a
+        // configRev rebuild can't snap the falling water back to a fresh
+        // pre-fill; a genuine resize re-seeds deterministically off the key.
+        const showerKey = fu.id ?? `sh_${Math.round(fu.x)}_${Math.round(fu.y)}`;
+        const shSig = `${dropCount}|${Math.round(headY)}|${Math.round(panY)}|${Math.round(hx)}|${Math.round(hz)}|${Math.round(spread)}`;
+        const { st: shSt, fresh: shFresh } =
+          this._cloudState(this._showerState, showerKey, shSig, dropCount, false);
+        const dpos = shSt.pos;
+        if (shFresh) for (let i = 0; i < dropCount; i++) {
+          const j = i * 3, a = this._rndFrom(shSt) * Math.PI * 2,
+                rr = Math.sqrt(this._rndFrom(shSt)) * spread;
           dpos[j] = hx + Math.cos(a) * rr;
-          dpos[j + 1] = panY + Math.random() * (headY - panY);   // pre-filled column
+          dpos[j + 1] = panY + this._rndFrom(shSt) * (headY - panY);   // pre-filled column
           dpos[j + 2] = hz + Math.sin(a) * rr;
         }
         const dgeo = new THREE.BufferGeometry();
@@ -9910,9 +10105,8 @@ export class ThreeDRenderer {
         ring.userData = { outlineSkip: true, showerRing: true };
         ring.visible = false;
         grp.add(ring);
-        const showerId = fu.id ?? `sh_${Math.round(fu.x)}_${Math.round(fu.y)}`;
         this._showers.push({
-          fuId: showerId, wx: fu.x, wy: fu.y, points: dpts, mat: dmat, ring,
+          fuId: showerKey, st: shSt, wx: fu.x, wy: fu.y, points: dpts, mat: dmat, ring,
           pos: dpos, count: dropCount, headY, panY: panY + 8, cx: hx, cz: hz, spread,
         });
         break;
@@ -9948,7 +10142,7 @@ export class ThreeDRenderer {
           addBox(8, HT * 0.6, D * 0.6, grille, sx * (W / 2 + 2), HT * 0.5, 0);
         addBox(W * 0.9, 22, 26, shell, 0, 22, -D / 2 - 12);                  // drip lip (proud, bottom-front)
         if (opts?.climateRunning)
-          this._buildApplianceVent(grp, opts.climateAir ?? 'cool',
+          this._buildApplianceVent(fu.id ?? `av_${Math.round(fu.x)}_${Math.round(fu.y)}`, grp, opts.climateAir ?? 'cool',
             0, HT * 0.32, -D / 2 - 30, 0, -0.3, -0.95, 20, 0.85);
         break;
       }
@@ -9976,7 +10170,7 @@ export class ThreeDRenderer {
             tauUp: 0.3, tauDown: 0.45, apply: b => { hinge.rotation.x = openA * b; } });
         }
         if (opts?.climateRunning)
-          this._buildApplianceVent(grp, opts.climateAir ?? 'cool',
+          this._buildApplianceVent(fu.id ?? `av_${Math.round(fu.x)}_${Math.round(fu.y)}`, grp, opts.climateAir ?? 'cool',
             0, -30, -D / 2 - 24, 0, -0.95, -0.3, 24, 1);
         break;
       }
@@ -9995,7 +10189,7 @@ export class ThreeDRenderer {
         h1.rotation.x = Math.PI / 3;
         addCyl(45, 45, 260, hoseMat, -W * 0.2, HT + 120, D / 2 + 90, 10);
         if (opts?.climateRunning)
-          this._buildApplianceVent(grp, opts.climateAir ?? 'cool',
+          this._buildApplianceVent(fu.id ?? `av_${Math.round(fu.x)}_${Math.round(fu.y)}`, grp, opts.climateAir ?? 'cool',
             0, HT + 40, 0, 0, 1, -0.2, 20, 0.7);
         break;
       }
@@ -10134,7 +10328,7 @@ export class ThreeDRenderer {
               apply: k => { m.emissiveIntensity = (0.15 + 0.5 * frac) * (0.7 + 0.6 * k); } });
         }
         if (opts?.climateRunning)
-          this._buildApplianceVent(grp, 'heat', 0, HT + 20, -D / 2 - 20, 0, 1, -0.15, 18, 0.6);
+          this._buildApplianceVent(fu.id ?? `av_${Math.round(fu.x)}_${Math.round(fu.y)}`, grp, 'heat', 0, HT + 20, -D / 2 - 20, 0, 1, -0.15, 18, 0.6);
         break;
       }
       case 'towel_warmer': {
@@ -10227,7 +10421,7 @@ export class ThreeDRenderer {
           grp.add(s);
         }
         if (opts?.mech?.running && opts.mech.glow !== 'none')
-          this._buildApplianceVent(grp, opts.mech.glow, 0, HT + 30, -D * 0.1,
+          this._buildApplianceVent(fu.id ?? `av_${Math.round(fu.x)}_${Math.round(fu.y)}`, grp, opts.mech.glow, 0, HT + 30, -D * 0.1,
             0, 1, -0.25, 20, 0.75);
         break;
       }
@@ -11754,9 +11948,13 @@ export class ThreeDRenderer {
         if (air === 'heat') { dirY = 1.1; }
         else if (air === 'cool') { dirY = -0.9; dirX = outX * 1.1; dirZ = outZ * 1.1; }
         const dl = Math.hypot(dirX, dirY, dirZ) || 1;
-        this._buildVentCloud(air, ox, oy, oz, dirX / dl, dirY / dl, dirZ / dl);
+        this._buildVentCloud(t.id, air, ox, oy, oz, dirX / dl, dirY / dl, dirZ / dl);
       }
     }
+    // Keep persisted puff state only for units still on this floor. A unit that
+    // goes IDLE keeps its state (the puffs resume mid-drift when it fires up
+    // again); a deleted unit drops it.
+    this._pruneCloudState(this._ventState, new Set(units.map(u => u.id)));
   }
 
   // Shared soft round point sprite for the vent airflow (built once, disposed
@@ -11776,33 +11974,42 @@ export class ThreeDRenderer {
     return this._ventTex;
   }
 
+  // Seed one vent puff. `st` supplies the deterministic RNG cursor (persisted
+  // with the buffers) — never Math.random, so a rebuild that DOES have to
+  // re-seed produces the identical stagger every time.
   private _seedVentParticle(
+    st: ParticleCloudState,
     pos: Float32Array, vel: Float32Array, life: Float32Array, i: number,
     ox: number, oy: number, oz: number, dirX: number, dirY: number, dirZ: number,
     speed: number, spread: number, stagger: boolean,
   ): void {
     const j = i * 3;
-    pos[j]     = ox + (Math.random() - 0.5) * 130;
-    pos[j + 1] = oy + (Math.random() - 0.5) * 90;
-    pos[j + 2] = oz + (Math.random() - 0.5) * 130;
-    vel[j]     = dirX * speed + (Math.random() - 0.5) * spread;
-    vel[j + 1] = dirY * speed + (Math.random() - 0.5) * spread * 0.6;
-    vel[j + 2] = dirZ * speed + (Math.random() - 0.5) * spread;
-    life[i] = stagger ? Math.random() * this._VENT_LIFE : 0;
+    pos[j]     = ox + (this._rndFrom(st) - 0.5) * 130;
+    pos[j + 1] = oy + (this._rndFrom(st) - 0.5) * 90;
+    pos[j + 2] = oz + (this._rndFrom(st) - 0.5) * 130;
+    vel[j]     = dirX * speed + (this._rndFrom(st) - 0.5) * spread;
+    vel[j + 1] = dirY * speed + (this._rndFrom(st) - 0.5) * spread * 0.6;
+    vel[j + 2] = dirZ * speed + (this._rndFrom(st) - 0.5) * spread;
+    life[i] = stagger ? this._rndFrom(st) * this._VENT_LIFE : 0;
   }
 
   private _buildVentCloud(
-    kind: 'heat' | 'cool' | 'fan',
+    key: string, kind: 'heat' | 'cool' | 'fan',
     ox: number, oy: number, oz: number, dirX: number, dirY: number, dirZ: number,
   ): void {
     const count = 26;
     const speed = kind === 'heat' ? 520 : kind === 'cool' ? 640 : 720;
     const spread = kind === 'fan' ? 260 : 180;
-    const pos = new Float32Array(count * 3);
-    const vel = new Float32Array(count * 3);
-    const life = new Float32Array(count);
-    for (let i = 0; i < count; i++)
-      this._seedVentParticle(pos, vel, life, i, ox, oy, oz, dirX, dirY, dirZ, speed, spread, true);
+    // Persisted puff state (see ParticleCloudState): same vent, same airflow
+    // kind → adopt the previous build's live buffers by reference so the puffs
+    // keep drifting across the rebuild. The airflow KIND is in the signature —
+    // heat↔cool is a genuine change and legitimately restarts (deterministically).
+    const sig = `${count}|${kind}|${Math.round(ox)}|${Math.round(oy)}|${Math.round(oz)}|` +
+      `${dirX.toFixed(3)},${dirY.toFixed(3)},${dirZ.toFixed(3)}|${speed}|${spread}`;
+    const { st, fresh } = this._cloudState(this._ventState, key, sig, count, true);
+    const pos = st.pos, vel = st.vel, life = st.life!;
+    if (fresh) for (let i = 0; i < count; i++)
+      this._seedVentParticle(st, pos, vel, life, i, ox, oy, oz, dirX, dirY, dirZ, speed, spread, true);
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
     const mat = new THREE.PointsMaterial({
@@ -11814,7 +12021,7 @@ export class ThreeDRenderer {
     points.renderOrder = 3;
     points.userData = { outlineSkip: true, ventKind: kind };
     this._thermoGroup.add(points);
-    this._ventClouds.push({ kind, points, pos, vel, life, count, ox, oy, oz, dirX, dirY, dirZ, spread, speed });
+    this._ventClouds.push({ key, st, kind, points, pos, vel, life, count, ox, oy, oz, dirX, dirY, dirZ, spread, speed });
   }
 
   // Furniture airflow vent cloud (AC / heater grilles) — the thermostat vent
@@ -11823,18 +12030,22 @@ export class ThreeDRenderer {
   // _advanceApplianceVents). `parent` is the furniture group; ox/oy/oz/dir are
   // LOCAL. Reuses the shared _ventTexture + _seedVentParticle. `count`/`speed`
   // scale with the airflow kind (heat rises slow, cool sinks, fan blows).
+  // `key` is the owning FURNITURE id — the persisted-state key. Coordinates are
+  // LOCAL to the piece group, so moving/rotating the piece keeps the signature
+  // (and the drifting puffs) intact; only a kind/geometry change re-seeds.
   private _buildApplianceVent(
-    parent: THREE.Object3D, kind: 'heat' | 'cool' | 'fan',
+    key: string, parent: THREE.Object3D, kind: 'heat' | 'cool' | 'fan',
     ox: number, oy: number, oz: number, dirX: number, dirY: number, dirZ: number,
     count = 24, speedMul = 1,
   ): void {
     const speed = (kind === 'heat' ? 480 : kind === 'cool' ? 600 : 680) * speedMul;
     const spread = kind === 'fan' ? 240 : 170;
-    const pos = new Float32Array(count * 3);
-    const vel = new Float32Array(count * 3);
-    const life = new Float32Array(count);
-    for (let i = 0; i < count; i++)
-      this._seedVentParticle(pos, vel, life, i, ox, oy, oz, dirX, dirY, dirZ, speed, spread, true);
+    const sig = `${count}|${kind}|${Math.round(ox)}|${Math.round(oy)}|${Math.round(oz)}|` +
+      `${dirX.toFixed(3)},${dirY.toFixed(3)},${dirZ.toFixed(3)}|${Math.round(speed)}|${spread}`;
+    const { st, fresh } = this._cloudState(this._applianceVentState, key, sig, count, true);
+    const pos = st.pos, vel = st.vel, life = st.life!;
+    if (fresh) for (let i = 0; i < count; i++)
+      this._seedVentParticle(st, pos, vel, life, i, ox, oy, oz, dirX, dirY, dirZ, speed, spread, true);
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
     const mat = new THREE.PointsMaterial({
@@ -11846,7 +12057,7 @@ export class ThreeDRenderer {
     points.renderOrder = 3;
     points.userData = { outlineSkip: true, ventKind: kind };
     parent.add(points);
-    this._applianceVents.push({ points, pos, vel, life, count, ox, oy, oz, dirX, dirY, dirZ, spread, speed });
+    this._applianceVents.push({ key, st, points, pos, vel, life, count, ox, oy, oz, dirX, dirY, dirZ, spread, speed });
   }
 
   // Mechanical-appliance glow material. Returns a toon material whose emissive is
@@ -11883,7 +12094,7 @@ export class ThreeDRenderer {
       for (let i = 0; i < count; i++) {
         life[i] += dt;
         if (life[i] >= this._VENT_LIFE) {
-          this._seedVentParticle(pos, vel, life, i, cl.ox, cl.oy, cl.oz,
+          this._seedVentParticle(cl.st, pos, vel, life, i, cl.ox, cl.oy, cl.oz,
             cl.dirX, cl.dirY, cl.dirZ, cl.speed, cl.spread, false);
           continue;
         }
@@ -11957,7 +12168,7 @@ export class ThreeDRenderer {
       for (let i = 0; i < count; i++) {
         life[i] += dt;
         if (life[i] >= this._VENT_LIFE) {
-          this._seedVentParticle(pos, vel, life, i, cl.ox, cl.oy, cl.oz,
+          this._seedVentParticle(cl.st, pos, vel, life, i, cl.ox, cl.oy, cl.oz,
             cl.dirX, cl.dirY, cl.dirZ, cl.speed, cl.spread, false);
           continue;
         }
@@ -20591,13 +20802,16 @@ export class ThreeDRenderer {
         const j = i * 3;
         p[j + 1] -= fall;
         if (p[j + 1] <= sh.panY) {                      // recycle at the head
-          const a = Math.random() * Math.PI * 2, rr = Math.sqrt(Math.random()) * sh.spread;
+          // Deterministic stream (the persisted mulberry32 cursor) rather than
+          // Math.random — same statistics, but a rebuild resumes the sequence.
+          const a = this._rndFrom(sh.st) * Math.PI * 2,
+                rr = Math.sqrt(this._rndFrom(sh.st)) * sh.spread;
           p[j] = sh.cx + Math.cos(a) * rr;
           // Jitter the respawn height by up to one fall step. Respawning at
           // EXACTLY headY quantizes every droplet onto y = headY − k·fall, so
           // with a steady frame dt the whole cloud collapses into a few visible
           // horizontal BANDS instead of a continuous stream.
-          p[j + 1] = sh.headY - Math.random() * Math.max(60, fall);
+          p[j + 1] = sh.headY - this._rndFrom(sh.st) * Math.max(60, fall);
           p[j + 2] = sh.cz + Math.sin(a) * rr;
         }
       }
@@ -23146,6 +23360,10 @@ export class ThreeDRenderer {
     this._groundTexCache = {};
     this._disposeWaterPatchTextures();   // per-patch water shimmer clones
     this._disposePoolWaterTextures();    // per-pool water surface shimmer clones
+    // Persisted rebuild-continuity state (particle buffers + shimmer phases).
+    this._fountainState = {}; this._showerState = {}; this._sprinklerState = {};
+    this._ventState = {}; this._applianceVentState = {};
+    this._waterPhase = {}; this._poolWaterPhase = {};
     this._disposePumpFlowTextures();     // per-pump pipe-flow scroll clones
     this._flowTex?.dispose(); this._flowTex = null;   // shared pump flow source
     this._fenceMeshTex?.dispose(); this._fenceMeshTex = null;
