@@ -336,6 +336,24 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Banner aircraft fleet + news-chopper merge** (2026-08-01,
+  user-requested; unreleased — on main past v0.53.0). 19 new banner
+  tow craft (BG_CRAFTS + _buildBannerCraft, entirely separate from
+  the ADS-B archetype path): 7 military/NASA (F-16, A-10, F-22, B-2,
+  B-52 w/ 8 engine pods, Apache, Space Shuttle) + 11 fiction homages
+  (Airwolf, Batwing, Trimaxion, Little Einsteins rocket, Enterprise
+  1701 + 1701-C, X-wing, Falcon, Slave I, Naboo, Serenity) +
+  news_chopper (the retired chopper mode's build verbatim). Signature
+  paint tintable via colorMain/colorDetail; per-craft len drives the
+  banner standoff; rotorcraft spin; spacecraft static emissive glow;
+  visual inspection pass fixed airwolf belly overhang + b52 wing-root
+  gap. mode:'chopper' DEPRECATED → migrated to banner+news_chopper
+  (idempotent, whole-entry passthrough preserved, renderer tolerates
+  raw rows); the chopper flight profile (opposite dir, 7500 alt,
+  x0.6 radius, bob, corner-hung banner) keys off the craft, byte-
+  preserved. Aircraft dropdown = 4 optgroups / 28 options; Mode
+  dropdown = 4. Tests: bgtext-multi 373/373, bgtext 30/30, terrain
+  119/119, flights-ui 299/299 (+4 dropdown pins).
 - **Gate breaks railings + railing-styled gate panel** (2026-08-01,
   user-reported + user-requested; unreleased — on main past v0.53.0).
   Repro'd: the railing's composite 3D build ignored wallCutsForSegment

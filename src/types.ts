@@ -1563,10 +1563,20 @@ export interface BgTextConfig {
 }
 
 // Multi-instance background text (up to 6 entries). Each entry is one decorative
-// message written into the 3D world in one of five styles. Supersedes the legacy
+// message written into the 3D world in one of four styles. Supersedes the legacy
 // single BgTextConfig above (which is migrated once into a bgTexts entry and then
-// ignored — kept for migration only, never written again). `train`/`chopper` tow
+// ignored — kept for migration only, never written again). `train`/`banner` tow
 // a message around/above the yard; `maxCars` is train-only.
+//
+// DEPRECATED member `'chopper'`: the news helicopter is no longer a MODE — it is
+// one entry in the banner tow-craft roster (`aircraft: 'news_chopper'`), so the
+// same five colour knobs, the model-size knob and the whole craft dropdown apply
+// to it. `_migrateBgTexts` rewrites `{mode:'chopper'}` → `{mode:'banner',
+// aircraft:'news_chopper'}` on every load/import/undo (idempotent), and the
+// renderer tolerates a raw `'chopper'` row identically (stale-store safety). The
+// member stays in the union only so a store written before the migration still
+// type-checks; nothing ever WRITES it again and the Settings mode dropdown no
+// longer offers it.
 export type BgTextEntryMode = 'sky' | 'banner' | 'grass' | 'train' | 'chopper';
 export interface BgTextEntry {
   id: string;                    // stable per-entry id (rig key + list identity)
@@ -1575,14 +1585,23 @@ export interface BgTextEntry {
   entityId?: string;             // optional bound entity — its formatted state replaces `text`
   format?: InfoCardFormat;       // formatting for the bound entity's value
   maxCars?: number;              // train-only: cap on message cars (default 8, clamp 2..12)
-  // banner-only: build the tow aircraft from one of the eight FLIGHT archetypes
-  // (see AircraftArchetype in src/aircraft-types.ts — 'ga-high' | 'ga-low' |
-  // 'twin-prop' | 'turboprop' | 'narrowbody' | 'widebody' | 'bizjet' | 'heli')
-  // instead of the classic toy tow plane. ABSENT (or an unknown string) = the
-  // toy plane, byte-identical to the shipped build. Civil paint, no status
-  // beacons / privacy dimming / livery lettering — this is a message prop, not
-  // live traffic. `heli` flies the same banner orbit with its rotors spinning
-  // (the dedicated news-chopper build stays on `mode: 'chopper'`).
+  // banner-only: which craft tows the message. THREE families, all opaque
+  // strings validated renderer-side (an unknown string ⇒ the classic toy tow
+  // plane, byte-identical to the shipped build — this can never throw):
+  //   • the eight FLIGHT archetypes (see AircraftArchetype in
+  //     src/aircraft-types.ts — 'ga-high' | 'ga-low' | 'twin-prop' |
+  //     'turboprop' | 'narrowbody' | 'widebody' | 'bizjet' | 'heli'), built by
+  //     the SAME model builder the live ADS-B rigs use, in civil paint with no
+  //     status beacons / privacy dimming / livery lettering;
+  //   • the BANNER-CRAFT roster (src/three-renderer.ts BG_CRAFTS — seven real
+  //     military/NASA silhouettes and eleven low-poly fiction homages), built
+  //     by _buildBannerCraft. These are message PROPS, never live traffic, and
+  //     deliberately share nothing with TYPE_ARCHETYPE;
+  //   • 'news_chopper' — the dedicated news helicopter. It is the ONE craft
+  //     that also swaps the FLIGHT PROFILE (opposite orbit direction, higher,
+  //     tighter, bigger hover bob, banner hung from its leading top corner on a
+  //     tow wire); every other craft, rotorcraft included, flies the ordinary
+  //     banner orbit.
   aircraft?: string;
   // Model size multiplier for THIS entry's whole rig (default 1, clamp 0.5..5):
   // train consist + car text planes, tow plane + banner, chopper + banner, sky

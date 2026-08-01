@@ -1153,7 +1153,19 @@
       const acSel = labelled('Aircraft', 'select');
       ok('BG banner row offers an “Aircraft” picker', !!acSel);
       eq('the picker defaults to the classic tow plane', acSel && acSel.value, '');
-      eq('all 8 archetypes + the classic plane are listed', acSel && acSel.options.length, 9);
+      // The roster grew: 9 airliner-family entries (classic plane + 8 archetypes)
+      // + 7 military/NASA + 11 fiction + the news helicopter, in four optgroups.
+      eq('the whole 28-craft roster is listed', acSel && acSel.options.length, 28);
+      eq('…grouped into four optgroups', acSel && acSel.querySelectorAll('optgroup').length, 4);
+      eq('optgroup labels name the four families',
+        acSel && [...acSel.querySelectorAll('optgroup')].map(g => g.label).join('|'),
+        'Toy plane & airliners|Military & NASA|Fiction|News');
+      ok('the news helicopter is a CRAFT now, not a mode',
+        !!acSel && [...acSel.options].some(o => o.value === 'news_chopper'));
+      const modeSel = dw.querySelector('select');
+      ok('…and the mode dropdown no longer offers "chopper"',
+        !!modeSel && ![...modeSel.options].some(o => o.value === 'chopper'),
+        modeSel && [...modeSel.options].map(o => o.value).join(','));
       acSel.value = 'widebody'; acSel.dispatchEvent(new Event('change'));
       await dw.updateComplete; await sleep(4);
       eq('picking an archetype writes the entry', p3.store.bgTexts[0].aircraft, 'widebody');

@@ -2096,7 +2096,18 @@ export class Planner extends EventTarget {
       const out = remote.bgTexts
         .filter(e => e && typeof e.id === 'string' && modes.includes(e.mode))
         .slice(0, 6)
-        .map(e => ({ ...e }));
+        // MODE MIGRATION (the news chopper stopped being a mode when the banner
+        // tow-craft roster landed): `{mode:'chopper'}` becomes the equivalent
+        // banner entry towing `news_chopper`, which renders identically — same
+        // build, same opposite/higher/tighter orbit, same corner-hung banner —
+        // while gaining the whole craft dropdown. IDEMPOTENT (a banner row is
+        // left alone, and re-running on the migrated row is a no-op) and every
+        // other field survives via the whole-entry spread, colours included. An
+        // `aircraft` already on a chopper row wins, so a hand-edited config that
+        // pre-picked a craft is honoured instead of being stomped.
+        .map(e => e.mode === 'chopper'
+          ? { ...e, mode: 'banner' as BgTextEntryMode, aircraft: e.aircraft ?? 'news_chopper' }
+          : { ...e });
       return out.length ? out : undefined;
     }
     const bt = remote.bgText;

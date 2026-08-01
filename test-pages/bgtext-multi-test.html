@@ -69,6 +69,13 @@
     return out;
   };
   const ent = (mode, text, extra) => ({ id: 'e_' + Math.random().toString(36).slice(2, 7), mode, text, ...(extra || {}) });
+  // The news helicopter is a banner tow CRAFT now (aircraft: 'news_chopper'),
+  // not a mode — so it is built through a banner entry and found by the rig's
+  // `newsChopper` flag (rig.mode is 'banner' for EVERY tow craft). The old
+  // `mode: 'chopper'` rows survive only as stale-store fixtures.
+  const chopEnt = (text, extra) => ent('banner', text, { aircraft: 'news_chopper', ...(extra || {}) });
+  const chopRig = () => r._bgRigs.find(x => x.newsChopper === true);
+  const planeRig = () => r._bgRigs.find(x => x.mode === 'banner' && !x.newsChopper);
   const THREE_FrontSide = 0;    // THREE.FrontSide (avoid a three import, like THREE_DoubleSide)
   // Make a fresh Vector3 by cloning any existing one (no `three` import in this page).
   const vec = (proto, x, y, z) => proto.clone().set(x, y, z);
@@ -259,11 +266,12 @@
   // ════════════ STORM HIDING ════════════
   {
     r.updateBgTexts([
-      ent('sky', 'SKY'), ent('banner', 'BANNER'), ent('chopper', 'CHOP'),
+      ent('sky', 'SKY'), ent('banner', 'BANNER'), chopEnt('CHOP'),
+      { id: 'rawstorm', mode: 'chopper', text: 'RAW CHOP' },   // stale-store row
       ent('grass', 'GRASS'), ent('train', 'TRAIN TIME'),
     ], true /* storm */, 0, 0);
     const modes = r._bgRigs.map(x => x.mode).sort();
-    ok('storm hides sky/banner/chopper',
+    ok('storm hides skywriting + every banner craft (plane, news chopper, raw chopper row)',
        !r._bgRigs.some(x => x.mode === 'sky' || x.mode === 'banner' || x.mode === 'chopper'),
        modes.join(','));
     ok('storm keeps grass + train (ground-level)',
@@ -343,16 +351,16 @@
 
   // ════════════ NEWS CHOPPER ════════════
   {
-    r.updateBgTexts([ent('chopper', 'BREAKING NEWS')], false, 0, 5);
-    const c = r._bgRigs.find(x => x.mode === 'chopper');
+    r.updateBgTexts([chopEnt('BREAKING NEWS')], false, 0, 5);
+    const c = chopRig();
     ok('chopper builds (main rotor + tail rotor + banner)',
        !!c && !!c.prop && c.prop.children && c.prop.children.length >= 2 &&
        !!c.tailRotor && !!c.banner,
        c ? `rotorBlades=${c.prop.children.length} tail=${!!c.tailRotor} banner=${!!c.banner}` : 'no rig');
   }
   {
-    r.updateBgTexts([ent('chopper', 'ROTOR SPIN')], false, 0, 5);
-    const c = r._bgRigs.find(x => x.mode === 'chopper');
+    r.updateBgTexts([chopEnt('ROTOR SPIN')], false, 0, 5);
+    const c = chopRig();
     const y0 = c.prop.rotation.y;
     step(60);
     ok('chopper main rotor angle advances', Math.abs(c.prop.rotation.y - y0) > 1e-3,
@@ -360,9 +368,9 @@
   }
   {
     // Chopper orbits OPPOSITE the plane: compare signed sweep of the XZ position.
-    r.updateBgTexts([ent('banner', 'PLANE'), ent('chopper', 'CHOP')], false, 0, 5);
-    const plane = r._bgRigs.find(x => x.mode === 'banner');
-    const chop = r._bgRigs.find(x => x.mode === 'chopper');
+    r.updateBgTexts([ent('banner', 'PLANE'), chopEnt('CHOP')], false, 0, 5);
+    const plane = planeRig();
+    const chop = chopRig();
     step(2);  // settle
     const pA = plane.asm.position.clone(), cA = chop.asm.position.clone();
     step(30);
@@ -375,9 +383,9 @@
   }
   // ════════════ BANNER: TWO FRONTSIDE PLANES, NON-MIRRORED (bug 3) ════════════
   {
-    r.updateBgTexts([ent('banner', 'TWO SIDES'), ent('chopper', 'TWO SIDES C')], false, 0, 5);
-    for (const mode of ['banner', 'chopper']) {
-      const rig = r._bgRigs.find(x => x.mode === mode);
+    r.updateBgTexts([ent('banner', 'TWO SIDES'), chopEnt('TWO SIDES C')], false, 0, 5);
+    for (const [mode, pick] of [['banner', planeRig], ['chopper', chopRig]]) {
+      const rig = pick();
       const planes = textPlanes(rig.banner);
       const frontBoth = planes.length === 2 && planes.every(p => p.material.side === THREE_FrontSide);
       const n0 = vec(rig.banner.position, 0, 0, 1).applyQuaternion(planes[0].quaternion);
@@ -404,8 +412,8 @@
 
   // ════════════ CHOPPER TOW WIRE connects chopper → banner top (bug 1) ════════════
   {
-    r.updateBgTexts([ent('chopper', 'BANNER TOW LINE')], false, 0, 5);
-    const c = r._bgRigs.find(x => x.mode === 'chopper');
+    r.updateBgTexts([chopEnt('BANNER TOW LINE')], false, 0, 5);
+    const c = chopRig();
     const w = c.towWire;
     ok('chopper builds a tow wire with attach/bannerTop metadata',
        !!w && Array.isArray(w.userData.attach) && Array.isArray(w.userData.bannerTop),
@@ -598,7 +606,7 @@
     const entries = [
       { id: 'gtrain', mode: 'train', text: 'ALL ABOARD' },
       { id: 'gplane', mode: 'banner', text: 'HELLO' },
-      { id: 'gchop', mode: 'chopper', text: 'NEWS' },
+      { id: 'gchop', mode: 'banner', text: 'NEWS', aircraft: 'news_chopper' },
       { id: 'gsky', mode: 'sky', text: 'HI' },
     ];
     const read = (sc) => {
@@ -610,8 +618,8 @@
       return {
         train: by('train').train.baseY,
         trainCar: by('train').train.vehicles[0].obj.position.y,
-        plane: by('banner').alt,
-        chop: by('chopper').alt,
+        plane: planeRig().alt,
+        chop: chopRig().alt,
         sky: by('sky').sky.position.y,
       };
     };
@@ -633,8 +641,9 @@
   // The banner Group origin must BE the corner the wire ends at, so the sway
   // (banner.rotation.y) pivots there and the cloth trails back + down from it.
   {
-    r.updateBgTexts([{ id: 'tow', mode: 'chopper', text: 'BREAKING NEWS' }], false, 0, 0);
-    const rig = r._bgRigs.find(x => x.mode === 'chopper');
+    r.updateBgTexts([{ id: 'tow', mode: 'banner', text: 'BREAKING NEWS',
+                       aircraft: 'news_chopper' }], false, 0, 0);
+    const rig = chopRig();
     const banner = rig.banner, wire = rig.towWire;
     const front = banner.children.find(c => c.userData && c.userData.bannerFace === 'front');
     const len = front.geometry.parameters.width, bh = front.geometry.parameters.height;
@@ -826,12 +835,15 @@
     ok('AC a jet archetype has no propeller disc',
        (jet.props ?? []).length === 0 && jet.propRate === 0,
        `n=${(jet.props ?? []).length} rate=${jet.propRate}`);
-    // The dedicated news chopper is untouched by the archetype path.
+    // STALE-STORE TOLERANCE: a raw `mode:'chopper'` row (one that reached the
+    // renderer before _migrateBgTexts rewrote it) still builds the news
+    // helicopter, and its `aircraft` field is deliberately ignored.
     r.updateBgTexts([{ id: 'newschop', mode: 'chopper', text: 'NEWS', aircraft: 'widebody' }],
                     false, 0, 0);
-    const nc = r._bgRigs.find(x => x.mode === 'chopper');
-    ok('AC `aircraft` is ignored on a chopper entry (dedicated news build kept)',
-       !!nc.towWire && !!nc.tailRotor && nc.dir === -1, `dir=${nc.dir}`);
+    const nc = chopRig();
+    ok('AC a raw `mode:chopper` row still builds the news chopper (aircraft ignored)',
+       !!nc && !!nc.towWire && !!nc.tailRotor && nc.dir === -1 && nc.mode === 'banner',
+       `dir=${nc && nc.dir} mode=${nc && nc.mode}`);
     r.updateBgTexts([], false, 0, 0);
   }
 
@@ -843,17 +855,17 @@
       r.updateBgTexts([
         { id: 'sTrain' + tag, mode: 'train', text: 'BIG TRAIN', scale },
         { id: 'sPlane' + tag, mode: 'banner', text: 'BIG PLANE', scale },
-        { id: 'sChop' + tag, mode: 'chopper', text: 'BIG CHOP', scale },
+        { id: 'sChop' + tag, mode: 'banner', text: 'BIG CHOP', scale, aircraft: 'news_chopper' },
         { id: 'sSky' + tag, mode: 'sky', text: 'BIG SKY', scale },
         { id: 'sGrass' + tag, mode: 'grass', text: 'BIG LAWN', scale },
       ], false, 0, 0);
       const by = (m) => r._bgRigs.find(x => x.mode === m);
       const t = by('train').train;
       return {
-        plane: by('banner').asm.scale.x, chop: by('chopper').asm.scale.x,
+        plane: planeRig().asm.scale.x, chop: chopRig().asm.scale.x,
         sky: by('sky').sky.scale.y, grass: by('grass').grassMesh.scale.x,
         car: t.vehicles[0].obj.scale.x, spacing: t.spacing, wheelR: t.wheelR,
-        alt: by('banner').alt, radius: by('banner').radius,
+        alt: planeRig().alt, radius: planeRig().radius,
         carPos: t.vehicles[0].obj.position.clone(),
       };
     };
@@ -1114,7 +1126,7 @@
         { id: 'ci' + tag, mode: 'sky', text: 'SKY' },
         { id: 'cb' + tag, mode: 'banner', text: 'BAN' },
         { id: 'ct' + tag, mode: 'train', text: 'TRAIN CARS' },
-        { id: 'cc' + tag, mode: 'chopper', text: 'CHOP' },
+        { id: 'cc' + tag, mode: 'banner', text: 'CHOP', aircraft: 'news_chopper' },
         { id: 'cg' + tag, mode: 'grass', text: 'GRASS', grassArea: gaRect },
       ];
       r.updateBgTexts(ents, false, 0, 0);
@@ -1125,8 +1137,8 @@
       for (let i = 0; i < 120; i++) { clk += 1 / 60; r._advanceBgText(1 / 60, clk); }
       return {
         skyX: by('sky').sky.position.x,
-        banY: by('banner').asm.rotation.y, banX: by('banner').asm.position.x,
-        choY: by('chopper').asm.rotation.y,
+        banY: planeRig().asm.rotation.y, banX: planeRig().asm.position.x,
+        choY: chopRig().asm.rotation.y,
         trnY: by('train').train.vehicles[0].obj.rotation.y,
         trnS: by('train').train.s,
         grsY: by('grass').grassMesh.rotation.y,
@@ -1938,9 +1950,9 @@
   // ── defaults byte-identical (goldens = the shipped palette) ──
   {
     r.updateBgTexts([
-      ent('banner', 'DEFAULTS'), ent('chopper', 'DEFAULTS'), ent('train', 'DEFAULTS'),
+      ent('banner', 'DEFAULTS'), chopEnt('DEFAULTS'), ent('train', 'DEFAULTS'),
     ], false, 0, 0);
-    const ban = rigOf('banner'), cho = rigOf('chopper'), trn = rigOf('train');
+    const ban = planeRig(), cho = chopRig(), trn = rigOf('train');
     ok('default classic plane: fuselage #dad7cf + accent #c94f3d',
        hasHex(ban.asm, 0xdad7cf) && hasHex(ban.asm, 0xc94f3d));
     ok('default chopper: cabin #2f6fb0 + stripes #e6291a',
@@ -1977,10 +1989,10 @@
   {
     r.updateBgTexts([
       ent('banner', 'PAINTED', { ...COL }),
-      ent('chopper', 'PAINTED', { ...COL }),
+      chopEnt('PAINTED', { ...COL }),
       ent('train', 'PAINTED', { ...COL }),
     ], false, 0, 0);
-    const ban = rigOf('banner'), cho = rigOf('chopper'), trn = rigOf('train');
+    const ban = planeRig(), cho = chopRig(), trn = rigOf('train');
     ok('classic plane: colorMain paints the fuselage, colorDetail the wing/tail',
        hasHex(ban.asm, 0x123456) && hasHex(ban.asm, 0x654321)
        && !hasHex(ban.asm, 0xdad7cf) && !hasHex(ban.asm, 0xc94f3d));
@@ -2089,6 +2101,377 @@
        Math.abs(rigOf('banner').angle - midAngle) < 1e-6,
        `mid=${midAngle} after=${rigOf('banner').angle}`);
     ok('…and the rebuilt rig really is recoloured', hasHex(rigOf('banner').asm, 0x123456));
+  }
+
+  // ════════════ BANNER TOW-CRAFT ROSTER (BG_CRAFTS) ════════════
+  // Eighteen new hand-built silhouettes + the news helicopter, all reachable
+  // through the SAME BgTextEntry.aircraft slot the eight flight archetypes use.
+  // The dropdown offers exactly these ids, so this list is the UI contract:
+  // anything here must build, and anything not here must fall back to the toy
+  // plane. (The settings drawer itself is a Lit component this page does not
+  // mount; mirroring its option ids and proving each one builds is the same
+  // guarantee without dragging lit into the harness — the `_buildNav` replica
+  // idiom.)
+  const UI_GROUPS = {
+    'Toy plane & airliners': ['', 'ga-high', 'ga-low', 'twin-prop', 'turboprop',
+                              'narrowbody', 'widebody', 'bizjet', 'heli'],
+    'Military & NASA': ['f16', 'a10', 'f22', 'b2', 'b52', 'apache', 'shuttle'],
+    'Fiction': ['airwolf', 'batwing', 'trimaxion', 'einstein_rocket', 'enterprise',
+                'enterprise_c', 'xwing', 'falcon', 'slave1', 'naboo', 'serenity'],
+    'News': ['news_chopper'],
+  };
+  const ROSTER = [...UI_GROUPS['Military & NASA'], ...UI_GROUPS['Fiction'],
+                  ...UI_GROUPS['News']];
+  // Build ONE craft on a fresh entry id (so no persistent phase seeds a pose:
+  // the assembly stays at the origin with identity rotation, which is what the
+  // geometry measurements below assume).
+  let craftSeq = 0;
+  const buildCraft = (aircraft, text = 'ROSTER', extra) => {
+    r.updateBgTexts([{ id: 'cr' + (craftSeq++), mode: 'banner', text,
+                       ...(aircraft ? { aircraft } : {}), ...(extra || {}) }], false, 0, 0);
+    return r._bgRigs[0];
+  };
+  // Real meshes only — outline shells share their host's geometry and the banner
+  // planes are text, not airframe.
+  const bodyMeshes = (rig) => {
+    const out = [];
+    rig.asm.traverse(o => {
+      if (!o.isMesh || (o.userData && (o.userData.outline || o.userData.textPlane))) return;
+      out.push(o);
+    });
+    return out;
+  };
+  const tagCount = (rig, key) => bodyMeshes(rig).filter(o => o.userData && o.userData[key]).length;
+  // Aft-most extent of the AIRFRAME in assembly-local coords (banner + tow wire
+  // excluded) — what the standoff has to clear.
+  const hullMaxZ = (rig) => {
+    rig.asm.updateMatrixWorld(true);
+    let mz = -Infinity;
+    for (const o of bodyMeshes(rig)) {
+      let par = o.parent, inBanner = false;
+      while (par) { if (par === rig.banner) { inBanner = true; break; } par = par.parent; }
+      if (inBanner || o === rig.towWire) continue;
+      o.geometry.computeBoundingBox();
+      const bb = o.geometry.boundingBox;
+      for (const cx of [bb.min.x, bb.max.x])
+        for (const cy of [bb.min.y, bb.max.y])
+          for (const cz of [bb.min.z, bb.max.z]) {
+            const w = vec(rig.asm.position, cx, cy, cz).applyMatrix4(o.matrixWorld);
+            if (w.z > mz) mz = w.z;
+          }
+    }
+    return mz;
+  };
+
+  // ── every roster craft builds a real rig ──
+  {
+    let allBuilt = true, thin = [], noBanner = [];
+    const counts = {};
+    for (const id of ROSTER) {
+      const rig = buildCraft(id);
+      const n = bodyMeshes(rig).length;
+      counts[id] = n;
+      if (!rig || !rig.asm) allBuilt = false;
+      if (n < 6) thin.push(`${id}:${n}`);
+      if (!rig.banner) noBanner.push(id);
+    }
+    ok('ROSTER all 19 craft build an assembly', allBuilt && ROSTER.length === 19,
+       `n=${ROSTER.length}`);
+    ok('ROSTER every craft is a real model (≥6 body meshes)', thin.length === 0,
+       thin.join(' ') || Object.entries(counts).map(([k, v]) => `${k}=${v}`).join(' '));
+    ok('ROSTER every craft tows a banner', noBanner.length === 0, noBanner.join(','));
+  }
+
+  // ── unknown ids still fall back to the classic toy plane, unchanged ──
+  {
+    const plain = buildCraft(null, 'FALLBACK');
+    const plainN = bodyMeshes(plain).length;
+    const plainZ = plain.banner.position.z;
+    for (const bad of ['not-a-craft', 'F16', 'news chopper', '', 'proto', '__proto__',
+                       'constructor', 'toString']) {
+      const rig = buildCraft(bad, 'FALLBACK');
+      const same = bodyMeshes(rig).length === plainN
+        && rig.banner.position.z === plainZ
+        && hasHex(rig.asm, 0xdad7cf) && hasHex(rig.asm, 0xc94f3d)
+        && rig.newsChopper !== true && rig.dir === 1;
+      ok(`ROSTER unknown id "${bad}" → the classic toy plane, unchanged`, same,
+         `n=${bodyMeshes(rig).length}/${plainN} z=${rig.banner.position.z}/${plainZ}`);
+    }
+  }
+
+  // ── marquee fingerprints (the shapes that name the craft) ──
+  {
+    const xw = buildCraft('xwing');
+    ok('ROSTER xwing has FOUR wings in an open X', tagCount(xw, 'wing') === 4,
+       `n=${tagCount(xw, 'wing')}`);
+    ok('ROSTER xwing carries four engine cans', tagCount(xw, 'engine') === 4,
+       `n=${tagCount(xw, 'engine')}`);
+    const b52 = buildCraft('b52');
+    ok('ROSTER b52 has EIGHT engines (four twin pods)', tagCount(b52, 'engine') === 8,
+       `n=${tagCount(b52, 'engine')}`);
+    ok('ROSTER b52 has two swept wing panels', tagCount(b52, 'wing') === 2,
+       `n=${tagCount(b52, 'wing')}`);
+    for (const id of ['enterprise', 'enterprise_c']) {
+      const e = buildCraft(id);
+      ok(`ROSTER ${id} has TWO warp nacelles`, tagCount(e, 'nacelle') === 2,
+         `n=${tagCount(e, 'nacelle')}`);
+    }
+    const ec = buildCraft('enterprise_c'), e0 = buildCraft('enterprise');
+    const nacZ = (rig) => bodyMeshes(rig).find(o => o.userData.nacelle).position.z;
+    ok('ROSTER the -C carries its nacelles further aft than the classic',
+       nacZ(ec) > nacZ(e0), `${nacZ(ec)} vs ${nacZ(e0)}`);
+    const b2 = buildCraft('b2');
+    ok('ROSTER b2 is a PURE flying wing (2 panels, no fin, sawtooth trailing edge)',
+       tagCount(b2, 'wing') === 2 && tagCount(b2, 'sawtooth') === 4
+       && tagCount(b2, 'fin') === 0,
+       `wing=${tagCount(b2, 'wing')} saw=${tagCount(b2, 'sawtooth')}`);
+    const a10 = buildCraft('a10');
+    ok('ROSTER a10 has twin rear engine pods + a straight wing',
+       tagCount(a10, 'engine') === 2
+       && bodyMeshes(a10).some(o => o.userData.wing === 'straight'),
+       `eng=${tagCount(a10, 'engine')}`);
+    const f22 = buildCraft('f22');
+    ok('ROSTER f22 has TWO canted tails (rotated off vertical)',
+       tagCount(f22, 'cantedTail') === 2
+       && bodyMeshes(f22).filter(o => o.userData.cantedTail)
+            .every(o => Math.abs(o.rotation.z) > 0.2),
+       `n=${tagCount(f22, 'cantedTail')}`);
+    const sh = buildCraft('shuttle');
+    ok('ROSTER shuttle has three rear engine bells', tagCount(sh, 'engine') === 3,
+       `n=${tagCount(sh, 'engine')}`);
+    const er = buildCraft('einstein_rocket');
+    ok('ROSTER einstein rocket has two side boosters + three tail fins',
+       tagCount(er, 'booster') === 2 && tagCount(er, 'fin') === 3,
+       `b=${tagCount(er, 'booster')} f=${tagCount(er, 'fin')}`);
+    const fa = buildCraft('falcon');
+    ok('ROSTER falcon has two forward mandibles', tagCount(fa, 'mandible') === 2,
+       `n=${tagCount(fa, 'mandible')}`);
+    const tri = buildCraft('trimaxion');
+    ok('ROSTER trimaxion has NO wings at all (a pure pod)',
+       tagCount(tri, 'wing') === 0 && bodyMeshes(tri).length >= 6,
+       `n=${bodyMeshes(tri).length}`);
+  }
+
+  // ── rotorcraft: disc registration, spin axis, tail rotor ──
+  {
+    for (const id of ['apache', 'airwolf', 'news_chopper']) {
+      const rig = buildCraft(id, 'ROTORS');
+      const hasDisc = (rig.props ?? []).length >= 1;
+      ok(`ROSTER ${id} registers a main rotor + a tail rotor`,
+         hasDisc && !!rig.tailRotor && rig.rotorY === true,
+         `props=${(rig.props ?? []).length} tail=${!!rig.tailRotor} rotorY=${rig.rotorY}`);
+      clk += 0.5; r._advanceBgText(0.5, clk);
+      ok(`ROSTER ${id} main rotor spins about Y, tail rotor about X`,
+         rig.props[0].rotation.y !== 0 && rig.props[0].rotation.z === 0
+         && rig.tailRotor.rotation.x !== 0,
+         `y=${rig.props[0].rotation.y.toFixed(2)} z=${rig.props[0].rotation.z} tx=${rig.tailRotor.rotation.x.toFixed(2)}`);
+    }
+    // Jets + spacecraft carry no spinning disc at all.
+    for (const id of ['f16', 'b2', 'enterprise', 'xwing', 'trimaxion']) {
+      const rig = buildCraft(id, 'NO PROP');
+      ok(`ROSTER ${id} has no propeller/rotor disc`,
+         (rig.props ?? []).length === 0 && rig.propRate === 0,
+         `n=${(rig.props ?? []).length} rate=${rig.propRate}`);
+    }
+  }
+
+  // ── banner standoff scales with hull length + clears the airframe ──
+  {
+    const z = (id) => buildCraft(id, 'STANDOFF').banner.position.z;
+    const zF16 = z('f16'), zB52 = z('b52'), zSer = z('serenity');
+    // Same text ⇒ same banner aspect ⇒ the standoff difference is exactly half
+    // the hull-length difference (B-52 3400 vs F-16 2000 ⇒ +700).
+    ok('ROSTER banner standoff tracks hull length exactly (b52 − f16 = 700)',
+       Math.abs((zB52 - zF16) - 700) < 1e-6, `f16=${zF16} b52=${zB52}`);
+    ok('ROSTER a longer hull always trails its banner further back',
+       zB52 > zSer && zSer > zF16, `f16=${zF16} serenity=${zSer} b52=${zB52}`);
+    // …and for EVERY craft the leading edge of the cloth is aft of the airframe.
+    const swallowed = [];
+    for (const id of ROSTER) {
+      const rig = buildCraft(id, 'CLEARANCE');
+      if (rig.newsChopper) continue;            // hangs BELOW on a wire, by design
+      const front = rig.banner.userData.bannerFront;
+      const bannerLead = rig.banner.position.z - front.geometry.parameters.width / 2;
+      if (!(bannerLead > hullMaxZ(rig))) swallowed.push(`${id}(${bannerLead | 0}≤${hullMaxZ(rig) | 0})`);
+    }
+    ok('ROSTER no craft swallows its own banner (cloth starts aft of the hull)',
+       swallowed.length === 0, swallowed.join(' '));
+  }
+
+  // ── signature paint + per-entry tint ──
+  {
+    const SIG = {
+      f16: [0x9aa3ad, 0x6d7681], a10: [0x6f7566, 0x4a5040], f22: [0x767c85, 0x565c65],
+      b2: [0x262a30, 0x1b1e23], b52: [0xadb4bb, 0x5c646d], apache: [0x4b5340, 0x363c2f],
+      shuttle: [0xeceff1, 0x24282d], airwolf: [0x1a1d21, 0xe8eaec],
+      batwing: [0x16181c, 0x3a3f47], trimaxion: [0xb9c2cb, 0x7d8791],
+      einstein_rocket: [0xd1372f, 0xf2c14e], enterprise: [0xcfd4d9, 0xc0563f],
+      enterprise_c: [0xcfd4d9, 0xc0563f], xwing: [0xe7e9ea, 0xc0392b],
+      falcon: [0xa8a49b, 0x6f6b63], slave1: [0x4d5a52, 0x8a5a3c],
+      naboo: [0xd8dde2, 0xb8952f], serenity: [0xcfc7b3, 0x7a8189],
+      news_chopper: [0x2f6fb0, 0xe6291a],
+    };
+    const missing = [];
+    for (const [id, [body, accent]] of Object.entries(SIG)) {
+      const rig = buildCraft(id, 'PAINT');
+      if (!hasHex(rig.asm, body) || !hasHex(rig.asm, accent)) missing.push(id);
+    }
+    ok('ROSTER every craft wears its signature body + accent by default',
+       missing.length === 0, missing.join(','));
+    // A tinted entry moves BOTH livery slots and drops the signature pair.
+    const tinted = [];
+    for (const id of ROSTER) {
+      const rig = buildCraft(id, 'TINT', { colorMain: '#123456', colorDetail: '#654321' });
+      const [body, accent] = SIG[id];
+      if (!hasHex(rig.asm, 0x123456) || !hasHex(rig.asm, 0x654321)
+          || hasHex(rig.asm, body) || hasHex(rig.asm, accent)) tinted.push(id);
+    }
+    ok('ROSTER colorMain/colorDetail repaint every craft (signature hues gone)',
+       tinted.length === 0, tinted.join(','));
+    // colorMain alone leaves the accent on its signature hue.
+    const half = buildCraft('xwing', 'HALF TINT', { colorMain: '#123456' });
+    ok('ROSTER colorMain alone leaves the accent at the signature hue',
+       hasHex(half.asm, 0x123456) && hasHex(half.asm, 0xc0392b)
+       && !hasHex(half.asm, 0xe7e9ea));
+    // The banner cloth palette is craft-independent.
+    const bc = bannerCv(buildCraft('shuttle', 'CLOTH'));
+    ok('ROSTER a roster craft tows the shipped cloth palette',
+       sameRgb(pxAt(bc, 5, 100), rgbOf('#c0281f'))
+       && sameRgb(pxAt(bc, 5, 4), rgbOf('#f5c400')));
+  }
+
+  // ── outline discipline: roster craft get shells, the news chopper does not ──
+  {
+    const shells = (rig) => {
+      let n = 0;
+      rig.asm.traverse(o => { if (o.userData && o.userData.outline) n++; });
+      return n;
+    };
+    ok('ROSTER a roster craft carries inverted-hull outline shells',
+       shells(buildCraft('b52', 'OUTLINE')) > 0 && shells(buildCraft('shuttle', 'OUTLINE')) > 0);
+    ok('ROSTER the news chopper ships WITHOUT shells (the shipped silhouette)',
+       shells(buildCraft('news_chopper', 'OUTLINE')) === 0);
+  }
+
+  // ════════════ NEWS CHOPPER FLIGHT-PROFILE PARITY ════════════
+  // The pinned contract: moving the news helicopter out of `mode` and into the
+  // craft roster must not move it a millimetre. These are the goldens the old
+  // `mode: 'chopper'` build produced.
+  {
+    const mkPair = (tag) => {
+      r.updateBgTexts([
+        { id: 'ppP' + tag, mode: 'banner', text: 'PROFILE' },
+        { id: 'ppC' + tag, mode: 'banner', text: 'PROFILE', aircraft: 'news_chopper' },
+      ], false, 0, 0);
+      return { plane: planeRig(), chop: chopRig() };
+    };
+    const { plane, chop } = mkPair('a');
+    ok('PROFILE news chopper orbits the OPPOSITE way (dir −1 vs +1)',
+       chop.dir === -1 && plane.dir === 1, `chop=${chop.dir} plane=${plane.dir}`);
+    ok('PROFILE news chopper bobs harder (150 vs 120) and spins faster (42 vs 22)',
+       chop.bobAmp === 150 && plane.bobAmp === 120
+       && chop.propRate === 42 && plane.propRate === 22,
+       `bob=${chop.bobAmp}/${plane.bobAmp} rate=${chop.propRate}/${plane.propRate}`);
+    // Altitude + radius carry the per-index stagger (+800 mm / factor 0.85·1·1.15),
+    // so compare them SOLO — each at list index 0 — where the profile constants
+    // are the only difference: 7500 vs 6000 AGL, and radius × 0.6.
+    const soloP = buildCraft(null, 'PROFILE'), soloC = buildCraft('news_chopper', 'PROFILE');
+    ok('PROFILE news chopper flies 1500 mm higher (7500 vs 6000 AGL)',
+       soloC.alt - soloP.alt === 1500, `chop=${soloC.alt} plane=${soloP.alt}`);
+    ok('PROFILE news chopper orbits tighter — exactly ×0.6 of the plane radius',
+       Math.abs(soloC.radius / soloP.radius - 0.6) < 1e-9,
+       `chop=${soloC.radius | 0} plane=${soloP.radius | 0}`);
+    ok('PROFILE news chopper reports mode "banner" with the newsChopper flag set',
+       chop.mode === 'banner' && chop.newsChopper === true && plane.newsChopper !== true,
+       `mode=${chop.mode} flag=${chop.newsChopper}`);
+    // Corner-hung banner + tow wire (the "Chopper tow point" contract).
+    const front = chop.banner.userData.bannerFront;
+    ok('PROFILE news chopper hangs its banner from the leading TOP corner',
+       Math.abs(front.position.x + front.geometry.parameters.width / 2) < 1
+       && Math.abs(front.position.y + front.geometry.parameters.height / 2) < 1
+       && !!chop.towWire,
+       `off=(${front.position.x | 0},${front.position.y | 0}) wire=${!!chop.towWire}`);
+    ok('PROFILE the plane\'s banner stays CENTRE-origin with no tow wire',
+       Math.abs(plane.banner.userData.bannerFront.position.x) < 1e-9
+       && Math.abs(plane.banner.userData.bannerFront.position.y) < 1e-9
+       && !plane.towWire);
+    ok('PROFILE the news banner hangs BELOW the hull (y = −1900 + bh/2)',
+       chop.banner.position.y === -1900 + 700 && chop.banner.position.z === 1500,
+       `pos=(${chop.banner.position.y},${chop.banner.position.z})`);
+    // The banner sways only on the news chopper. Re-make the pair: the solo
+    // builds above replaced _bgRigs, so the rigs captured earlier are disposed
+    // and _advanceBgText would no longer touch them.
+    const live = mkPair('b');
+    const swayC0 = live.chop.banner.rotation.y, swayP0 = live.plane.banner.rotation.y;
+    step(90);
+    ok('PROFILE only the news chopper\'s banner sways (trailing lag)',
+       live.chop.banner.rotation.y !== swayC0 && live.plane.banner.rotation.y === swayP0,
+       `chop=${live.chop.banner.rotation.y.toFixed(3)} plane=${live.plane.banner.rotation.y}`);
+    // A rotorcraft that is NOT the news chopper flies the ordinary orbit.
+    for (const id of ['apache', 'airwolf', 'heli']) {
+      const rig = buildCraft(id, 'ORBIT');
+      ok(`PROFILE ${id} flies the ORDINARY banner orbit (not the news profile)`,
+         rig.dir === 1 && rig.bobAmp === 120 && !rig.towWire && rig.newsChopper !== true,
+         `dir=${rig.dir} bob=${rig.bobAmp} wire=${!!rig.towWire}`);
+    }
+    r.updateBgTexts([], false, 0, 0);
+  }
+
+  // ════════════ MIGRATION: mode 'chopper' → banner + news_chopper ════════════
+  // Rides the existing whole-entry passthrough harness (real Planner
+  // _normalizeStore), so the matrix also proves nothing else is dropped.
+  {
+    const norm = (bgTexts) =>
+      p._normalizeStore(JSON.parse(JSON.stringify(mkStore({ bgTexts }))), 'f1').bgTexts;
+    const one = norm([{ id: 'm1', mode: 'chopper', text: 'NEWS AT 11' }])[0];
+    ok('MIGRATE chopper → banner + aircraft news_chopper',
+       one.mode === 'banner' && one.aircraft === 'news_chopper' && one.text === 'NEWS AT 11',
+       JSON.stringify(one));
+    // Idempotent: re-normalizing the migrated row is a no-op.
+    const twice = norm([one])[0];
+    ok('MIGRATE is idempotent (re-running leaves the migrated row identical)',
+       JSON.stringify(twice) === JSON.stringify(one), JSON.stringify(twice));
+    // Every other field survives — colours, size, format, entity, id.
+    const rich = norm([{
+      id: 'm2', mode: 'chopper', text: 'RICH', entityId: 'sensor.x',
+      format: { prefix: '$', showUnit: false }, scale: 2.5,
+      colorMain: '#101010', colorDetail: '#202020', bannerBg: '#303030',
+      bannerText: '#404040', bannerFrame: '#505050',
+    }])[0];
+    ok('MIGRATE preserves every other field (colours, scale, format, entity, id)',
+       rich.id === 'm2' && rich.mode === 'banner' && rich.aircraft === 'news_chopper'
+       && rich.scale === 2.5 && rich.entityId === 'sensor.x'
+       && rich.format.prefix === '$' && rich.format.showUnit === false
+       && rich.colorMain === '#101010' && rich.colorDetail === '#202020'
+       && rich.bannerBg === '#303030' && rich.bannerText === '#404040'
+       && rich.bannerFrame === '#505050', JSON.stringify(rich));
+    // A hand-picked craft on a chopper row WINS (never stomped).
+    const picked = norm([{ id: 'm3', mode: 'chopper', text: 'X', aircraft: 'xwing' }])[0];
+    ok('MIGRATE honours an aircraft already set on a chopper row',
+       picked.mode === 'banner' && picked.aircraft === 'xwing', JSON.stringify(picked));
+    // Non-chopper rows are byte-identical through the migration.
+    const others = norm([
+      { id: 'm4', mode: 'banner', text: 'B', aircraft: 'b52' },
+      { id: 'm5', mode: 'sky', text: 'S' },
+      { id: 'm6', mode: 'grass', text: 'G', grassAreaId: 'a1', faceCamera: false, rotationDeg: 45 },
+      { id: 'm7', mode: 'train', text: 'T', maxCars: 4 },
+    ]);
+    ok('MIGRATE leaves sky / banner / grass / train rows untouched',
+       others[0].aircraft === 'b52' && others[0].mode === 'banner'
+       && others[1].mode === 'sky' && others[2].grassAreaId === 'a1'
+       && others[2].rotationDeg === 45 && others[3].maxCars === 4,
+       JSON.stringify(others));
+    // A migrated row renders as the news chopper end-to-end.
+    p.store.bgTexts = [{ id: 'm8', mode: 'chopper', text: 'END TO END' }];
+    p.store.bgTexts = norm(p.store.bgTexts);
+    const resolved8 = p.bgTextsResolved()[0];
+    ok('MIGRATE the migrated row resolves with aircraft news_chopper',
+       resolved8.mode === 'banner' && resolved8.aircraft === 'news_chopper',
+       JSON.stringify(resolved8));
+    r.updateBgTexts([resolved8], false, 0, 0);
+    ok('MIGRATE …and the renderer builds the news chopper from it',
+       !!chopRig() && !!chopRig().towWire && chopRig().dir === -1);
+    r.updateBgTexts([], false, 0, 0);
   }
 
   // ════════════ report ════════════

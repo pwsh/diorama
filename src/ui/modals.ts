@@ -2332,24 +2332,56 @@ export class SettingsDrawer extends LitElement {
       p.store.bgTexts ??= [];
       mut(); p.save(); p.emitConfig(); this.requestUpdate();
     };
+    // 'chopper' is DELIBERATELY absent: the news helicopter is a banner tow
+    // CRAFT now (aircraft: 'news_chopper'), so it gains the colour rows, the
+    // size knob and the rest of the roster. Existing chopper rows migrate on
+    // load (_migrateBgTexts), so this dropdown never has to render one.
     const modes: Array<[BgTextEntryMode, string]> = [
       ['sky', 'Skywriting (sky)'], ['banner', 'Banner plane'],
-      ['grass', 'Ground writing'], ['train', 'Message train'], ['chopper', 'News chopper'],
+      ['grass', 'Ground writing'], ['train', 'Message train'],
     ];
-    // The eight flight archetypes (src/aircraft-types.ts) a banner entry can
-    // tow its message with, plus the classic toy plane. Listed here as plain
-    // strings — aircraft-types.ts exports the union TYPE and the designator
-    // table, not a runtime list, and the renderer re-validates anyway.
-    const AIRCRAFT: Array<[string, string]> = [
-      ['', 'Classic tow plane'],
-      ['ga-high', 'Light single, high wing (Cessna)'],
-      ['ga-low', 'Light single, low wing (Cirrus)'],
-      ['twin-prop', 'Twin prop (King Air)'],
-      ['turboprop', 'Regional turboprop (ATR / Dash 8)'],
-      ['narrowbody', 'Airliner — narrowbody (737 / A320)'],
-      ['widebody', 'Airliner — widebody (747 / 777)'],
-      ['bizjet', 'Business jet (Learjet / CRJ)'],
-      ['heli', 'Helicopter'],
+    // Which craft tows the banner, grouped into four families. Listed here as
+    // plain strings: aircraft-types.ts exports the archetype union TYPE (not a
+    // runtime list) and BG_CRAFTS lives in the lazy 3D chunk, so this settings
+    // panel must never import either — the renderer re-validates every value and
+    // falls back to the classic toy plane on anything it does not know.
+    const AIRCRAFT_GROUPS: Array<[string, Array<[string, string]>]> = [
+      ['Toy plane & airliners', [
+        ['', 'Classic tow plane'],
+        ['ga-high', 'Light single, high wing (Cessna)'],
+        ['ga-low', 'Light single, low wing (Cirrus)'],
+        ['twin-prop', 'Twin prop (King Air)'],
+        ['turboprop', 'Regional turboprop (ATR / Dash 8)'],
+        ['narrowbody', 'Airliner — narrowbody (737 / A320)'],
+        ['widebody', 'Airliner — widebody (747 / 777)'],
+        ['bizjet', 'Business jet (Learjet / CRJ)'],
+        ['heli', 'Helicopter'],
+      ]],
+      ['Military & NASA', [
+        ['f16', 'F-16 Fighting Falcon'],
+        ['a10', 'A-10 Thunderbolt II'],
+        ['f22', 'F-22 Raptor'],
+        ['b2', 'B-2 Spirit (flying wing)'],
+        ['b52', 'B-52 Stratofortress'],
+        ['apache', 'AH-64 Apache'],
+        ['shuttle', 'Space Shuttle orbiter'],
+      ]],
+      ['Fiction', [
+        ['airwolf', 'Black attack helicopter'],
+        ['batwing', 'Bat-winged jet'],
+        ['trimaxion', 'Chrome explorer pod'],
+        ['einstein_rocket', 'Little red rocket'],
+        ['enterprise', 'Starship — classic'],
+        ['enterprise_c', 'Starship — heavy cruiser'],
+        ['xwing', 'X-wing fighter'],
+        ['falcon', 'Freighter (disc hull)'],
+        ['slave1', 'Bounty hunter pod'],
+        ['naboo', 'Royal chrome starship'],
+        ['serenity', 'Firefly transport'],
+      ]],
+      ['News', [
+        ['news_chopper', 'News helicopter'],
+      ]],
     ];
     // Resolved strings (per entry, in list order) for the live preview.
     const resolved = new Map(p.bgTextsResolved().map(r => [r.id, r.text]));
@@ -2385,17 +2417,22 @@ export class SettingsDrawer extends LitElement {
     };
     const colorRows = (e: BgTextEntry) => {
       if (e.mode !== 'banner' && e.mode !== 'train' && e.mode !== 'chopper') return nothing;
-      const d = COLOR_DEFAULTS[e.mode];
+      // A migrated news helicopter is a BANNER row towing 'news_chopper', so the
+      // swatches must still open on the chopper's shipped blue/red rather than
+      // the tow plane's cream/red — the swatch is only ever a starting value
+      // (never written to the store), and this keeps it honest.
+      const isChopper = e.mode === 'chopper' || e.aircraft === 'news_chopper';
+      const d = COLOR_DEFAULTS[isChopper ? 'chopper' : e.mode];
       const isTrain = e.mode === 'train';
       const surface = isTrain ? 'car-side sign' : 'towed banner';
       return html`
         ${colorRow(e, 'colorMain', 'Vehicle color', d.colorMain,
           isTrain ? 'Body colour of the engine and the message cars.'
-                  : e.mode === 'chopper' ? 'Cabin colour of the news helicopter.'
+                  : isChopper ? 'Cabin colour of the news helicopter.'
                   : 'Fuselage colour of the tow plane (also applies to a chosen aircraft silhouette).')}
         ${colorRow(e, 'colorDetail', 'Accent color', d.colorDetail,
           isTrain ? 'Trim colour — roof, chimney, cowcatcher, wheels — and the darker last car.'
-                  : e.mode === 'chopper' ? 'NEWS stripes and the tail boom.'
+                  : isChopper ? 'NEWS stripes and the tail boom.'
                   : 'Wing and tailplane colour (also the accent on a chosen aircraft silhouette).')}
         ${colorRow(e, 'bannerBg', 'Banner background', d.bannerBg,
           `Background of the ${surface} the message is painted on.`)}
@@ -2467,14 +2504,17 @@ export class SettingsDrawer extends LitElement {
             </div>` : nothing}
           ${e.mode === 'banner' ? html`
             <div class="row" style="margin-top:2px">
-              <label title="Which aircraft tows the banner. The eight silhouettes are the same models the live flight tracker builds — in civil paint, with no status beacons or registration lettering.">Aircraft</label>
+              <label title="Which craft tows the banner. The airliner silhouettes are the same models the live flight tracker builds (civil paint, no beacons or lettering); the military, NASA and fiction craft are toy models built for the message. The news helicopter also flies its own profile — higher, tighter, the other way round, with the banner slung below.">Aircraft</label>
               <select style="flex:1;min-width:0"
                       @change=${(ev: Event) => upd(() => {
                         const v = (ev.target as HTMLSelectElement).value;
                         e.aircraft = v || undefined;
                       })}>
-                ${AIRCRAFT.map(([v, l]) => html`
-                  <option value=${v} ?selected=${(e.aircraft ?? '') === v}>${l}</option>`)}
+                ${AIRCRAFT_GROUPS.map(([grp, items]) => html`
+                  <optgroup label=${grp}>
+                    ${items.map(([v, l]) => html`
+                      <option value=${v} ?selected=${(e.aircraft ?? '') === v}>${l}</option>`)}
+                  </optgroup>`)}
               </select>
             </div>` : nothing}
           <div class="row" style="margin-top:2px">
@@ -2541,12 +2581,12 @@ export class SettingsDrawer extends LitElement {
                                 style="font-weight:600">Background text</label></div>
         ${list.length ? list.map((e, i) => row(e, i))
           : html`<div style="font-size:10px;color:var(--text-dim);margin:0 0 6px">
-                   None. Add a skywriter, banner plane, ground message, message train, or news chopper.</div>`}
+                   None. Add a skywriter, banner plane, ground message, or message train.</div>`}
         <button class="btn" style="font-size:11px;padding:3px 8px" ?disabled=${list.length >= 6}
                 @click=${() => upd(() => { p.store.bgTexts!.push({ id: newId(), mode: 'sky' }); })}>
           + Add${list.length >= 6 ? ' (max 6)' : ''}</button>
         <div style="font-size:10px;color:var(--text-dim);line-height:1.3;margin:4px 0 0">
-          Up to 6. Skywriting / banner plane / news chopper hide during storms; ground writing + train stay.</div>
+          Up to 6. Skywriting and anything flying a banner hide during storms; ground writing + train stay.</div>
       </div>`;
   }
 

@@ -622,8 +622,8 @@ interface AnimPrim {
   basePosX: number; basePosY: number; basePosZ: number;
 }
 
-// One background-text instance (skywriting / banner plane / grass / train /
-// chopper). Built by updateBgTexts, advanced by _advanceBgText. A loose union —
+// One background-text instance (skywriting / banner tow craft / grass / train).
+// Built by updateBgTexts, advanced by _advanceBgText. A loose union —
 // only the fields for the rig's `mode` are populated (matching the file's
 // established loose-struct style for the old single-rig fields).
 interface BgTrainVehicle { obj: THREE.Group; wheels: THREE.Object3D[]; }
@@ -666,8 +666,13 @@ interface BgRig {
   prop?: THREE.Object3D;                    // plane prop OR chopper main rotor (= props[0])
   props?: THREE.Object3D[];                 // every spinning disc (a twin carries two)
   rotorY?: boolean;                         // spin the discs about Y (a rotorcraft) not Z
-  tailRotor?: THREE.Object3D;               // chopper tail rotor
-  towWire?: THREE.Object3D;                 // chopper→banner tow line
+  newsChopper?: boolean;                    // the `news_chopper` tow craft: the ONE craft that
+                                            // also swaps the FLIGHT PROFILE (opposite orbit, higher,
+                                            // tighter, bigger bob) and sways its corner-hung banner.
+                                            // Keyed off the CRAFT, never the entry mode — `chopper`
+                                            // stopped being a mode when the craft roster landed.
+  tailRotor?: THREE.Object3D;               // tail rotor (rotorcraft)
+  towWire?: THREE.Object3D;                 // news-chopper→banner tow line
   banner?: THREE.Object3D;                  // trailing/hanging text plane (Group: 2 FrontSide planes)
   angle?: number; radius?: number; alt?: number; dir?: number;
   bobAmp?: number; propRate?: number;
@@ -752,6 +757,57 @@ const BG_ARCHETYPES: readonly AircraftArchetype[] = [
 function bgArchetype(v: unknown): AircraftArchetype | null {
   return typeof v === 'string' && (BG_ARCHETYPES as readonly string[]).includes(v)
     ? v as AircraftArchetype : null;
+}
+
+// ── Banner tow-craft roster (BgTextEntry.aircraft, second family) ────────────
+// The 18 hand-built silhouettes that are NOT flight archetypes, plus the news
+// helicopter. Deliberately SEPARATE from aircraft-types.ts: these are message
+// props, so nothing here may ever leak into TYPE_ARCHETYPE / the live ADS-B
+// fleet (an F-16 must never be what a 'F16' ICAO designator resolves to on the
+// traffic shell — that is a data question, this is a toy box).
+//
+// Each entry carries only what the ORBIT needs; the geometry lives in
+// _buildBannerCraft. `len` is the hull length used by the banner standoff
+// (`len/2 + 500 + halfBannerLen`) so a B-52 or a starship never swallows its own
+// message; `idY` is the tow height on the hull; `rotorY` spins the discs about
+// the vertical axis (a rotorcraft) instead of the flight axis; `propRate` 0 =
+// nothing spins (jets, spacecraft). `chopper` marks the ONE craft that also
+// swaps the flight PROFILE (see _bgCraftProfile).
+type BgCraftId =
+  | 'f16' | 'a10' | 'f22' | 'b2' | 'apache' | 'b52' | 'shuttle'
+  | 'airwolf' | 'batwing' | 'trimaxion' | 'einstein_rocket'
+  | 'enterprise' | 'enterprise_c' | 'xwing' | 'falcon' | 'slave1'
+  | 'naboo' | 'serenity' | 'news_chopper';
+type BgCraftSpec = {
+  len: number; idY: number; rotorY?: boolean; propRate?: number; chopper?: boolean;
+};
+const BG_CRAFTS: Readonly<Record<BgCraftId, BgCraftSpec>> = {
+  // ── Real: military + NASA ────────────────────────────────────────────────
+  f16:             { len: 2000, idY: 0,   propRate: 0 },
+  a10:             { len: 2200, idY: 20,  propRate: 0 },
+  f22:             { len: 2200, idY: 0,   propRate: 0 },
+  b2:              { len: 1700, idY: 40,  propRate: 0 },
+  apache:          { len: 2500, idY: 260, rotorY: true, propRate: 40 },
+  b52:             { len: 3400, idY: 40,  propRate: 0 },
+  shuttle:         { len: 2600, idY: 60,  propRate: 0 },
+  // ── Fiction (low-poly toon homages, geometric suggestion only) ───────────
+  airwolf:         { len: 2400, idY: 240, rotorY: true, propRate: 44 },
+  batwing:         { len: 1800, idY: 30,  propRate: 0 },
+  trimaxion:       { len: 1800, idY: 60,  propRate: 0 },
+  einstein_rocket: { len: 2000, idY: 40,  propRate: 0 },
+  enterprise:      { len: 2600, idY: 60,  propRate: 0 },
+  enterprise_c:    { len: 2600, idY: 60,  propRate: 0 },
+  xwing:           { len: 2400, idY: 0,   propRate: 0 },
+  falcon:          { len: 2200, idY: 40,  propRate: 0 },
+  slave1:          { len: 1600, idY: 120, propRate: 0 },
+  naboo:           { len: 2400, idY: 20,  propRate: 0 },
+  serenity:        { len: 2800, idY: 60,  propRate: 0 },
+  // ── The news helicopter (was `mode: 'chopper'`) ─────────────────────────
+  news_chopper:    { len: 1600, idY: 320, rotorY: true, propRate: 42, chopper: true },
+};
+function bgCraft(v: unknown): BgCraftId | null {
+  return typeof v === 'string' && Object.prototype.hasOwnProperty.call(BG_CRAFTS, v)
+    ? v as BgCraftId : null;
 }
 
 // ── Background-text colour customization (BgTextEntry.colorMain / colorDetail /
@@ -13521,12 +13577,14 @@ export class ThreeDRenderer {
     });
   }
 
-  // ── Playful background text (sky / banner / grass / train / chopper) ───────
+  // ── Playful background text (sky / banner / grass / train) ────────────────
   // Multi-instance: one BgRig per resolved entry (cap 6). Rebuilt wholesale
   // under three-view's _keyBgText; per-frame motion loops over _bgRigs in
-  // _advanceBgText (zero allocation). sky/banner/chopper (aircraft + skywriting)
-  // are HIDDEN during storm conditions (pouring/lightning) — they read wrong in
-  // a downpour; grass + train are ground-level and stay. Renders in every UI
+  // _advanceBgText (zero allocation). sky + banner (skywriting and every tow
+  // craft, the news helicopter included) are HIDDEN during storm conditions
+  // (pouring/lightning) — they read wrong in a downpour; grass + train are
+  // ground-level and stay. The retired `chopper` MODE is still accepted here for
+  // stale stores and builds the news helicopter (see the dispatch below). Renders in every UI
   // mode (a display prop). Entries are staggered so instances of the same style
   // never overlap. Legacy single-rig mirror fields point at the first rig of
   // each style so the original bgtext-test keeps reading them.
@@ -13586,8 +13644,18 @@ export class ThreeDRenderer {
       const col = bgColors(e);
       let rig: BgRig | null = null;
       if (e.mode === 'sky')          rig = this._buildBgSky(text, i, n, diag, sc);
-      else if (e.mode === 'banner')  rig = this._buildBgAircraft('plane', text, i, n, diag, sc, bgArchetype(e.aircraft), col);
-      else if (e.mode === 'chopper') rig = this._buildBgAircraft('chopper', text, i, n, diag, sc, null, col);
+      else if (e.mode === 'banner')  rig = this._buildBgAircraft(text, i, n, diag, sc,
+                                                                 bgArchetype(e.aircraft), bgCraft(e.aircraft), col);
+      // STALE-STORE TOLERANCE: `chopper` stopped being a mode when the craft
+      // roster landed (_migrateBgTexts rewrites it to banner + news_chopper on
+      // every load / import / undo). A raw row that reaches the renderer before
+      // that migration ran — a hand-edited config, an in-flight import — builds
+      // exactly what the migration would have produced, and `aircraft` is
+      // deliberately IGNORED on it (the row predates the roster, so any value it
+      // carries came from the old archetype-only dropdown and would silently
+      // change a news chopper into an airliner).
+      else if (e.mode === 'chopper') rig = this._buildBgAircraft(text, i, n, diag, sc,
+                                                                 null, 'news_chopper', col);
       else if (e.mode === 'grass')   rig = this._buildBgGrass(text, i, grassSlot++, e.grassArea, sc,
                                                               bgGroundFixedYaw(e.faceCamera, e.rotationDeg));
       else if (e.mode === 'train')   rig = this._buildBgTrain(text, i, e.maxCars, sc, col);
@@ -13651,29 +13719,42 @@ export class ThreeDRenderer {
     return { mode: 'sky', index: i, sky: spr, skyBaseX: baseX, skyPhase: i * 1.7 };
   }
 
-  // Tow-plane (banner) OR news helicopter (chopper) towing a broadside-readable
-  // text banner. Both orbit; instances stagger by radius (±15 %), altitude
-  // (+800 mm each) and starting angle (spread evenly). Choppers orbit the
-  // OPPOSITE direction, higher + tighter, with a bigger hover bob.
+  // The ONE tow-craft builder: a craft towing a broadside-readable text banner
+  // around the yard. Instances stagger by radius (±15 %), altitude (+800 mm
+  // each) and starting angle (spread evenly).
   //
-  // `archetype` (banner mode only) swaps the classic toy tow plane for one of
-  // the eight FLIGHT silhouettes, built by the SAME _buildAircraftModel the
-  // ADS-B rigs use — civil paint, no beacon / privacy dim / livery lettering,
-  // because this is a message prop and not live traffic. A `heli` archetype
-  // flies the ordinary banner orbit (it is NOT re-routed to the news-chopper
-  // flight profile — `mode: 'chopper'` remains the dedicated news build); only
-  // its rotor axes differ, carried by rig.rotorY. `sc` scales the whole rig.
+  // THREE craft families, resolved by the caller from BgTextEntry.aircraft:
+  //   • `archetype` — one of the eight FLIGHT silhouettes, built by the SAME
+  //     _buildAircraftModel the ADS-B rigs use (civil paint, no beacon /
+  //     privacy dim / livery lettering: a message prop, not live traffic).
+  //   • `craft` — one of the hand-built BG_CRAFTS silhouettes (military / NASA
+  //     / fiction homages), built by _buildBannerCraft.
+  //   • neither — the classic toy tow plane, byte-identical to the shipped
+  //     build, which is also where an unknown/garbage string lands.
+  //
+  // FLIGHT PROFILE keys off the craft id, NOT the entry mode (the news
+  // helicopter used to be `mode: 'chopper'`): ONLY `news_chopper` gets the news
+  // profile — opposite orbit direction, higher (7500), tighter (radius ×0.6),
+  // bigger hover bob, banner hung BELOW-and-behind from its LEADING TOP CORNER
+  // on a rigid tow wire. Every other craft, ROTORCRAFT INCLUDED (`heli`,
+  // `apache`, `airwolf`), flies the ordinary banner orbit; only its rotor axes
+  // differ, carried by rig.rotorY. `sc` scales the whole rig.
   //
   // `col` is the entry's optional palette (all fields absent = the shipped
   // paint, byte-for-byte): `main` recolours the vehicle body (toy-plane
-  // fuselage / chopper cabin / the archetype's livery body), `detail` the accent
-  // (wing + tail / NEWS stripes + tail boom / the archetype's livery accent),
+  // fuselage / chopper cabin / the craft's livery body), `detail` the accent
+  // (wing + tail / NEWS stripes + tail boom / the craft's livery accent),
   // and bg/text/frame are handed to the banner painter.
-  private _buildBgAircraft(kind: 'plane' | 'chopper', text: string,
+  private _buildBgAircraft(text: string,
                            i: number, n: number, diag: number, sc = 1,
                            archetype: AircraftArchetype | null = null,
+                           craft: BgCraftId | null = null,
                            col: BgColors = {}): BgRig {
-    const useArch = kind === 'plane' ? archetype : null;
+    // An entry names at most ONE family; an archetype wins if both somehow
+    // resolve (they cannot — the two id sets are disjoint).
+    const useArch = archetype;
+    const spec = !archetype && craft ? BG_CRAFTS[craft] : null;
+    const isChopper = spec?.chopper === true;
     let asm = new THREE.Group();
     const baseR = Math.max(6000, diag * 0.75);
     const factor = 1 + 0.15 * ((i % 3) - 1);            // 0.85 / 1.0 / 1.15
@@ -13686,10 +13767,10 @@ export class ThreeDRenderer {
     const cv = tex.image as HTMLCanvasElement;
     const aspect = cv.width / cv.height;
     const bh = 1400;
-    // The chopper tows from the banner's LEADING TOP CORNER, so its group origin
-    // is moved onto that corner (originCorner) and the cloth extends back/down
-    // from it. The plane's banner trails from its CENTRE (origin centred).
-    const banner = this._buildBanner(tex, bh, aspect, kind === 'chopper');
+    // The news chopper tows from the banner's LEADING TOP CORNER, so its group
+    // origin is moved onto that corner (originCorner) and the cloth extends
+    // back/down from it. Every towed banner trails from its CENTRE.
+    const banner = this._buildBanner(tex, bh, aspect, isChopper);
     banner.rotation.y = Math.PI / 2;
 
     let prop: THREE.Object3D | undefined, tailRotor: THREE.Object3D | undefined,
@@ -13719,7 +13800,55 @@ export class ThreeDRenderer {
       banner.position.set(0, M.idY, M.fusLen / 2 + 500 + (bh * aspect) / 2);
       asm.add(banner);
       radius = baseR * factor; alt = 6000 + 800 * i + this._yardGroundY(); dir = 1; bobAmp = 120;
-    } else if (kind === 'plane') {
+    } else if (spec) {
+      // A hand-built roster craft (BG_CRAFTS). Geometry + signature paint live in
+      // _buildBannerCraft; the orbit + banner rigging stay here so every family
+      // shares one flight path.
+      const built = this._buildBannerCraft(craft!, col);
+      asm = built.asm;
+      props = built.props;
+      prop = built.props[0];
+      tailRotor = built.tailRotor ?? undefined;
+      rotorY = spec.rotorY === true;
+      propRate = spec.propRate ?? 22;
+      if (isChopper) {
+        // ── The news-helicopter profile (pinned; unchanged from `mode:'chopper'`)
+        // Banner hung BELOW-and-behind, towed from its LEADING TOP CORNER. The
+        // banner Group's origin was moved onto that corner (originCorner=true), so
+        // placing the group at the corner's world spot puts the visible banner in
+        // the same place as before (it extends +Z/−y away from the corner). The tow
+        // wire spans the chopper belly to that corner. Cylinders are Y-axis-aligned
+        // by default, so we position the wire at the segment MIDPOINT and rotate its
+        // local +Y onto the attach→corner vector. The sway (rotation.y) pivots
+        // the banner ABOUT this towed corner — physically correct for a hanging
+        // banner — and the corner sits at the group origin, so it is sway-invariant:
+        // a wire fixed in the chopper (asm) frame stays connected across frames.
+        banner.position.set(0, -1900 + bh / 2, 1500);
+        asm.add(banner);
+        const attach = new THREE.Vector3(0, 260, 480);        // belly, just behind the cabin
+        const bannerCorner = banner.position.clone();          // leading TOP corner (= group origin)
+        const wireVec = bannerCorner.clone().sub(attach);
+        const wireLen = wireVec.length();
+        const towLine = new THREE.Mesh(new THREE.CylinderGeometry(14, 14, wireLen, 6),
+                                       this._mat({ color: 0x2a2d31 }));
+        towLine.position.copy(attach).addScaledVector(wireVec, 0.5);   // midpoint
+        towLine.quaternion.setFromUnitVectors(
+          new THREE.Vector3(0, 1, 0), wireVec.clone().normalize());     // +Y → attach→corner
+        towLine.userData.outlineSkip = true;
+        towLine.userData.attach = attach.toArray();
+        towLine.userData.bannerTop = bannerCorner.toArray();   // legacy key: the leading-top corner
+        asm.add(towLine);
+        towWire = towLine;
+        radius = baseR * 0.6 * factor; alt = 7500 + 800 * i + this._yardGroundY();
+        dir = -1; bobAmp = 150;
+      } else {
+        // Trail the banner clear of the tail: the craft's own hull length sets
+        // the standoff, so a B-52 or a starship never swallows its own message.
+        banner.position.set(0, spec.idY, spec.len / 2 + 500 + (bh * aspect) / 2);
+        asm.add(banner);
+        radius = baseR * factor; alt = 6000 + 800 * i + this._yardGroundY(); dir = 1; bobAmp = 120;
+      }
+    } else {
       const bodyMat = this._mat({ color: col.main ?? 0xdad7cf });   // fuselage + fin
       const accent = this._mat({ color: col.detail ?? 0xc94f3d });  // wing + tailplane
       asm.add(new THREE.Mesh(new THREE.BoxGeometry(180, 180, 900), bodyMat));
@@ -13749,77 +13878,16 @@ export class ThreeDRenderer {
       // Altitude is AGL: the orbit rides the surroundings grade (_yardGroundY),
       // so a lowered yard lowers the flight path with it.
       radius = baseR * factor; alt = 6000 + 800 * i + this._yardGroundY(); dir = 1; bobAmp = 120; propRate = 22;
-    } else {
-      // News helicopter: cabin bubble + tail boom + skids + a NEWS-style stripe.
-      const bodyMat = this._mat({ color: col.main ?? 0x2f6fb0 });     // news blue (cabin)
-      const dark = this._mat({ color: 0x2a2d31 });
-      const stripeMat = this._mat({ color: col.detail ?? 0xe6291a });  // NEWS accent
-      // The tail assembly (boom + fin) rides the ACCENT when one is set and the
-      // body otherwise, so the shipped all-blue chopper is byte-identical.
-      const tailMat = col.detail != null ? stripeMat : bodyMat;
-      const cabin = new THREE.Mesh(new THREE.SphereGeometry(280, 16, 12), bodyMat);
-      cabin.position.set(0, 320, -260); cabin.scale.set(1, 0.85, 1.15); asm.add(cabin);
-      const boom = new THREE.Mesh(new THREE.BoxGeometry(90, 90, 900), tailMat);
-      boom.position.set(0, 380, 340); asm.add(boom);
-      const fin = new THREE.Mesh(new THREE.BoxGeometry(40, 220, 130), tailMat);
-      fin.position.set(0, 470, 760); asm.add(fin);
-      for (const sx of [-1, 1]) {                          // NEWS stripe on both cabin flanks
-        const stripe = new THREE.Mesh(new THREE.BoxGeometry(10, 90, 320), stripeMat);
-        stripe.position.set(sx * 286, 320, -260); asm.add(stripe);
-      }
-      for (const sx of [-1, 1]) {                          // skids
-        const skid = new THREE.Mesh(new THREE.BoxGeometry(50, 30, 720), dark);
-        skid.position.set(sx * 190, 60, -120); asm.add(skid);
-      }
-      // Main rotor: crossed thin blades on a short mast, spun about Y (vertical).
-      prop = new THREE.Group();
-      for (const rot of [0, Math.PI / 2]) {
-        const blade = new THREE.Mesh(new THREE.BoxGeometry(1600, 18, 90), dark);
-        blade.rotation.y = rot; (prop as THREE.Group).add(blade);
-      }
-      prop.position.set(0, 560, -140); prop.userData.outlineSkip = true; asm.add(prop);
-      const mast = new THREE.Mesh(new THREE.CylinderGeometry(24, 24, 200, 8), dark);
-      mast.position.set(0, 460, -140); asm.add(mast);
-      // Tail rotor: crossed blades on the fin, spun about X (perpendicular axis).
-      tailRotor = new THREE.Group();
-      for (const rot of [0, Math.PI / 2]) {
-        const blade = new THREE.Mesh(new THREE.BoxGeometry(18, 360, 40), dark);
-        blade.rotation.x = rot; (tailRotor as THREE.Group).add(blade);
-      }
-      tailRotor.position.set(70, 470, 800); tailRotor.userData.outlineSkip = true; asm.add(tailRotor);
-      // Banner hung BELOW-and-behind, towed from its LEADING TOP CORNER. The
-      // banner Group's origin was moved onto that corner (originCorner=true), so
-      // placing the group at the corner's world spot puts the visible banner in
-      // the same place as before (it extends +Z/−y away from the corner). The tow
-      // wire spans the chopper belly to that corner. Cylinders are Y-axis-aligned
-      // by default, so we position the wire at the segment MIDPOINT and rotate its
-      // local +Y onto the attach→corner vector. The sway (rotation.y) now pivots
-      // the banner ABOUT this towed corner — physically correct for a hanging
-      // banner — and the corner sits at the group origin, so it is sway-invariant:
-      // a wire fixed in the chopper (asm) frame stays connected across frames.
-      banner.position.set(0, -1900 + bh / 2, 1500);
-      asm.add(banner);
-      const attach = new THREE.Vector3(0, 260, 480);        // belly, just behind the cabin
-      const bannerCorner = banner.position.clone();          // leading TOP corner (= group origin)
-      const wireVec = bannerCorner.clone().sub(attach);
-      const wireLen = wireVec.length();
-      const towLine = new THREE.Mesh(new THREE.CylinderGeometry(14, 14, wireLen, 6), dark);
-      towLine.position.copy(attach).addScaledVector(wireVec, 0.5);   // midpoint
-      towLine.quaternion.setFromUnitVectors(
-        new THREE.Vector3(0, 1, 0), wireVec.clone().normalize());     // +Y → attach→corner
-      towLine.userData.outlineSkip = true;
-      towLine.userData.attach = attach.toArray();
-      towLine.userData.bannerTop = bannerCorner.toArray();   // legacy key: now the leading-top corner
-      asm.add(towLine);
-      towWire = towLine;
-      radius = baseR * 0.6 * factor; alt = 7500 + 800 * i + this._yardGroundY(); dir = -1; bobAmp = 150; propRate = 42;
     }
 
-    if (props.length === 0 && prop) props = [prop];      // classic toy plane / chopper rotor
+    if (props.length === 0 && prop) props = [prop];      // classic toy plane / single rotor
     asm.scale.setScalar(sc);            // per-entry size; the advance never writes scale
     this._bgTextGroup.add(asm);
+    // `mode` is ALWAYS 'banner' now — the news helicopter is a craft, not a mode.
+    // `newsChopper` is what the advance reads for the sway + the rotor axis, so
+    // the flight profile is keyed off the CRAFT and never off the entry mode.
     return {
-      mode: kind === 'plane' ? 'banner' : 'chopper', index: i, asm, prop, props, rotorY,
+      mode: 'banner', index: i, asm, prop, props, rotorY, newsChopper: isChopper,
       tailRotor, towWire, banner, angle, radius, alt, dir, bobAmp, propRate,
     };
   }
@@ -13858,6 +13926,496 @@ export class ThreeDRenderer {
     grp.userData.textPlane = true;              // keep the group flagged (legacy assert)
     grp.userData.bannerFront = front;
     return grp;
+  }
+
+  // ── Banner tow-craft roster (BG_CRAFTS) ─────────────────────────────────────
+  // Nineteen hand-built silhouettes for the banner tow slot: seven real
+  // military / NASA airframes, eleven low-poly toon HOMAGES (geometric
+  // suggestion, never a replica), and the news helicopter that used to be
+  // `mode: 'chopper'`.
+  //
+  // DELIBERATELY SEPARATE from _buildAircraftModel: that builder serves the live
+  // ADS-B fleet, whose eight archetypes are a DATA classification (TYPE_ARCHETYPE
+  // maps real ICAO designators onto them). These are message props chosen by
+  // hand, so nothing here may leak into the traffic shell.
+  //
+  // House-style rules, all inherited from the flight models:
+  //   • nose along local −Z, +Y up, hull centred on the origin;
+  //   • every material through this._mat() with `fog: false` (a sky object is
+  //     kilometres past the FogExp2 falloff);
+  //   • NO blob shadow (nothing on the ground below it);
+  //   • inverted-hull outlines added at the end with a fog-free CLONE of the
+  //     shared _outlineMaterial (never the shared one — _disposeSubtree would
+  //     free it) — EXCEPT the news chopper, which ships without shells and stays
+  //     byte-for-byte the silhouette it has always been;
+  //   • no Math.random anywhere (the builder re-runs on every _keyBgText change);
+  //   • signature paint per craft, overridable by the entry's `main`/`accent`
+  //     tint through the mkBody/mkAccent idiom — absent = the signature colours.
+  private _buildBannerCraft(craft: BgCraftId, col: BgColors): {
+    asm: THREE.Group; props: THREE.Object3D[]; tailRotor: THREE.Object3D | null;
+  } {
+    const asm = new THREE.Group();
+    const props: THREE.Object3D[] = [];
+    let tailRotor: THREE.Object3D | null = null;
+    const mk = (color: number) => this._mat({ color, fog: false });
+    // The two named livery slots. With no tint these are EXACTLY the signature
+    // hues each branch inlines, so an untinted craft is stable across edits.
+    const mkBody = (c: number) => mk(col.main ?? c);
+    const mkAccent = (c: number) => mk(col.detail ?? c);
+    const dark = mk(0x2f3237);
+    const glass = this._mat({ color: 0x2a3946, fog: false, transparent: true, opacity: 0.85 });
+    // A self-lit engine / thruster glow. Emissive rather than transparent so the
+    // outline pass still skips it explicitly (outlineSkip) but the toon bands do
+    // not swallow it. Static — there is no per-frame system for these by design.
+    const glow = (c: number) => this._mat({
+      color: c, emissive: c, emissiveIntensity: 0.9, fog: false,
+    });
+
+    const box = (w: number, h: number, d: number, m: THREE.Material,
+                 x: number, y: number, z: number) => {
+      const me = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m);
+      me.position.set(x, y, z); asm.add(me); return me;
+    };
+    // A barrel along an explicit axis: 'z' = the flight axis (engine pods,
+    // fuselage tubes), 'y' = upright (masts, saucer discs), 'x' = spanwise.
+    const cyl = (r: number, len: number, m: THREE.Material,
+                 x: number, y: number, z: number, axis: 'x' | 'y' | 'z' = 'z') => {
+      const c = new THREE.Mesh(new THREE.CylinderGeometry(r, r, len, 14), m);
+      if (axis === 'z') c.rotation.x = Math.PI / 2;
+      else if (axis === 'x') c.rotation.z = Math.PI / 2;
+      c.position.set(x, y, z); asm.add(c); return c;
+    };
+    // A cone whose APEX points forward (−Z) — the standard nose/spinner pose.
+    const nose = (r: number, len: number, m: THREE.Material, z: number,
+                  x = 0, y = 0) => {
+      const c = new THREE.Mesh(new THREE.ConeGeometry(r, len, 14), m);
+      c.rotation.x = -Math.PI / 2; c.position.set(x, y, z); asm.add(c); return c;
+    };
+    // A cone whose apex points AFT (+Z) — engine bells / nozzles.
+    const bell = (r: number, len: number, m: THREE.Material,
+                  x: number, y: number, z: number) => {
+      const c = new THREE.Mesh(new THREE.ConeGeometry(r, len, 14), m);
+      c.rotation.x = Math.PI / 2; c.position.set(x, y, z);
+      c.userData.outlineSkip = true; asm.add(c); return c;
+    };
+    const sph = (r: number, m: THREE.Material, x: number, y: number, z: number,
+                 sx = 1, sy = 1, sz = 1) => {
+      const s = new THREE.Mesh(new THREE.SphereGeometry(r, 16, 12), m);
+      s.position.set(x, y, z); s.scale.set(sx, sy, sz); asm.add(s); return s;
+    };
+    // A rotorcraft main rotor: `n` crossed blade boxes (⇒ 2n tips) on a group
+    // spun about Y by _advanceBgAircraft (rig.rotorY). The shipped news chopper
+    // is exactly n = 2, span 1600, 18 × 90 blades.
+    const rotor = (x: number, y: number, z: number, span: number, m: THREE.Material,
+                   n = 2, th = 18, chord = 90) => {
+      const g = new THREE.Group();
+      for (let k = 0; k < n; k++) {
+        const b = new THREE.Mesh(new THREE.BoxGeometry(span, th, chord), m);
+        b.rotation.y = (k * Math.PI) / n; b.userData.outlineSkip = true; g.add(b);
+      }
+      g.position.set(x, y, z); g.userData.outlineSkip = true;
+      g.userData.rotorDisc = true;
+      asm.add(g); props.push(g); return g;
+    };
+    // A tail rotor: crossed blades spun about X (the advance drives tailRotor).
+    const tailRotorAt = (x: number, y: number, z: number, span: number,
+                         m: THREE.Material) => {
+      const g = new THREE.Group();
+      for (const rot of [0, Math.PI / 2]) {
+        const b = new THREE.Mesh(new THREE.BoxGeometry(18, span, 40), m);
+        b.rotation.x = rot; g.add(b);
+      }
+      g.position.set(x, y, z); g.userData.outlineSkip = true;
+      asm.add(g); tailRotor = g; return g;
+    };
+
+    switch (craft) {
+      // ── Real: military ─────────────────────────────────────────────────────
+      case 'f16': {
+        // Single engine, bubble canopy, cropped delta with leading-edge root
+        // extensions and a single tall fin.
+        const body = mkBody(0x9aa3ad), accent = mkAccent(0x6d7681);
+        box(280, 300, 2000, body, 0, 0, 0);                     // fuselage
+        nose(140, 500, body, -1250);
+        sph(170, glass, 0, 190, -520, 1, 0.8, 2.0);             // bubble canopy
+        box(320, 200, 320, dark, 0, -180, -400);                // chin intake
+        const wing = box(2400, 46, 700, accent, 0, -40, 260);   // cropped delta
+        wing.userData.wing = 'delta';
+        for (const sx of [-1, 1]) {                             // LERX
+          const l = box(200, 40, 760, accent, sx * 250, -30, -340);
+          l.rotation.y = -sx * 0.12; l.userData.outlineSkip = true;
+        }
+        box(1200, 40, 320, accent, 0, -20, 900);                // tailplanes
+        box(46, 520, 460, body, 0, 300, 830);                   // fin
+        for (const sx of [-1, 1]) {                             // ventral fins
+          const v = box(30, 180, 240, dark, sx * 180, -190, 900);
+          v.rotation.z = sx * 0.35; v.userData.outlineSkip = true;
+        }
+        cyl(170, 300, dark, 0, 0, 1080);                        // exhaust
+        break;
+      }
+      case 'a10': {
+        // Straight wing, TWIN rear-mounted engine pods high on the fuselage,
+        // twin tails, and the nose gun that defines the airframe.
+        const body = mkBody(0x6f7566), accent = mkAccent(0x4a5040);
+        box(360, 380, 2200, body, 0, 0, 0);
+        nose(170, 420, body, -1310);
+        cyl(45, 520, dark, 0, -70, -1560);                      // gun barrel hint
+        box(300, 180, 420, glass, 0, 230, -650);                // canopy
+        const wing = box(3400, 60, 620, accent, 0, 60, 100);    // straight wing
+        wing.userData.wing = 'straight';
+        for (const sx of [-1, 1]) {
+          const p = cyl(180, 760, body, sx * 400, 320, 520);    // rear pods
+          p.userData.engine = true; p.userData.outlineSkip = true;
+          box(46, 420, 420, body, sx * 620, 300, 1020);         // twin tails
+          box(160, 160, 420, dark, sx * 760, -60, 60);          // gear pods
+        }
+        box(1500, 46, 380, accent, 0, 100, 1020);               // tailplane
+        break;
+      }
+      case 'f22': {
+        // Diamond planform, TWIN CANTED tails, two rear nozzles.
+        const body = mkBody(0x767c85), accent = mkAccent(0x565c65);
+        box(420, 300, 2200, body, 0, 0, 0);
+        nose(180, 480, body, -1340);
+        sph(180, glass, 0, 190, -560, 1, 0.75, 2.1);
+        const wing = box(2900, 44, 900, accent, 0, -20, 300);   // diamond wing
+        wing.userData.wing = 'diamond';
+        for (const sx of [-1, 1]) {
+          const chine = box(200, 36, 900, accent, sx * 300, -10, -420);
+          chine.userData.outlineSkip = true;
+          const t = box(44, 480, 420, body, sx * 300, 300, 900);  // canted tail
+          t.rotation.z = -sx * 0.42; t.userData.cantedTail = true;
+          const n = cyl(140, 280, dark, sx * 180, 0, 1150);
+          n.userData.engine = true; n.userData.outlineSkip = true;
+        }
+        box(1300, 40, 340, accent, 0, -20, 980);                // tailplanes
+        break;
+      }
+      case 'b2': {
+        // PURE flying wing — no fuselage, no fin. The sawtooth trailing edge is
+        // suggested by alternating notch blocks (tagged so the test can count).
+        const body = mkBody(0x262a30), accent = mkAccent(0x1b1e23);
+        box(1000, 200, 1700, body, 0, 0, 0);                    // centre body
+        box(520, 80, 260, glass, 0, 130, -560);                 // cockpit glazing
+        for (const sx of [-1, 1]) {
+          const panel = box(1400, 90, 1000, body, sx * 1050, 0, 300);
+          panel.rotation.y = -sx * 0.5;                         // swept outboard-aft
+          panel.userData.wing = 'flyingwing';
+          for (let k = 0; k < 2; k++) {                         // sawtooth notches
+            const s = box(320, 70, 240, accent,
+                          sx * (500 + k * 620), 0, 820 + (k % 2 === 0 ? 0 : 180));
+            s.userData.sawtooth = true; s.userData.outlineSkip = true;
+          }
+        }
+        break;
+      }
+      case 'apache': {
+        // Tandem stepped canopy, stub weapon wings, wheeled gear, main + tail
+        // rotor. Body sits high on the origin so the banner tows off the hull.
+        const body = mkBody(0x4b5340), accent = mkAccent(0x363c2f);
+        box(320, 340, 2000, body, 0, 260, 0);
+        box(280, 200, 400, glass, 0, 470, -520);                // gunner canopy
+        box(300, 220, 400, glass, 0, 530, -140);                // pilot canopy (stepped up)
+        sph(120, dark, 0, 200, -1080);                          // nose sensor ball
+        box(90, 150, 260, dark, 0, 80, -900);                   // chin gun
+        const wing = box(2200, 60, 320, accent, 0, 300, 200);   // stub wings
+        wing.userData.wing = 'stub';
+        for (const sx of [-1, 1]) {
+          box(140, 140, 300, dark, sx * 700, 190, 200);         // pylons
+          sph(90, dark, sx * 280, 90, -300);                    // main wheels
+        }
+        box(150, 150, 1100, body, 0, 400, 950);                 // tail boom
+        box(50, 380, 300, accent, 0, 620, 1400);                // fin
+        box(700, 44, 220, accent, 0, 600, 1420);                // stabilizer
+        cyl(26, 180, dark, 0, 620, -100, 'y');                  // mast
+        rotor(0, 700, -100, 3400, dark);
+        tailRotorAt(90, 620, 1420, 420, dark);
+        break;
+      }
+      case 'b52': {
+        // Long fuselage, deeply swept wing, EIGHT engines in FOUR twin pods,
+        // tall fin. The eight pod barrels are tagged for the fingerprint test.
+        const body = mkBody(0xadb4bb), accent = mkAccent(0x5c646d);
+        box(400, 420, 3400, body, 0, 0, 0);
+        nose(200, 600, body, -2000);
+        box(340, 160, 400, glass, 0, 220, -1350);
+        for (const sx of [-1, 1]) {
+          // Root pulled inboard so the swept panel still overlaps the 400 mm
+          // fuselage after the rotation walks its inboard end outboard + forward.
+          const panel = box(2000, 70, 900, accent, sx * 1100, 120, 330);
+          panel.rotation.y = -sx * 0.5;
+          panel.userData.wing = 'swept';
+          for (let k = 0; k < 2; k++) {                         // twin pods ×2 per side
+            const px = sx * (700 + k * 650), pz = 260 + k * 340, py = -40 - k * 30;
+            for (const dx of [-130, 130]) {
+              const e = cyl(110, 620, body, px + dx, py, pz);
+              e.userData.engine = true; e.userData.outlineSkip = true;
+            }
+          }
+          box(150, 90, 300, dark, sx * 1900, 40, 520);          // outrigger gear
+        }
+        box(60, 900, 900, accent, 0, 560, 1350);                // tall fin
+        box(1800, 50, 500, accent, 0, 140, 1500);               // tailplane
+        break;
+      }
+      case 'shuttle': {
+        // Orbiter: white upper hull, BLACK thermal belly + nose cap, delta wing,
+        // tail fin, OMS pods and three rear engine bells.
+        const body = mkBody(0xeceff1), accent = mkAccent(0x24282d);
+        box(520, 480, 2600, body, 0, 0, 0);
+        nose(250, 560, accent, -1580);                          // black nose cap
+        box(560, 60, 2400, accent, 0, -250, 60);                // black belly tiles
+        const wing = box(2800, 60, 1000, body, 0, -170, 640);   // delta wing
+        wing.userData.wing = 'delta';
+        for (const sx of [-1, 1]) {
+          const le = box(560, 54, 130, accent, sx * 1080, -170, 200);
+          le.userData.outlineSkip = true;                       // black leading edge
+          box(180, 200, 500, body, sx * 250, 260, 1000);        // OMS pods
+        }
+        box(60, 700, 600, body, 0, 480, 1050);                  // tail fin
+        for (const [ex, ey] of [[0, 130], [-230, -60], [230, -60]] as const) {
+          const e = bell(150, 300, dark, ex, ey, 1400);
+          e.userData.engine = true;
+        }
+        break;
+      }
+      // ── Fiction (low-poly toon homages) ────────────────────────────────────
+      case 'airwolf': {
+        // Sleek black attack helicopter, white belly, very low profile.
+        const body = mkBody(0x1a1d21), accent = mkAccent(0xe8eaec);
+        sph(300, body, 0, 280, -250, 0.9, 0.75, 2.4);           // slim hull
+        box(480, 60, 1080, accent, 0, 105, -250);                // white belly stripe
+                                                                 // (inside the hull's own
+                                                                 // ±720 mm, so it never
+                                                                 // pokes out fore/aft)
+        box(320, 180, 420, glass, 0, 400, -900);                // canopy
+        box(1400, 50, 260, body, 0, 240, 100);                  // stub wings
+        box(120, 120, 1200, body, 0, 340, 800);                 // tail boom
+        box(44, 340, 260, accent, 0, 500, 1310);                // fin
+        for (const sx of [-1, 1]) box(44, 26, 700, dark, sx * 220, 40, -300);  // skids
+        cyl(24, 160, dark, 0, 600, -250, 'y');
+        rotor(0, 660, -250, 3000, dark);
+        tailRotorAt(80, 500, 1330, 380, dark);
+        break;
+      }
+      case 'batwing': {
+        // Scalloped bat-silhouette flying wing with upturned tip fins.
+        const body = mkBody(0x16181c), accent = mkAccent(0x3a3f47);
+        sph(220, body, 0, 60, 0, 1, 0.9, 3.2);                  // centre pod
+        box(240, 140, 420, glass, 0, 220, -420);
+        for (const sx of [-1, 1]) {
+          const panel = box(1300, 70, 900, body, sx * 900, 40, 200);
+          panel.rotation.y = -sx * 0.45; panel.userData.wing = 'bat';
+          for (let k = 0; k < 3; k++) {                         // scalloped trailing edge
+            const s = box(240, 60, 280, accent,
+                          sx * (400 + k * 380), 40, 700 + (k % 2) * 160);
+            s.userData.scallop = true; s.userData.outlineSkip = true;
+          }
+          const tip = box(60, 320, 400, body, sx * 1520, 190, 420);
+          tip.rotation.z = sx * 0.3;
+        }
+        const th = cyl(150, 260, glow(0xff7043), 0, 60, 900);   // rear thruster
+        th.userData.outlineSkip = true; th.userData.engine = true;
+        break;
+      }
+      case 'trimaxion': {
+        // Smooth chrome clamshell/teardrop pod — NO wings at all, the whole
+        // point of the silhouette. Two overlapping ellipsoids + a seam rim.
+        const body = mkBody(0xb9c2cb), accent = mkAccent(0x7d8791);
+        sph(500, body, 0, 0, 0, 1.1, 0.42, 1.8);                // lower hull
+        sph(420, body, 0, 170, -60, 1.15, 0.55, 1.55);          // upper clamshell
+        const rim = cyl(620, 40, accent, 0, 80, 0, 'y');        // clamshell seam
+        rim.userData.outlineSkip = true;
+        sph(200, glass, 0, 130, -700, 1, 0.7, 1);               // forward eye
+        for (const sx of [-1, 1]) sph(120, accent, sx * 300, -160, 300, 1, 0.6, 1);
+        break;
+      }
+      case 'einstein_rocket': {
+        // Friendly round-nosed red rocket: side boosters, big round window,
+        // three tail fins and an engine bell.
+        const body = mkBody(0xd1372f), accent = mkAccent(0xf2c14e);
+        cyl(300, 1500, body, 0, 0, 100);
+        nose(300, 600, body, -1000);
+        sph(190, glass, 0, 60, -520, 1, 1, 0.7);                // big round window
+        const ring = cyl(240, 60, accent, 0, 60, -560);         // window rim
+        ring.userData.outlineSkip = true;
+        for (const sx of [-1, 1]) {
+          const b = cyl(130, 900, accent, sx * 380, -80, 350);
+          b.userData.booster = true;
+          nose(130, 260, accent, -230, sx * 380, -80);
+        }
+        for (let k = 0; k < 3; k++) {                           // three tail fins
+          const f = box(60, 420, 420, accent, 0, 0, 700);
+          f.rotation.z = (k * Math.PI * 2) / 3;
+          f.position.set(Math.sin((k * Math.PI * 2) / 3) * 300,
+                         Math.cos((k * Math.PI * 2) / 3) * 300, 700);
+          f.userData.fin = true;
+        }
+        bell(260, 320, dark, 0, 0, 1000);
+        break;
+      }
+      case 'enterprise':
+      case 'enterprise_c': {
+        // Saucer + engineering hull + TWO raised warp nacelles. The -C is
+        // chunkier (bigger, thicker saucer) with more sharply swept-back pylons
+        // and the nacelles carried further aft.
+        const c = craft === 'enterprise_c';
+        const body = mkBody(0xcfd4d9), accent = mkAccent(0xc0563f);
+        cyl(c ? 1000 : 900, c ? 200 : 130, body, 0, 120, -800, 'y');     // saucer
+        sph(c ? 300 : 240, body, 0, c ? 240 : 200, -800, 1, 0.4, 1);     // bridge dome
+        box(160, 380, 320, body, 0, -60, -300);                          // neck
+        cyl(250, 1500, body, 0, -180, 400);                              // engineering hull
+        sph(180, accent, 0, -180, -350, 1, 1, 0.5);                      // deflector
+        for (const sx of [-1, 1]) {
+          const pylon = box(90, 500, c ? 420 : 300, body,
+                            sx * 280, 60, c ? 820 : 700);
+          pylon.rotation.z = -sx * 0.55;
+          if (c) pylon.rotation.x = 0.32;                                // swept back
+          const nac = cyl(150, 1600, body, sx * 620, 320, c ? 760 : 620);
+          nac.userData.nacelle = true;
+          sph(160, accent, sx * 620, 320, (c ? 760 : 620) - 800);        // bussard cap
+        }
+        break;
+      }
+      case 'xwing': {
+        // FOUR wings in an open X (tagged so the fingerprint test can count
+        // them), four engine cans, long nose.
+        const body = mkBody(0xe7e9ea), accent = mkAccent(0xc0392b);
+        box(240, 240, 2400, body, 0, 0, 0);
+        nose(120, 700, body, -1450);
+        box(220, 180, 380, glass, 0, 190, 200);
+        for (const sx of [-1, 1]) for (const sy of [-1, 1]) {
+          const w = box(1500, 50, 420, body, sx * 820, sy * 250, 600);
+          w.rotation.z = -sx * sy * 0.28; w.userData.wing = 'x';
+          const stripe = box(300, 54, 200, accent, sx * 1350, sy * 320, 480);
+          stripe.userData.outlineSkip = true;
+          const e = cyl(130, 620, dark, sx * 300, sy * 250, 750);
+          e.userData.engine = true; e.userData.outlineSkip = true;
+        }
+        break;
+      }
+      case 'falcon': {
+        // Flat disc hull, forward mandibles with the gap between them (that gap
+        // IS the silhouette), offset cockpit tube, dorsal + ventral turrets.
+        const body = mkBody(0xa8a49b), accent = mkAccent(0x6f6b63);
+        cyl(1100, 240, body, 0, 0, 0, 'y');                     // saucer hull
+        for (const sx of [-1, 1]) {
+          const m = box(240, 180, 900, body, sx * 330, 0, -1250);
+          m.userData.mandible = true;
+        }
+        cyl(120, 700, body, 760, 20, -300);                     // offset cockpit tube
+        sph(150, glass, 780, 20, -640);
+        for (const sy of [1, -1]) sph(170, accent, 0, sy * 200, 100);  // turrets
+        const eng = box(1100, 90, 60, glow(0x9fe6ff), 0, 60, 1080);
+        eng.userData.outlineSkip = true; eng.userData.engine = true;
+        break;
+      }
+      case 'slave1': {
+        // Upright pod on a rounded base with flanking wing panels — read from
+        // the side it is unmistakable, and it never needs to look like a plane.
+        const body = mkBody(0x4d5a52), accent = mkAccent(0x8a5a3c);
+        sph(450, body, 0, 120, 300, 1.3, 0.55, 1.2);            // rounded base
+        box(420, 1100, 700, body, 0, 700, 200);                 // upright pod
+        sph(240, body, 0, 1250, 150, 1.1, 0.6, 1.0);            // upper cap
+        box(280, 180, 240, glass, 0, 1050, -180);               // cockpit
+        for (const sx of [-1, 1]) {
+          const w = box(80, 900, 620, accent, sx * 300, 700, 250);
+          w.userData.wing = 'panel';
+          const e = cyl(120, 240, dark, sx * 180, 260, 620);
+          e.userData.engine = true; e.userData.outlineSkip = true;
+        }
+        break;
+      }
+      case 'naboo': {
+        // Sleek chrome teardrop, swept wings, twin rear engines with gold trim.
+        const body = mkBody(0xd8dde2), accent = mkAccent(0xb8952f);
+        sph(380, body, 0, 0, 100, 1.0, 0.55, 3.0);              // teardrop hull
+        nose(220, 700, body, -1350);
+        box(300, 120, 320, glass, 0, 150, -700);
+        for (const sx of [-1, 1]) {
+          const w = box(1600, 60, 700, body, sx * 820, -30, 500);
+          w.rotation.y = -sx * 0.42; w.userData.wing = 'swept';
+          const e = cyl(180, 700, accent, sx * 420, 40, 950);
+          e.userData.engine = true;
+          const n = cyl(150, 60, glow(0x8fd8ff), sx * 420, 40, 1310);
+          n.userData.outlineSkip = true;
+        }
+        box(50, 300, 400, accent, 0, 240, 900);                 // dorsal fin
+        break;
+      }
+      case 'serenity': {
+        // Bulbous forward section, slim neck, rear hull with rotating engine
+        // pods on stub pylons and the glowing tail that names the class.
+        const body = mkBody(0xcfc7b3), accent = mkAccent(0x7a8189);
+        sph(420, body, 0, 60, -900, 1.0, 0.85, 1.3);            // forward section
+        box(420, 120, 200, glass, 0, 180, -1290);               // bridge windows
+        box(260, 200, 700, accent, 0, 20, -280);                // neck
+        box(720, 460, 1200, body, 0, 40, 460);                  // rear hull
+        for (const sx of [-1, 1]) {
+          box(300, 90, 200, accent, sx * 400, 160, 700);        // pylon
+          const p = cyl(220, 520, body, sx * 640, 180, 700);
+          p.userData.engine = true;
+        }
+        const tail = cyl(300, 90, glow(0xffb74d), 0, 60, 1130); // glowing tail
+        tail.userData.outlineSkip = true; tail.userData.engine = true;
+        break;
+      }
+      // ── The news helicopter (verbatim from the retired `mode: 'chopper'`) ──
+      case 'news_chopper': {
+        // Cabin bubble + tail boom + skids + a NEWS-style stripe. Kept
+        // byte-for-byte, INCLUDING the no-outline finish below: this is the
+        // shipped silhouette users already have on their plans.
+        const bodyMat = this._mat({ color: col.main ?? 0x2f6fb0 });     // news blue (cabin)
+        const chopDark = this._mat({ color: 0x2a2d31 });
+        const stripeMat = this._mat({ color: col.detail ?? 0xe6291a });  // NEWS accent
+        // The tail assembly (boom + fin) rides the ACCENT when one is set and the
+        // body otherwise, so the shipped all-blue chopper is byte-identical.
+        const tailMat = col.detail != null ? stripeMat : bodyMat;
+        const cabin = new THREE.Mesh(new THREE.SphereGeometry(280, 16, 12), bodyMat);
+        cabin.position.set(0, 320, -260); cabin.scale.set(1, 0.85, 1.15); asm.add(cabin);
+        const boom = new THREE.Mesh(new THREE.BoxGeometry(90, 90, 900), tailMat);
+        boom.position.set(0, 380, 340); asm.add(boom);
+        const fin = new THREE.Mesh(new THREE.BoxGeometry(40, 220, 130), tailMat);
+        fin.position.set(0, 470, 760); asm.add(fin);
+        for (const sx of [-1, 1]) {                          // NEWS stripe on both cabin flanks
+          const stripe = new THREE.Mesh(new THREE.BoxGeometry(10, 90, 320), stripeMat);
+          stripe.position.set(sx * 286, 320, -260); asm.add(stripe);
+        }
+        for (const sx of [-1, 1]) {                          // skids
+          const skid = new THREE.Mesh(new THREE.BoxGeometry(50, 30, 720), chopDark);
+          skid.position.set(sx * 190, 60, -120); asm.add(skid);
+        }
+        // Main rotor: crossed thin blades on a short mast, spun about Y (vertical).
+        const main = new THREE.Group();
+        for (const rot of [0, Math.PI / 2]) {
+          const blade = new THREE.Mesh(new THREE.BoxGeometry(1600, 18, 90), chopDark);
+          blade.rotation.y = rot; main.add(blade);
+        }
+        main.position.set(0, 560, -140); main.userData.outlineSkip = true; asm.add(main);
+        props.push(main);
+        const mast = new THREE.Mesh(new THREE.CylinderGeometry(24, 24, 200, 8), chopDark);
+        mast.position.set(0, 460, -140); asm.add(mast);
+        // Tail rotor: crossed blades on the fin, spun about X (perpendicular axis).
+        const tr = new THREE.Group();
+        for (const rot of [0, Math.PI / 2]) {
+          const blade = new THREE.Mesh(new THREE.BoxGeometry(18, 360, 40), chopDark);
+          blade.rotation.x = rot; tr.add(blade);
+        }
+        tr.position.set(70, 470, 800); tr.userData.outlineSkip = true; asm.add(tr);
+        tailRotor = tr;
+        return { asm, props, tailRotor };      // NO outline shells — shipped look
+      }
+    }
+
+    // Inverted-hull outlines with a fog-free CLONE (the shared _outlineMaterial
+    // must keep fogging for ground geometry, and _disposeSubtree would free it).
+    // Same thickness / min-dimension the live flight models use.
+    this._addOutlines(new THREE.Group(), 10, 320);      // ensure _outlineMaterial exists
+    const outlineMat = this._outlineMaterial!.clone();
+    outlineMat.fog = false;
+    this._addOutlines(asm, 10, 320, outlineMat);
+    return { asm, props, tailRotor };
   }
 
   // Flat ground-writing decal. Two placements:
@@ -14619,18 +15177,20 @@ export class ThreeDRenderer {
     const tx = -Math.sin(a) * dir, tz = Math.cos(a) * dir;   // tangent (direction of travel)
     rig.asm!.rotation.y = Math.atan2(tx, tz) + Math.PI;      // nose (−Z) → tangent
     // Prop / rotor spin. A twin-engine archetype carries TWO discs, a jet none;
-    // `rotorY` (the news chopper, and a `heli` archetype towing a banner) spins
-    // about the vertical axis, everything else about the flight axis.
-    const rate = rig.propRate ?? (rig.mode === 'chopper' ? 42 : 22);
+    // `rotorY` (every rotorcraft — the news chopper, a `heli` archetype, the
+    // Apache, Airwolf) spins about the vertical axis, everything else about the
+    // flight axis. The legacy `mode === 'chopper'` term is kept ONLY so a rig
+    // built by a stale chunk (before the craft roster) still spins correctly.
+    const rate = rig.propRate ?? (rig.newsChopper || rig.mode === 'chopper' ? 42 : 22);
     if (rate > 0) {
       const spin = (nowS * rate) % (Math.PI * 2);
-      const aboutY = rig.mode === 'chopper' || rig.rotorY === true;
+      const aboutY = rig.newsChopper === true || rig.mode === 'chopper' || rig.rotorY === true;
       for (const d of (rig.props ?? (rig.prop ? [rig.prop] : []))) {
         if (aboutY) d.rotation.y = spin; else d.rotation.z = spin;
       }
     }
     if (rig.tailRotor) rig.tailRotor.rotation.x = (nowS * (rig.propRate ?? 42) * 1.6) % (Math.PI * 2);
-    if (rig.mode === 'chopper' && rig.banner) {
+    if ((rig.newsChopper === true || rig.mode === 'chopper') && rig.banner) {
       rig.banner.rotation.y = Math.PI / 2 + Math.sin(nowS * 0.8) * 0.12;   // trailing lag sway
     }
     if (rig.ph) rig.ph.angle = rig.angle;
