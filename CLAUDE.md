@@ -198,7 +198,7 @@ UI Lit components are thin wrappers that read planner state and dispatch events 
 - `live` — fires on every HA `state_changed` event (~10 Hz). The 2D canvas RAF reads planner state every frame, so it doesn't usually need to subscribe; the event exists for non-canvas consumers.
 - `config` — fires only on structural changes / `number.*` / `switch.*` updates. Sidebar + topbar subscribe; Lit reconciles surgically and focused inputs survive.
 
-`_isSlowEntity(id)` decides which channel: `number.*` and `switch.*` go through both (slow path triggers config), everything else stays live-only. Slow-path sync is skipped while a drag or zone-edit is in flight to avoid HA's stale read clobbering an in-progress edit.
+`_isSlowEntity(id)` decides which channel. **The old blanket "`number.*`/`switch.*` always slow" rule is GONE (2026-08-01 churn fix — unrelated house entities were bumping configRev and rebuilding the whole 3D floor at idle every few seconds)**: the number./switch. branch now consults a MEMBERSHIP set — `_slowIdSet` (every bound entity id swept from the WHOLE store, all floors + store-level configs; rebuilt lazily when `_slowIdsRev !== configRev`, forced in `save()`, never emits during rebuild) plus `_slowIdPrefixes` (`number.<deviceSlug>_`/`switch.<deviceSlug>_` per BOUND mmWave sensor — NOT a discBy sweep: discovery stores slugs and synthesizes zone entity ids on demand, and ESPHome trickles entities in after the discovery cache, so only a prefix rule keeps the load-bearing zoneCache sync alive). Unrelated `number.*`/`switch.*` traffic is now LIVE-only (no configRev bump, no 3D rebuild). Every other scoped rule is unchanged; non-number/switch ids in the set are inert (only that branch consults it). Test `churn-test.html` (`CHURN PASS 48/48`). Slow-path sync is skipped while a drag or zone-edit is in flight to avoid HA's stale read clobbering an in-progress edit.
 
 ### Two connection modes
 `HaApi` (interface in `ha-client.ts`) is the connection surface Planner + UI use. Two implementations:
@@ -1355,8 +1355,10 @@ Design `docs/DESIGN-terrain.md` (T3 bullet); research `docs/research/terrain-enh
   `_advanceSprinklers(dt)` recycles droplets in place (guarded on "any cloud exists" =
   "any zone running"). Dirty key `_keySprinklers` (three-view) = configRev + keyGround +
   per-zone geometry + a bucketed running boolean (spray animation is per-frame, NOT keyed).
-  Raycast `userData.kind='sprinkler'` → `toggleItem`. Zone entity ids are **LIVE-path**
-  (NOT added to `_isSlowEntity`) so the spray starts/stops promptly; toggle uses the
+  Raycast `userData.kind='sprinkler'` → `toggleItem`. Zone entity ids have no DEDICATED
+  `_isSlowEntity` rule (the intent was prompt LIVE spray start/stop — NB a zone bound to
+  `switch.*` was ALWAYS slow via the old blanket rule and stays slow via the 2026-08-01
+  membership set, so behavior is unchanged); toggle uses the
   domain-sniffing `toggleEntity` (switch.toggle/valve.toggle), NOT the valve's
   open_valve/close_valve state pick.
 - **`rock_cluster`** FurnitureKind (~800×600×500, `outdoor` cat): 4 overlapping low-poly
@@ -1912,7 +1914,7 @@ type `bathwater` + `capBathWater` — every isWetBathKind piece emits `<kind>` +
 twins on its BASE page (kitchen_sink-running lands on Appliances); toilet capture primes the
 off state then flips (the capSafety age-ramp precedent); the hand-list guard is unaffected
 (furniture counts unguarded by design). Test `bath-water-test.html` (`BATHWATER PASS 62/62`);
-vehicle-mail 39/39, robot 96/96.
+vehicle-mail 39/39, robot 168/168.
 
 ### Sinks v2 (basins, running water, fill/drain)
 Five sink kinds (`isSinkKind`, geometry.ts): `sink` (compact vanity),

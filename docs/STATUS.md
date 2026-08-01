@@ -324,6 +324,22 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Config-channel churn reduction** (2026-08-01, the follow-up flagged
+  by the wall-flash investigation; unreleased — on main past v0.51.0).
+  The blanket "`number.*`/`switch.*` always slow-path" rule in
+  `_isSlowEntity` is replaced by a membership set: `_slowIdSet` (every
+  bound entity id swept from the whole store, all floors + store-level
+  configs, rebuilt lazily on configRev + forced in save()) plus
+  `_slowIdPrefixes` (`number./switch.<deviceSlug>_` per bound mmWave
+  sensor — a discBy sweep would have broken zoneCache sync since
+  discovery synthesizes zone ids from slugs on demand). Unrelated
+  house entities no longer bump configRev → no more idle full-floor
+  3D rebuilds. Also: printProgressEntity bucketed to 2% in the
+  appliance hash. Audit finding left for follow-up: `_keyPool` folds
+  waterTempEntity's RAW state (0.1° chatter re-keys the pool rebuild;
+  the temp may not even render in 3D — drop or bucket to 0.5°). New
+  churn-test 48/48; config 60/60, undo 44/44, robot 168/168, flights
+  686/686, weather 200/200 unchanged.
 - **Sidebar header no-jump fix** (2026-08-01, user-reported "expanding
   a section restores the space above/below and the header jumps";
   unreleased — on main past v0.51.0). The 3 px vertical padding moved

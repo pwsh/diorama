@@ -1202,7 +1202,16 @@ export class ThreeView extends LitElement {
           // A secondary print-progress sensor drives the growing print box —
           // fold its state in so the model tracks it live (powerEntity idiom:
           // _keyFloor recomputes per tick, no _isSlowEntity entry needed).
-          if (fu.printProgressEntity) clim += `:${stOf(fu.printProgressEntity)}`;
+          // BUCKETED to 2% (the 50 W power-bucket idiom): a printer pushes a
+          // fresh percentage every few seconds and the RAW string re-keyed the
+          // WHOLE floor group each time. 2% is finer than the print box is
+          // visibly resolvable, so nothing is lost. Non-numeric states (a
+          // string status / unavailable) pass through verbatim.
+          if (fu.printProgressEntity) {
+            const raw = stOf(fu.printProgressEntity);
+            const pp = parseFloat(raw);
+            clim += `:${isFinite(pp) ? Math.round(pp / 2) : raw}`;
+          }
         }
         // "Job done" badge (event-focused thought bubbles): the appliance's
         // finished-window flag drives a blue emissive badge built inside

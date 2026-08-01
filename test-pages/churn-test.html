@@ -1,0 +1,330 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>CHURN …</title>
+<style>
+  body { margin:0; background:#0d1116; color:#cfd8dc; font:13px/1.5 sans-serif; padding:14px; }
+  h1 { font-size:15px; margin:0 0 10px; }
+  #summary { font-size:14px; font-weight:bold; margin:10px 0; padding:8px 10px; border-radius:5px; }
+  .okbg { background:#12331f; color:#69f0ae; } .badbg { background:#3a1414; color:#ff8a80; }
+  .row { display:flex; justify-content:space-between; gap:10px; padding:2px 0; border-bottom:1px solid #1c2530; }
+  .pass { color:#69f0ae; } .fail { color:#ff5252; }
+  .name { color:#90caf9; } .extra { color:#ffd54f; font-size:11px; }
+</style>
+<h1>Config-channel membership (number.*/switch.* churn) — real Planner + fake HaApi</h1>
+<div id="summary">Running…</div>
+<div id="rows"></div>
+
+<!-- Drives the REAL Planner (bundled) with an in-page fake HaApi over a Map
+     (the config-test.html / undo-test.html seam). Build:
+       T=$(mktemp -d); cp -r src/* "$T"/
+       cp test-pages/fake-avatar-store.ts "$T"/avatar-store.ts
+       npx esbuild "$T"/planner.ts --bundle --format=esm --outfile=<harness>/planner.mod.js
+-->
+<script type="module">
+  const V = '?v=' + Date.now();
+  const { Planner } = await import('./planner.mod.js' + V);
+
+  const results = [];
+  const ok = (name, cond, extra = '') => results.push({ name, pass: !!cond, extra: String(extra) });
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  async function waitFor(cond, tries = 600) {
+    for (let i = 0; i < tries; i++) { if (cond()) return true; await sleep(4); }
+    return !!cond();
+  }
+  const clone = x => JSON.parse(JSON.stringify(x));
+
+  class FakeHa {
+    constructor(seed) {
+      this.map = new Map();
+      for (const [k, v] of Object.entries(seed || {})) this.map.set(k, clone(v));
+      this.states = {};
+      this._stateCbs = []; this._connCbs = [];
+    }
+    connect() {
+      for (const cb of this._connCbs) cb('connected');
+      for (const cb of this._stateCbs) cb(this.states, undefined);
+    }
+    onState(fn) { this._stateCbs.push(fn); }
+    onConn(fn) { this._connCbs.push(fn); }
+    callService() { return Promise.resolve(); }
+    async getHistory() { return {}; }
+    async getWeatherForecasts() { return null; }
+    async getDevices() { return []; }
+    async getEntityRegistry() { return []; }
+    async getFloorRegistry() { return []; }
+    async getAreaRegistry() { return []; }
+    async updateEntityRegistry() { return true; }
+    async getCalendarEvents() { return {}; }
+    async listRepairsIssues() { return []; }
+    async subscribePersistentNotifications() { return () => {}; }
+    async subscribeMqtt() { return () => {}; }
+    async publishMqtt() { return true; }
+    async getUserData(key) { return this.map.has(key) ? clone(this.map.get(key)) : null; }
+    async setUserData(key, value) { this.map.set(key, clone(value)); return true; }
+    async refreshStates() {}
+    // Push a SINGLE entity state change (the `state_changed` shape).
+    push(id, state) {
+      this.states[id] = { entity_id: id, state: String(state), attributes: {} };
+      for (const cb of this._stateCbs) cb(this.states, id);
+    }
+  }
+
+  function floor(id, name, extra = {}) {
+    return {
+      id, name, w: 8000, d: 6000,
+      walls: [], furniture: [], lights: [], switches: [], sensors: [], motionSensors: [],
+      roamers: [], envSensors: [], doors: [], windows: [], bg: null, rooms: [], bleProxies: [],
+      alarmPanels: [], safetySensors: [], robots: [], presenceZones: [], cameras: [],
+      groundAreas: [], voidAreas: [], ...extra,
+    };
+  }
+  function makeStore(floors, extra = {}) {
+    return {
+      v: 2, floors, currentFloorId: floors[0].id, activeSensorId: null,
+      coverage: true, imperial: false, showDetails: false, useRawTargets: false, ...extra,
+    };
+  }
+
+  const LEGACY = 'diorama';
+  async function freshPlanner(store) {
+    localStorage.removeItem('diorama:store:v1');
+    localStorage.removeItem('diorama:configs');
+    const stub = new FakeHa({ [LEGACY]: store });
+    const p = new Planner();
+    p.connectWith(stub);
+    await waitFor(() => p.configIndex !== null && p.store.floors[0].name === store.floors[0].name);
+    return { p, stub };
+  }
+
+  // configRev delta across a SINGLE synchronous state push.
+  const revDelta = (p, stub, id, val) => {
+    const before = p.configRev;
+    stub.push(id, val);
+    return p.configRev - before;
+  };
+
+  try {
+    // ── (a) LD2450 firmware sync: bound sensor's number./switch. stay slow ────
+    {
+      const f = floor('f1', 'Home', {
+        sensors: [{
+          id: 's1', x: 1000, y: 1000, heading: 0, fov: 120, range: 6000,
+          label: 'Radar', deviceSlug: 'ld2450a',
+        }],
+      });
+      const { p, stub } = await freshPlanner(makeStore([f]));
+      ok('a: zone vertex number.* is slow', p._isSlowEntity('number.ld2450a_iz1_v1_x') === true, '');
+      ok('a: zone enable switch.* is slow', p._isSlowEntity('switch.ld2450a_zone_1_enable') === true, '');
+      ok('a: mount angle number.* is slow', p._isSlowEntity('number.ld2450a_mount_angle') === true, '');
+      ok('a: ghostbuster switch.* is slow', p._isSlowEntity('switch.ld2450a_ghostbuster') === true, '');
+      ok('a: zone vertex bumps configRev', revDelta(p, stub, 'number.ld2450a_iz1_v1_x', '250') === 1, '');
+      ok('a: zone enable bumps configRev', revDelta(p, stub, 'switch.ld2450a_zone_1_enable', 'on') === 1, '');
+      // A DIFFERENT device's firmware ids must NOT be claimed by the prefix.
+      ok('a: other device slug not slow', p._isSlowEntity('number.ld2450b_mount_angle') === false, '');
+      ok('a: prefix needs the trailing _', p._isSlowEntity('number.ld2450about_x') === false, '');
+      // A sensor with NO deviceSlug registers no prefix.
+      ok('a: unbound sensor adds no prefix', p._slowIdPrefixes.length === 2, `n=${p._slowIdPrefixes.length}`);
+    }
+
+    // ── (b) bound switch fixture / light stay slow ───────────────────────────
+    {
+      const f = floor('f1', 'Home', {
+        switches: [{ id: 'sw1', x: 100, y: 100, label: 'Lamp', entity_id: 'switch.living_lamp' }],
+        lights: [{ id: 'l1', x: 200, y: 200, label: 'Ceil', entity_id: 'switch.ceiling' }],
+      });
+      const { p, stub } = await freshPlanner(makeStore([f]));
+      ok('b: bound switch fixture slow', p._isSlowEntity('switch.living_lamp') === true, '');
+      ok('b: bound light (switch domain) slow', p._isSlowEntity('switch.ceiling') === true, '');
+      ok('b: bound switch bumps configRev', revDelta(p, stub, 'switch.living_lamp', 'on') === 1, '');
+    }
+
+    // ── (c) unrelated number./switch. traffic is LIVE-only ───────────────────
+    {
+      const f = floor('f1', 'Home', {
+        switches: [{ id: 'sw1', x: 100, y: 100, label: 'Lamp', entity_id: 'switch.living_lamp' }],
+      });
+      const { p, stub } = await freshPlanner(makeStore([f]));
+      ok('c: unrelated number.* not slow', p._isSlowEntity('number.garage_door_threshold') === false, '');
+      ok('c: unrelated switch.* not slow', p._isSlowEntity('switch.random_plug') === false, '');
+      ok('c: unrelated number.* no configRev bump', revDelta(p, stub, 'number.garage_door_threshold', '17') === 0, '');
+      ok('c: unrelated switch.* no configRev bump', revDelta(p, stub, 'switch.random_plug', 'on') === 0, '');
+      // Two identical unrelated pushes leave configRev untouched; a bound one bumps.
+      const r0 = p.configRev;
+      stub.push('switch.random_plug', 'off');
+      stub.push('switch.random_plug', 'on');
+      ok('c: two unrelated pushes leave configRev', p.configRev === r0, `${r0}->${p.configRev}`);
+      ok('c: bound push still bumps after them', revDelta(p, stub, 'switch.living_lamp', 'off') === 1, '');
+      // Live channel still fires for the unrelated entity (it is not dropped).
+      let live = 0;
+      p.addEventListener('live', () => live++);
+      stub.push('number.garage_door_threshold', '18');
+      ok('c: unrelated still emits LIVE', live === 1, `live=${live}`);
+    }
+
+    // ── (d) cross-floor: a binding on a NON-current floor stays slow ─────────
+    {
+      const f1 = floor('f1', 'Home');
+      const f2 = floor('f2', 'Upstairs', {
+        switches: [{ id: 'sw9', x: 100, y: 100, label: 'Attic', entity_id: 'switch.attic_fan' }],
+        infoCards: [{ id: 'ic1', x: 1, y: 1, entity_id: 'number.setpoint_up' }],
+        flagpoles: [{ id: 'fp1', x: 1, y: 1, entityId: 'number.hoist_up' }],
+      });
+      const { p, stub } = await freshPlanner(makeStore([f1, f2]));
+      ok('d: current floor is f1', p.floor().id === 'f1', p.floor().id);
+      ok('d: other-floor switch slow', p._isSlowEntity('switch.attic_fan') === true, '');
+      ok('d: other-floor infoCard number slow', p._isSlowEntity('number.setpoint_up') === true, '');
+      ok('d: other-floor flagpole number slow', p._isSlowEntity('number.hoist_up') === true, '');
+      ok('d: other-floor push bumps configRev', revDelta(p, stub, 'switch.attic_fan', 'on') === 1, '');
+    }
+
+    // ── (e) bind / unbind transitions (set invalidates on configRev) ─────────
+    {
+      const { p, stub } = await freshPlanner(makeStore([floor('f1', 'Home')]));
+      ok('e: not slow before binding', p._isSlowEntity('switch.new_plug') === false, '');
+      p.floor().plugs = [{ id: 'pg1', x: 10, y: 10, entity_id: 'switch.new_plug' }];
+      p.save(); p.emitConfig();
+      ok('e: slow right after binding', p._isSlowEntity('switch.new_plug') === true, '');
+      ok('e: bound plug bumps configRev', revDelta(p, stub, 'switch.new_plug', 'on') === 1, '');
+      p.floor().plugs[0].entity_id = null;
+      p.save(); p.emitConfig();
+      ok('e: not slow after unbinding', p._isSlowEntity('switch.new_plug') === false, '');
+      ok('e: unbound plug no longer bumps', revDelta(p, stub, 'switch.new_plug', 'off') === 0, '');
+      // bindSensor-style: adding a sensor slug registers its prefix on the next check.
+      p.floor().sensors.push({ id: 's2', x: 0, y: 0, heading: 0, fov: 120, range: 6000, label: 'R', deviceSlug: 'newdev' });
+      p.save(); p.emitConfig();
+      ok('e: new sensor prefix picked up', p._isSlowEntity('number.newdev_mount_angle') === true, '');
+      // save() ALONE (no emitConfig) must still invalidate the set — save() is
+      // the store-mutation choke point, so a setter that forgets emitConfig
+      // cannot strand a fresh binding on the live path.
+      p.floor().valves = [{ id: 'vv9', x: 1, y: 1, entity_id: 'switch.save_only' }];
+      p.save();
+      ok('e: save()-only binding is slow', p._isSlowEntity('switch.save_only') === true, '');
+    }
+
+    // ── (f) rev guard: rebuild only when configRev moves ─────────────────────
+    {
+      const { p } = await freshPlanner(makeStore([floor('f1', 'Home')]));
+      p._isSlowEntity('switch.x');
+      const set1 = p._slowIdSet;
+      ok('f: set built on first use', set1 instanceof Set, '');
+      ok('f: rev tracks configRev', p._slowIdsRev === p.configRev, `${p._slowIdsRev}/${p.configRev}`);
+      p._isSlowEntity('switch.y'); p._isSlowEntity('number.z');
+      ok('f: no rebuild without configRev move', p._slowIdSet === set1, '');
+      p.emitConfig();
+      p._isSlowEntity('switch.y');
+      ok('f: rebuilt after configRev move', p._slowIdSet !== set1, '');
+      ok('f: rebuild does not emit config', (() => {
+        const r = p.configRev; p._rebuildSlowIds(); return p.configRev === r;
+      })(), '');
+    }
+
+    // ── (g) boot order: called before any store load ─────────────────────────
+    {
+      const p = new Planner();
+      let threw = '';
+      let r = null;
+      try { r = p._isSlowEntity('number.anything'); } catch (err) { threw = String(err); }
+      ok('g: no throw before store load', threw === '', threw);
+      ok('g: false before store load', r === false, String(r));
+      ok('g: empty set before store load', p._slowIdSet instanceof Set && p._slowIdSet.size === 0,
+        `size=${p._slowIdSet ? p._slowIdSet.size : 'null'}`);
+      ok('g: empty id is never slow', p._isSlowEntity('') === false, '');
+    }
+
+    // ── (h) sweep breadth: every store-level + fixture source ────────────────
+    {
+      const f = floor('f1', 'Home', {
+        furniture: [{
+          id: 'fu1', x: 1, y: 1, w: 600, h: 600, kind: 'dishwasher', rotation: 0,
+          entity_id: 'switch.dishwasher', doorEntity: 'switch.fridge_door',
+          jobStateEntity: 'switch.job', moistureEntity: 'number.soil',
+          newsEntity: 'switch.news', biasLight: { entityId: 'switch.bias' },
+          evCharger: { statusEntity: 'switch.evstat' },
+          mailCount: { countEntity: 'number.mail', flagEntity: 'switch.flag' },
+        }],
+        lights: [{ id: 'l1', x: 1, y: 1, label: 'L', entity_id: null, fanEntity: 'switch.fan', logic: { entityId: 'number.logic', rules: [] } }],
+        doors: [{ id: 'd1', x: 1, y: 1, w: 800, rotation: 0, entity_id: 'switch.door', lockEntity: 'switch.bolt', doorbellEntity: 'switch.bell' }],
+        windows: [{ id: 'wi1', x: 1, y: 1, w: 800, rotation: 0, entity_id: 'switch.win', curtain: { style: 'split', entityId: 'switch.curtain' } }],
+        rooms: [{ id: 'rm1', name: 'K', anchor: { x: 1, y: 1 }, occupancyEntity: 'switch.occ' }],
+        motionSensors: [{ id: 'm1', x: 1, y: 1, heading: 0, fov: 360, range: 4000, label: 'M', entity_id: 'switch.motion' }],
+        envSensors: [{ id: 'e1', x: 1, y: 1, entity_id: 'number.env' }],
+        alarmPanels: [{ id: 'ap1', x: 1, y: 1, entity_id: 'switch.alarm' }],
+        calendarPanels: [{ id: 'cp1', x: 1, y: 1, calendarIds: ['switch.cal'] }],
+        thermostats: [{ id: 'th1', x: 1, y: 1, entity_id: 'switch.thermo' }],
+        safetySensors: [{ id: 'sa1', x: 1, y: 1, kind: 'smoke', entity_id: 'switch.smoke' }],
+        alertBeacons: [{ id: 'ab1', x: 1, y: 1, entity_id: 'switch.beacon' }],
+        robots: [{ id: 'rb1', x: 1, y: 1, kind: 'vacuum', entity_id: 'switch.vac', trackerEntity: 'switch.trk', latEntity: 'number.lat', lonEntity: 'number.lon', progressEntity: 'number.prog' }],
+        presenceZones: [{ id: 'pz1', points: [], entity_id: 'switch.pz' }],
+        cameras: [{ id: 'cm1', x: 1, y: 1, entity_id: 'switch.cam', alertEntity: 'switch.camalert' }],
+        projectors: [{ id: 'pj1', x: 1, y: 1, entity_id: 'switch.proj' }],
+        valves: [{ id: 'vv1', x: 1, y: 1, entity_id: 'switch.valve' }],
+        plugs: [{ id: 'pg1', x: 1, y: 1, entity_id: 'switch.plug', powerEntity: 'number.plugw' }],
+        sprinklerZones: [{ id: 'sp1', x: 1, y: 1, entity_id: 'switch.sprink' }],
+        pools: [{ id: 'po1', points: [], heaterEntity: 'switch.heat', pumpEntity: 'switch.pump', lightEntities: ['switch.poollight'], waterTempEntity: 'number.wt', phEntity: 'number.ph', orpEntity: 'number.orp', saltEntity: 'number.salt' }],
+        infoCards: [{ id: 'ic1', x: 1, y: 1, entity_id: 'number.info' }],
+        actionButtons: [{ id: 'ac1', x: 1, y: 1, entity_id: 'switch.action' }],
+        flagpoles: [{ id: 'fp1', x: 1, y: 1, entityId: 'number.hoist' }],
+      });
+      const store = makeStore([f], {
+        people: [{ id: 'pp1', name: 'A', haPersonId: 'switch.person', gpsTrackerId: 'switch.tracker' }],
+        weather: { source: 'sensors', sensors: { precip: 'number.precip', windSpeed: 'number.wind', temp: 'number.temp', lightning: 'switch.lightning' }, moonEntity: 'switch.moon', alerts: { entityId: 'switch.walert' } },
+        scene3d: { preset: 'night', luxEntity: 'number.lux' },
+        flights: { enabled: true, source: 'entity', entityId: 'switch.flights' },
+        bgTexts: [{ id: 'bt1', mode: 'sky', entityId: 'switch.bgtext' }],
+        geo: { landmarks: [], calibTracker: 'switch.calib' },
+      });
+      const { p } = await freshPlanner(store);
+      const want = [
+        'switch.dishwasher', 'switch.fridge_door', 'switch.job', 'number.soil', 'switch.news',
+        'switch.bias', 'switch.evstat', 'number.mail', 'switch.flag',
+        'switch.fan', 'number.logic',
+        'switch.door', 'switch.bolt', 'switch.bell',
+        'switch.win', 'switch.curtain', 'switch.occ', 'switch.motion', 'number.env',
+        'switch.alarm', 'switch.cal', 'switch.thermo', 'switch.smoke', 'switch.beacon',
+        'switch.vac', 'switch.trk', 'number.lat', 'number.lon', 'number.prog',
+        'switch.pz', 'switch.cam', 'switch.camalert', 'switch.proj', 'switch.valve',
+        'switch.plug', 'number.plugw', 'switch.sprink',
+        'switch.heat', 'switch.pump', 'switch.poollight', 'number.wt', 'number.ph', 'number.orp', 'number.salt',
+        'number.info', 'switch.action', 'number.hoist',
+        'switch.person', 'switch.tracker',
+        'number.precip', 'number.wind', 'number.temp', 'switch.lightning', 'switch.moon', 'switch.walert',
+        'number.lux', 'switch.flights', 'switch.bgtext', 'switch.calib',
+      ];
+      const missing = want.filter(id => p._isSlowEntity(id) !== true);
+      ok('h: every swept binding is slow', missing.length === 0, missing.join(','));
+      ok('h: sweep count', want.length === 59, `n=${want.length}`);
+      ok('h: an unswept sibling is not slow', p._isSlowEntity('switch.not_bound_anywhere') === false, '');
+    }
+
+    // ── (i) non-number/switch scoped rules unchanged ─────────────────────────
+    {
+      const f = floor('f1', 'Home', {
+        envSensors: [{ id: 'e1', x: 1, y: 1, entity_id: 'sensor.env_temp' }],
+        alarmPanels: [{ id: 'ap1', x: 1, y: 1, entity_id: 'alarm_control_panel.house' }],
+        cameras: [{ id: 'cm1', x: 1, y: 1, entity_id: 'camera.porch', alertEntity: 'binary_sensor.porch_motion' }],
+      });
+      const { p } = await freshPlanner(makeStore([f]));
+      ok('i: bound env sensor.* still slow', p._isSlowEntity('sensor.env_temp') === true, '');
+      ok('i: bound alarm still slow', p._isSlowEntity('alarm_control_panel.house') === true, '');
+      ok('i: camera alert binary_sensor still slow', p._isSlowEntity('binary_sensor.porch_motion') === true, '');
+      ok('i: unrelated sensor.* still live', p._isSlowEntity('sensor.random_power') === false, '');
+      ok('i: unrelated binary_sensor still live', p._isSlowEntity('binary_sensor.random') === false, '');
+    }
+  } catch (err) {
+    ok('harness threw', false, (err && err.stack) ? err.stack.split('\n').slice(0, 3).join(' | ') : String(err));
+  }
+
+  const pass = results.filter(r => r.pass).length;
+  const total = results.length;
+  const fails = results.filter(r => !r.pass).map(r => r.name + (r.extra ? ` {${r.extra}}` : ''));
+  document.getElementById('rows').innerHTML = results.map(r =>
+    `<div class="row"><span class="name">${r.name}</span>` +
+    `<span class="${r.pass ? 'pass' : 'fail'}">${r.pass ? 'PASS' : 'FAIL'}${r.extra ? ` <span class="extra">${r.extra}</span>` : ''}</span></div>`
+  ).join('');
+  const sum = document.getElementById('summary');
+  sum.textContent = `CHURN ${pass === total ? 'PASS' : 'FAIL'} ${pass}/${total}`;
+  sum.className = pass === total ? 'okbg' : 'badbg';
+  window.__RESULT__ = { pass, total, results };
+  document.title = `CHURN ${pass === total ? 'PASS' : 'FAIL'} ${pass}/${total}` +
+    (fails.length ? ` | FAILS: ${fails.join('; ')}` : '');
+</script>

@@ -480,6 +480,12 @@ export class Planner extends EventTarget {
   hass: HaApi | null = null;
   disc = new SensorDiscovery();
 
+  // Config-channel membership for `number.*` / `switch.*` entities (perf). See
+  // _slowIds() / _rebuildSlowIds() — rebuilt lazily whenever configRev moves.
+  private _slowIdSet: Set<string> | null = null;
+  private _slowIdPrefixes: string[] = [];
+  private _slowIdsRev = -1;
+
   // Per-bound-sensor live state, keyed by sensor.id
   discBy: Record<string, DiscoveredDevice> = {};
   zonesBy: Record<string, ZonesLive> = {};
@@ -1132,6 +1138,13 @@ export class Planner extends EventTarget {
     // not write its runtime view tweaks (or anything else) back to HA or
     // even its own localStorage cache.
     if (this.uiMode !== 'edit') return;
+    // Any persisted mutation may have changed a BINDING, so invalidate the
+    // config-channel membership set (_slowIds). Belt-and-braces: virtually
+    // every binding edit also emitConfig()s (which the rev guard catches), but
+    // save() is THE store-mutation choke point, so pinning it here means a
+    // setter that only saves can never leave a new binding on the live path.
+    // Rebuilding is a cheap store sweep and save() is a user-edit cadence.
+    this._slowIdsRev = -1;
     // Undo history: record the pre-mutation baseline before persisting. Cheap
     // no-op when nothing changed since the last snapshot (identical serialize).
     this._pushUndoSnapshot();
@@ -2280,11 +2293,119 @@ export class Planner extends EventTarget {
     this.emitConfig();
   }
 
-  // Slow vs live classification: number/switch are config, everything else is
-  // ~10 Hz live data.
+  // ---- Config-channel membership set for number.* / switch.* -------------
+  //
+  // HISTORY: this used to be a blanket `id.startsWith('number.'|'switch.')`
+  // rule. In a real HA instance those two domains change constantly for
+  // entities Diorama never displays, and every one of them emitted config →
+  // bumped `configRev` → rebuilt EVERY configRev-keyed 3D group (incl. the
+  // whole `_keyFloor` floor group: walls, furniture, nav). The scene churned
+  // at idle every few seconds. The blanket rule is now a MEMBERSHIP TEST.
+  //
+  // Two mechanisms, because the config channel serves two different consumers:
+  //   1. `_slowIdSet` — every `number.`/`switch.`-capable BOUND entity id swept
+  //      out of the whole store (ALL floors, not just the current one: a floor
+  //      switch must not silently drop a binding, and several of the scoped
+  //      per-fixture rules below are deliberately current-floor-only).
+  //   2. `_slowIdPrefixes` — `number.<slug>_` / `switch.<slug>_` for every
+  //      BOUND mmWave sensor's deviceSlug. This is the load-bearing half of the
+  //      old blanket rule and CANNOT be served by sweeping `discBy`: the
+  //      firmware's zone-vertex entities are built on demand from discovered
+  //      SLUGS (`zoneEntityId` → `number.<slug>_<zoneSlug>_v<n>_x`) and never
+  //      appear in `DiscoveredDevice` as entity ids at all. A prefix rule also
+  //      survives ESPHome trickling new zone/config entities in long after
+  //      discovery cached, which a discBy sweep would miss until the next
+  //      `disc.invalidate()`. Still tightly scoped — only ids belonging to a
+  //      device the user actually bound.
+  //
+  // Rebuilt lazily whenever `configRev` moves (binding edits are exactly the
+  // config-path events, and discovery completion emits config too). Must never
+  // itself emitConfig — it only reads.
+  private _slowIds(): Set<string> {
+    if (this._slowIdSet === null || this._slowIdsRev !== this.configRev) this._rebuildSlowIds();
+    return this._slowIdSet!;
+  }
+
+  private _rebuildSlowIds(): void {
+    this._slowIdsRev = this.configRev;
+    const set = new Set<string>();
+    const pre: string[] = [];
+    const add = (v: string | null | undefined): void => { if (v) set.add(v); };
+    const addAll = (v: readonly (string | null | undefined)[] | undefined): void => {
+      if (v) for (const x of v) add(x);
+    };
+    const st = this.store;
+    for (const f of st.floors ?? []) {
+      for (const s of f.sensors ?? []) {
+        if (!s.deviceSlug) continue;
+        pre.push(`number.${s.deviceSlug}_`, `switch.${s.deviceSlug}_`);
+      }
+      for (const x of f.switches ?? []) add(x.entity_id);
+      for (const x of f.lights ?? []) { add(x.entity_id); add(x.fanEntity); add(x.logic?.entityId); }
+      for (const x of f.furniture ?? []) {
+        add(x.entity_id); add(x.doorEntity); add(x.powerEntity); add(x.tempEntity);
+        add(x.moistureEntity); add(x.jobStateEntity); add(x.newsEntity);
+        add(x.printProgressEntity); add(x.biasLight?.entityId);
+        add(x.evCharger?.statusEntity); add(x.evCharger?.powerEntity);
+        add(x.mailCount?.countEntity); add(x.mailCount?.flagEntity);
+      }
+      for (const x of f.motionSensors ?? []) add(x.entity_id);
+      for (const x of f.envSensors ?? []) add(x.entity_id);
+      for (const x of f.doors ?? []) { add(x.entity_id); add(x.lockEntity); add(x.doorbellEntity); }
+      for (const x of f.windows ?? []) { add(x.entity_id); add(x.coverEntity); add(x.curtain?.entityId); }
+      for (const x of f.rooms ?? []) add(x.occupancyEntity);
+      for (const x of f.alarmPanels ?? []) add(x.entity_id);
+      for (const x of f.calendarPanels ?? []) addAll(x.calendarIds);
+      for (const x of f.thermostats ?? []) add(x.entity_id);
+      for (const x of f.safetySensors ?? []) add(x.entity_id);
+      for (const x of f.alertBeacons ?? []) add(x.entity_id);
+      for (const x of f.robots ?? []) {
+        add(x.entity_id); add(x.trackerEntity); add(x.latEntity); add(x.lonEntity);
+        add(x.posEntity); add(x.progressEntity);
+      }
+      for (const x of f.presenceZones ?? []) add(x.entity_id);
+      for (const x of f.cameras ?? []) { add(x.entity_id); add(x.alertEntity); }
+      for (const x of f.projectors ?? []) add(x.entity_id);
+      for (const x of f.valves ?? []) add(x.entity_id);
+      for (const x of f.plugs ?? []) { add(x.entity_id); add(x.powerEntity); }
+      for (const x of f.sprinklerZones ?? []) add(x.entity_id);
+      for (const x of f.pools ?? []) {
+        add(x.heaterEntity); add(x.pumpEntity); addAll(x.lightEntities);
+        add(x.waterTempEntity); add(x.phEntity); add(x.orpEntity); add(x.saltEntity);
+      }
+      for (const x of f.infoCards ?? []) add(x.entity_id);
+      for (const x of f.actionButtons ?? []) add(x.entity_id);
+      for (const x of f.flagpoles ?? []) add(x.entityId);
+    }
+    // Store-level bindings.
+    for (const pe of st.people ?? []) { add(pe.haPersonId); add(pe.gpsTrackerId); }
+    const w = st.weather;
+    if (w) {
+      add(w.entityId); add(w.moonEntity); add(w.alerts?.entityId);
+      const ws = w.sensors ?? {};
+      add(ws.precip); add(ws.windSpeed); add(ws.temp); add(ws.lightning);
+    }
+    add(st.scene3d?.luxEntity);
+    add(st.flights?.entityId);
+    for (const e of st.bgTexts ?? []) add(e.entityId);
+    add(st.geo?.calibTracker);
+    this._slowIdSet = set;
+    this._slowIdPrefixes = pre;
+  }
+
+  // Slow vs live classification: bound number/switch entities are config,
+  // everything else is ~10 Hz live data.
   private _isSlowEntity(id: string): boolean {
     if (!id) return false;
-    if (id.startsWith('number.') || id.startsWith('switch.')) return true;
+    if (id.startsWith('number.') || id.startsWith('switch.')) {
+      if (this._slowIds().has(id)) return true;
+      for (const pfx of this._slowIdPrefixes) if (id.startsWith(pfx)) return true;
+      // Unrelated number.*/switch.* traffic: LIVE-only. Nothing in Diorama
+      // displays it, so no configRev bump and no 3D rebuild. (The rest of this
+      // function still runs — a bound id in one of the scoped rules below can
+      // legitimately be in either domain and is caught above via the set.)
+      return false;
+    }
     // The 'entity' flight source's bound rest-sensor proxy: config-path so the
     // sidebar status + the renderer dirty key repaint when a new aircraft list
     // lands. Scoped to that ONE configured id, and only while that source is
