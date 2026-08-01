@@ -1310,7 +1310,7 @@ Design `docs/DESIGN-terrain.md`; research `docs/research/terrain-enhancements.md
   DoubleSide, a documented `_mat()` exemption; plane UVs scale per segment, never
   `texture.repeat` on the shared `_fenceMeshTexture`) / `hedge` (green solid
   extrusion + crown box, h 900, 450 thick, `_hedgeTexture` speckle). Shared
-  textures disposed only in `destroy()`. Openings punch through ALL FOUR fence kinds
+  textures disposed only in `destroy()`. Openings punch through ALL FOUR fence kinds + RAILING (2026-08-01 — the railing composite ignored the cuts full-segment exactly like picket/chainlink had; now per-solid-sub-interval with end posts = gate posts at each gap edge; 2D was already guarded)
   (2026-07-30, user-reported "the gate is not leaving a break in the fence line" —
   picket + chainlink were composite builds that IGNORED the cuts full-segment, and
   hedge's crown box bridged its punched gap; picket/chainlink now build PER SOLID
@@ -1319,12 +1319,23 @@ Design `docs/DESIGN-terrain.md`; research `docs/research/terrain-enhancements.md
   the kind-agnostic `wallCutsForSegment`; fences block nav like solid walls
   (rasterizer only skips `invisible`). Wall-kind picker in sidebar is HAND-LISTED
   (not enumerated) — new kinds must be added there.
-- **Gates**: `Door.kind: 'gate'` — picket-styled ~1100 swinging panel on the
-  shared swing/lock/doorbell/`doorOpenFraction` machinery (cover.* with
-  device_class `gate` binds like any cover). Doors snapped onto a fence/hedge
-  wall DEFAULT to `'gate'` silently (`nearestWallKind` in canvas-interact);
+- **Gates**: `Door.kind: 'gate'` — ONE kind whose PANEL STYLING branches on the
+  HOST wall kind (2026-08-01, user-requested): a RAILING host builds a banister
+  leaf (2 stiles at `WALL_KINDS.railing.h` 914 + 2 rails + slim balusters —
+  stiles deepest / balusters thinnest so end caps die inside thicker members,
+  the coincident-face trick); fence/hedge/no-host keep the picket leaf
+  byte-identical (golden-pinned mesh multiset). Host resolved at BUILD time via
+  `_openingHostKind(x, y)` (mirrors `_openingBaseY`'s nearest-segment search,
+  same 500 mm reach, NO ground-level short-circuit — styling must resolve at
+  grade 0; `_wallSegBases` entries carry a `kind` field). Shared
+  swing/lock/doorbell/`doorOpenFraction` machinery (cover.* with device_class
+  `gate` binds like any cover). Doors snapped onto a fence/hedge **or RAILING**
+  wall DEFAULT to `'gate'` silently (`isFenceLikeKind` — now exported for the
+  test pin — in canvas-interact; a 914 banister only sensibly hosts a gate);
   override via the Doors Kind dropdown (eight kinds — see "Covers & doorbell").
-- Test pages `terrain-test.html` (119/119), `fence-gate-test.html` (58/58).
+  2D gates draw via the host-neutral default swing branch (nothing
+  picket-specific exists in 2D).
+- Test pages `terrain-test.html` (119/119), `fence-gate-test.html` (86/86).
 
 ### Yard life (batch T3): water shimmer, fountain spray, sprinklers, rock_cluster
 Design `docs/DESIGN-terrain.md` (T3 bullet); research `docs/research/terrain-enhancements.md`
@@ -1434,7 +1445,7 @@ Design `docs/DESIGN-terrain.md` (T4 bullet + pinned decision 3); research
 - **Camera alert popups**: `CameraFixture.alertEntity` (binary_sensor, config-path like camera ids). Planner `_detectCameraAlerts` (LIVE path) + `cameraAlerting()` with a 6 s linger. 2D: pulsing FOV wedge + a screen-fixed 220×140 snapshot card beside the marker (module image cache keyed by a 3 s cache-bust bucket; ALERT text fallback; drawImage try/caught). 3D: `_camAlertGroup` sprite cards (now-playing mechanics; `_keyCamAlerts` = configRev | sensors flag | per-camera picture + 3 s bucket → rebuilds every 3 s while alerting, clears after linger; `_disposeSpriteMaps` pairing). Renders in all UI modes. Test page `batchn-test.html` (13/13).
 
 ### Continuous walls, interactive locks, oven, bg-image fixes (batch I)
-- **Walls are ONE extruded mesh per segment** (`_buildSolidWallSegment`): a 2D along-wall × height profile with door openings notching the bottom edge, window openings as interior HOLES, extruded wallT — replaces the old per-run/sub-sill/header/lintel BOX composition whose internal faces showed as horizontal/vertical seams at translucent opacities. `JAMB_OVL` is GONE. `wallCutsForSegment` still supplies the intervals; cutaway tags apply to the single mesh; railings keep their composite build; nav/floor-clip read wall DATA (unchanged). window-test asserts `wall_single_mesh`.
+- **Walls are ONE extruded mesh per segment** (`_buildSolidWallSegment`): a 2D along-wall × height profile with door openings notching the bottom edge, window openings as interior HOLES, extruded wallT — replaces the old per-run/sub-sill/header/lintel BOX composition whose internal faces showed as horizontal/vertical seams at translucent opacities. `JAMB_OVL` is GONE. `wallCutsForSegment` still supplies the intervals; cutaway tags apply to the single mesh; railings keep their composite build — but PER SOLID SUB-INTERVAL since 2026-08-01 (see the fences/gates bullet: the composite ignored wallCutsForSegment full-segment, a gate never broke a railing); nav/floor-clip read wall DATA (unchanged). window-test asserts `wall_single_mesh`.
 - **Interactive locks**: deadbolt boxes on BOTH door faces (`userData.kind='lock'`, `_doorGroup` in the raycast walker; 2D `hitDoorLock` wins over the panel) — click calls `lock.unlock`/`lock.lock` when bound, flips `Door.lockLocalState` when unbound (view mode refuses; kiosk allowed). `Planner.doorLockState`/`toggleDoorLock`. Sidebar lock badge is clickable. **`Door.lockControl?: 'full'|'display'`** (absent = 'full', today's behavior): `'display'` = the padlock/deadbolt is a PASSIVE state indicator — `toggleDoorLock` refuses (single choke point: `if (uiMode==='view' || door.lockControl==='display') return`), covering the 2D badge, 3D raycast, and sidebar-badge paths in EVERY ui mode incl. edit/kiosk; 2D `hitDoorLock` also skips display-mode doors so the padlock loses its click-priority (clicks fall through to the door open/close beneath, cursor stays `grab`) and draws at ~70 % alpha, and the 3D bolt drops emissiveIntensity ×0.65 as a "look-but-don't-touch" cue. Sidebar Doors editor shows a "Lock control" dropdown when a lock is bound or `lockLocalState` exists. **Lock state → visual resolution** is one shared helper in geometry.ts (mirrors `alarmStateColor`): `normalizeLockState` maps HA's full vocabulary, `lockGlyphColor` (locked=red, unlocked/open=green, **jammed=amber alert** distinct from locked, locking/unlocking/opening=target-state color, unavailable/unknown=grey), `lockGlyphTransitional` (dims the glyph/bolt), `lockGlyphJammed` (2D pulse), `lockGlyphSecured` (closed-shackle/filled 2D body). Consumed by `drawPadlock` (2D), the 3D deadbolt material, and the sidebar badge. `lockControl` folds into `_keyDoors`. Test page `lockoven-test.html` (`LOCKOVEN PASS 31/31`).
 - **Oven**: `Furniture.tempEntity` (stove/fridge; config-path) → 2D `N°` chip + 3D temp sprite (env-sprite idiom; temp rounded into the `_keyFloor` appliance hash); stoves are click-tagged `kind='appliance'` — click toggles persisted `Furniture.doorOpen` (ORed into the appliance-door blend as forceOpen; avatar proximity still works), dblclick binds.
 - **Bg image fixes**: `_applyBg` re-enables the `bg` layer (primary bug — a preset with bg off silently hid new images; section shows an amber hint when image-present-but-layer-off), names unsupported formats on decode error, downscales >2.5 MB rasters to ≤2000 px JPEG 0.85 before storing (the HA push failed SILENTLY on huge dataURLs — `save()` only console.warns), and sizes zero-intrinsic SVGs to the floor rect. Test page `lockoven-test.html` (8/8); window-test now 53/53.

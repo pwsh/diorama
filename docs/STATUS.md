@@ -336,6 +336,22 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Gate breaks railings + railing-styled gate panel** (2026-08-01,
+  user-reported + user-requested; unreleased — on main past v0.53.0).
+  Repro'd: the railing's composite 3D build ignored wallCutsForSegment
+  full-segment (the exact fence-kind bug class from 2026-07-30 — the
+  fence fix never touched railing because it isn't a fence kind; 2D
+  was already guarded). Fixed: per-solid-sub-interval build, end posts
+  land within ±120mm of both gap edges = real gate posts; gate-free
+  railings byte-identical. Gate panel now styles to its HOST wall:
+  railing host → banister leaf (stiles at 914 + rails + balusters,
+  coincident-face-safe), fence/hedge/none → picket leaf golden-pinned
+  unchanged; host via new _openingHostKind (nearest-segment, 500mm
+  reach, no grade short-circuit; _wallSegBases carries kind). Railing
+  joined the silent gate default (isFenceLikeKind, now exported for
+  the pin). Nav was already kind-agnostic — now pinned. Tests:
+  fence-gate 86/86 (+28); window 53/53, terrain 119/119, door-kinds
+  97/97, opening-click 39/39 unchanged.
 - **3D interaction parity audit + door/window clicks** (2026-08-01,
   user-reported "doors respond in 2D but not 3D — full pass all
   objects"; released in v0.53.0). Full 2D↔3D matrix
@@ -2978,6 +2994,15 @@ alarm keypad, smoke/CO, appliance animation, robots, weather W3, layer
 splits) shipped ahead of it in July 2026 — see the ledger above.
 
 ## Open threads / known deferrals
+
+**Future improvement (2026-08-01, user-noted)** — fun GROUND-BASED items to
+amend the train background-text option: scenery that dresses the orbit loop
+(e.g. crossing signals/gates that animate as the train passes, a small
+station platform, tunnel portals, signal lights, trackside trees/cargo).
+Design direction when picked up: per-entry opt-in props on the train
+BgTextEntry riding the existing loop geometry (arc-length placement like the
+cars), built in `_bgTextGroup` under `_keyBgText`, per-frame animation via
+`_advanceBgText` (zero-alloc discipline), `_bgTextPhase`-continuous.
 
 **Next planned arc (2026-07-20)** — five user-ordered items now scoped in
 `docs/ROADMAP.md` ("Planned arc — 2026-07-20"), none started:

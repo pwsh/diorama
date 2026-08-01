@@ -14,7 +14,7 @@
     cp test-pages/fence-gate-test.html "$H"/
     npx esbuild src/geometry.ts --bundle --format=esm --outfile="$H"/geometry.mod.js
     T=$(mktemp -d); cp -r src/* "$T"/; cp test-pages/fake-avatar-store.ts "$T"/avatar-store.ts
-    printf "export * from './canvas-render.js';\nexport * from './canvas-hit.js';\n" > "$T"/canvas2d-entry.ts
+    printf "export * from './canvas-render.js';\nexport * from './canvas-hit.js';\nexport { nearestWallKind, isFenceLikeKind } from './canvas-interact.js';\n" > "$T"/canvas2d-entry.ts
     npx esbuild "$T"/planner.ts        --bundle --format=esm --outfile="$H"/planner.mod.js
     npx esbuild "$T"/canvas2d-entry.ts --bundle --format=esm --outfile="$H"/canvas-render.mod.js
 -->
@@ -254,7 +254,12 @@
       });
       return clear;
     };
-    for (const kind of ['fence_picket', 'fence_privacy', 'fence_chainlink', 'hedge']) {
+    // `railing` joined the matrix with the railing-gate work: the banister is a
+    // see-through COMPOSITE like picket / chain-link (not the notched single-mesh
+    // extrusion), and it was still built across the WHOLE segment — rails, posts
+    // and balusters ran straight through a gate. (Its 2D balusters already
+    // honoured the cuts, so only the 3D side was broken — §11 covers that.)
+    for (const kind of ['fence_picket', 'fence_privacy', 'fence_chainlink', 'hedge', 'railing']) {
       // No gate → the run is continuous (the control: the assertions below only
       // mean something if the un-gated fence DOES cross the same interval).
       r.updateFloor(mkFloor(fence(kind)), scene3d);
@@ -266,11 +271,112 @@
       ok(`gap_no_span_${kind}`, spansGate(grp) === null, String(spansGate(grp)));
       ok(`gap_mid_clear_${kind}`, midClear(grp));
     }
+    // Each RUN gets its own end posts → the two gap edges carry real gate posts.
+    // Railing posts are the 90×90 bars (h = kindH−60 = 854); assert one lands
+    // within ±120 mm of each opening edge (a post CENTRE sits ON the cut).
+    r.updateFloor(mkFloor(fence('railing'), [gapGate]), scene3d);
+    {
+      const grp = r._floorGroup.children.find(c => c.type === 'Group' && c.children.length);
+      const postCentres = [];
+      grp.traverse(o => {
+        if (!o.isMesh || o.userData?.outline) return;
+        const g = o.geometry?.parameters;
+        if (!g || !near(g.height, 854, 2) || !near(g.width, 90, 2)) return;
+        const [lo, hi] = worldSpanX(o);
+        postCentres.push((lo + hi) / 2);
+      });
+      const nearEdge = (e) => postCentres.some(c => Math.abs(c - e) < 120);
+      ok('railing_gate_post_lo', nearEdge(GAP_X0), postCentres.map(c => c | 0).join(','));
+      ok('railing_gate_post_hi', nearEdge(GAP_X1), postCentres.map(c => c | 0).join(','));
+    }
     // The gate PANEL itself still builds (the gap is a hole for the gate, not a
     // hole with nothing in it) and still swings.
     r.updateFloor(mkFloor(fence('fence_picket'), [gapGate]), scene3d);
     r.updateDoorsWindows([gapGate], [], () => null);
     ok('gap_gate_panel_present', r._doorGroup.children.length === 1);
+  }
+
+  // === 10b. Gate PANEL styling follows the HOST wall kind =================
+  // ONE Door.kind ('gate'); only the leaf's look branches. A railing host builds
+  // a banister leaf (stiles + 2 rails + slim balusters, ~914 = WALL_KINDS.railing.h);
+  // a fence / hedge / no host keeps the picket leaf (~1100), byte-identical to
+  // the pre-feature build. Structural fingerprints, not pixels.
+  {
+    const styleGate = { id: 'sg', x: 5550, y: wallY, w: 900, rotation: 0, kind: 'gate', entity_id: null };
+    const leafBoxes = () => r._doorGroup.children[0].children
+      .filter(c => c.isMesh && !c.userData.outline && c.geometry?.type === 'BoxGeometry');
+    const buildOn = (kind) => {
+      r.updateFloor(mkFloor(kind ? fence(kind) : [], [styleGate]), scene3d);
+      r.updateDoorsWindows([styleGate], [], () => null);
+      return leafBoxes().map(m => m.geometry.parameters);
+    };
+    // Picket host: 2 full-width rails (w = 900) + N tall pickets (h = 1060).
+    const pk = buildOn('fence_picket');
+    const pkPick = pk.filter(g => near(g.height, 1060, 2));
+    const pkRail = pk.filter(g => near(g.width, 900, 2) && near(g.height, 80, 2));
+    ok('style_picket_pickets', pkPick.length >= 8, String(pkPick.length));
+    ok('style_picket_rails', pkRail.length === 2, String(pkRail.length));
+    ok('style_picket_no_railing_stile', pk.filter(g => near(g.height, 914, 2)).length === 0);
+    // Railing host: 2 full-height stiles (h = 914, w = 70) + 2 SHORT rails
+    // (w = 830 = d.w − stile) + slim balusters (w = 26). No 1060 pickets.
+    const rl = buildOn('railing');
+    const rlStile = rl.filter(g => near(g.height, 914, 2) && near(g.width, 70, 2));
+    const rlRail  = rl.filter(g => near(g.width, 830, 2));
+    const rlBal   = rl.filter(g => near(g.width, 26, 2) && near(g.depth, 26, 2));
+    ok('style_railing_stiles', rlStile.length === 2, String(rlStile.length));
+    ok('style_railing_rails', rlRail.length === 2, String(rlRail.length));
+    ok('style_railing_balusters', rlBal.length >= 2, String(rlBal.length));
+    ok('style_railing_no_pickets', rl.filter(g => near(g.height, 1060, 2)).length === 0);
+    // The leaf is SHORTER than the picket leaf (banister height, not fence).
+    const topOf = (gs) => Math.max(...gs.map(g => g.height));
+    ok('style_railing_shorter', topOf(rl) < topOf(pk), `${topOf(rl)} < ${topOf(pk)}`);
+    // Coincident-face discipline: stiles are the DEEPEST part, balusters the
+    // thinnest, so every rail / baluster end cap dies inside a thicker member.
+    ok('style_railing_depths',
+       Math.max(...rlStile.map(g => g.depth)) > Math.max(...rlRail.map(g => g.depth))
+       && Math.min(...rlRail.map(g => g.depth)) > 26,
+       `stile=${rlStile[0]?.depth} rail=${rlRail.map(g => g.depth).join('/')}`);
+    // GOLDEN: fence-host gate is byte-identical to the pre-feature build.
+    // Reference = the shipped picket leaf: 2 rails (900×80×30) + 9 pickets
+    // (55×1060×22) for w = 900. Signature compared as a sorted multiset.
+    const sig = (gs) => gs.map(g => `${g.width}x${g.height}x${g.depth}`).sort().join(' ');
+    const GOLD = sig([
+      { width: 900, height: 80, depth: 30 }, { width: 900, height: 80, depth: 30 },
+      ...Array.from({ length: 9 }, () => ({ width: 55, height: 1060, depth: 22 })),
+    ]);
+    ok('style_picket_golden', sig(pk) === GOLD, sig(pk));
+    // Hedge host + NO host at all both keep the picket leaf verbatim.
+    ok('style_hedge_golden', sig(buildOn('hedge')) === GOLD);
+    ok('style_nohost_golden', sig(buildOn(null)) === GOLD);
+    // Swing / open machinery is shared and untouched by the styling branch.
+    const rSt = { 'cover.rg': { state: 'open', attributes: { current_position: 100 } } };
+    const rgGate = { ...styleGate, entity_id: 'cover.rg' };
+    r.updateFloor(mkFloor(fence('railing'), [rgGate]), scene3d);
+    r.updateDoorsWindows([rgGate], [], () => null);
+    const rClosedY = r._doorGroup.children[0].rotation.y;
+    r.updateDoorsWindows([rgGate], [], id => rSt[id] || null);
+    ok('style_railing_swings', Math.abs(r._doorGroup.children[0].rotation.y - rClosedY) > 0.2);
+  }
+
+  // === 10c. Nav: a railing gate stays walkable ============================
+  // Railings block nav like solid walls; wallCutsForSegment is kind-agnostic, so
+  // the opening must remain a hole in the rasterized run.
+  {
+    const navRg = { id: 'nrg', x: 5550, y: wallY, w: 900, rotation: 0, kind: 'gate', entity_id: null };
+    r.updateFloor(mkFloor(fence('railing'), [navRg]), scene3d);
+    const nv = r._nav;
+    const idx = (wx, wy) => {
+      const cx = Math.max(0, Math.min(nv.nx - 1, Math.floor(wx / nv.cell)));
+      const cy = Math.max(0, Math.min(nv.ny - 1, Math.floor(wy / nv.cell)));
+      return cy * nv.nx + cx;
+    };
+    ok('nav_railing_blocks', nv.blocked[idx(2000, wallY)] === 1);
+    ok('nav_railing_gate_walkable', nv.blocked[idx(6000, wallY)] !== 1);
+    // Pure-level: the cut exists for a railing host (kind-agnostic by design).
+    const { wallCutsForSegment } = geo;
+    const cuts = wallCutsForSegment({ x: 500, y: wallY }, { x: 11500, y: wallY }, [navRg], []);
+    ok('railing_cut_pure', cuts.solids.length === 2 && cuts.openings.length === 1,
+       `${cuts.solids.length}/${cuts.openings.length}`);
   }
 
   // === 11. 2D: the gate gap is REAL PIXELS, not just a broken base stroke ==
@@ -283,6 +389,24 @@
     const { Planner } = await import('./planner.mod.js?v=' + Date.now());
     const C2D = await import('./canvas-render.mod.js?v=' + Date.now());
     const { drawAll, computeView, mmToPx } = C2D;
+    // === 11a. A door dropped on a boundary run defaults to 'gate' ==========
+    // The drop sites (onCanvasClick's `door` tool + the doorMove release) gate
+    // on isFenceLikeKind(nearestWallKind(...)). Railing joined that set: a
+    // 914 mm banister can only sensibly host a gate, and the 3D gate now styles
+    // itself to a railing host (§10b), so the default lands the right look.
+    {
+      const { nearestWallKind, isFenceLikeKind } = C2D;
+      const nwFloor = (kind) => ({ walls: [{ id: 'w1', kind, points: [{ x: 500, y: wallY }, { x: 11500, y: wallY }] }] });
+      ok('nwk_railing', nearestWallKind(nwFloor('railing'), 6000, wallY) === 'railing');
+      ok('nwk_out_of_reach', nearestWallKind(nwFloor('railing'), 6000, wallY + 900) === null);
+      ok('fencelike_railing', isFenceLikeKind('railing') === true);
+      ok('fencelike_fences', ['fence_picket', 'fence_privacy', 'fence_chainlink', 'hedge']
+        .every(k => isFenceLikeKind(k) === true));
+      // House structure must NOT auto-gate (a door in a wall stays a door).
+      ok('fencelike_not_house', ['full', 'half', 'invisible']
+        .every(k => isFenceLikeKind(k) === false) && isFenceLikeKind(null) === false);
+    }
+
     const sleep = ms => new Promise(res => setTimeout(res, ms));
     const waitFor = async (cond, tries = 600) => {
       for (let i = 0; i < tries; i++) { if (cond()) return true; await sleep(4); } return false;
@@ -336,7 +460,11 @@
     // inside the gate band. Sample with a non-Select tool so only the fence
     // geometry differs between the with-wall and no-wall paints.
     P.tool = 'delete';
-    for (const kind of ['fence_picket', 'fence_privacy', 'fence_chainlink', 'hedge']) {
+    // `railing` is in the matrix as a REGRESSION PIN, not a bug repro: drawWalls
+    // already stroked only the solid sub-intervals and its baluster ticks already
+    // carried the shared `inSolid` guard, so 2D was correct while 3D ran the
+    // banister straight through the gate (§10).
+    for (const kind of ['fence_picket', 'fence_privacy', 'fence_chainlink', 'hedge', 'railing']) {
       const control = bandDiff(paint(kind, []), paint(null, []));
       const gated = bandDiff(paint(kind, [gate2]), paint(null, [gate2]));
       ok(`gap2d_control_${kind}`, control > 20, String(control));

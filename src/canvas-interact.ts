@@ -494,9 +494,15 @@ export function nearestWallKind(
   return best ? best.kind : null;
 }
 
-// True when a wall kind is a fence/hedge boundary (→ new doors default to gate).
-function isFenceLikeKind(k: string | null): boolean {
-  return k != null && (k.startsWith('fence_') || k === 'hedge');
+// True when a wall kind is a see-through / low BOUNDARY run rather than house
+// structure (→ new doors dropped on it default to 'gate'). Railings joined the
+// set with the railing-gate work: a 914 mm banister can only sensibly host a
+// gate (a baby gate at the head of a stair, a deck gate), never a 2 m door
+// panel — and the 3D gate now styles itself to the railing host, so the default
+// produces the right look with no extra clicks. Explicit Door.kind always wins;
+// only an UNSET kind is defaulted.
+export function isFenceLikeKind(k: string | null): boolean {
+  return k != null && (k.startsWith('fence_') || k === 'hedge' || k === 'railing');
 }
 
 // Weld `wall`'s endpoints onto other unlocked walls — endpoint-to-endpoint

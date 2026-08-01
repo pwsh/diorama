@@ -2610,7 +2610,8 @@ export class ThreeDRenderer {
   // windows builder runs under its OWN dirty key (_keyDoors) and must be able to
   // hang a gate in its fence without a floor rebuild. Empty / all-zero whenever
   // the effective ground level is 0, so the default build is untouched.
-  private _wallSegBases: { ax: number; ay: number; bx: number; by: number; baseY: number }[] = [];
+  private _wallSegBases: { ax: number; ay: number; bx: number; by: number;
+                           baseY: number; kind: string }[] = [];
   // Bed occupancy summary produced by _updateBedCovers for NEXT frame's thought-
   // bubble resolution (one-frame lag is fine — bubble commit has 2.5 s
   // hysteresis). hiddenKeys: rigs currently hidden under the two-in-bed covers.
@@ -4113,6 +4114,30 @@ export class ThreeDRenderer {
       const qx = s.ax + t * dx - x, qy = s.ay + t * dy - y;
       const d2 = qx * qx + qy * qy;
       if (d2 <= bestD2) { bestD2 = d2; best = s.baseY; }
+    }
+    return best;
+  }
+
+  // The WallKind of the segment HOSTING a door / window — the same nearest-
+  // segment association `_openingBaseY` uses, but for the panel's LOOK rather
+  // than its height. A gate keeps ONE Door.kind ('gate'); only its panel
+  // STYLING branches on the host, so a gate hung in a banister reads as a
+  // railing gate (rails + balusters) instead of a picket one. Unlike
+  // _openingBaseY there is no ground-level short-circuit — styling must resolve
+  // at grade 0 too. `_wallSegBases` is rebuilt by updateFloor for EVERY wall
+  // (incl. invisible / layer-hidden ones) and persists across the doors-only
+  // rebuilds `_keyDoors` drives; an empty table (updateDoorsWindows before any
+  // updateFloor) or an opening farther than the snap reach → null = the
+  // default styling, i.e. byte-identical to the pre-feature build.
+  private _openingHostKind(x: number, y: number): string | null {
+    let best: string | null = null, bestD2 = OPENING_HOST_MAX_MM * OPENING_HOST_MAX_MM;
+    for (const s of this._wallSegBases) {
+      const dx = s.bx - s.ax, dy = s.by - s.ay, len2 = dx * dx + dy * dy;
+      let t = len2 > 0 ? ((x - s.ax) * dx + (y - s.ay) * dy) / len2 : 0;
+      t = t < 0 ? 0 : t > 1 ? 1 : t;
+      const qx = s.ax + t * dx - x, qy = s.ay + t * dy - y;
+      const d2 = qx * qx + qy * qy;
+      if (d2 <= bestD2) { bestD2 = d2; best = s.kind; }
     }
     return best;
   }
@@ -5940,7 +5965,8 @@ export class ThreeDRenderer {
       for (let i = 0; i < wall.points.length - 1; i++) {
         const a = wall.points[i], b = wall.points[i + 1];
         this._wallSegBases.push({ ax: a.x, ay: a.y, bx: b.x, by: b.y,
-                                  baseY: this._wallSegmentBaseY(kind, a, b, loops) });
+                                  baseY: this._wallSegmentBaseY(kind, a, b, loops),
+                                  kind });
       }
     }
     for (const wall of showWalls ? f.walls : []) {
@@ -5976,24 +6002,37 @@ export class ThreeDRenderer {
         // this segment's meshes resolve, so the whole run shifts rigidly.
         const bY = this._wallSegmentBaseY(kind, a, b, loops);
         if (kind === 'railing') {
-          // Banister: end/interval posts + top rail + thin balusters.
+          // Banister: end/interval posts + top/bottom rails + thin balusters —
+          // built PER SOLID SUB-INTERVAL, exactly like the picket / chain-link
+          // composites below. A railing is a see-through COMPOSITE (not the
+          // notched single-mesh extrusion), so building it across the whole
+          // segment ran the rails and balusters straight THROUGH a gate's
+          // opening — the 2D balusters already honoured the cuts (`inSolid`),
+          // so only the 3D side showed the fence-line bug. Posts are placed per
+          // RUN, so both sides of a gap get a real gate post.
           const railMat = this._mat({
             color: scene3d?.wallColor ? hexToInt(scene3d.wallColor) : 0x8d8d92,
             metalness: 0.3, roughness: 0.5,
           });
-          const bar = (t: number, w2: number, y0: number, y1: number, d2 = 70) => {
-            const m = new THREE.Mesh(new THREE.BoxGeometry(d2, y1 - y0, w2), railMat);
-            const p = this._w(a.x + ux * t, a.y + uy * t, bY + (y0 + y1) / 2);
-            m.position.set(p.x, p.y, p.z);
-            m.rotation.y = angle;
-            group.add(m);
-          };
-          bar(len / 2, len, kindH - 60, kindH);          // top rail
-          bar(len / 2, len, 60, 100, 50);                // bottom rail
-          const nPosts = Math.max(1, Math.round(len / 1200));
-          for (let k = 0; k <= nPosts; k++) bar((len * k) / nPosts, 90, 0, kindH - 60, 90);
-          const nBal = Math.floor(len / 280);
-          for (let k = 1; k < nBal; k++) bar((len * k) / nBal, 28, 100, kindH - 60, 28);
+          const { solids: railRuns } = wallCutsForSegment(a, b, f.doors ?? [], f.windows ?? []);
+          for (const run of railRuns) {
+            const rLen = run.t1 - run.t0;
+            if (rLen < 60) continue;    // sliver between abutting openings
+            const t0 = run.t0;
+            const bar = (t: number, w2: number, y0: number, y1: number, d2 = 70) => {
+              const m = new THREE.Mesh(new THREE.BoxGeometry(d2, y1 - y0, w2), railMat);
+              const p = this._w(a.x + ux * (t0 + t), a.y + uy * (t0 + t), bY + (y0 + y1) / 2);
+              m.position.set(p.x, p.y, p.z);
+              m.rotation.y = angle;
+              group.add(m);
+            };
+            bar(rLen / 2, rLen, kindH - 60, kindH);          // top rail
+            bar(rLen / 2, rLen, 60, 100, 50);                // bottom rail
+            const nPosts = Math.max(1, Math.round(rLen / 1200));
+            for (let k = 0; k <= nPosts; k++) bar((rLen * k) / nPosts, 90, 0, kindH - 60, 90);
+            const nBal = Math.floor(rLen / 280);
+            for (let k = 1; k < nBal; k++) bar((rLen * k) / nBal, 28, 100, kindH - 60, 28);
+          }
           continue;
         }
         // See-through fence composites (picket / chain-link) are built PER SOLID
@@ -8658,22 +8697,57 @@ export class ThreeDRenderer {
       hinge.rotation.y = rotR + openR;
 
       if (kind === 'gate') {
-        // Gate: a picket-styled swinging panel (flat boards, shorter ~1100) on
-        // the SAME hinge/swing math as a swing door — top/bottom rails + vertical
-        // pickets, all in `mat` (green while open). The shared lock/doorbell/
-        // open-fraction machinery below runs unchanged.
-        const GATE_H = 1100, boardT = 30;
-        const rail = (y: number) => {
-          const r = new THREE.Mesh(new THREE.BoxGeometry(d.w, 80, boardT), mat);
-          r.position.set(-d.w / 2, y, 0);
-          hinge.add(r);
-        };
-        rail(GATE_H - 220); rail(200);
-        const nPick = Math.max(2, Math.floor(d.w / 100));
-        for (let k = 0; k < nPick; k++) {
-          const pick = new THREE.Mesh(new THREE.BoxGeometry(55, GATE_H - 40, 22), mat);
-          pick.position.set(-((k + 0.5) / nPick) * d.w, (GATE_H - 40) / 2, 0);
-          hinge.add(pick);
+        // Gate: a swinging boundary panel on the SAME hinge/swing math as a
+        // swing door, in `mat` (green while open). The shared lock / doorbell /
+        // open-fraction machinery below runs unchanged. STYLING follows the HOST
+        // wall so an inline gate matches the run it breaks (one Door.kind, two
+        // looks): a railing host builds a banister leaf (stiles + top/bottom
+        // rails + slim balusters, ~914 to match WALL_KINDS.railing.h); every
+        // other host — fence, hedge, or none — keeps the picket leaf (~1100),
+        // byte-identical to the pre-feature build.
+        const railingHost = this._openingHostKind(dc.x, dc.y) === 'railing';
+        if (railingHost) {
+          const GATE_H = WALL_KINDS.railing.h;         // 914 — matches the run
+          const stW = 70, stT = 44;                    // stiles: the DEEPEST part
+          // Stiles sit fully inside the leaf; the rails span stile CENTRE to
+          // stile CENTRE and are shallower (34/30 < 44), so every rail end cap
+          // is buried inside a stile — no coincident faces (the same trick the
+          // railing wall uses where its rails die into a post).
+          for (const cx of [-stW / 2, -(d.w - stW / 2)]) {
+            const st2 = new THREE.Mesh(new THREE.BoxGeometry(stW, GATE_H, stT), mat);
+            st2.position.set(cx, GATE_H / 2, 0);
+            hinge.add(st2);
+          }
+          const railL = Math.max(10, d.w - stW);
+          const rail = (yc: number, h2: number, t2: number) => {
+            const r = new THREE.Mesh(new THREE.BoxGeometry(railL, h2, t2), mat);
+            r.position.set(-d.w / 2, yc, 0);
+            hinge.add(r);
+          };
+          rail(GATE_H - 35, 70, 34);                   // top rail   (879..914)
+          rail(85, 50, 30);                            // bottom rail (60..110)
+          // Balusters lap INTO both rails (y 90 → GATE_H−25) and are thinner
+          // than either (26 < 30/34), so their caps are buried too.
+          const nBal = Math.max(2, Math.round(d.w / 220));
+          for (let k = 0; k < nBal; k++) {
+            const bal = new THREE.Mesh(new THREE.BoxGeometry(26, GATE_H - 115, 26), mat);
+            bal.position.set(-((k + 0.5) / nBal) * d.w, 90 + (GATE_H - 115) / 2, 0);
+            hinge.add(bal);
+          }
+        } else {
+          const GATE_H = 1100, boardT = 30;
+          const rail = (y: number) => {
+            const r = new THREE.Mesh(new THREE.BoxGeometry(d.w, 80, boardT), mat);
+            r.position.set(-d.w / 2, y, 0);
+            hinge.add(r);
+          };
+          rail(GATE_H - 220); rail(200);
+          const nPick = Math.max(2, Math.floor(d.w / 100));
+          for (let k = 0; k < nPick; k++) {
+            const pick = new THREE.Mesh(new THREE.BoxGeometry(55, GATE_H - 40, 22), mat);
+            pick.position.set(-((k + 0.5) / nPick) * d.w, (GATE_H - 40) / 2, 0);
+            hinge.add(pick);
+          }
         }
       } else {
         const panel = new THREE.Mesh(
