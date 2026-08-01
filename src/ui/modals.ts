@@ -2864,6 +2864,13 @@ export class SettingsDrawer extends LitElement {
         exposes no real moon position. The sky dome + sun/moon toggle lives in
         Display ▸ "Sky backdrop".
       </div>
+      <label class="row"><span style="flex:1">Space station</span>
+        <input type="checkbox" .checked=${w?.moonStation === true}
+               @change=${(e: Event) => set(x => { x.moonStation = (e.target as HTMLInputElement).checked; })}>
+      </label>
+      <div style="font-size:10px;color:var(--text-dim);line-height:1.3;margin:2px 0 6px">
+        Renders the moon as a battle station — phases still apply.
+      </div>
 
       ${this._weatherAppearance(w, set)}
 

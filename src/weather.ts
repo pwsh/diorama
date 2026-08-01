@@ -948,6 +948,7 @@ export interface WeatherKeyFx {
   alertSeverity?: 'advisory' | 'watch' | 'warning';
   skyBackdrop?: boolean;
   moonPhase?: string | null;
+  moonStation?: boolean;
   observer?: { lat: number; lon: number } | null;
   skyRotRad?: number;
 }
@@ -1000,7 +1001,9 @@ export function weatherRebuildKey(
   const effKey = (Object.keys(fx.effects ?? {}) as Array<WeatherEffectKey>)
     .map(k => (fx.effects![k] ? '1' : '0')).join('');
   // Sky: the effective preset (dome colours + sun/moon day-night gating), the
-  // moon phase (8 states, ~daily), the resolved skyBackdrop flag, and the
+  // moon phase (8 states, ~daily), the moonStation flag (the moon disc's face
+  // is picked at BUILD time — updateWeather swaps the cached texture, so the
+  // toggle has to reach the renderer), the resolved skyBackdrop flag, and the
   // astronomical observer (lat/lon to 4 dp + plan-north θ to ~2°) so the
   // catalog sky rebuilds when calibration or location changes. Time
   // progression is the renderer's own 60 s recompute, never this key.
@@ -1008,7 +1011,8 @@ export function weatherRebuildKey(
     ? `${fx.observer.lat.toFixed(4)},${fx.observer.lon.toFixed(4)},` +
       `${b((fx.skyRotRad ?? 0) * 180 / Math.PI, 2)}`
     : '-';
-  const skyBucket = `${effPreset}:${fx.moonPhase ?? '-'}:${fx.skyBackdrop ? '1' : '0'}:${obsBucket}`;
+  const skyBucket = `${effPreset}:${fx.moonPhase ?? '-'}:${fx.moonStation ? 's' : '-'}:` +
+    `${fx.skyBackdrop ? '1' : '0'}:${obsBucket}`;
   // Sun elevation is consumed at FINE granularity (the star-ramp through civil
   // twilight, the sun-disc horizon ramp, the disc tint + position, the
   // decorative moon arc), so the sign alone is not enough now that configRev no

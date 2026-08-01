@@ -887,6 +887,10 @@ export class ThreeView extends LitElement {
     const sc3 = this._sc3();
     const skyBackdrop = sc3?.skyBackdrop ?? (w != null);
     const moonPhase = w?.moonEntity ? (states[w.moonEntity]?.state ?? null) : null;
+    // "That's no moon" — a pure display flag; the phase machinery is unchanged
+    // (see _moonTexture). Folded into weatherRebuildKey's skyBucket because the
+    // face is picked when the texture is built.
+    const moonStation = w?.moonStation === true;
 
     // Fitted geo θ recovers plan-north from calibration (else θ = 0 = plan-north).
     const fit = p.geoFit();
@@ -907,7 +911,7 @@ export class ThreeView extends LitElement {
     if (!wnow) {
       return {
         condition: 'sunny', intensity01: 0, windKmh: 0, windBearingPlanRad: null,
-        isDay: true, effects, alertSeverity, skyBackdrop, moonPhase,
+        isDay: true, effects, alertSeverity, skyBackdrop, moonPhase, moonStation,
         observer, skyRotRad: theta,
       };
     }
@@ -956,6 +960,7 @@ export class ThreeView extends LitElement {
       alertSeverity,
       skyBackdrop,
       moonPhase,
+      moonStation,
       observer,
       skyRotRad: theta,
     };

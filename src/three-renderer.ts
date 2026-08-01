@@ -293,8 +293,14 @@ export interface WeatherFxState {
   // moonPhase   — the bound moon.* entity's raw 8-state string (weather.ts
   //   moonPhaseFraction maps it to the drawn terminator). Null/undefined →
   //   default full moon.
+  // moonStation — "that's no moon": paint the moon disc as a battle station
+  //   instead of the plain lunar surface. The PHASE machinery is untouched
+  //   (same unlit semicircle + terminator half-ellipse over the painted face),
+  //   so the station waxes and wanes. Absent/false on a stale chunk → the plain
+  //   moon (graceful degrade, no regression).
   skyBackdrop?: boolean;
   moonPhase?: string | null;
+  moonStation?: boolean;
   // Astronomically-correct night sky (constellations + planets). observer =
   // resolved lat/lon (geoFit originLat/Lon when calibrated, else weather lat/lon,
   // else null). When present the renderer replaces the decorative random
@@ -17078,8 +17084,12 @@ export class ThreeDRenderer {
       this._skyStormDir.set(ux, uz);
     }
     // Moon phase texture (cheap; changes at most daily). Swap the cached map.
+    // This is the ONE moon sprite — the decorative opposite-the-sun arc and the
+    // real-ephemeris catalog moon only differ in POSITION (_moonRealDir vs
+    // _skyMoonTarget, both applied in _advanceWeather), so the station face
+    // covers both paths by construction.
     if (this._moonSprite) {
-      const tex = this._moonTexture(fx.moonPhase ?? 'full_moon');
+      const tex = this._moonTexture(fx.moonPhase ?? 'full_moon', fx.moonStation === true);
       const mm = this._moonSprite.material as THREE.SpriteMaterial;
       if (mm.map !== tex) { mm.map = tex; mm.needsUpdate = true; }
     }
@@ -17538,8 +17548,16 @@ export class ThreeDRenderer {
   // moonPhaseFraction (magnitude = illuminated fraction, sign = lit limb). An
   // unlit semicircle + a terminator half-ellipse compose every phase correctly
   // (new → full, crescent → gibbous, both waxing/waning). Cached per state.
-  private _moonTexture(state: string): THREE.CanvasTexture {
-    const key = (state || 'full_moon').toLowerCase().trim();
+  //
+  // `station` (WeatherConfig.moonStation) swaps ONLY the lit-disc painter for
+  // the battle-station face (_paintStationDisc) — the halo, the phase fraction
+  // and the whole unlit/terminator composition below are shared verbatim, which
+  // is the point: "that's no moon" only lands if it still waxes and wanes.
+  // Cached under a SUFFIXED key so plain and station live side by side in the
+  // one _moonTexCache (disposed wholesale in destroy(); no lifecycle change).
+  private _moonTexture(state: string, station = false): THREE.CanvasTexture {
+    const phase = (state || 'full_moon').toLowerCase().trim();
+    const key = station ? `${phase}|station` : phase;
     const cached = this._moonTexCache[key];
     if (cached) return cached;
     const S = 128, R = 52, cx = 64, cy = 64;
@@ -17551,11 +17569,12 @@ export class ThreeDRenderer {
     glow.addColorStop(1, 'rgba(223,230,255,0)');
     g.fillStyle = glow; g.beginPath(); g.arc(cx, cy, R * 1.3, 0, Math.PI * 2); g.fill();
 
-    const frac = moonPhaseFraction(key);        // [-1, 1]
+    const frac = moonPhaseFraction(phase);      // [-1, 1]
     const illum = Math.abs(frac);
     const waxing = frac >= 0;                    // lit on the right
     // full lit disc
-    g.fillStyle = '#dfe6ff'; g.beginPath(); g.arc(cx, cy, R, 0, Math.PI * 2); g.fill();
+    if (station) this._paintStationDisc(g, cx, cy, R);
+    else { g.fillStyle = '#dfe6ff'; g.beginPath(); g.arc(cx, cy, R, 0, Math.PI * 2); g.fill(); }
     if (illum < 0.999) {
       g.fillStyle = '#242c42';
       if (illum <= 0.001) {
@@ -17584,6 +17603,73 @@ export class ThreeDRenderer {
     const tex = new THREE.CanvasTexture(c);
     this._moonTexCache[key] = tex;
     return tex;
+  }
+
+  // "That's no moon." The battle-station face, painted INSTEAD of the plain
+  // `#dfe6ff` lit disc inside _moonTexture — the caller then lays the ordinary
+  // unlit semicircle + terminator half-ellipse over it, so every phase reads
+  // exactly as it does for the real moon.
+  //
+  // Toon-flat throughout (crisp bands, flat fills, no gradients — the plain
+  // moon has none either) and DETERMINISTIC: no Math.random, because the
+  // painter re-runs on every cache miss and the station must not shuffle its
+  // panels between rebuilds. Everything is clipped to the disc, so the limb
+  // stays a clean circle. Geometry (fractions of R): a one-band darker limb
+  // annulus for sphere read (0.87R→R), the equatorial trench (±0.135R, thin
+  // bright edge lines), three horizontal + two short vertical panel lines, and
+  // the superlaser dish in the upper-right quadrant (centre at +0.38R, −0.40R,
+  // radius 0.26R) as a dark crater + darker inner shadow + small bright focus
+  // dot + a bright rim stroke.
+  private _paintStationDisc(
+    g: CanvasRenderingContext2D, cx: number, cy: number, R: number,
+  ): void {
+    g.save();
+    g.beginPath(); g.arc(cx, cy, R, 0, Math.PI * 2); g.clip();
+
+    // Hull — a shade greyer than the lunar disc so the station reads as metal.
+    g.fillStyle = '#d2d8e4';
+    g.fillRect(cx - R, cy - R, R * 2, R * 2);
+
+    // Single darker limb band: toon sphere shading without a gradient.
+    g.fillStyle = '#b7bfd0';
+    g.beginPath();
+    g.arc(cx, cy, R, 0, Math.PI * 2);
+    g.arc(cx, cy, R * 0.87, 0, Math.PI * 2, true);
+    g.fill();
+
+    // Panel-line hints — subtle, low contrast, never crossing the trench band.
+    g.strokeStyle = '#c1c8d6'; g.lineWidth = 1;
+    for (const fy of [-0.68, 0.34, 0.70]) {
+      const y = Math.round(cy + R * fy) + 0.5;
+      g.beginPath(); g.moveTo(cx - R, y); g.lineTo(cx + R, y); g.stroke();
+    }
+    for (const fx of [-0.52, 0.30]) {
+      const x = Math.round(cx + R * fx) + 0.5;
+      g.beginPath(); g.moveTo(x, cy + R * 0.34); g.lineTo(x, cy + R * 0.70); g.stroke();
+    }
+
+    // Equatorial trench: darker band straight across the middle + edge lines.
+    const th = R * 0.135;
+    g.fillStyle = '#8f97a8';
+    g.fillRect(cx - R, cy - th, R * 2, th * 2);
+    g.strokeStyle = '#e2e7f0'; g.lineWidth = 1;
+    g.beginPath();
+    g.moveTo(cx - R, Math.round(cy - th) + 0.5); g.lineTo(cx + R, Math.round(cy - th) + 0.5);
+    g.moveTo(cx - R, Math.round(cy + th) - 0.5); g.lineTo(cx + R, Math.round(cy + th) - 0.5);
+    g.stroke();
+
+    // Superlaser dish (upper-right quadrant), drawn last so it sits proud.
+    const dx = cx + R * 0.38, dy = cy - R * 0.40, rd = R * 0.26;
+    g.fillStyle = '#9aa2b3';
+    g.beginPath(); g.arc(dx, dy, rd, 0, Math.PI * 2); g.fill();
+    g.fillStyle = '#7d8598';
+    g.beginPath(); g.arc(dx, dy, rd * 0.55, 0, Math.PI * 2); g.fill();
+    g.fillStyle = '#e8edf7';
+    g.beginPath(); g.arc(dx, dy, rd * 0.17, 0, Math.PI * 2); g.fill();
+    g.strokeStyle = '#eef2fa'; g.lineWidth = 2;
+    g.beginPath(); g.arc(dx, dy, rd, 0, Math.PI * 2); g.stroke();
+
+    g.restore();
   }
 
   private _starTexture(): THREE.CanvasTexture {

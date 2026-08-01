@@ -336,6 +336,20 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Death Star moon** (2026-08-01, user-requested "space station"
+  checkbox; unreleased — on main past v0.53.0).
+  WeatherConfig.moonStation: the moon disc paints as a battle
+  station (superlaser dish + rim, equatorial trench, deterministic
+  panel lines, toon-flat) with the REAL phase machinery composing on
+  top — it waxes and wanes; absent = byte-identical plain moon
+  (golden-pinned). One texture cache (<phase>|station suffix,
+  destroy()-only lifecycle; fixed a latent bug — moonPhaseFraction
+  was fed the suffixed cache key); both moon paths (decorative arc +
+  real-ephemeris) share the one sprite, test-pinned; skyBucket gains
+  the term in weatherRebuildKey; Settings ▸ Weather checkbox;
+  card/kiosk free. Tests: weather-fx sky 69/69 (+24), key 53/53
+  (+2), all other cases + weather 200/200 + sky-real 32/32
+  unchanged.
 - **Banner aircraft fleet + news-chopper merge** (2026-08-01,
   user-requested; unreleased — on main past v0.53.0). 19 new banner
   tow craft (BG_CRAFTS + _buildBannerCraft, entirely separate from

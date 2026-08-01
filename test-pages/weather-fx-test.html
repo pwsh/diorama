@@ -376,6 +376,119 @@
     ok('waning crescent lit on left', lum(rowPx(wanTex, 0.18)) > lum(rowPx(wanTex, 0.82)),
        `L=${lum(rowPx(wanTex,0.18)).toFixed(0)} R=${lum(rowPx(wanTex,0.82)).toFixed(0)}`);
 
+    // ── "That's no moon": WeatherConfig.moonStation paints the battle-station
+    // face INSTEAD of the lunar surface, but reuses the SAME phase machinery.
+    // Canvas is 128², disc R=52 centred (64,64); the station geometry is
+    // fractions of R (see _paintStationDisc), so these samples are absolute.
+    const pxAt = (tex, x, y) => tex.image.getContext('2d').getImageData(x, y, 1, 1).data;
+
+    // (i) absent flag = byte-identical plain moon. The lit disc is the flat
+    // #dfe6ff fill it has always been (golden pin, not a relative compare) and
+    // the no-arg call is the same cached texture as an explicit `false`.
+    const plainFull = r._moonTexture('full_moon');
+    const pf = pxAt(plainFull, 64, 64);
+    ok('plain full moon centre is still flat #dfe6ff',
+       pf[0] === 0xdf && pf[1] === 0xe6 && pf[2] === 0xff && pf[3] === 255,
+       `rgba=${pf[0]},${pf[1]},${pf[2]},${pf[3]}`);
+    const pf2 = pxAt(plainFull, 94, 43);   // where the station's dish crater sits
+    ok('plain full moon is uniform where the dish would be',
+       pf2[0] === 0xdf && pf2[1] === 0xe6 && pf2[2] === 0xff,
+       `rgba=${pf2[0]},${pf2[1]},${pf2[2]}`);
+    ok('moonTexture() with no station arg === explicit false',
+       r._moonTexture('full_moon') === r._moonTexture('full_moon', false));
+
+    // (ii) the station face differs from the plain moon at the same phase.
+    const stnFull = r._moonTexture('full_moon', true);
+    ok('station texture !== plain texture at the same phase', stnFull !== plainFull);
+    ok('station centre pixel differs from plain',
+       lum(pxAt(stnFull, 64, 64)) !== lum(pf),
+       `stn=${lum(pxAt(stnFull,64,64)).toFixed(0)} plain=${lum(pf).toFixed(0)}`);
+
+    // (iii) superlaser dish — upper-right quadrant crater darker than the plain
+    // moon there, and its bright rim brighter than the crater it encloses.
+    const dishCrater = lum(pxAt(stnFull, 94, 43));   // dish centre (84,43) + 0.78·rd
+    const dishRim    = lum(pxAt(stnFull, 97, 43));   // on the rd rim stroke
+    const stnHull    = lum(pxAt(stnFull, 38, 44));   // plain hull, away from dish/trench
+    ok('dish crater darker than the plain moon there', dishCrater < lum(pf2) - 30,
+       `crater=${dishCrater.toFixed(0)} plain=${lum(pf2).toFixed(0)}`);
+    ok('dish crater darker than the surrounding hull', dishCrater < stnHull - 15,
+       `crater=${dishCrater.toFixed(0)} hull=${stnHull.toFixed(0)}`);
+    ok('dish rim highlight brighter than the crater', dishRim > dishCrater + 30,
+       `rim=${dishRim.toFixed(0)} crater=${dishCrater.toFixed(0)}`);
+
+    // (iv) equatorial trench — the centre row is darker than the hull above it.
+    const trenchL = lum(pxAt(stnFull, 38, 64));
+    const trenchR = lum(pxAt(stnFull, 90, 64));
+    ok('trench band darker than the hull above it', trenchL < stnHull - 15,
+       `trench=${trenchL.toFixed(0)} hull=${stnHull.toFixed(0)}`);
+    ok('trench runs across the equator (both limbs)', trenchR < stnHull - 15,
+       `right=${trenchR.toFixed(0)} hull=${stnHull.toFixed(0)}`);
+
+    // (v) deterministic: repainting a fresh station canvas (a different phase's
+    // cache entry) puts identical panel/dish pixels on the lit side.
+    const stnWax = r._moonTexture('waxing_gibbous', true);
+    ok('station painting is deterministic (same dish pixels on the lit side)',
+       lum(pxAt(stnWax, 94, 43)) === dishCrater,
+       `wax=${lum(pxAt(stnWax,94,43)).toFixed(0)} full=${dishCrater.toFixed(0)}`);
+
+    // (vi) the PHASE overlay still composes over the station face: a waning
+    // crescent station is lit on the LEFT limb and dark on the right; waxing is
+    // the mirror. (Both sampled on the equator row, i.e. through the trench.)
+    const stnWan = r._moonTexture('waning_crescent', true);
+    const stnWaxC = r._moonTexture('waxing_crescent', true);
+    ok('waning-crescent station: left limb lit, right limb dark',
+       lum(rowPx(stnWan, 0.18)) > lum(rowPx(stnWan, 0.82)) + 40,
+       `L=${lum(rowPx(stnWan,0.18)).toFixed(0)} R=${lum(rowPx(stnWan,0.82)).toFixed(0)}`);
+    ok('waxing-crescent station: right limb lit, left limb dark',
+       lum(rowPx(stnWaxC, 0.82)) > lum(rowPx(stnWaxC, 0.18)) + 40,
+       `R=${lum(rowPx(stnWaxC,0.82)).toFixed(0)} L=${lum(rowPx(stnWaxC,0.18)).toFixed(0)}`);
+    ok('new-moon station is fully dark (unlit overlay wins)',
+       lum(centerPx(r._moonTexture('new_moon', true))) < 90,
+       `L=${lum(centerPx(r._moonTexture('new_moon', true))).toFixed(0)}`);
+
+    // (vii) cache keying: plain and station coexist per phase, each stable, and
+    // the plain entry is untouched by the station one.
+    ok('station texture is cached (stable identity)',
+       r._moonTexture('full_moon', true) === stnFull);
+    ok('plain entry survives the station entry',
+       r._moonTexture('full_moon') === plainFull && plainFull !== stnFull);
+    ok('station keys are per-phase too', stnFull !== stnWan && stnWan !== stnWaxC);
+
+    // (viii) the live swap: updateWeather picks the face, and toggling back
+    // restores the PLAIN texture on the one moon sprite (both moon paths — the
+    // decorative arc and the real-ephemeris catalog moon — share this sprite).
+    const nightMoon = (over) => fx(Object.assign({ condition: 'clear-night', isDay: false,
+      skyBackdrop: true, sunAzimuthDeg: 120, sunElevationDeg: -25,
+      moonPhase: 'waxing_gibbous' }, over));
+    r.applyScenePreset('night');
+    r.updateWeather(nightMoon({ moonStation: true }));
+    ok('moonStation:true puts the station texture on the moon sprite',
+       r._moonSprite.material.map === r._moonTexture('waxing_gibbous', true));
+    r.updateWeather(nightMoon({ moonStation: false }));
+    ok('moonStation:false restores the plain texture',
+       r._moonSprite.material.map === r._moonTexture('waxing_gibbous'));
+    r.updateWeather(nightMoon({}));
+    ok('absent moonStation → the plain texture (stale-chunk / unset default)',
+       r._moonSprite.material.map === r._moonTexture('waxing_gibbous'));
+
+    // (ix) BOTH moon paths are covered. The decorative opposite-the-sun arc and
+    // the astronomically-correct catalog moon are the SAME sprite — they differ
+    // only in POSITION (_skyMoonTarget vs _moonRealDir) — so switching into real
+    // observer mode must keep the station face without any extra plumbing.
+    r.setSkyEpochOverride(Date.UTC(2026, 1, 3, 4, 0, 0));
+    r.updateWeather(nightMoon({ moonStation: true,
+      observer: { lat: 43.0731, lon: -89.4012 }, skyRotRad: 0 }));
+    ok('real-sky (observer) mode is engaged', r._skyRealMode === true, `real=${r._skyRealMode}`);
+    ok('real-ephemeris moon uses the SAME station texture',
+       r._moonSprite.material.map === r._moonTexture('waxing_gibbous', true));
+    ok('real-sky moon has a real direction (not the decorative arc target)',
+       r._moonRealDir.lengthSq() > 1,
+       `dir=(${r._moonRealDir.x.toFixed(0)},${r._moonRealDir.y.toFixed(0)},${r._moonRealDir.z.toFixed(0)})`);
+    r.updateWeather(nightMoon({ observer: { lat: 43.0731, lon: -89.4012 }, skyRotRad: 0 }));
+    ok('real-sky moon falls back to the plain face when the flag clears',
+       r._moonSprite.material.map === r._moonTexture('waxing_gibbous'));
+    r.setSkyEpochOverride(null);
+
     // OVERCAST dome differs from clear (greyed/darkened) at the same preset.
     r.applyScenePreset('day');
     r.updateWeather(fx({ condition: 'sunny', isDay: true, skyBackdrop: true, cloudCoverage: 0 }));
@@ -559,6 +672,10 @@
       ['alertSeverity (DC-D beacon)', { alertSeverity: 'warning' }],
       ['skyBackdrop toggle', { skyBackdrop: false }],
       ['moonPhase', { moonPhase: 'waning_crescent' }],
+      // The moon disc's FACE is chosen when the texture is built, so the
+      // "that's no moon" toggle has to move the key or the sprite keeps the
+      // stale map until some other term changes.
+      ['moonStation (battle station face)', { moonStation: true }],
     ];
     for (const [name, over] of moves) ok(`d: ${name} → key changes`, K(over) !== base, '');
     ok('d: effective lighting preset → key changes', K(null, null, 'night') !== base, '');
@@ -578,6 +695,9 @@
       ['apparentC +1', { apparentC: 12 }],
       ['sunAzimuthDeg +1', { sunAzimuthDeg: 141 }],
       ['sunElevationDeg +0.5', { sunElevationDeg: 24.5 }],
+      // Absent (the un-migrated / default config) and an explicit false are the
+      // same plain moon, so they must key identically.
+      ['moonStation:false ≡ absent', { moonStation: false }],
     ];
     for (const [name, over] of holds) ok(`e: ${name} holds the key`, K(over) === base, K(over));
 

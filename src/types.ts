@@ -1230,6 +1230,11 @@ export interface WeatherConfig {
   affectLighting?: boolean;// default true — cloudy/precip dims the day preset
   moonEntity?: string;     // phase 3: sensor.* from HA's core `moon` integration (8-state phase).
                            // Drives the 3D moon prop's phase texture; unbound → default full moon.
+  moonStation?: boolean;   // "that's no moon" — render the moon disc as a battle station
+                           // instead. Absent/false = the plain moon (byte-identical painting).
+                           // The PHASE still applies: the station is painted into the lit disc
+                           // and the same unlit-semicircle + terminator overlay composes over
+                           // it, so it waxes and wanes exactly like the moon it replaces.
   // Per-effect toggles (W3). Absent key = the per-key default (see
   // weatherEffectEnabled in weather.ts): ON for precip/fog/lightning/wind/
   // clouds/sunPosition/sunDisc/puddles, OFF for frost/precipForecast.
