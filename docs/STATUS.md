@@ -1,6 +1,6 @@
 # Project status & pick-up guide
 
-Last updated: 2026-08-01, at **v0.53.0**. This is the single document to
+Last updated: 2026-08-01, at **v0.54.0**. This is the single document to
 read (alongside `CLAUDE.md`) to resume work with full context.
 
 ## Where things stand
@@ -333,11 +333,16 @@ instance.
   navigation incl. locked items; banner/vehicle color customization
   + the bgTexts field-stripping fix; full 2D↔3D interaction parity —
   doors and windows clickable in 3D).
+  → v0.54.0 that's no moon (gates truly break railing walls with
+  railing-styled banister gate panels; 19 new banner tow craft —
+  military/NASA + fiction homages — with the news chopper merged
+  into the aircraft dropdown, flight profile preserved; the Death
+  Star moon option with real phase lighting).
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
 - **Death Star moon** (2026-08-01, user-requested "space station"
-  checkbox; unreleased — on main past v0.53.0).
+  checkbox; released in v0.54.0).
   WeatherConfig.moonStation: the moon disc paints as a battle
   station (superlaser dish + rim, equatorial trench, deterministic
   panel lines, toon-flat) with the REAL phase machinery composing on
@@ -351,7 +356,7 @@ instance.
   (+2), all other cases + weather 200/200 + sky-real 32/32
   unchanged.
 - **Banner aircraft fleet + news-chopper merge** (2026-08-01,
-  user-requested; unreleased — on main past v0.53.0). 19 new banner
+  user-requested; released in v0.54.0). 19 new banner
   tow craft (BG_CRAFTS + _buildBannerCraft, entirely separate from
   the ADS-B archetype path): 7 military/NASA (F-16, A-10, F-22, B-2,
   B-52 w/ 8 engine pods, Apache, Space Shuttle) + 11 fiction homages
@@ -369,7 +374,7 @@ instance.
   dropdown = 4. Tests: bgtext-multi 373/373, bgtext 30/30, terrain
   119/119, flights-ui 299/299 (+4 dropdown pins).
 - **Gate breaks railings + railing-styled gate panel** (2026-08-01,
-  user-reported + user-requested; unreleased — on main past v0.53.0).
+  user-reported + user-requested; released in v0.54.0).
   Repro'd: the railing's composite 3D build ignored wallCutsForSegment
   full-segment (the exact fence-kind bug class from 2026-07-30 — the
   fence fix never touched railing because it isn't a fence kind; 2D
