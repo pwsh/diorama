@@ -70,6 +70,9 @@ export const LAYER_DEFS: LayerDef[] = [
   { key: 'motion', label: 'Motion sensors', cat: 'devices' },
   { key: 'env', label: 'Env sensors', cat: 'devices' },
   { key: 'info', label: 'Info cards', cat: 'devices' },
+  // Robot vacuums / mowers used to ride `sensors`; they get their own switch so
+  // the household robots can be hidden without losing the mmWave fixtures.
+  { key: 'robots', label: 'Robots', cat: 'devices' },
   // ── People & presence ────────────────────────────────────────────────────
   { key: 'targets', label: 'Avatars', cat: 'people' },
   // ── Outside world ────────────────────────────────────────────────────────
@@ -105,9 +108,13 @@ export function layerIsOn(layers: Layers2D | undefined, k: keyof Layers2D): bool
 //
 // bgText is OFF here: a simple floorplan should not fly decorative banner
 // planes / trains / grass messages over itself.
+//
+// robots is explicitly false: robots used to ride `sensors` (which this preset
+// turns off), so leaving the new key absent (= on) would have CHANGED the simple
+// floorplan's look by surfacing docks/pucks that were hidden before.
 export const SIMPLE_LAYERS: Layers2D = {
   bg: false, furniture: false, appliances: false, lights: false,
-  switches: false, sensors: false,
+  switches: false, sensors: false, robots: false,
   motion: false, env: false, zones: false, targets: true, activity: true,
   bgText: false,
 };

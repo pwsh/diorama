@@ -471,6 +471,10 @@ export function hitAlertBeacon(p: Planner, view: View, mm: Vec2): AlertBeacon | 
 // live robot body (Planner.robotStates position — moves), so a click lands on
 // whichever the user aimed at.
 export function hitRobot(p: Planner, view: View, mm: Vec2): RobotFixture | null {
+  // Hidden = untappable (the openingsVisible rule): the `robots` layer gates the
+  // 2D draw, so a hidden dock/puck must not capture clicks either. 3D gets the
+  // same for free — the raycast roots only include VISIBLE groups.
+  if (p.store.layers2d?.robots === false) return null;
   const f = p.floor();
   const h = hitPx(view) * 1.6;
   const list = f.robots ?? [];

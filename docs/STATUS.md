@@ -318,6 +318,24 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Robots layer + position info + calibration nudges** (2026-07-31,
+  user-requested; unreleased — on main past v0.50.0). Vacuum/mower
+  fixtures get their OWN "Robots" view layer (devices cat, absent =
+  on; split off `sensors`; `robots: false` in SIMPLE_LAYERS; hidden =
+  untappable in both views). Per-robot "Show position info" overlay
+  (`RobotFixture.showPosInfo` + `Planner.robotPosInfo` — live-map /
+  gps / sim ladder): 2D crosshair at the PROJECTED reported point +
+  dashed connector when >50 mm from the drawn body + a 3-line
+  monospace plate (raw / → world mm / mode · Δ); 3D skipped v1.
+  "Align position" sidebar nudges (←↑↓→ on posOffsetX/Y via the
+  shared diorama:moveStep, vacuum ↺/↻ 0.5°/5° on posRotDeg, Reset,
+  one undo step per click); the MOWER now honours posOffsetX/Y as a
+  world-mm GPS trim applied before the yard clamp. Follow-up fix:
+  rotateFloorContent rotates the mower trim as a VECTOR about the
+  origin (posRotDeg untouched) — the vacuum world-point path was
+  provably wrong for a delta trim. Tests: robot 129/129 (+33),
+  plan-rotate 70/70 (+2); layers2d 67/67, card 92/92, sidebar-org
+  150/150, valetudo 32/32 unchanged.
 - **View persistence + boot-framing fix** (2026-07-31, user-reported
   "after a hard refresh the scene is zoomed in a lot"; released in v0.50.0). Root cause: the 3D camera was NEVER framed
   — a hard-coded ~10.8 m constructor pose served every load

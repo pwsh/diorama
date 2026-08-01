@@ -322,6 +322,17 @@ export interface RobotState {
                               //   unused by the vacuum branch (point-chaser)
 }
 
+// Calibration diagnostic for one robot (runtime-only, derived — never stored).
+// `worldX/worldY` is the REPORTED position projected onto the plan (the point
+// the alignment offsets move), NOT the eased body the canvas draws; comparing
+// the two is the whole purpose of the readout. See Planner.robotPosInfo.
+export interface RobotPosInfo {
+  mode: 'live-map' | 'gps' | 'sim';
+  rawText: string;                 // the source's own numbers, verbatim-ish
+  worldX: number; worldY: number;  // projected plan mm
+  headingDeg: number | null;       // reported heading (plan frame, ° CCW from +X), when known
+}
+
 // Unbound-toilet flush window (ms). Slightly longer than the renderer's 4 s
 // one-shot so the animation always completes before localState clears.
 export const TOILET_FLUSH_MS = 4300;
@@ -6697,9 +6708,20 @@ export class Planner extends EventTarget {
     for (const it of f.alertBeacons ?? []) rot(it);     // ceiling puck, no heading
     for (const it of f.robots ?? []) {
       rot(it);                                          // dock position
-      // Vacuum map→plan calibration: keep a projected raw point on its rotated
-      // image. offset is a world point → rotate it; posRotDeg is CCW → subtract.
-      if (it.posOffsetX != null || it.posOffsetY != null || it.posRotDeg != null || it.posScale != null) {
+      if (it.kind === 'mower') {
+        // Mower GPS trim is a world-mm DELTA added to the projected fix, not a
+        // world point — rotate it as a VECTOR (about the origin): with landmarks
+        // rotated (single-floor), plan' = Rφ(plan−c)+c, so the trimmed target
+        // Rφ(plan+trim−c)+c = plan' + Rφ·trim. Multi-floor no static trim can
+        // be exact (the fix itself doesn't rotate) — this is the best effort.
+        // posRotDeg/posScale are vacuum-only fields, untouched here.
+        if (it.posOffsetX != null || it.posOffsetY != null) {
+          const off = rotPointDeg(it.posOffsetX ?? 0, it.posOffsetY ?? 0, 0, 0, phi);
+          it.posOffsetX = off.x; it.posOffsetY = off.y;
+        }
+      } else if (it.posOffsetX != null || it.posOffsetY != null || it.posRotDeg != null || it.posScale != null) {
+        // Vacuum map→plan calibration: keep a projected raw point on its rotated
+        // image. offset is a world point → rotate it; posRotDeg is CCW → subtract.
         const off = rotPointDeg(it.posOffsetX ?? 0, it.posOffsetY ?? 0, cx, cy, phi);
         it.posOffsetX = off.x; it.posOffsetY = off.y;
         it.posRotDeg = norm((it.posRotDeg ?? 0) - phi);
@@ -7068,10 +7090,14 @@ export class Planner extends EventTarget {
   }
 
   // GPS position for a bound mower (tracker attrs or a lat/lon sensor pair),
-  // projected to plan mm via the fitted geo transform + boundary clamp. Null when
-  // no GPS source, no calibration, or no numeric fix. `headingRad` from a
-  // tracker `direction` attribute (compass °) mapped into the plan frame.
-  private _mowerGps(r: RobotFixture): { x: number; y: number; headingRad: number | null } | null {
+  // projected to plan mm via the fitted geo transform + a MANUAL trim
+  // (posOffsetX/Y — the same two fields the vacuum's map calibration uses; the
+  // sidebar "Align position" nudges write them) + boundary clamp. Null when no
+  // GPS source, no calibration, or no numeric fix. `headingRad` from a tracker
+  // `direction` attribute (compass °) mapped into the plan frame. `lat`/`lon` are
+  // the raw fix, carried for the calibration readout (robotPosInfo).
+  private _mowerGps(r: RobotFixture):
+    { x: number; y: number; headingRad: number | null; lat: number; lon: number } | null {
     if (r.kind !== 'mower') return null;
     const fit = this.geoFit();
     if (!fit || fit.transform.quality === 'none') return null;
@@ -7089,8 +7115,12 @@ export class Planner extends EventTarget {
     }
     if (lat == null || lon == null) return null;
     const t = fit.transform;
-    const plan = latLonToPlan(t, lat, lon);
-    if (!plan) return null;
+    const proj = latLonToPlan(t, lat, lon);
+    if (!proj) return null;
+    // Manual trim FIRST, so the trimmed point is what the yard test + clamp see
+    // (a nudge can push a fix past the boundary, and it should clamp like any
+    // other out-of-yard position rather than escape the ring).
+    const plan = { x: proj.x + (r.posOffsetX ?? 0), y: proj.y + (r.posOffsetY ?? 0) };
     const f = this.floor();
     const boundaryMm = this.geoBoundaryM() * 1000;
     const inYard = plan.x >= -boundaryMm && plan.x <= f.w + boundaryMm
@@ -7103,7 +7133,7 @@ export class Planner extends EventTarget {
       const c = Math.cos(t.thetaRad), s = Math.sin(t.thetaRad);
       headingRad = Math.atan2(s * east + c * north, c * east - s * north);  // geo→plan, then atan2(dy,dx)
     }
-    return { x: pos.x, y: pos.y, headingRad };
+    return { x: pos.x, y: pos.y, headingRad, lat, lon };
   }
 
   // LIVE vacuum position (#6): when a `posEntity` is bound and its
@@ -7120,6 +7150,45 @@ export class Planner extends EventTarget {
     const w = vacuumRawToWorld(raw, r);
     const headingRad = raw.a != null && isFinite(raw.a) ? vacuumRawHeadingRad(raw.a, r) : null;
     return { x: w.x, y: w.y, headingRad };
+  }
+
+  // Calibration diagnostic: what the SOURCE reports for this robot and where
+  // that lands on the plan. Runtime-only + cheap (one attribute read + the same
+  // pure projection the controller uses), so the 2D RAF may call it per frame
+  // for every robot with `showPosInfo`. Never throws: an unbound robot, a dead
+  // entity or garbage attributes all fall through to the 'sim' branch, which
+  // reports the controller's own pose (dock position when it has not spawned).
+  robotPosInfo(r: RobotFixture): RobotPosInfo | null {
+    if (!r) return null;
+    if (r.kind !== 'mower') {
+      const live = this._vacuumLive(r);
+      if (live) {
+        const raw = parseVacuumPosition(
+          this.hass?.states?.[r.posEntity!]?.attributes as Record<string, unknown> | undefined);
+        const rawText = raw
+          ? `x=${raw.x.toFixed(0)} y=${raw.y.toFixed(0)}${raw.a != null ? ` a=${raw.a.toFixed(0)}°` : ''}`
+          : '—';
+        return {
+          mode: 'live-map', rawText, worldX: live.x, worldY: live.y,
+          headingDeg: live.headingRad != null ? live.headingRad * 180 / Math.PI : null,
+        };
+      }
+    } else {
+      const gps = this._mowerGps(r);
+      if (gps) {
+        return {
+          mode: 'gps', rawText: `${gps.lat.toFixed(5)}, ${gps.lon.toFixed(5)}`,
+          worldX: gps.x, worldY: gps.y,
+          headingDeg: gps.headingRad != null ? gps.headingRad * 180 / Math.PI : null,
+        };
+      }
+    }
+    const rs = this.robotStates[r.id];
+    return {
+      mode: 'sim', rawText: '—',
+      worldX: rs ? rs.x : r.x, worldY: rs ? rs.y : r.y,
+      headingDeg: null,
+    };
   }
 
   // Advance all robots on the current floor (called from the 2D RAF).

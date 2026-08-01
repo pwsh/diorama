@@ -60,7 +60,7 @@ import { aircraftArchetype } from './aircraft-types.js';
 // the combined canvas bundle.
 export { flightFieldText, flightLabelLines };
 import type { Planner } from './planner.js';
-import type { Vec2, LightIconKind, Furniture, ObjectRecipe, RecipePrimitive, HassState, FloorTexKind } from './types.js';
+import type { Vec2, LightIconKind, Furniture, ObjectRecipe, RecipePrimitive, HassState, FloorTexKind, RobotFixture } from './types.js';
 
 // ── `objectLabels` layer (absent = ON) ──────────────────────────────────────
 // Gates NAME / caption text on fixtures and structural items — door + window
@@ -360,7 +360,7 @@ export function drawAll(ctx: CanvasRenderingContext2D, p: Planner, view: View,
   if (on(L.sensors)) drawThermostats(ctx, p, view);
   if (on(L.sensors)) drawSafetySensors(ctx, p, view);
   if (on(L.sensors)) drawAlertBeacons(ctx, p, view);
-  if (on(L.sensors)) drawRobots(ctx, p, view);
+  if (on(L.robots)) drawRobots(ctx, p, view);         // robots own their layer (split off `sensors`)
   if (on(L.sensors)) drawCameras(ctx, p, view);
   if (on(L.sensors)) drawProjectors(ctx, p, view);
   if (on(L.sensors)) drawValves(ctx, p, view);       // water valves ride the sensors layer
@@ -2393,9 +2393,81 @@ function drawRobots(ctx: CanvasRenderingContext2D, p: Planner, view: View): void
     ctx.fillRect(bc.x - tw / 2, ty, tw, 13 * dpr);
     ctx.fillStyle = '#cfd8dc';
     ctx.fillText(txt, bc.x, ty + 1 * dpr);
+    // Calibration diagnostic (opt-in per robot) — zero cost when off.
+    if (r.showPosInfo) drawRobotPosInfo(ctx, p, view, r, baseCol, bc, bx, by, ty + 14 * dpr, dpr);
     // Battery badge at the dock (the fixture's fixed marker).
     drawBatteryBadge(ctx, p, r.entity_id, dc.x + dw / 2, dc.y - dd / 2);
   }
+}
+
+// Below this the reported point and the drawn body count as "the same place" —
+// no Δ readout, no connector (the eased body is always a few mm behind a live
+// fix and a permanent hairline would be noise).
+const ROBOT_POS_DELTA_MM = 50;
+
+// Robot calibration overlay (RobotFixture.showPosInfo, 2D-only): a crosshair at
+// the REPORTED position (live map fix / GPS fix / simulated pose — the point the
+// alignment offsets move) plus a small monospace readout of raw → projected plan
+// mm, and a dashed connector to the drawn body when the two disagree. This is
+// the visual the user aligns against while nudging "Align position".
+function drawRobotPosInfo(
+  ctx: CanvasRenderingContext2D, p: Planner, view: View, r: RobotFixture,
+  baseCol: string, bc: Vec2, bodyXmm: number, bodyYmm: number, topY: number, dpr: number,
+): void {
+  const info = p.robotPosInfo(r);
+  if (!info || !isFinite(info.worldX) || !isFinite(info.worldY)) return;
+  const tp = mmToPx(view, info.worldX, info.worldY);
+  const deltaMm = Math.hypot(info.worldX - bodyXmm, info.worldY - bodyYmm);
+  const far = deltaMm > ROBOT_POS_DELTA_MM;
+
+  ctx.save();
+  ctx.strokeStyle = hexToRgba(baseCol, 0.95);
+  ctx.lineWidth = Math.max(1, 1.4 * dpr);
+  // Connector: drawn body → reported point (the offset the nudges close).
+  if (far) {
+    ctx.save();
+    ctx.setLineDash([4 * dpr, 3 * dpr]);
+    ctx.lineWidth = Math.max(1, 1 * dpr);
+    ctx.strokeStyle = hexToRgba(baseCol, 0.6);
+    ctx.beginPath();
+    ctx.moveTo(bc.x, bc.y);
+    ctx.lineTo(tp.x, tp.y);
+    ctx.stroke();
+    ctx.restore();
+  }
+  // Crosshair ⌖: four gapped arms + a small ring on the reported point.
+  const cr = Math.max(6, 8 * dpr);
+  ctx.beginPath();
+  ctx.moveTo(tp.x - cr, tp.y);        ctx.lineTo(tp.x - cr * 0.35, tp.y);
+  ctx.moveTo(tp.x + cr * 0.35, tp.y); ctx.lineTo(tp.x + cr, tp.y);
+  ctx.moveTo(tp.x, tp.y - cr);        ctx.lineTo(tp.x, tp.y - cr * 0.35);
+  ctx.moveTo(tp.x, tp.y + cr * 0.35); ctx.lineTo(tp.x, tp.y + cr);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(tp.x, tp.y, cr * 0.42, 0, 2 * Math.PI);
+  ctx.stroke();
+
+  // Readout plate under the robot's own label.
+  const lines = [
+    `raw: ${info.rawText}`,
+    `→ ${Math.round(info.worldX)}, ${Math.round(info.worldY)} mm`,
+    `${info.mode}${far ? ` · Δ ${Math.round(deltaMm)} mm` : ''}`,
+  ];
+  ctx.font = `${9 * dpr}px ui-monospace, Menlo, Consolas, monospace`;
+  ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+  let wMax = 0;
+  for (const ln of lines) wMax = Math.max(wMax, ctx.measureText(ln).width);
+  const padX = 4 * dpr, lh = 11 * dpr;
+  const boxW = wMax + padX * 2, boxH = lines.length * lh + 3 * dpr;
+  const boxX = bc.x - boxW / 2;
+  ctx.fillStyle = 'rgba(0,0,0,0.72)';
+  ctx.fillRect(boxX, topY, boxW, boxH);
+  ctx.strokeStyle = hexToRgba(baseCol, 0.5);
+  ctx.lineWidth = 1;
+  ctx.strokeRect(boxX + 0.5, topY + 0.5, boxW - 1, boxH - 1);
+  ctx.fillStyle = '#b0bec5';
+  for (let i = 0; i < lines.length; i++) ctx.fillText(lines[i], boxX + padX, topY + 2 * dpr + i * lh);
+  ctx.restore();
 }
 
 // Camera-snapshot image cache for alert cards (mirrors canvas-2d's _ensureBg

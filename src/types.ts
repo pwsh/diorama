@@ -537,6 +537,12 @@ export interface RobotFixture {
   // map map pixels → plan mm (calibrate once via "Set dock as reference").
   valetudoId?: string;
   label?: string;
+  // Calibration diagnostic (item-level, absent = OFF): draw the REPORTED position
+  // (live map fix / GPS fix / simulated pose) as a crosshair + a small monospace
+  // readout beside the robot, so the user can see what the source says while
+  // nudging the alignment offsets onto the plan. 2D-only (see canvas-render's
+  // drawRobots) — the 3D view has no equivalent overlay.
+  showPosInfo?: boolean;
   localState?: string;           // unbound manual pause: 'paused' (else demo runs autonomously). Inert once bound.
   locked?: boolean;              // canvas move/delete disabled (click-to-toggle still works)
 }
@@ -1613,6 +1619,7 @@ export interface Layers2D {
   motion?: boolean;     // motion sensor bodies + cones
   env?: boolean;
   info?: boolean;       // info-card plaques (2D chip + 3D sprite/plane); default on
+  robots?: boolean;     // robot vacuum / mower docks + moving bodies (2D + the 3D _robotGroup/_robotRigGroup); default ON. Split off `sensors` so a plan can hide the household robots without losing the mmWave fixtures.
   zones?: boolean;      // LD2450 zone polys + halos
   targets?: boolean;    // live target dots
   activity?: boolean;   // default OFF: glow pools for lights that are ON + active motion

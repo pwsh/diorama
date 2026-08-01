@@ -5286,9 +5286,11 @@ export class ThreeDRenderer {
     this._safetyGroup.visible = v.sensors !== false;
     // Alert beacons ride the sensors layer too.
     this._alertGroup.visible = v.sensors !== false;
-    // Robot docks + moving bodies ride the sensors layer too.
-    this._robotGroup.visible = v.sensors !== false;
-    this._robotRigGroup.visible = v.sensors !== false;
+    // Robot docks + moving bodies have their OWN layer (split off `sensors`);
+    // absent = on. Hiding it also drops them from the raycast roots (which are
+    // built from visible groups), so a hidden robot is untappable in 3D too.
+    this._robotGroup.visible = v.robots !== false;
+    this._robotRigGroup.visible = v.robots !== false;
     // Camera fixtures + FOV frustum ride the sensors layer too.
     this._cameraGroup.visible = v.sensors !== false;
     // Projector fixtures + light beam ride the sensors layer too.

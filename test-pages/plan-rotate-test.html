@@ -252,6 +252,23 @@
       ok('5: posOffset rotated as a world point', nearV({ x: cal1.posOffsetX, y: cal1.posOffsetY }, rotPointDeg(4200, 3600, cx, cy, 30).x, rotPointDeg(4200, 3600, cx, cy, 30).y, 1e-6), `${cal1.posOffsetX.toFixed(1)},${cal1.posOffsetY.toFixed(1)}`);
     }
 
+    // ── 5b. Mower GPS trim is a DELTA vector, not a world point: it rotates
+    // about the ORIGIN (with landmarks rotated, plan' = Rφ(plan−c)+c, so the
+    // trimmed target Rφ(plan+trim−c)+c = plan' + Rφ·trim), and posRotDeg is a
+    // vacuum-only field the mower branch must never touch. Regression: the
+    // pre-fix code rotated the trim as a world point — error (c − Rφ·c). ────
+    {
+      const F = baseFloor({ w: 12000, d: 10000,
+        robots: [{ id: 'rm1', kind: 'mower', x: 2000, y: 2000, entity_id: 'lawn_mower.m',
+          trackerEntity: 'device_tracker.m', posOffsetX: 800, posOffsetY: -300 }] });
+      const p = await mkPlanner([F]);
+      p.rotateFloorContent(30);
+      const m = p.floor().robots[0];
+      const exp = rotPointDeg(800, -300, 0, 0, 30);
+      ok('5b: mower trim rotates as a vector (about origin)', nearV({ x: m.posOffsetX, y: m.posOffsetY }, exp.x, exp.y, 1e-6), `${m.posOffsetX.toFixed(1)},${m.posOffsetY.toFixed(1)}`);
+      ok('5b: mower posRotDeg untouched by plan rotation', m.posRotDeg == null, String(m.posRotDeg));
+    }
+
     // ── 6. Compass invariant: resolveNorth output rotates by exactly φ ──────────
     {
       // 6a. Manual-bearing path, single floor (both signs).

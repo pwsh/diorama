@@ -2488,6 +2488,7 @@ export class Sidebar extends LitElement {
                   @click=${() => p.toggleRobot(r)}>${act === 'cleaning' || act === 'mowing' ? 'Dock' : 'Run'}</button>
         </div>
         ${kind === 'mower' ? this._robotGpsRows(r) : this._robotVacuumPosRows(r)}
+        ${this._robotAlignRows(r)}
         ${this._robotProgressRow(r)}
         <div style="font-size:10px;color:var(--text-dim);margin-top:4px;line-height:1.3">
           ${bound
@@ -2532,11 +2533,25 @@ export class Sidebar extends LitElement {
           <span style="font-size:11px;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.lonEntity || '—'}</span>
           <button class="btn" style="font-size:11px" @click=${() => this._pickRobotLatLon(r, 'lon')}>Bind</button>
         </div>
+        ${this._robotPosReadout(r)}
         <div style="font-size:10px;color:var(--text-dim);margin-top:3px;line-height:1.3">
           Needs calibrated GPS landmarks (GPS/Geo section). No fix / no calibration → simulated mowing.
         </div>
       </div>
     `;
+  }
+
+  // Shared live readout of Planner.robotPosInfo — what the SOURCE reports and
+  // where that lands on the plan (the point the alignment nudges move). Both
+  // kinds show it; it refreshes on the config channel like the Raw line above.
+  private _robotPosReadout(r: RobotFixture) {
+    const info = this.planner.robotPosInfo(r);
+    if (!info) return nothing;
+    return html`
+      <div style="font-size:10px;color:var(--text-dim);margin-top:3px;font-family:ui-monospace,Menlo,Consolas,monospace">
+        ${info.mode === 'sim' ? '' : html`${info.rawText}<br>`}→ ${Math.round(info.worldX)}, ${Math.round(info.worldY)} mm ·
+        <span style="color:${info.mode === 'sim' ? 'var(--text-dim)' : '#69f0ae'}">${info.mode}</span>
+      </div>`;
   }
 
   // Vacuum LIVE position (#6): bind a Roborock map camera/image/sensor entity
@@ -2593,6 +2608,7 @@ export class Sidebar extends LitElement {
           <div style="font-size:10px;color:var(--text-dim);margin-top:3px">
             Raw: ${raw ? `x=${raw.x.toFixed(0)} y=${raw.y.toFixed(0)}${raw.a != null ? ` a=${raw.a.toFixed(0)}°` : ''}` : '— no vacuum_position —'}
           </div>
+          ${this._robotPosReadout(r)}
           <button class="btn" style="width:100%;margin-top:4px;font-size:11px"
                   ?disabled=${!raw}
                   title="Park the vacuum on its dock, then click to solve the X/Y offset"
@@ -2604,6 +2620,75 @@ export class Sidebar extends LitElement {
                   })}>Set dock as reference</button>
           <div style="font-size:10px;color:var(--text-dim);margin-top:3px;line-height:1.3">
             No fix / unparseable → simulated roam. Park on the dock and click above to align the map origin.
+          </div>
+        ` : nothing}
+      </div>
+    `;
+  }
+
+  // Manual alignment: nudge WHERE the reported position lands on the plan.
+  // Vacuum → the map calibration offsets/rotation (which also move the Valetudo
+  // room-map overlay — it reuses the same transform); mower → the GPS trim
+  // applied to the projected fix. Rotation is VACUUM-ONLY: a mower's rotation is
+  // owned by the geo fit's θ, so recalibrate landmarks rather than trim here.
+  // Shares the "Move plan" step (device-local `diorama:moveStep`); every click
+  // routes through upd() = save + emitConfig = one undo step.
+  private _robotAlignRows(r: RobotFixture) {
+    const p = this.planner;
+    const upd = (mut: () => void) => { mut(); p.save(); p.emitConfig(); };
+    const kind = r.kind === 'mower' ? 'mower' : 'vacuum';
+    const step = this._moveStep;
+    const showAlign = kind === 'mower'
+      ? !!(r.trackerEntity || (r.latEntity && r.lonEntity))
+      : !!(r.posEntity || r.valetudoId);
+    const nudge = (dx: number, dy: number) => upd(() => {
+      r.posOffsetX = (r.posOffsetX ?? 0) + dx;
+      r.posOffsetY = (r.posOffsetY ?? 0) + dy;
+    });
+    const spin = (deg: number) => upd(() => { r.posRotDeg = (r.posRotDeg ?? 0) + deg; });
+    return html`
+      <div style="border-top:1px solid var(--border);margin-top:6px;padding-top:6px">
+        <div class="row"><label>Show position info</label>
+          <input type="checkbox" .checked=${!!r.showPosInfo}
+                 title="Draw the reported position (crosshair + raw/projected readout) on the plan"
+                 @change=${(e: Event) => upd(() => { r.showPosInfo = (e.target as HTMLInputElement).checked || undefined; })}>
+        </div>
+        ${showAlign ? html`
+          <div style="display:flex;align-items:center;gap:6px;margin:4px 0 3px">
+            <span style="color:var(--text-dim);font-size:11px;flex:1">Align position</span>
+            <select title="Nudge distance (structural millimetres/metres — ignores the imperial setting)"
+                    style="background:#111;color:var(--text);border:1px solid var(--border);
+                           border-radius:4px;padding:2px 4px;font-size:11px"
+                    .value=${String(step)}
+                    @change=${(e: Event) => this._setMoveStep(Number((e.target as HTMLSelectElement).value))}>
+              <option value="10">10 mm</option>
+              <option value="100">100 mm</option>
+              <option value="500">500 mm</option>
+              <option value="1000">1 m</option>
+            </select>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:4px">
+            <button class="btn btn-sm" title="Nudge up (+Y)" @click=${() => nudge(0, step)}>↑</button>
+            <button class="btn btn-sm" title="Nudge down (−Y)" @click=${() => nudge(0, -step)}>↓</button>
+            <button class="btn btn-sm" title="Nudge left (−X)" @click=${() => nudge(-step, 0)}>←</button>
+            <button class="btn btn-sm" title="Nudge right (+X)" @click=${() => nudge(step, 0)}>→</button>
+          </div>
+          ${kind === 'vacuum' ? html`
+            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:4px;margin-top:4px">
+              <button class="btn btn-sm" title="Rotate 5° CCW" @click=${() => spin(-5)}>↺ 5°</button>
+              <button class="btn btn-sm" title="Rotate 0.5° CCW" @click=${() => spin(-0.5)}>↺ 0.5°</button>
+              <button class="btn btn-sm" title="Rotate 0.5° CW" @click=${() => spin(0.5)}>↻ 0.5°</button>
+              <button class="btn btn-sm" title="Rotate 5° CW" @click=${() => spin(5)}>↻ 5°</button>
+            </div>
+          ` : nothing}
+          <button class="btn btn-sm" style="width:100%;margin-top:4px" title="Clear the alignment nudge"
+                  @click=${() => upd(() => {
+                    r.posOffsetX = undefined; r.posOffsetY = undefined;
+                    if (kind === 'vacuum') r.posRotDeg = undefined;
+                  })}>Reset</button>
+          <div style="font-size:10px;color:var(--text-dim);margin-top:3px;line-height:1.3">
+            Nudges move where the reported position lands on the plan. Turn on
+            <b>Show position info</b> to see the reported point while aligning.
           </div>
         ` : nothing}
       </div>
