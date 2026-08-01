@@ -1,6 +1,6 @@
 # Project status & pick-up guide
 
-Last updated: 2026-07-31, at **v0.50.0**. This is the single document to
+Last updated: 2026-07-31, at **v0.51.0**. This is the single document to
 read (alongside `CLAUDE.md`) to resume work with full context.
 
 ## Where things stand
@@ -315,11 +315,17 @@ instance.
   load; resolveBootPose ladder + 20 s reframe latch; device-local
   view persistence for 2D pan/zoom + 3D camera, config+floor keyed,
   kiosk tablets restore).
+  → v0.51.0 docking maneuvers (robots get their own view layer, a
+  position-info overlay with a reported-position crosshair, manual
+  calibration nudges + a mower GPS trim, a one-click mower
+  calibrate-to-dock, dock rotation with a front indicator in both
+  views, and a heading-rotated rectangular 2D mower body matching
+  the 3D box).
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
 - **Mower dock calibrate/rotate/front + 2D rect body** (2026-07-31,
-  user-requested; unreleased — on main past v0.50.0). "Calibrate to
+  user-requested; released in v0.51.0). "Calibrate to
   dock" button (mower GPS block): Planner.calibrateMowerToDock solves
   the position trim from the untrimmed latLonToPlan projection so the
   parked mower's reported fix lands at the placed dock; refuses on no
@@ -336,7 +342,7 @@ instance.
   168/168 (+39); plan-rotate 70/70, layers2d 67/67, sidebar-org
   150/150 unchanged.
 - **Robots layer + position info + calibration nudges** (2026-07-31,
-  user-requested; unreleased — on main past v0.50.0). Vacuum/mower
+  user-requested; released in v0.51.0). Vacuum/mower
   fixtures get their OWN "Robots" view layer (devices cat, absent =
   on; split off `sensors`; `robots: false` in SIMPLE_LAYERS; hidden =
   untappable in both views). Per-robot "Show position info" overlay
