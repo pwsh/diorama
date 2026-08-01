@@ -176,6 +176,29 @@ const SECTION_SLUGS: string[] = [
   'rooms', 'fixtures', 'geo', 'neighborhood', 'model3d', 'bg',
 ];
 
+// Alt+click IDENTIFY → the section slug that holds the item's editor. A wall has
+// no per-wall editor (only the bulk lock/unlock button in Tools), so it lands
+// there; a landmark's row lives in the GPS/Geo section. Adding a placeable means
+// one entry here alongside its `IdentifyKind` and its canvas glyph.
+const IDENTIFY_SECTION: Record<string, string> = {
+  wall: 'tools', furniture: 'furniture', light: 'fixtures', switch: 'fixtures',
+  sensor: 'sensors', motion: 'motion', env: 'env', info: 'info', action: 'actions',
+  ble: 'ble', alarm: 'alarm', calendar: 'calendar', thermostat: 'thermostats',
+  safety: 'safety', alert: 'alertbeacons', robot: 'robots', camera: 'cameras',
+  projector: 'projectors', valve: 'valves', plug: 'plugs', sprinkler: 'sprinklers',
+  flagpole: 'flagpoles', door: 'doors', window: 'windows', ruler: 'rulers',
+  pzone: 'pzones', ground: 'ground', pool: 'pools', void: 'voids', room: 'rooms',
+  landmark: 'geo',
+};
+
+// The IDENTIFY_SECTION slugs whose lists render through `_groupedList` — those
+// also need their `<slug>/<roomId>` sub-key expanded before the row exists.
+const IDENTIFY_GROUPED_SECTIONS = new Set([
+  'actions', 'alarm', 'alertbeacons', 'ble', 'calendar', 'cameras', 'doors', 'env',
+  'fixtures', 'flagpoles', 'furniture', 'info', 'motion', 'plugs', 'projectors',
+  'robots', 'safety', 'sensors', 'sprinklers', 'thermostats', 'valves', 'windows',
+]);
+
 @customElement('diorama-sidebar')
 export class Sidebar extends LitElement {
   @property({ attribute: false }) planner!: Planner;
@@ -304,6 +327,47 @@ export class Sidebar extends LitElement {
     // session's card is currently visible (session running + section expanded).
     this._reconcileCalibLiveTimer();
     this._maybeFocusNewlyPlaced();
+    this._maybeNavigateIdentify();
+  }
+
+  // ── Alt+click IDENTIFY navigation ────────────────────────────────────────
+  // The identify latch already SET the item's active id, so `_autoExpandActive`
+  // opens its section on the same pass for the kinds that have one. This adds
+  // what a mere selection can't: expanding the room-GROUP sub-key the row is
+  // bucketed under, scrolling the row into view, and pulsing it. Runs ONCE per
+  // latch (guarded on `identifyFx.at`, the `_maybeFocusNewlyPlaced` pattern) and
+  // deliberately NEVER focuses anything — this is navigation, and a focus steal
+  // would cool the delete-hotkey selection heat the identify just set.
+  private _identifyHandled = 0;
+  private _identifyRetries = 0;
+
+  private _maybeNavigateIdentify(): void {
+    const fx = this.planner.identifyFx;
+    if (!fx) { this._identifyRetries = 0; return; }
+    if (fx.at === this._identifyHandled) return;
+    const slug = IDENTIFY_SECTION[fx.kind];
+    if (!slug) { this._identifyHandled = fx.at; return; }
+    let changed = this._collapsed.delete(slug);
+    if (IDENTIFY_GROUPED_SECTIONS.has(slug)) {
+      // Bucket the item by its own world position — exactly how `_groupedList`
+      // decides which room group its row renders in.
+      const g = this._groupByRoom([{ x: fx.x, y: fx.y }])[0];
+      if (g?.id && this._collapsed.delete(this._roomGroupKey(slug, g.id))) changed = true;
+    }
+    if (changed) { this._persistCollapsed(); this.requestUpdate(); }
+    const row = this.querySelector<HTMLElement>(`[data-item-row="${fx.id}"]`);
+    if (row) {
+      this._identifyHandled = fx.at;
+      this._identifyRetries = 0;
+      row.scrollIntoView({ block: 'center' });
+      row.classList.add('identify-flash');
+      setTimeout(() => row.classList.remove('identify-flash'), 1500);
+      return;
+    }
+    // Section/group expanding this pass (or the kind has no list row, e.g. a
+    // wall) — retry a few frames, then give up silently.
+    if (this._identifyRetries++ < 4) requestAnimationFrame(() => this.requestUpdate());
+    else { this._identifyRetries = 0; this._identifyHandled = fx.at; }
   }
 
   // Frames spent waiting for a just-placed fixture's editor to render.
@@ -986,7 +1050,7 @@ export class Sidebar extends LitElement {
     // configuration editor and the HA-data (zones / objects / targets / sensor
     // config) blocks render as sub-blocks directly beneath the row.
     return html`
-      <div style="border-bottom:1px solid var(--border)">
+      <div data-item-row=${s.id} style="border-bottom:1px solid var(--border)">
         <div class="sensor-item ${sel ? 'sel' : ''}" @click=${() => p.setActiveSensor(s.id)}>
           <div class="dot"></div>
           <div class="nm">${s.label || 'Sensor'}${this._batteryText(p.discBy[s.id]?.hasTarget ?? p.discBy[s.id]?.targetCount ?? p.discBy[s.id]?.sensorHeight ?? null)}</div>
@@ -1126,7 +1190,7 @@ export class Sidebar extends LitElement {
     const isOn = st?.state === 'on';
     const bound = !!m.entity_id;
     return html`
-      <div style="border-bottom:1px solid var(--border)">
+      <div data-item-row=${m.id} style="border-bottom:1px solid var(--border)">
         <div class="sensor-item ${sel ? 'sel' : ''}" @click=${() => p.setActiveMotion(m.id)}>
           <div class="dot" style="background:${isOn ? '#ce93d8' : '#ba68c8'};
                                    ${isOn ? 'box-shadow:0 0 6px #ce93d8' : ''}"></div>
@@ -1290,7 +1354,7 @@ export class Sidebar extends LitElement {
     const color = envColor(kind, value);
     const bound = !!en.entity_id;
     return html`
-      <div style="border-bottom:1px solid var(--border)">
+      <div data-item-row=${en.id} style="border-bottom:1px solid var(--border)">
         <div class="sensor-item ${sel ? 'sel' : ''}" @click=${() => p.setActiveEnv(en.id)}>
           <div class="dot" style="background:${color}"></div>
           <div class="nm">${en.label || 'Env'}${this._batteryText(en.entity_id)}</div>
@@ -1423,7 +1487,7 @@ export class Sidebar extends LitElement {
     const text = infoCardText(ic, st ?? null, { now: new Date(), imperial: p.store.imperial });
     const bound = mode !== 'entity' || !!ic.entity_id;
     return html`
-      <div style="border-bottom:1px solid var(--border)">
+      <div data-item-row=${ic.id} style="border-bottom:1px solid var(--border)">
         <div class="sensor-item ${sel ? 'sel' : ''}" @click=${() => p.setActiveInfo(ic.id)}>
           <div class="dot" style="background:#7fd4ff"></div>
           <div class="nm">${ic.label || 'Info'}${this._batteryText(ic.entity_id)}</div>
@@ -1655,7 +1719,7 @@ export class Sidebar extends LitElement {
     const lastFired = kind === 'custom' ? null
       : actionLastFired(b.entity_id ? p.hass?.states?.[b.entity_id] : null);
     return html`
-      <div style="border-bottom:1px solid var(--border)">
+      <div data-item-row=${b.id} style="border-bottom:1px solid var(--border)">
         <div class="sensor-item ${sel ? 'sel' : ''}" @click=${() => p.setActiveAction(b.id)}>
           <div class="dot" style="background:${actionButtonColor(b)}">${actionButtonIcon(b)}</div>
           <div class="nm">${b.label || 'Action'}</div>
@@ -1807,7 +1871,7 @@ export class Sidebar extends LitElement {
     const sel = p.activeBleId === b.id;
     const bound = !!b.haDeviceId;
     return html`
-      <div style="border-bottom:1px solid var(--border)">
+      <div data-item-row=${b.id} style="border-bottom:1px solid var(--border)">
         <div class="sensor-item ${sel ? 'sel' : ''}" @click=${() => p.setActiveBle(b.id)}>
           <div class="dot" style="background:${BLE_PROXY_DEFAULTS.color}"></div>
           <div class="nm">${b.name || 'Proxy'}${this._batteryText(b.haDeviceId, true)}</div>
@@ -1919,7 +1983,7 @@ export class Sidebar extends LitElement {
     const col = alarmStateColor(state);
     const badge = state ? state.replace('armed_', '').replace(/_/g, ' ') : (a.entity_id ? 'n/a' : '—');
     return html`
-      <div style="border-bottom:1px solid var(--border)">
+      <div data-item-row=${a.id} style="border-bottom:1px solid var(--border)">
         <div class="sensor-item ${sel ? 'sel' : ''}" @click=${() => p.setActiveAlarm(a.id)}>
           <div class="dot" style="background:${state ? col : '#90a4ae'}"></div>
           <div class="nm">${a.label?.trim() || 'Alarm'}${this._batteryText(a.entity_id)}</div>
@@ -2019,7 +2083,7 @@ export class Sidebar extends LitElement {
     const n = (p.calendarEvents[c.id] ?? []).length;
     const bound = (c.calendarIds ?? []).length;
     return html`
-      <div style="border-bottom:1px solid var(--border)">
+      <div data-item-row=${c.id} style="border-bottom:1px solid var(--border)">
         <div class="sensor-item ${sel ? 'sel' : ''}" @click=${() => p.setActiveCalendar(c.id)}>
           <div class="dot" style="background:${bound ? '#f4b73e' : '#90a4ae'}"></div>
           <div class="nm">${c.label?.trim() || 'Calendar'}</div>
@@ -2111,7 +2175,7 @@ export class Sidebar extends LitElement {
     const cur = st?.attributes?.current_temperature;
     const badge = mode ? `${mode.replace('_', ' ')}${cur != null ? ` ${Math.round(Number(cur))}°` : ''}` : (t.entity_id ? 'n/a' : '—');
     return html`
-      <div style="border-bottom:1px solid var(--border)">
+      <div data-item-row=${t.id} style="border-bottom:1px solid var(--border)">
         <div class="sensor-item ${sel ? 'sel' : ''}" @click=${() => p.setActiveThermo(t.id)}>
           <div class="dot" style="background:${mode ? col : '#90a4ae'}"></div>
           <div class="nm">${t.label?.trim() || 'Thermostat'}${this._batteryText(t.entity_id)}</div>
@@ -2221,7 +2285,7 @@ export class Sidebar extends LitElement {
                            : (st ? (kind === 'leak' ? 'dry' : kind === 'siren' ? 'idle' : 'ok')
                                  : (s.entity_id ? '—' : 'unbound'));
     return html`
-      <div style="border-bottom:1px solid var(--border)">
+      <div data-item-row=${s.id} style="border-bottom:1px solid var(--border)">
         <div class="sensor-item ${sel ? 'sel' : ''}" @click=${() => p.setActiveSafety(s.id)}>
           <div class="dot" style="background:${alarming ? col : '#90a4ae'}"></div>
           <div class="nm">${s.label?.trim() || dfl}${this._batteryText(s.entity_id)}</div>
@@ -2338,7 +2402,7 @@ export class Sidebar extends LitElement {
     const badge = bs === 'active' ? 'ALERT' : bs === 'ack' ? 'ack'
                 : (st ? 'idle' : (b.entity_id ? '—' : 'unbound'));
     return html`
-      <div style="border-bottom:1px solid var(--border)">
+      <div data-item-row=${b.id} style="border-bottom:1px solid var(--border)">
         <div class="sensor-item ${sel ? 'sel' : ''}" @click=${() => p.setActiveAlertBeacon(b.id)}>
           <div class="dot" style="background:${bs === 'idle' ? '#90a4ae' : col}"></div>
           <div class="nm">${b.label?.trim() || 'Alert'}${this._batteryText(b.entity_id)}</div>
@@ -2441,7 +2505,7 @@ export class Sidebar extends LitElement {
     const led = robotLedColor(act);
     const working = act === 'cleaning' || act === 'mowing';
     return html`
-      <div style="border-bottom:1px solid var(--border)">
+      <div data-item-row=${r.id} style="border-bottom:1px solid var(--border)">
         <div class="sensor-item ${sel ? 'sel' : ''}" @click=${() => p.setActiveRobot(r.id)}>
           <div class="dot" style="background:${robotColor(kind)}"></div>
           <div class="nm">${robotGlyph(kind)} ${r.label?.trim() || (kind === 'mower' ? 'Mower' : 'Vacuum')}${this._batteryText(r.entity_id)}</div>
@@ -2838,7 +2902,7 @@ export class Sidebar extends LitElement {
     const st = c.entity_id && p.hass ? p.hass.states[c.entity_id] : null;
     const recording = st?.state === 'recording';
     return html`
-      <div style="border-bottom:1px solid var(--border)">
+      <div data-item-row=${c.id} style="border-bottom:1px solid var(--border)">
         <div class="sensor-item ${sel ? 'sel' : ''}" @click=${() => p.setActiveCamera(c.id)}>
           <div class="dot" style="background:${recording ? '#ef5350' : '#4dd0e1'}"></div>
           <div class="nm">📷 ${c.label?.trim() || 'Camera'}${this._batteryText(c.entity_id)}</div>
@@ -3089,7 +3153,7 @@ export class Sidebar extends LitElement {
     const sel = p.activeProjectorId === pr.id;
     const projecting = (p.effectiveState(pr)?.state === 'on' || p.effectiveState(pr)?.state === 'playing');
     return html`
-      <div style="border-bottom:1px solid var(--border)">
+      <div data-item-row=${pr.id} style="border-bottom:1px solid var(--border)">
         <div class="sensor-item ${sel ? 'sel' : ''}" @click=${() => p.setActiveProjector(pr.id)}>
           <div class="dot" style="background:${projecting ? projectorBeamColor(pr) : '#5c6bc0'}"></div>
           <div class="nm">📽 ${pr.label?.trim() || 'Projector'}${this._batteryText(pr.entity_id ?? null)}</div>
@@ -3203,7 +3267,7 @@ export class Sidebar extends LitElement {
     const badge = st ? (flowing ? `open ${pct}%` : 'closed') : (v.entity_id ? 'n/a' : '—');
     const col = flowing ? '#4fc3f7' : (st ? '#90a4ae' : '#607d8b');
     return html`
-      <div style="border-bottom:1px solid var(--border)">
+      <div data-item-row=${v.id} style="border-bottom:1px solid var(--border)">
         <div class="sensor-item ${sel ? 'sel' : ''}" @click=${() => p.setActiveValve(v.id)}>
           <div class="dot" style="background:${col}"></div>
           <div class="nm">${v.label?.trim() || 'Valve'}${this._batteryText(v.entity_id)}</div>
@@ -3291,7 +3355,7 @@ export class Sidebar extends LitElement {
     const col = running ? '#4fc3f7' : (st ? '#90a4ae' : '#607d8b');
     const nm = z.label?.trim() || (z.zoneNumber != null ? `Zone ${z.zoneNumber}` : 'Sprinkler');
     return html`
-      <div style="border-bottom:1px solid var(--border)">
+      <div data-item-row=${z.id} style="border-bottom:1px solid var(--border)">
         <div class="sensor-item ${sel ? 'sel' : ''}" @click=${() => p.setActiveSprinkler(z.id)}>
           <div class="dot" style="background:${col}"></div>
           <div class="nm">${nm}${this._batteryText(z.entity_id)}</div>
@@ -3393,7 +3457,7 @@ export class Sidebar extends LitElement {
     const badge = fp.entityId ? `${Math.round(frac * 100)}%` : (fp.halfMast ? '½ mast' : 'full');
     const nm = fp.label?.trim() || 'Flagpole';
     return html`
-      <div style="border-bottom:1px solid var(--border)">
+      <div data-item-row=${fp.id} style="border-bottom:1px solid var(--border)">
         <div class="sensor-item ${sel ? 'sel' : ''}" @click=${() => p.setActiveFlagpole(fp.id)}>
           <div class="dot" style="background:${entry.dominant}"></div>
           <div class="nm">${nm} · ${entry.label}</div>
@@ -3490,7 +3554,7 @@ export class Sidebar extends LitElement {
     const badge = st ? (on ? (isFinite(powerW) ? `${Math.round(powerW)}W` : 'on') : 'off') : (pl.entity_id ? 'n/a' : '—');
     const col = on ? '#69f0ae' : (st ? '#90a4ae' : '#607d8b');
     return html`
-      <div style="border-bottom:1px solid var(--border)">
+      <div data-item-row=${pl.id} style="border-bottom:1px solid var(--border)">
         <div class="sensor-item ${sel ? 'sel' : ''}" @click=${() => p.setActivePlug(pl.id)}>
           <div class="dot" style="background:${col}"></div>
           <div class="nm">${pl.label?.trim() || 'Plug'}${this._batteryText(pl.entity_id)}</div>
@@ -3610,7 +3674,7 @@ export class Sidebar extends LitElement {
     const occupied = st?.state === 'on';
     const col = presenceZoneColor(z);
     return html`
-      <div style="border-bottom:1px solid var(--border)">
+      <div data-item-row=${z.id} style="border-bottom:1px solid var(--border)">
         <div class="sensor-item ${sel ? 'sel' : ''}" @click=${() => p.setActivePZone(z.id)}>
           <div class="dot" style="background:${occupied ? col : '#607d8b'}"></div>
           <div class="nm">▱ ${z.name?.trim() || 'Zone'}</div>
@@ -3719,7 +3783,7 @@ export class Sidebar extends LitElement {
     const sel = p.activeGroundAreaId === g.id;
     const col = groundAreaColor(g);
     return html`
-      <div style="border-bottom:1px solid var(--border)">
+      <div data-item-row=${g.id} style="border-bottom:1px solid var(--border)">
         <div class="sensor-item ${sel ? 'sel' : ''}" @click=${() => p.setActiveGroundArea(g.id)}>
           <div class="dot" style="background:${col}"></div>
           <div class="nm">▨ ${g.name?.trim() || GROUND_KINDS[g.kind]?.label || g.kind}</div>
@@ -3842,7 +3906,7 @@ export class Sidebar extends LitElement {
     const hs = p.poolHeaterStateOf(pl);
     const badge = hs === 'heating' ? '🔥 heating' : hs === 'idle' ? 'idle' : (p.poolPumpOnOf(pl) ? '💧 pump' : (pl.kind === 'spa' ? 'spa' : 'pool'));
     return html`
-      <div style="border-bottom:1px solid var(--border)">
+      <div data-item-row=${pl.id} style="border-bottom:1px solid var(--border)">
         <div class="sensor-item ${sel ? 'sel' : ''}" @click=${() => p.setActivePool(pl.id)}>
           <div class="dot" style="background:${poolWaterColor(pl)}"></div>
           <div class="nm">${pl.kind === 'spa' ? '♨' : '🏊'} ${pl.name?.trim() || (pl.kind === 'spa' ? 'Spa' : 'Pool')}</div>
@@ -3978,7 +4042,7 @@ export class Sidebar extends LitElement {
     const p = this.planner;
     const sel = p.activeVoidAreaId === v.id;
     return html`
-      <div style="border-bottom:1px solid var(--border)">
+      <div data-item-row=${v.id} style="border-bottom:1px solid var(--border)">
         <div class="sensor-item ${sel ? 'sel' : ''}" @click=${() => p.setActiveVoidArea(v.id)}>
           <div class="dot" style="background:#222"></div>
           <div class="nm">🕳 Void ${i + 1}</div>
@@ -4687,7 +4751,7 @@ export class Sidebar extends LitElement {
     const dist = res ? fmtLen(res.mm, p.store.imperial) : '— (broken)';
     const bIsPoint = r.b.kind === 'point';
     return html`
-      <div style="border-bottom:1px solid var(--border)">
+      <div data-item-row=${r.id} style="border-bottom:1px solid var(--border)">
         <div class="sensor-item ${sel ? 'sel' : ''}" @click=${() => p.setActiveRuler(r.id)}>
           <div class="dot" style="background:#ffb74d"></div>
           <div class="nm">📏 Ruler ${i + 1}</div>
@@ -4779,7 +4843,7 @@ export class Sidebar extends LitElement {
     const badge = !bound ? '—' : unavail ? 'n/a' : isOpen ? 'OPEN' : 'closed';
     const badgeClass = bound && !unavail && isOpen ? 'bound' : '';
     return html`
-      <div style="border-bottom:1px solid var(--border)">
+      <div data-item-row=${d.id} style="border-bottom:1px solid var(--border)">
         <div class="sensor-item" style="cursor:default">
           <div class="dot" style="background:${effOpen ? '#66bb6a' : '#90a4ae'}"></div>
           <div class="nm">${d.label?.trim() || 'Door'}</div>
@@ -5049,7 +5113,7 @@ export class Sidebar extends LitElement {
     const badge = !bound ? '—' : unavail ? 'n/a' : isOpen ? 'OPEN' : 'closed';
     const badgeClass = bound && !unavail && isOpen ? 'bound' : '';
     return html`
-      <div style="border-bottom:1px solid var(--border)">
+      <div data-item-row=${w.id} style="border-bottom:1px solid var(--border)">
         <div class="sensor-item" style="cursor:default">
           <div class="dot" style="background:${effOpen ? '#66bb6a' : '#64b5f6'}"></div>
           <div class="nm">${w.label?.trim() || 'Window'}</div>
@@ -5316,7 +5380,7 @@ export class Sidebar extends LitElement {
     const exp = this._furnExpanded.has(piece.id);
     const display = piece.label?.trim() || def.label;
     return html`
-      <div style="border-bottom:1px solid var(--border)">
+      <div data-item-row=${piece.id} style="border-bottom:1px solid var(--border)">
         <div class="sensor-item" style="cursor:default">
           <span style="font-size:11px;color:var(--text-dim);min-width:54px">${def.label}</span>
           <div class="nm">${display}</div>
@@ -6279,7 +6343,7 @@ export class Sidebar extends LitElement {
     const badgeClass = bound && !unavail && isOn ? 'bound' : '';
     const exp = this._fxExpanded.has(it.id);
     return html`
-      <div style="border-bottom:1px solid var(--border)">
+      <div data-item-row=${it.id} style="border-bottom:1px solid var(--border)">
         <div class="sensor-item" style="cursor:default">
           <span style="font-size:14px;line-height:1">${icon}</span>
           <div class="nm" title=${it.entity_id || ''}>${friendly}</div>
@@ -7338,7 +7402,7 @@ export class Sidebar extends LitElement {
     // latches rather than a component @state.
     const suggestOpen = p.landmarkSuggestId === lm.id;
     return html`
-      <div style="border-bottom:1px solid var(--border)${excluded ? ';opacity:0.55' : ''}">
+      <div data-item-row=${lm.id} style="border-bottom:1px solid var(--border)${excluded ? ';opacity:0.55' : ''}">
         <div class="sensor-item" style="cursor:default;gap:4px">
           <div class="dot" style="background:${pending ? '#ffb74d' : calibrated ? '#4dd0e1' : '#90a4ae'}"></div>
           <input type="text" .value=${lm.name} style="flex:1;min-width:0" placeholder="Landmark name…"

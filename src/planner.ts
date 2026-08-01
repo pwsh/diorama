@@ -12,7 +12,8 @@ import { slugToName, normMac, localToWorld, segCrossesSolidWall, mowerSweepWaypo
          closedWallLoops, envKindOf, tempToCelsius, aggregateRoomTemps,
          bufferPolyline, PATH_DEFAULT_WIDTH, poolHeaterState, poolPumpOn,
          rotPointDeg, floorContentBbox, GRID_MM, rulerSetLength,
-         furnitureLocalToWorld, furnitureDef, resolveItemGroundMm, STAIRS_MIN_RISE_MM,
+         furnitureLocalToWorld, furnitureDef, resolveFurnitureDef, resolveItemGroundMm, STAIRS_MIN_RISE_MM,
+         IDENTIFY_TTL_MS,
          type LockGlyphState, type RoomTemp, type TempSample,
          type BicycleState } from './geometry.js';
 import { solveHomography, applyHomography } from './homography.js';
@@ -236,6 +237,29 @@ export interface GeoEventPin {
   label: string;               // e.g. 'M4.2 · 12 km NW' (composed once)
 }
 
+// ── Alt+click IDENTIFY (edit mode) ─────────────────────────────────────────
+// Every canvas item kind Alt+click can name. Deliberately item-level (not
+// section-level): the sidebar maps kind → section slug, the 2D painter maps
+// kind → glyph, and `Planner.identifyItem` maps kind → the collection to look
+// the id up in. Adding a new placeable means one entry in each of those three.
+export type IdentifyKind =
+  | 'wall' | 'furniture' | 'light' | 'switch' | 'sensor' | 'motion' | 'env'
+  | 'info' | 'action' | 'ble' | 'alarm' | 'calendar' | 'thermostat' | 'safety'
+  | 'alert' | 'robot' | 'camera' | 'projector' | 'valve' | 'plug' | 'sprinkler'
+  | 'flagpole' | 'door' | 'window' | 'ruler' | 'pzone' | 'ground' | 'pool'
+  | 'void' | 'room' | 'landmark';
+
+// The runtime identify latch. `at` is a performance.now() stamp — the canvas
+// callout fades out over the last stretch of IDENTIFY_TTL_MS and the sidebar
+// navigates ONCE per distinct `at`.
+export interface IdentifyFx {
+  kind: IdentifyKind;
+  id: string;
+  label: string;      // human name (the item's own, else a kind name)
+  locked: boolean;    // drives the "🔒 locked — unlock in the sidebar" line
+  x: number; y: number;   // world mm anchor for the callout
+  at: number;
+}
 // Drag state covers every interaction kind. Only active during a mousedown→up.
 export type Drag =
   | { kind: 'sensor'; id: string; startMm: Vec2; start: Vec2 }
@@ -541,11 +565,15 @@ export class Planner extends EventTarget {
   drag: Drag | null = null;
   dragJustEnded = false;
   editZone: EditZone | null = null;
-  // Smart alignment guides (Feature C). Runtime only — never persisted.
-  // `alignGuides` are the active guide lines drawn while moving a placeable;
-  // `alignCandidates` are peer centers snapshotted once at drag start.
+  // Smart alignment guides (Feature C, universalized). Runtime only — never
+  // persisted. `alignGuides` are the active guide lines drawn while a drag is in
+  // flight; `alignPool` is the CROSS-CATEGORY candidate pool (wall vertices,
+  // room anchors, every fixture/furniture centre — plus other shapes' vertices
+  // while editing a polygon), snapshotted ONCE per drag as two flat coordinate
+  // arrays and never rescanned per frame. Built lazily on the drag's first
+  // mousemove and dropped on release (see canvas-interact).
   alignGuides: { axis: 'x' | 'y'; mm: number }[] = [];
-  alignCandidates: { x: number; y: number }[] = [];
+  alignPool: { xs: number[]; ys: number[] } | null = null;
 
   conn: ConnStatus | 'connecting' = 'connecting';
   showDetails: boolean;
@@ -1004,7 +1032,7 @@ export class Planner extends EventTarget {
       this.tool = 'select'; this.placingRoomId = null; this.placingLandmarkId = null;
       this.landmarkSuggestId = null;
       this.placingCamCalibId = null; this.pendingCamCalibUV = null;
-      this.alignGuides = []; this.alignCandidates = [];
+      this.alignGuides = []; this.alignPool = null; this.identifyFx = null;
       // A disabled floor is hidden from the kiosk/view picker — don't strand the
       // view on one. Jump to the first enabled floor (if any exists).
       const cur = this.store.floors.find(f => f.id === this.store.currentFloorId);
@@ -1303,6 +1331,7 @@ export class Planner extends EventTarget {
     this.drawingPath = null; this.drawingPoolArea = null; this.drawingExclusion = null;
     this.drawingRuler = null; this.pickingDimWalls = false;
     this.landmarkSuggestId = null;
+    this.identifyFx = null; this.alignGuides = []; this.alignPool = null;
   }
 
   // ── Delete the current selection ────────────────────────────────────────────
@@ -3066,6 +3095,245 @@ export class Planner extends EventTarget {
   markNewlyPlaced(kind: string, id: string): void {
     this.newlyPlacedFocus = { kind, id };
     this.selectionHot = true;
+  }
+
+  // ── Alt+click IDENTIFY ────────────────────────────────────────────────────
+  // "If something is locked it is hard to find what needs unlocking." Alt+click
+  // (2D canvas or 3D raycast, EDIT mode only) selects the item under the cursor
+  // WITHOUT any of its normal click behaviour, drops a runtime latch the 2D
+  // canvas paints as a callout, and the sidebar uses to expand + scroll to the
+  // item's row. Runtime only — never persisted, never an undo step (no save()).
+  // `identifyItem` is the ONE entry point both views call, so their labels /
+  // selection semantics can't diverge; it SETS the active id (never toggles it
+  // like the setActive* setters do — a second Alt+click must re-identify, not
+  // deselect).
+  identifyFx: IdentifyFx | null = null;
+
+  // The live latch, or null once its TTL has elapsed. Cheap; safe per frame.
+  identifyActive(now = (typeof performance !== 'undefined' ? performance.now() : Date.now())):
+      IdentifyFx | null {
+    const fx = this.identifyFx;
+    if (!fx) return null;
+    return (now - fx.at) < IDENTIFY_TTL_MS ? fx : null;
+  }
+
+  clearIdentify(): void {
+    if (!this.identifyFx) return;
+    this.identifyFx = null;
+    this.emitConfig();
+  }
+
+  identifyItem(kind: IdentifyKind, id: string): boolean {
+    if (this.uiMode !== 'edit') return false;
+    const f = this.floor();
+    const find = <T extends { id: string }>(arr: T[] | undefined): T | undefined =>
+      (arr ?? []).find(x => x.id === id);
+    const poly = (pts: Vec2[] | undefined): Vec2 => {
+      const list = pts ?? [];
+      if (!list.length) return { x: 0, y: 0 };
+      let sx = 0, sy = 0;
+      for (const pt of list) { sx += pt.x; sy += pt.y; }
+      return { x: sx / list.length, y: sy / list.length };
+    };
+    let label = '', locked = false, at: Vec2 | null = null;
+
+    switch (kind) {
+      case 'wall': {
+        const w = find(f.walls); if (!w) return false;
+        label = 'Wall'; locked = !!w.locked; at = poly(w.points);
+        break;
+      }
+      case 'furniture': {
+        const fu = find(f.furniture); if (!fu) return false;
+        label = fu.label?.trim() || resolveFurnitureDef(fu, this.store.customObjects).label;
+        locked = !!fu.locked; at = { x: fu.x, y: fu.y };
+        this.activeFurnitureId = fu.id;
+        break;
+      }
+      case 'light': case 'switch': {
+        const it = find(kind === 'light' ? f.lights : f.switches); if (!it) return false;
+        label = it.label?.trim() || (kind === 'light' ? 'Light' : 'Switch');
+        locked = !!it.locked; at = { x: it.x, y: it.y };
+        break;
+      }
+      case 'sensor': {
+        const s = find(f.sensors); if (!s) return false;
+        label = s.label?.trim() || 'mmWave sensor';
+        locked = !!s.locked; at = { x: s.x, y: s.y };
+        this.store.activeSensorId = s.id;
+        break;
+      }
+      case 'motion': {
+        const m = find(f.motionSensors); if (!m) return false;
+        label = m.label?.trim() || 'Motion sensor';
+        locked = !!m.locked; at = { x: m.x, y: m.y }; this.activeMotionId = m.id;
+        break;
+      }
+      case 'env': {
+        const en = find(f.envSensors); if (!en) return false;
+        label = en.label?.trim() || 'Env sensor';
+        locked = !!en.locked; at = { x: en.x, y: en.y }; this.activeEnvId = en.id;
+        break;
+      }
+      case 'info': {
+        const ic = find(f.infoCards); if (!ic) return false;
+        label = ic.label?.trim() || 'Info card';
+        locked = !!ic.locked; at = { x: ic.x, y: ic.y }; this.activeInfoId = ic.id;
+        break;
+      }
+      case 'action': {
+        const b = find(f.actionButtons); if (!b) return false;
+        label = b.label?.trim() || 'Action button';
+        locked = !!b.locked; at = { x: b.x, y: b.y }; this.activeActionId = b.id;
+        break;
+      }
+      case 'ble': {
+        const b = find(f.bleProxies); if (!b) return false;
+        label = b.name?.trim() || 'BLE proxy';
+        locked = !!b.locked; at = { x: b.x, y: b.y }; this.activeBleId = b.id;
+        break;
+      }
+      case 'alarm': {
+        const a = find(f.alarmPanels); if (!a) return false;
+        label = a.label?.trim() || 'Alarm keypad';
+        locked = !!a.locked; at = { x: a.x, y: a.y }; this.activeAlarmId = a.id;
+        break;
+      }
+      case 'calendar': {
+        const c = find(f.calendarPanels); if (!c) return false;
+        label = c.label?.trim() || 'Wall calendar';
+        locked = !!c.locked; at = { x: c.x, y: c.y }; this.activeCalendarId = c.id;
+        break;
+      }
+      case 'thermostat': {
+        const t = find(f.thermostats); if (!t) return false;
+        label = t.label?.trim() || 'Thermostat';
+        locked = !!t.locked; at = { x: t.x, y: t.y }; this.activeThermoId = t.id;
+        break;
+      }
+      case 'safety': {
+        const s = find(f.safetySensors); if (!s) return false;
+        label = s.label?.trim() || 'Safety sensor';
+        locked = !!s.locked; at = { x: s.x, y: s.y }; this.activeSafetyId = s.id;
+        break;
+      }
+      case 'alert': {
+        const b = find(f.alertBeacons); if (!b) return false;
+        label = b.label?.trim() || 'Alert beacon';
+        locked = !!b.locked; at = { x: b.x, y: b.y }; this.activeAlertBeaconId = b.id;
+        break;
+      }
+      case 'robot': {
+        const r = find(f.robots); if (!r) return false;
+        label = r.label?.trim() || 'Robot';
+        locked = !!r.locked; at = { x: r.x, y: r.y }; this.activeRobotId = r.id;
+        break;
+      }
+      case 'camera': {
+        const c = find(f.cameras); if (!c) return false;
+        label = c.label?.trim() || 'Camera';
+        locked = !!c.locked; at = { x: c.x, y: c.y }; this.activeCameraId = c.id;
+        break;
+      }
+      case 'projector': {
+        const pr = find(f.projectors); if (!pr) return false;
+        label = pr.label?.trim() || 'Projector';
+        locked = !!pr.locked; at = { x: pr.x, y: pr.y }; this.activeProjectorId = pr.id;
+        break;
+      }
+      case 'valve': {
+        const v = find(f.valves); if (!v) return false;
+        label = v.label?.trim() || 'Water valve';
+        locked = !!v.locked; at = { x: v.x, y: v.y }; this.activeValveId = v.id;
+        break;
+      }
+      case 'plug': {
+        const pg = find(f.plugs); if (!pg) return false;
+        label = pg.label?.trim() || 'Smart plug';
+        locked = !!pg.locked; at = { x: pg.x, y: pg.y }; this.activePlugId = pg.id;
+        break;
+      }
+      case 'sprinkler': {
+        const sz = find(f.sprinklerZones); if (!sz) return false;
+        label = sz.label?.trim() || 'Sprinkler zone';
+        locked = !!sz.locked; at = { x: sz.x, y: sz.y }; this.activeSprinklerId = sz.id;
+        break;
+      }
+      case 'flagpole': {
+        const fp = find(f.flagpoles); if (!fp) return false;
+        label = fp.label?.trim() || 'Flagpole';
+        locked = !!fp.locked; at = { x: fp.x, y: fp.y }; this.activeFlagpoleId = fp.id;
+        break;
+      }
+      case 'door': {
+        const d = find(f.doors); if (!d) return false;
+        label = d.label?.trim() || 'Door';
+        locked = !!d.locked; at = { x: d.x, y: d.y };
+        break;
+      }
+      case 'window': {
+        const w = find(f.windows); if (!w) return false;
+        label = w.label?.trim() || 'Window';
+        locked = !!w.locked; at = { x: w.x, y: w.y };
+        break;
+      }
+      case 'ruler': {
+        const r = find(f.rulers); if (!r) return false;
+        label = 'Ruler';
+        locked = !!r.locked; this.activeRulerId = r.id;
+        const ends = [r.a, r.b].filter((e): e is { kind: 'point'; x: number; y: number } =>
+          e.kind === 'point');
+        at = ends.length ? poly(ends) : { x: 0, y: 0 };
+        break;
+      }
+      case 'pzone': {
+        const z = find(f.presenceZones); if (!z) return false;
+        label = z.name?.trim() || 'Presence zone';
+        locked = !!z.locked; at = poly(z.points); this.activePZoneId = z.id;
+        break;
+      }
+      case 'ground': {
+        const g = find(f.groundAreas); if (!g) return false;
+        label = g.name?.trim() || `Ground area (${g.kind})`;
+        locked = !!g.locked; at = poly(g.points); this.activeGroundAreaId = g.id;
+        break;
+      }
+      case 'pool': {
+        const pl = find(f.pools); if (!pl) return false;
+        label = pl.name?.trim() || 'Pool';
+        locked = !!pl.locked; at = poly(pl.points); this.activePoolId = pl.id;
+        break;
+      }
+      case 'void': {
+        const vd = find(f.voidAreas); if (!vd) return false;
+        label = 'Floor void';
+        locked = !!vd.locked; at = poly(vd.points); this.activeVoidAreaId = vd.id;
+        break;
+      }
+      case 'room': {
+        const rm = find(f.rooms); if (!rm) return false;
+        label = rm.name?.trim() || this.roomAreaName(rm) || 'Unnamed room';
+        at = { x: rm.anchor.x, y: rm.anchor.y };
+        break;
+      }
+      case 'landmark': {
+        const lm = (this.store.geo?.landmarks ?? []).find(l => l.id === id);
+        if (!lm) return false;
+        label = lm.name?.trim() || 'Landmark';
+        at = { x: lm.x, y: lm.y };
+        break;
+      }
+      default: return false;
+    }
+
+    this.markSelectionHot();
+    this.identifyFx = {
+      kind, id, label, locked,
+      x: at?.x ?? 0, y: at?.y ?? 0,
+      at: (typeof performance !== 'undefined' ? performance.now() : Date.now()),
+    };
+    this.emitConfig();
+    return true;
   }
 
   setActiveSensor(id: string | null): void {

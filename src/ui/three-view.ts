@@ -24,10 +24,21 @@ import { roadCapForRadius } from '../neighborhood.js';
 import { FLIGHTS_DEFAULT_RADIUS_NM, flightShellMm } from '../flights.js';
 import { loadModel } from '../model-store.js';
 import { newId } from '../storage.js';
-import type { Planner } from '../planner.js';
+import type { Planner, IdentifyKind } from '../planner.js';
 import { floorSwitchCameraDelta } from '../planner.js';
 import { browserViewStorage, loadCam3d, saveCam3d, resolveBootPose } from '../view-persist.js';
 import type { Scene3D } from '../types.js';
+
+// 3D raycast fixture kind → the IdentifyKind the planner looks up. 'media' and
+// 'appliance' are both furniture tags; 'lock' is a door's deadbolt, so it names
+// the DOOR. 'flight' is deliberately absent — a live aircraft is not a placed
+// item and has no sidebar row (its own detail card already covers inspection).
+const IDENTIFY_KIND_FOR_CLICK: Record<string, IdentifyKind> = {
+  light: 'light', switch: 'switch', media: 'furniture', appliance: 'furniture',
+  alarm: 'alarm', thermostat: 'thermostat', safety: 'safety', alert: 'alert',
+  robot: 'robot', action: 'action', projector: 'projector', valve: 'valve',
+  plug: 'plug', sprinkler: 'sprinkler', lock: 'door',
+};
 
 @customElement('diorama-three-view')
 export class ThreeView extends LitElement {
@@ -53,6 +64,8 @@ export class ThreeView extends LitElement {
   private _ro: ResizeObserver | null = null;
   private _raf = 0;
   private _initialized = false;  // renderer set up at least once (reconnect guard)
+  // Alt state of the pointerdown that started the pending click (identify gate).
+  private _lastAltKey = false;
   private _simsCamOn = false;   // runtime-only Sims-cam azimuth-snap toggle
 
   protected override createRenderRoot() { return this; }
@@ -290,11 +303,28 @@ export class ThreeView extends LitElement {
       this._renderer?.resize(w, h);
     });
     this._ro.observe(this._area);
+    // Alt+click IDENTIFY needs the modifier, and the renderer's click callback
+    // carries no event. Record it from a CAPTURE-phase pointerdown on the
+    // container: pointerdown always precedes the click that fires the callback,
+    // and capturing on the ancestor beats the renderer's own canvas listeners.
+    this._area.addEventListener('pointerdown',
+      (e: PointerEvent) => { this._lastAltKey = e.altKey; }, true);
+    this._area.addEventListener('mousedown',
+      (e: MouseEvent) => { this._lastAltKey = e.altKey; }, true);
     // Fixture click → toggle whatever entity is bound (uses entity's actual
     // domain so a "switch" fixture bound to a light entity does light.toggle).
     this._renderer.onFixtureClick(({ kind, entity_id, fixtureId, hex }) => {
       const p = this.planner;
       if (!this.interactive) return;   // view-mode card: no device interaction
+      // Alt+click IDENTIFY (edit only): select + name the fixture instead of
+      // actuating it, so the sidebar jumps to its row. Same planner entry point
+      // the 2D sweep uses, so labels + selection can't diverge between views.
+      // There is no 3D callout in v1 — the sidebar navigation IS the payoff.
+      if (this._lastAltKey && p.uiMode === 'edit') {
+        const k = IDENTIFY_KIND_FOR_CLICK[kind];
+        if (k) p.identifyItem(k, fixtureId);
+        return;   // never falls through to a toggle
+      }
       // Live aircraft → open the flight detail card. Not a placed fixture and
       // nothing to actuate: the click is pure inspection, so it opens in edit
       // AND kiosk and refuses only in view (like the alarm/thermostat modals).
@@ -424,6 +454,7 @@ export class ThreeView extends LitElement {
       const p = this.planner;
       if (!this.interactive) return;   // view-mode card: no device interaction
       if (p.uiMode === 'view') return;
+      if (this._lastAltKey && p.uiMode === 'edit') return;   // Alt = identify, not clean
       const ro = p.floor().robots?.find(x => x.id === robotId);
       if (!ro) return;
       const map = p.vacuumMaps[robotId];
@@ -436,6 +467,8 @@ export class ThreeView extends LitElement {
       const p = this.planner;
       if (!this.interactive) return;   // view-mode card: no device interaction
       if (p.uiMode === 'view') return;
+      // Alt is the IDENTIFY modifier — never a binding modal (see onFixtureClick).
+      if (this._lastAltKey && p.uiMode === 'edit') return;
       // Aircraft have no dblclick action — the first tap already opened the
       // detail card, and there is nothing to bind.
       if (kind === 'flight') return;

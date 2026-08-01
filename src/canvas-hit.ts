@@ -783,6 +783,22 @@ export function hitRoomLabel(p: Planner, view: View, mm: Vec2): { room: import('
   return null;
 }
 
+// Geo landmark pin (store-level, drawn on every floor). Landmarks are NOT
+// canvas-draggable — this exists purely so Alt+click IDENTIFY can name one and
+// jump to its GPS/Geo row. Same layer gate + `hidden` skip the painter uses.
+export function hitGeoLandmark(p: Planner, view: View, mm: Vec2):
+    { id: string } | null {
+  if (p.store.layers2d?.geo === false) return null;
+  const list = p.geoLandmarks();
+  const h = hitPx(view) * 1.2;
+  for (let i = list.length - 1; i >= 0; i--) {
+    const lm = list[i];
+    if (lm.hidden) continue;
+    if (distMM(lm, mm) < h) return { id: lm.id };
+  }
+  return null;
+}
+
 // A draggable ruler ENDPOINT handle (only POINT ends are draggable; object-
 // anchored ends track their item). Highest ruler priority — small explicit
 // targets. Locked rulers expose no handles.

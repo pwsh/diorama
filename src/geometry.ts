@@ -2189,6 +2189,62 @@ export function nearestAlign(v: number, candidates: number[], tol: number): numb
   return best;
 }
 
+// The smallest-magnitude shift that brings ONE of `values` onto a candidate
+// within `tol` (else null). Generalizes `nearestAlign` from "snap this point" to
+// "translate this shape" — a whole-wall move offers all of its vertices, a
+// polygon body move offers its bbox centre, and the winner is the least
+// disturbing of them. `mm` is the matched candidate coordinate (what the guide
+// line is drawn through); `delta` is what the caller adds to every point. Pure.
+export function bestAlignShift(
+  values: number[], candidates: number[], tol: number,
+): { mm: number; delta: number } | null {
+  let best: { mm: number; delta: number } | null = null;
+  let bd = tol;
+  for (const v of values) {
+    for (const c of candidates) {
+      const d = Math.abs(c - v);
+      if (d < bd) { bd = d; best = { mm: c, delta: c - v }; }
+    }
+  }
+  return best;
+}
+
+// Drag kinds that get the smart alignment guides (universal cross-category
+// pool). ONE shared set so the snapper (canvas-interact) and the painter
+// (canvas-render) can never disagree about which drags show guides — they used
+// to keep two hand-maintained copies, and the painter's was the smaller of the
+// two (safety / alert / robot / camera / projector snapped with no visible
+// line). Deliberately EXCLUDED: door / window drags (they wall-snap), the
+// LD2450 zone editor (firmware-local coords), ruler ends (object-anchored),
+// bg corner/resize, and the click-vs-drag control fixtures (alarm / calendar /
+// thermostat / action) whose tiny "click" movement must never be nudged past
+// their 30 mm open-the-modal threshold.
+export const ALIGN_DRAG_KINDS: ReadonlySet<string> = new Set([
+  // single-point fixture / furniture moves
+  'sensor', 'motion', 'env', 'ble', 'safety', 'alert', 'robot', 'camera',
+  'projector', 'fixture', 'furnMove', 'info',
+  // structure + room anchors
+  'wallv', 'wallMove', 'roomAnchor',
+  // polygon vertices
+  'groundVert', 'pzoneVert', 'voidVert', 'poolVert', 'pathVert',
+  // whole-shape body moves (bbox centre)
+  'groundMove', 'pzoneMove', 'poolMove', 'voidMove',
+]);
+
+// The subset of ALIGN_DRAG_KINDS that is editing a polygon / centerline. Only
+// these pull OTHER shapes' vertices into the candidate pool — a fixture drag
+// aligns to corners and centres, not to every terrace vertex on the floor.
+export const ALIGN_POLY_DRAG_KINDS: ReadonlySet<string> = new Set([
+  'groundVert', 'pzoneVert', 'voidVert', 'poolVert', 'pathVert',
+  'groundMove', 'pzoneMove', 'poolMove', 'voidMove',
+]);
+
+// Alt+click IDENTIFY latch timings. Lives here (pure) rather than on the
+// Planner because canvas-render must read them and imports Planner TYPE-only —
+// a value import would drag the whole planner into the 2D-render bundle.
+export const IDENTIFY_TTL_MS = 3000;
+export const IDENTIFY_FADE_MS = 600;   // fade over the last stretch of the TTL
+
 // Per-device power glow (#8). Maps a live power reading (W) to a 0..1 intensity
 // multiplier for the in-use appliance glow / LED: sqrt ramp, full at ~1500 W,
 // floored at 0.25 so a barely-on device still reads. A non-finite / ≤5 W reading

@@ -1,0 +1,478 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>ALIGNGUIDES …</title>
+<style>
+  body { margin:0; background:#0d1116; color:#cfd8dc; font:13px/1.5 sans-serif; padding:14px; }
+  h1 { font-size:15px; margin:0 0 10px; }
+  #summary { font-size:14px; font-weight:bold; margin:10px 0; padding:8px 10px; border-radius:5px; }
+  .okbg { background:#12331f; color:#69f0ae; } .badbg { background:#3a1414; color:#ff8a80; }
+  .row { display:flex; justify-content:space-between; gap:10px; padding:2px 0; border-bottom:1px solid #1c2530; }
+  .pass { color:#69f0ae; } .fail { color:#ff5252; }
+  .name { color:#90caf9; } .extra { color:#ffd54f; font-size:11px; }
+  h2 { font-size:12px; color:#80cbc4; margin:14px 0 4px; }
+  #stage { position:fixed; left:0; top:0; width:900px; height:700px; opacity:0; pointer-events:none; }
+</style>
+<h1>Universal cross-category alignment guides — pool, precedence, painter</h1>
+<div id="summary">Running…</div>
+<div id="rows"></div>
+<canvas id="stage" width="900" height="700"></canvas>
+
+<!-- Drives the REAL Planner + the REAL canvas-interact drag flows (bundled)
+     over an in-page fake HaApi (the wall-edit-test / undo-test seam). Build:
+       T=$(mktemp -d); cp -r src/* "$T"/
+       cp test-pages/fake-avatar-store.ts "$T"/avatar-store.ts
+       printf "export { Planner } from './planner.js';\nexport * from './canvas-interact.js';\nexport { drawAll } from './canvas-render.js';\nexport { nearestAlign, bestAlignShift, ALIGN_DRAG_KINDS, ALIGN_POLY_DRAG_KINDS } from './geometry.js';\n" > "$T"/align-entry.ts
+       npx esbuild "$T"/align-entry.ts --bundle --format=esm --outfile=<harness>/align.mod.js
+     Run headless (serve over http — Chrome blocks dynamic module imports on file://):
+       (cd <harness> && python3 -m http.server <port> &)
+       google-chrome --headless=new --disable-gpu --use-angle=swiftshader \
+         --enable-unsafe-swiftshader --run-all-compositor-stages-before-draw \
+         --window-size=1200,900 --virtual-time-budget=30000 --dump-dom \
+         "http://localhost:<port>/align-guides-test.html" | grep -o "<title>[^<]*" -->
+<script type="module">
+  const V = '?v=' + Date.now();
+  const M = await import('./align.mod.js' + V);
+  const {
+    Planner, drawAll,
+    onCanvasMouseDown, onCanvasMouseMove, onCanvasMouseUp,
+    nearestAlign, bestAlignShift, ALIGN_DRAG_KINDS, ALIGN_POLY_DRAG_KINDS,
+  } = M;
+
+  const results = [];
+  const ok = (name, cond, extra = '') => results.push({ name, pass: !!cond, extra: String(extra) });
+  const near = (a, b, eps = 1e-6) => Math.abs(a - b) <= eps;
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  async function waitFor(cond, tries = 600) {
+    for (let i = 0; i < tries; i++) { if (cond()) return true; await sleep(4); }
+    return !!cond();
+  }
+  const clone = x => JSON.parse(JSON.stringify(x));
+
+  class FakeHa {
+    constructor(seed) {
+      this.map = new Map();
+      for (const [k, v] of Object.entries(seed || {})) this.map.set(k, clone(v));
+      this.states = {}; this._stateCbs = []; this._connCbs = [];
+    }
+    connect() { for (const cb of this._connCbs) cb('connected'); for (const cb of this._stateCbs) cb(this.states, undefined); }
+    onState(fn) { this._stateCbs.push(fn); }
+    onConn(fn) { this._connCbs.push(fn); }
+    callService() { return Promise.resolve(); }
+    async getHistory() { return {}; } async getWeatherForecasts() { return null; }
+    async getDevices() { return []; } async getEntityRegistry() { return []; }
+    async updateEntityRegistry() { return true; }
+    async getUserData(k) { return this.map.has(k) ? clone(this.map.get(k)) : null; }
+    async setUserData(k, v) { this.map.set(k, clone(v)); return true; }
+    async refreshStates() {} async subscribeMqtt() { return () => {}; } async publishMqtt() {}
+  }
+
+  function floor(id, name, extra = {}) {
+    return {
+      id, name, w: 20000, d: 16000,
+      walls: [], furniture: [], lights: [], switches: [], sensors: [], motionSensors: [],
+      roamers: [], envSensors: [], doors: [], windows: [], bg: null, rooms: [], bleProxies: [],
+      alarmPanels: [], calendarPanels: [], thermostats: [], safetySensors: [], alertBeacons: [],
+      robots: [], presenceZones: [], cameras: [], projectors: [], valves: [], plugs: [],
+      sprinklerZones: [], flagpoles: [], infoCards: [], actionButtons: [], rulers: [],
+      groundAreas: [], voidAreas: [], pools: [], ...extra,
+    };
+  }
+  const makeStore = (floors, extra = {}) => ({
+    v: 2, floors, currentFloorId: floors[0].id, activeSensorId: null,
+    coverage: true, imperial: false, showDetails: false, useRawTargets: false, ...extra,
+  });
+  const LEGACY = 'diorama';
+  async function freshPlanner(store) {
+    localStorage.removeItem('diorama:store:v1');
+    localStorage.removeItem('diorama:configs');
+    for (const k of ['diorama:wall:angleSnap', 'diorama:wall:gridSnap', 'diorama:wall:weld']) localStorage.removeItem(k);
+    const p = new Planner();
+    p.connectWith(new FakeHa({ [LEGACY]: store }));
+    await waitFor(() => p.configIndex !== null && p.store.floors[0].id === store.floors[0].id);
+    return p;
+  }
+
+  // ── Canvas / view plumbing (wall-edit-test recipe) ─────────────────────────
+  const canvas = document.getElementById('stage');
+  const view = { ox: 40, oy: 620, scale: 0.05 };  // 1 mm = 0.05 px ⇒ 8 px tol = 160 mm
+  const TOL_MM = 8 / view.scale;
+  const rect = canvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  const evAt = (mx, my, opts = {}) => ({
+    clientX: rect.left + (mx * view.scale + view.ox) / dpr,
+    clientY: rect.top + (view.oy - my * view.scale) / dpr,
+    altKey: !!opts.alt, shiftKey: false, ctrlKey: false, metaKey: false,
+    button: opts.button ?? 0, buttons: 1,
+    preventDefault() {}, stopPropagation() {},
+  });
+  // Press at `from`, move to `to`, optionally release. Returns the planner.
+  function drag(p, from, to, opts = {}) {
+    onCanvasMouseDown(p, canvas, view, evAt(from.x, from.y, opts));
+    onCanvasMouseMove(p, canvas, view, evAt(to.x, to.y, opts));
+    if (opts.release !== false) onCanvasMouseUp(p, canvas, evAt(to.x, to.y, opts));
+    return p;
+  }
+  const guideX = p => p.alignGuides.filter(g => g.axis === 'x').map(g => g.mm);
+  const guideY = p => p.alignGuides.filter(g => g.axis === 'y').map(g => g.mm);
+
+  const mkWall = (id, pts, extra = {}) => ({ id, points: pts.map(q => ({ ...q })), kind: 'full', ...extra });
+  const mkFurn = (id, x, y, extra = {}) =>
+    ({ id, kind: 'table', x, y, w: 1200, h: 800, rotation: 0, elevation: 0, ...extra });
+
+  try {
+    // ── (1) Pure helpers ────────────────────────────────────────────────────
+    ok('1: nearestAlign picks the nearest in tol', nearestAlign(1005, [1000, 1004], 8) === 1004);
+    ok('1: nearestAlign outside tol → null', nearestAlign(1005, [1000], 3) === null);
+    {
+      const s = bestAlignShift([1000, 5000], [4980, 900], 60);
+      ok('1: bestAlignShift takes the SMALLEST magnitude shift', s && s.mm === 4980 && near(s.delta, -20), JSON.stringify(s));
+      ok('1: bestAlignShift outside tol → null', bestAlignShift([1000], [1200], 60) === null);
+      ok('1: bestAlignShift empty values → null', bestAlignShift([], [1000], 60) === null);
+      const t = bestAlignShift([1000], [1000], 60);
+      ok('1: bestAlignShift exact hit → delta 0', t && t.delta === 0, JSON.stringify(t));
+    }
+
+    // ── (2) The shared kind set (snapper + painter can't diverge) ───────────
+    for (const k of ['sensor', 'motion', 'env', 'ble', 'safety', 'alert', 'robot', 'camera',
+                     'projector', 'fixture', 'furnMove', 'info', 'wallv', 'wallMove',
+                     'roomAnchor', 'groundVert', 'pzoneVert', 'voidVert', 'poolVert',
+                     'pathVert', 'groundMove', 'pzoneMove', 'poolMove', 'voidMove'])
+      ok(`2: ALIGN_DRAG_KINDS has '${k}'`, ALIGN_DRAG_KINDS.has(k));
+    for (const k of ['doorMove', 'windowMove', 'vert', 'zonemove', 'rulerEnd', 'bgCorner',
+                     'bgMove', 'alarm', 'calendar', 'thermostat', 'action', 'furnCorner'])
+      ok(`2: ALIGN_DRAG_KINDS excludes '${k}'`, !ALIGN_DRAG_KINDS.has(k));
+    ok('2: poly subset ⊆ align set', [...ALIGN_POLY_DRAG_KINDS].every(k => ALIGN_DRAG_KINDS.has(k)));
+    ok('2: a fixture kind is NOT in the poly subset', !ALIGN_POLY_DRAG_KINDS.has('furnMove'));
+
+    // ── (3) Cross-category: furniture centre aligns to a WALL VERTEX x ──────
+    {
+      const p = await freshPlanner(makeStore([floor('f1', 'Home', {
+        walls: [mkWall('w1', [{ x: 6000, y: 2000 }, { x: 6000, y: 9000 }])],
+        furniture: [mkFurn('fu1', 3000, 3000)],
+      })]));
+      drag(p, { x: 3000, y: 3000 }, { x: 6000 - 100, y: 3000 }, { release: false });
+      const fu = p.floor().furniture[0];
+      ok('3: furniture snapped to the wall vertex x', near(fu.x, 6000), fu.x);
+      ok('3: guide recorded on x=6000', guideX(p).includes(6000), JSON.stringify(p.alignGuides));
+      ok('3: y untouched (no candidate near)', near(fu.y, 3000), fu.y);
+      onCanvasMouseUp(p, canvas, evAt(6000, 3000));
+      ok('3: guides cleared on release', p.alignGuides.length === 0);
+      ok('3: pool dropped on release', p.alignPool === null);
+    }
+
+    // ── (4) Tolerance boundary: 7 px yes, 9 px no ──────────────────────────
+    for (const [px, want] of [[7, true], [9, false]]) {
+      const off = px / view.scale;             // px → mm at this view scale
+      const p = await freshPlanner(makeStore([floor('f1', 'Home', {
+        walls: [mkWall('w1', [{ x: 6000, y: 2000 }, { x: 6000, y: 9000 }])],
+        furniture: [mkFurn('fu1', 3000, 3000)],
+      })]));
+      drag(p, { x: 3000, y: 3000 }, { x: 6000 - off, y: 3000 }, { release: false });
+      const fu = p.floor().furniture[0];
+      ok(`4: ${px} px offset ⇒ ${want ? 'snaps' : 'no snap'}`, near(fu.x, want ? 6000 : 6000 - off, 1e-6), fu.x);
+      onCanvasMouseUp(p, canvas, evAt(0, 0));
+    }
+    ok('4: harness tol matches the 8 px rule', near(TOL_MM, 160));
+
+    // ── (5) Self-exclusion ─────────────────────────────────────────────────
+    {
+      // Furniture alone on the floor: nothing to align to (its own centre is out).
+      const p = await freshPlanner(makeStore([floor('f1', 'Home', {
+        furniture: [mkFurn('fu1', 3000, 3000)],
+      })]));
+      drag(p, { x: 3000, y: 3000 }, { x: 3050, y: 3020 }, { release: false });
+      ok('5: dragged item is excluded from its own pool', p.alignGuides.length === 0, JSON.stringify(p.alignGuides));
+      ok('5: pool is empty on a bare floor', p.alignPool.xs.length === 0, p.alignPool.xs.length);
+      onCanvasMouseUp(p, canvas, evAt(0, 0));
+    }
+    {
+      // Wall vertex drag: the wall's OWN other vertex must not attract it.
+      const p = await freshPlanner(makeStore([floor('f1', 'Home', {
+        walls: [mkWall('w1', [{ x: 4000, y: 2000 }, { x: 9000, y: 2000 }, { x: 9000, y: 7000 }])],
+      })]));
+      p.setWallAngleSnap(false);
+      drag(p, { x: 4000, y: 2000 }, { x: 9000 - 60, y: 5000 }, { release: false });
+      const w = p.floor().walls[0];
+      ok('5: own wall vertices excluded (no x snap to 9000)', !near(w.points[0].x, 9000), w.points[0].x);
+      onCanvasMouseUp(p, canvas, evAt(0, 0));
+    }
+
+    // ── (6) Wall vertex aligns to a ROOM ANCHOR, overriding the angle lock ──
+    {
+      const p = await freshPlanner(makeStore([floor('f1', 'Home', {
+        walls: [mkWall('w1', [{ x: 2000, y: 2000 }, { x: 6000, y: 2000 }])],
+        rooms: [{ id: 'rm1', name: 'Kitchen', anchor: { x: 12000, y: 9000 } }],
+      })]));
+      // Drag the FAR endpoint toward (12000-60, 9000-60): the 15° lock off
+      // (2000,2000) would place it elsewhere; alignment must win on both axes.
+      drag(p, { x: 6000, y: 2000 }, { x: 12000 - 60, y: 9000 - 60 }, { release: false });
+      const v = p.floor().walls[0].points[1];
+      ok('6: wall vertex snapped to the room anchor x', near(v.x, 12000), v.x);
+      ok('6: wall vertex snapped to the room anchor y', near(v.y, 9000), v.y);
+      ok('6: guides on both axes', guideX(p).includes(12000) && guideY(p).includes(9000), JSON.stringify(p.alignGuides));
+      ok('6: alignment overrode the 15° angle snap', p.wallAngleSnap === true);
+      onCanvasMouseUp(p, canvas, evAt(0, 0));
+    }
+
+    // ── (7) Alt suspends alignment (wall vertex AND furniture) ─────────────
+    {
+      const p = await freshPlanner(makeStore([floor('f1', 'Home', {
+        walls: [mkWall('w1', [{ x: 2000, y: 2000 }, { x: 6000, y: 2000 }])],
+        rooms: [{ id: 'rm1', name: 'Kitchen', anchor: { x: 12000, y: 9000 } }],
+      })]));
+      drag(p, { x: 6000, y: 2000 }, { x: 12000 - 60, y: 9000 - 60 }, { release: false, alt: true });
+      const v = p.floor().walls[0].points[1];
+      ok('7: Alt → no align snap on a wall vertex', !near(v.x, 12000) && !near(v.y, 9000), `${v.x},${v.y}`);
+      ok('7: Alt → raw mm preserved (no grid either)', near(v.x, 11940) && near(v.y, 8940), `${v.x},${v.y}`);
+      ok('7: Alt → no guides drawn', p.alignGuides.length === 0);
+      onCanvasMouseUp(p, canvas, evAt(0, 0));
+    }
+    {
+      const p = await freshPlanner(makeStore([floor('f1', 'Home', {
+        walls: [mkWall('w1', [{ x: 6000, y: 2000 }, { x: 6000, y: 9000 }])],
+        furniture: [mkFurn('fu1', 3000, 3000)],
+      })]));
+      drag(p, { x: 3000, y: 3000 }, { x: 6000 - 100, y: 3000 }, { release: false, alt: true });
+      ok('7: Alt → no align snap on furniture', near(p.floor().furniture[0].x, 5900), p.floor().furniture[0].x);
+      onCanvasMouseUp(p, canvas, evAt(0, 0));
+    }
+
+    // ── (8) Weld still wins at release, inside weld range ──────────────────
+    {
+      // w2's free end is dragged near w1's endpoint; a room anchor 120 mm off
+      // pulls the align snap, but the release weld must land it ON w1's corner.
+      const p = await freshPlanner(makeStore([floor('f1', 'Home', {
+        walls: [
+          mkWall('w1', [{ x: 8000, y: 3000 }, { x: 8000, y: 9000 }]),
+          mkWall('w2', [{ x: 2000, y: 3000 }, { x: 5000, y: 3000 }]),
+        ],
+        rooms: [{ id: 'rm1', name: 'Kitchen', anchor: { x: 7880, y: 3000 } }],
+      })]));
+      p.setWallAngleSnap(false);
+      onCanvasMouseDown(p, canvas, view, evAt(5000, 3000));
+      onCanvasMouseMove(p, canvas, view, evAt(7900, 3000));
+      const midX = p.floor().walls[1].points[1].x;
+      ok('8: mid-drag the align guide won (room anchor)', near(midX, 7880), midX);
+      onCanvasMouseUp(p, canvas, evAt(7900, 3000));
+      const end = p.floor().walls[1].points[1];
+      ok('8: release WELD wins over the aligned position', near(end.x, 8000) && near(end.y, 3000), `${end.x},${end.y}`);
+    }
+
+    // ── (9) roomAnchor drag aligns to a fixture centre ─────────────────────
+    {
+      const p = await freshPlanner(makeStore([floor('f1', 'Home', {
+        rooms: [{ id: 'rm1', name: 'Kitchen', anchor: { x: 3000, y: 3000 } }],
+        motionSensors: [{ id: 'mo1', x: 9000, y: 5000, heading: 0, fov: 90, range: 5000, label: 'M' }],
+      })]));
+      // The room label hit map is published by drawAll, so paint one frame first.
+      drawAll(canvas.getContext('2d'), p, view);
+      onCanvasMouseDown(p, canvas, view, evAt(3000, 3000));
+      const started = p.drag && p.drag.kind === 'roomAnchor';
+      ok('9: pressing the room label starts a roomAnchor drag', started, p.drag && p.drag.kind);
+      if (started) {
+        onCanvasMouseMove(p, canvas, view, evAt(9000 - 80, 5000 - 80));
+        const a = p.floor().rooms[0].anchor;
+        ok('9: anchor snapped to the motion sensor centre', near(a.x, 9000) && near(a.y, 5000), `${a.x},${a.y}`);
+        onCanvasMouseUp(p, canvas, evAt(0, 0));
+      } else { ok('9: anchor snapped to the motion sensor centre', false, 'no drag'); }
+    }
+
+    // ── (10) Polygon vertex drag aligns to ANOTHER shape's vertex ──────────
+    {
+      const p = await freshPlanner(makeStore([floor('f1', 'Home', {
+        groundAreas: [
+          { id: 'g1', name: 'Lawn', kind: 'grass', points: [{ x: 1000, y: 1000 }, { x: 4000, y: 1000 }, { x: 4000, y: 4000 }] },
+          { id: 'g2', name: 'Patio', kind: 'concrete', points: [{ x: 9000, y: 6000 }, { x: 12000, y: 6000 }, { x: 12000, y: 9000 }] },
+        ],
+      })]));
+      p.activeGroundAreaId = 'g1';
+      drawAll(canvas.getContext('2d'), p, view);
+      onCanvasMouseDown(p, canvas, view, evAt(4000, 4000));
+      const kind = p.drag && p.drag.kind;
+      ok('10: pressing a vertex handle starts groundVert', kind === 'groundVert', kind);
+      onCanvasMouseMove(p, canvas, view, evAt(9000 - 90, 6000 - 90));
+      const v = p.floor().groundAreas[0].points[2];
+      ok('10: vertex snapped to the OTHER area\'s vertex', near(v.x, 9000) && near(v.y, 6000), `${v.x},${v.y}`);
+      ok('10: pool included other-shape vertices', p.alignPool.xs.includes(12000), p.alignPool.xs.length);
+      onCanvasMouseUp(p, canvas, evAt(0, 0));
+    }
+
+    // ── (11) Body move aligns its BBOX CENTRE ─────────────────────────────
+    {
+      const p = await freshPlanner(makeStore([floor('f1', 'Home', {
+        groundAreas: [
+          { id: 'g1', name: 'Lawn', kind: 'grass', points: [{ x: 1000, y: 1000 }, { x: 3000, y: 1000 }, { x: 3000, y: 3000 }, { x: 1000, y: 3000 }] },
+        ],
+        motionSensors: [{ id: 'mo1', x: 9000, y: 5000, heading: 0, fov: 90, range: 5000, label: 'M' }],
+      })]));
+      p.activeGroundAreaId = 'g1';       // already selected ⇒ body press = move
+      drawAll(canvas.getContext('2d'), p, view);
+      // bbox centre starts at (2000,2000); aim it 70 mm short of (9000,5000).
+      onCanvasMouseDown(p, canvas, view, evAt(2000, 2000));
+      ok('11: press on a SELECTED area body starts groundMove', p.drag && p.drag.kind === 'groundMove', p.drag && p.drag.kind);
+      onCanvasMouseMove(p, canvas, view, evAt(2000 + 7000 - 70, 2000 + 3000 - 70));
+      const pts = p.floor().groundAreas[0].points;
+      const cx = (Math.min(...pts.map(q => q.x)) + Math.max(...pts.map(q => q.x))) / 2;
+      const cy = (Math.min(...pts.map(q => q.y)) + Math.max(...pts.map(q => q.y))) / 2;
+      ok('11: bbox centre landed on the fixture centre', near(cx, 9000) && near(cy, 5000), `${cx},${cy}`);
+      const w = Math.max(...pts.map(q => q.x)) - Math.min(...pts.map(q => q.x));
+      ok('11: shape stayed rigid (width unchanged)', near(w, 2000), w);
+      ok('11: guides on both axes', guideX(p).includes(9000) && guideY(p).includes(5000), JSON.stringify(p.alignGuides));
+      onCanvasMouseUp(p, canvas, evAt(0, 0));
+    }
+
+    // ── (12) Whole-wall move aligns on one of ITS OWN points ──────────────
+    {
+      const p = await freshPlanner(makeStore([floor('f1', 'Home', {
+        walls: [
+          mkWall('w1', [{ x: 2000, y: 2000 }, { x: 5000, y: 2000 }]),
+          mkWall('w2', [{ x: 14000, y: 11000 }, { x: 14000, y: 13000 }]),
+        ],
+      })]));
+      // Press OFF the segment midpoint — that is the vertex-INSERT ghost.
+      onCanvasMouseDown(p, canvas, view, evAt(2600, 2000));
+      ok('12: press on a wall body starts wallMove', p.drag && p.drag.kind === 'wallMove', p.drag && p.drag.kind);
+      onCanvasMouseMove(p, canvas, view, evAt(2600 + 8940, 2000 + 8940));
+      const w1 = p.floor().walls[0];
+      ok('12: an endpoint landed on the other wall\'s x', near(w1.points[1].x, 14000), w1.points[1].x);
+      ok('12: an endpoint landed on the other wall\'s y', near(w1.points[0].y, 11000) || near(w1.points[1].y, 11000),
+         `${w1.points[0].y},${w1.points[1].y}`);
+      const len = Math.hypot(w1.points[1].x - w1.points[0].x, w1.points[1].y - w1.points[0].y);
+      ok('12: wall stayed rigid (length unchanged)', near(len, 3000, 1e-6), len);
+      onCanvasMouseUp(p, canvas, evAt(0, 0));
+    }
+
+    // ── (13) Pool composition: one of EVERY documented source ─────────────
+    {
+      const f = floor('f1', 'Home', {
+        walls: [mkWall('w1', [{ x: 100, y: 110 }, { x: 120, y: 130 }])],
+        rooms: [{ id: 'rm1', name: 'K', anchor: { x: 200, y: 210 } }],
+        lights: [{ id: 'l1', x: 300, y: 310, entity_id: null }],
+        switches: [{ id: 'sw1', x: 400, y: 410, entity_id: null }],
+        sensors: [{ id: 's1', x: 500, y: 510, heading: 0, fov: 60, range: 6000, label: 'S', deviceSlug: null }],
+        motionSensors: [{ id: 'mo1', x: 600, y: 610, heading: 0, fov: 90, range: 5000, label: 'M' }],
+        envSensors: [{ id: 'e1', x: 700, y: 710 }],
+        bleProxies: [{ id: 'b1', name: 'B', x: 800, y: 810 }],
+        alarmPanels: [{ id: 'al1', x: 900, y: 910 }],
+        calendarPanels: [{ id: 'ca1', x: 1000, y: 1010 }],
+        thermostats: [{ id: 'th1', x: 1100, y: 1110 }],
+        safetySensors: [{ id: 'sa1', kind: 'smoke', x: 1200, y: 1210 }],
+        alertBeacons: [{ id: 'ab1', x: 1300, y: 1310 }],
+        robots: [{ id: 'ro1', kind: 'vacuum', x: 1400, y: 1410 }],
+        cameras: [{ id: 'cm1', x: 1500, y: 1510 }],
+        projectors: [{ id: 'pj1', x: 1600, y: 1610 }],
+        valves: [{ id: 'vl1', x: 1700, y: 1710 }],
+        plugs: [{ id: 'pl1', x: 1800, y: 1810 }],
+        sprinklerZones: [{ id: 'sp1', x: 1900, y: 1910 }],
+        flagpoles: [{ id: 'fp1', x: 2000, y: 2010 }],
+        infoCards: [{ id: 'ic1', x: 2100, y: 2110 }],
+        actionButtons: [{ id: 'ac1', x: 2200, y: 2210 }],
+        furniture: [mkFurn('fu1', 2300, 2310), mkFurn('fuDrag', 9000, 9000)],
+        groundAreas: [{ id: 'g1', name: 'L', kind: 'grass', points: [{ x: 2400, y: 2410 }, { x: 2500, y: 2410 }, { x: 2500, y: 2510 }] }],
+        pools: [{ id: 'po1', name: 'P', kind: 'pool', points: [{ x: 2600, y: 2610 }, { x: 2700, y: 2610 }, { x: 2700, y: 2710 }] }],
+        voidAreas: [{ id: 'vo1', points: [{ x: 2800, y: 2810 }, { x: 2900, y: 2810 }, { x: 2900, y: 2910 }] }],
+        presenceZones: [{ id: 'pz1', name: 'Z', points: [{ x: 3000, y: 3010 }, { x: 3100, y: 3010 }, { x: 3100, y: 3110 }] }],
+      });
+      const p = await freshPlanner(makeStore([f]));
+      // FIXTURE-style drag (furniture): corners + anchors + centres, no poly verts.
+      drag(p, { x: 9000, y: 9000 }, { x: 9500, y: 9500 }, { release: false });
+      const xs = p.alignPool.xs;
+      const want = [100, 120, 200, 300, 400, 500, 600, 700, 800, 900, 1000, 1100, 1200,
+                    1300, 1400, 1500, 1600, 1700, 1800, 1900, 2000, 2100, 2200, 2300];
+      for (const v of want) ok(`13: pool has x=${v}`, xs.includes(v), xs.length);
+      ok('13: fixture drag pool EXCLUDES polygon vertices', !xs.includes(2400) && !xs.includes(2600) && !xs.includes(2800) && !xs.includes(3000), xs.length);
+      ok('13: fixture drag pool excludes the dragged piece', !xs.includes(9000), xs.length);
+      ok('13: fixture-drag pool size', xs.length === want.length, `${xs.length} candidates`);
+      onCanvasMouseUp(p, canvas, evAt(0, 0));
+
+      // POLY drag on the SAME floor: the same pool PLUS other shapes' vertices.
+      p.activeGroundAreaId = 'g1';
+      drawAll(canvas.getContext('2d'), p, view);
+      onCanvasMouseDown(p, canvas, view, evAt(2400, 2410));
+      onCanvasMouseMove(p, canvas, view, evAt(2405, 2415));
+      const pxs = p.alignPool.xs;
+      ok('13: poly drag pool ADDS other shapes\' vertices', pxs.includes(2600) && pxs.includes(2800) && pxs.includes(3000), pxs.length);
+      ok('13: poly drag pool excludes the dragged shape', !pxs.includes(2500), pxs.length);
+      ok('13: poly-drag pool size', pxs.length === want.length + 9 + 1, `${pxs.length} candidates`);
+      onCanvasMouseUp(p, canvas, evAt(0, 0));
+    }
+
+    // ── (14) Snapshot discipline + big-floor cost ─────────────────────────
+    {
+      // 400 furniture pieces + 60 walls ⇒ a "big demo floor" order of magnitude.
+      const furniture = [];
+      // Sparse 20x20 grid — dense placement would put a neighbour's RESIZE
+      // corner handle under the press, which starts furnCorner (not an align kind).
+      for (let i = 0; i < 400; i++)
+        furniture.push(mkFurn('fu' + i, 500 + (i % 20) * 900, 400 + Math.floor(i / 20) * 700));
+      const walls = [];
+      for (let i = 0; i < 60; i++) walls.push(mkWall('w' + i, [{ x: i * 300, y: 12000 }, { x: i * 300, y: 15000 }, { x: 1 + i * 300, y: 15000 }]));
+      const p = await freshPlanner(makeStore([floor('f1', 'Home', { furniture, walls })]));
+      const t0 = performance.now();
+      drag(p, { x: 500, y: 400 }, { x: 520, y: 420 }, { release: false });
+      const t1 = performance.now();
+      ok('14: big-floor pool built once', p.alignPool !== null && p.alignPool.xs.length === 399 + 180,
+         `${p.alignPool.xs.length} candidates in ${(t1 - t0).toFixed(2)} ms`);
+      const poolRef = p.alignPool;
+      for (let i = 0; i < 20; i++) onCanvasMouseMove(p, canvas, view, evAt(600 + i, 500 + i));
+      ok('14: pool NOT rebuilt per frame (same object)', p.alignPool === poolRef);
+      const t2 = performance.now();
+      for (let i = 0; i < 60; i++) onCanvasMouseMove(p, canvas, view, evAt(700 + i, 600 + i));
+      const t3 = performance.now();
+      ok('14: 60 aligned frames stay cheap', (t3 - t2) / 60 < 5, `${((t3 - t2) / 60).toFixed(3)} ms/frame`);
+      onCanvasMouseUp(p, canvas, evAt(0, 0));
+      ok('14: pool cleared on release', p.alignPool === null);
+    }
+
+    // ── (15) Locked items never move (align must not bypass the lock) ──────
+    {
+      const p = await freshPlanner(makeStore([floor('f1', 'Home', {
+        walls: [mkWall('w1', [{ x: 6000, y: 2000 }, { x: 6000, y: 9000 }])],
+        furniture: [mkFurn('fu1', 3000, 3000, { locked: true })],
+      })]));
+      drag(p, { x: 3000, y: 3000 }, { x: 6000 - 100, y: 3000 }, { release: false });
+      ok('15: locked furniture did not move', near(p.floor().furniture[0].x, 3000), p.floor().furniture[0].x);
+      ok('15: locked drag drew no guides', p.alignGuides.length === 0);
+      onCanvasMouseUp(p, canvas, evAt(0, 0));
+    }
+
+    // ── (16) Painter gate: guides only paint for an in-flight align drag ───
+    {
+      const p = await freshPlanner(makeStore([floor('f1', 'Home', {
+        walls: [mkWall('w1', [{ x: 6000, y: 2000 }, { x: 6000, y: 9000 }])],
+        furniture: [mkFurn('fu1', 3000, 3000)],
+      })]));
+      const ctx = canvas.getContext('2d');
+      drag(p, { x: 3000, y: 3000 }, { x: 6000 - 100, y: 3000 }, { release: false });
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      drawAll(ctx, p, view);
+      // The guide is a dashed vertical line at x=6000 → px column.
+      const gx = Math.round(6000 * view.scale + view.ox);
+      const col = ctx.getImageData(gx, 0, 1, canvas.height).data;
+      let lit = 0;
+      for (let i = 3; i < col.length; i += 4) if (col[i] > 0) lit++;
+      ok('16: guide column painted while dragging', lit > 40, `${lit} lit px`);
+      onCanvasMouseUp(p, canvas, evAt(0, 0));
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      drawAll(ctx, p, view);
+      const col2 = ctx.getImageData(gx, 0, 1, canvas.height).data;
+      let lit2 = 0;
+      for (let i = 3; i < col2.length; i += 4) if (col2[i] > 0) lit2++;
+      ok('16: guide gone after release', lit2 < lit, `${lit2} lit px`);
+    }
+  } catch (err) {
+    ok('harness: no exception', false, (err && err.stack) || String(err));
+  }
+
+  // ── Report ────────────────────────────────────────────────────────────────
+  const passed = results.filter(r => r.pass).length;
+  const total = results.length;
+  document.getElementById('rows').innerHTML = results.map(r =>
+    `<div class="row"><span class="name">${r.name}</span>
+     <span class="${r.pass ? 'pass' : 'fail'}">${r.pass ? 'PASS' : 'FAIL'}
+     <span class="extra">${r.extra}</span></span></div>`).join('');
+  const sum = document.getElementById('summary');
+  sum.textContent = `${passed}/${total} passed`;
+  sum.className = passed === total ? 'okbg' : 'badbg';
+  document.title = `ALIGNGUIDES ${passed === total ? 'PASS' : 'FAIL'} ${passed}/${total}`;
+</script>

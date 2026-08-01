@@ -1,0 +1,311 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>IDENTIFY …</title>
+<style>
+  body { margin:0; background:#0d1116; color:#cfd8dc; font:13px/1.5 sans-serif; padding:14px; }
+  h1 { font-size:15px; margin:0 0 10px; }
+  #summary { font-size:14px; font-weight:bold; margin:10px 0; padding:8px 10px; border-radius:5px; }
+  .okbg { background:#12331f; color:#69f0ae; } .badbg { background:#3a1414; color:#ff8a80; }
+  .row { display:flex; justify-content:space-between; gap:10px; padding:2px 0; border-bottom:1px solid #1c2530; }
+  .pass { color:#69f0ae; } .fail { color:#ff5252; }
+  .name { color:#90caf9; } .extra { color:#ffd54f; font-size:11px; }
+  #stage { position:fixed; left:0; top:0; width:900px; height:700px; opacity:0; pointer-events:none; }
+  #mount { position:fixed; right:0; top:0; width:280px; height:700px; overflow:auto; opacity:0; }
+</style>
+<h1>Alt+click identify — canvas sweep, planner latch, sidebar navigation</h1>
+<div id="summary">Running…</div>
+<div id="rows"></div>
+<canvas id="stage" width="900" height="700"></canvas>
+<div id="mount"></div>
+
+<!-- Drives the REAL Planner + REAL canvas-interact + a REAL <diorama-sidebar>
+     (the sensor-focus-test bundle recipe: tsconfig copy so esbuild keeps the
+     decorators, plus the two lit aliases). Needs a WIDE viewport. Build:
+       T=$(mktemp -d); cp -r src/* "$T"/; cp tsconfig.json "$T"/
+       cp test-pages/fake-avatar-store.ts "$T"/avatar-store.ts
+       printf "export { Planner } from '../planner.js';\nexport * from '../canvas-interact.js';\nexport { drawAll } from '../canvas-render.js';\nexport { IDENTIFY_TTL_MS } from '../geometry.js';\nimport './sidebar.js';\n" > "$T"/ui/identify-entry.ts
+       npx esbuild "$T"/ui/identify-entry.ts --bundle --format=esm --tsconfig="$T"/tsconfig.json \
+         --alias:lit=$PWD/node_modules/lit/index.js \
+         --alias:lit/decorators.js=$PWD/node_modules/lit/decorators.js \
+         --outfile=<harness>/identify.mod.js
+     Run headless (serve over http):
+       (cd <harness> && python3 -m http.server <port> &)
+       google-chrome --headless=new --disable-gpu --use-angle=swiftshader \
+         --enable-unsafe-swiftshader --run-all-compositor-stages-before-draw \
+         --window-size=1200,900 --virtual-time-budget=30000 --dump-dom \
+         "http://localhost:<port>/identify-test.html" | grep -o "<title>[^<]*" -->
+<script type="module">
+  const V = '?v=' + Date.now();
+  const M = await import('./identify.mod.js' + V);
+  const {
+    Planner, drawAll, IDENTIFY_TTL_MS,
+    onCanvasMouseDown, onCanvasMouseMove, onCanvasMouseUp, onCanvasClick, onCanvasDblClick,
+  } = M;
+
+  const results = [];
+  const ok = (name, cond, extra = '') => results.push({ name, pass: !!cond, extra: String(extra) });
+  const near = (a, b, eps = 1e-6) => Math.abs(a - b) <= eps;
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const frames = async n => { for (let i = 0; i < n; i++) await sleep(20); };
+  async function waitFor(cond, tries = 400) {
+    for (let i = 0; i < tries; i++) { if (cond()) return true; await sleep(8); }
+    return !!cond();
+  }
+  const clone = x => JSON.parse(JSON.stringify(x));
+
+  class FakeHa {
+    constructor(seed) {
+      this.map = new Map();
+      for (const [k, v] of Object.entries(seed || {})) this.map.set(k, clone(v));
+      this.states = {}; this._s = []; this._c = [];
+    }
+    connect() { for (const cb of this._c) cb('connected'); for (const cb of this._s) cb(this.states, undefined); }
+    onState(fn) { this._s.push(fn); } onConn(fn) { this._c.push(fn); }
+    callService() { return Promise.resolve(); }
+    async getHistory() { return {}; } async getWeatherForecasts() { return null; }
+    async getDevices() { return []; } async getEntityRegistry() { return []; }
+    async updateEntityRegistry() { return true; }
+    async getFloorRegistry() { return []; } async getAreaRegistry() { return []; }
+    async getUserData(k) { return this.map.has(k) ? clone(this.map.get(k)) : null; }
+    async setUserData(k, v) { this.map.set(k, clone(v)); return true; }
+    async refreshStates() {} async subscribeMqtt() { return () => {}; } async publishMqtt() {}
+    async listRepairsIssues() { return []; }
+    async subscribePersistentNotifications() { return () => {}; }
+  }
+
+  // A room-enclosing wall loop so the sidebar buckets items into a room group
+  // (the `<slug>/<roomId>` sub-key the identify navigation must also expand).
+  const LOOP = [{ x: 500, y: 500 }, { x: 9500, y: 500 }, { x: 9500, y: 9500 }, { x: 500, y: 9500 }, { x: 500, y: 500 }];
+  function baseFloor(extra = {}) {
+    return {
+      id: 'f1', name: 'Home', w: 20000, d: 16000,
+      walls: [{ id: 'wLoop', points: LOOP.map(q => ({ ...q })), kind: 'full' }],
+      furniture: [], lights: [], switches: [], sensors: [], motionSensors: [],
+      roamers: [], envSensors: [], doors: [], windows: [], bg: null,
+      rooms: [{ id: 'rmK', name: 'Kitchen', anchor: { x: 5000, y: 5000 } }],
+      bleProxies: [], alarmPanels: [], calendarPanels: [], thermostats: [],
+      safetySensors: [], alertBeacons: [], robots: [], presenceZones: [], cameras: [],
+      projectors: [], valves: [], plugs: [], sprinklerZones: [], flagpoles: [],
+      infoCards: [], actionButtons: [], rulers: [], groundAreas: [], voidAreas: [], pools: [],
+      ...extra,
+    };
+  }
+  const makeStore = (f) => ({
+    v: 2, floors: [f], currentFloorId: f.id, activeSensorId: null,
+    coverage: true, imperial: false, showDetails: false, useRawTargets: false,
+  });
+  async function freshPlanner(f) {
+    localStorage.removeItem('diorama:store:v1');
+    localStorage.removeItem('diorama:configs');
+    const p = new Planner();
+    p.connectWith(new FakeHa({ diorama: makeStore(f) }));
+    await waitFor(() => p.configIndex !== null && p.store.floors[0].id === f.id);
+    return p;
+  }
+
+  // ── Canvas / view plumbing (wall-edit-test recipe) ─────────────────────────
+  const canvas = document.getElementById('stage');
+  const view = { ox: 40, oy: 620, scale: 0.05 };
+  const rect = canvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  const evAt = (mx, my, opts = {}) => ({
+    clientX: rect.left + (mx * view.scale + view.ox) / dpr,
+    clientY: rect.top + (view.oy - my * view.scale) / dpr,
+    altKey: !!opts.alt, shiftKey: false, ctrlKey: false, metaKey: false,
+    button: opts.button ?? 0, buttons: 1,
+    preventDefault() {}, stopPropagation() {},
+  });
+  // A full press → release → click at one point (the browser's own order).
+  function clickAt(p, x, y, opts = {}) {
+    onCanvasMouseDown(p, canvas, view, evAt(x, y, opts));
+    onCanvasMouseUp(p, canvas, evAt(x, y, opts));
+    onCanvasClick(p, canvas, view, evAt(x, y, opts));
+  }
+  const mkFurn = (id, x, y, extra = {}) =>
+    ({ id, kind: 'sofa', x, y, w: 2000, h: 900, rotation: 0, elevation: 0, ...extra });
+
+  try {
+    // ── (1) Locked furniture: identified, selected, NOT moved ──────────────
+    {
+      const p = await freshPlanner(baseFloor({
+        furniture: [mkFurn('fu1', 4000, 4000, { label: 'Big sofa', locked: true })],
+      }));
+      clickAt(p, 4000, 4000, { alt: true });
+      const fx = p.identifyFx;
+      ok('1: identifyFx set', !!fx, JSON.stringify(fx));
+      ok('1: kind is furniture', fx && fx.kind === 'furniture', fx && fx.kind);
+      ok('1: id matches', fx && fx.id === 'fu1', fx && fx.id);
+      ok('1: label is the item label', fx && fx.label === 'Big sofa', fx && fx.label);
+      ok('1: locked flag true', fx && fx.locked === true, fx && fx.locked);
+      ok('1: anchor is the item position', fx && near(fx.x, 4000) && near(fx.y, 4000), fx && `${fx.x},${fx.y}`);
+      ok('1: item selected', p.activeFurnitureId === 'fu1', p.activeFurnitureId);
+      ok('1: selection heated', p.selectionHot === true, p.selectionHot);
+      ok('1: item did NOT move', near(p.floor().furniture[0].x, 4000), p.floor().furniture[0].x);
+      ok('1: identifyActive() live inside the TTL', !!p.identifyActive(), '');
+      ok('1: identifyActive() null past the TTL',
+         p.identifyActive(fx.at + IDENTIFY_TTL_MS + 1) === null, '');
+      p.clearIdentify();
+      ok('1: clearIdentify drops the latch', p.identifyFx === null);
+    }
+
+    // ── (2) An UNBOUND switch must not toggle under Alt ────────────────────
+    {
+      const p = await freshPlanner(baseFloor({
+        switches: [{ id: 'sw1', x: 3000, y: 3000, entity_id: null, label: 'Porch' }],
+      }));
+      clickAt(p, 3000, 3000, { alt: true });
+      ok('2: identified the switch', p.identifyFx && p.identifyFx.kind === 'switch' && p.identifyFx.id === 'sw1',
+         p.identifyFx && p.identifyFx.kind);
+      ok('2: localState NOT flipped', p.floor().switches[0].localState === undefined,
+         String(p.floor().switches[0].localState));
+      ok('2: label from the fixture', p.identifyFx && p.identifyFx.label === 'Porch', p.identifyFx && p.identifyFx.label);
+      // A NORMAL click on the same fixture still toggles (unchanged behaviour).
+      clickAt(p, 3000, 3000);
+      ok('2: plain click still toggles localState', p.floor().switches[0].localState === 'on',
+         String(p.floor().switches[0].localState));
+    }
+
+    // ── (3) Alt+DRAG stays free placement (identify only fires unmoved) ────
+    {
+      const p = await freshPlanner(baseFloor({
+        switches: [{ id: 'sw1', x: 3000, y: 3000, entity_id: null }],
+        motionSensors: [{ id: 'mo1', x: 6000, y: 3000, heading: 0, fov: 90, range: 5000, label: 'M' }],
+      }));
+      onCanvasMouseDown(p, canvas, view, evAt(6000, 3000, { alt: true }));
+      onCanvasMouseMove(p, canvas, view, evAt(7500, 4500, { alt: true }));
+      onCanvasMouseUp(p, canvas, evAt(7500, 4500, { alt: true }));
+      onCanvasClick(p, canvas, view, evAt(7500, 4500, { alt: true }));
+      ok('3: a moved Alt drag does NOT identify', p.identifyFx === null, JSON.stringify(p.identifyFx));
+      ok('3: the moved item actually moved', near(p.floor().motionSensors[0].x, 7500), p.floor().motionSensors[0].x);
+    }
+
+    // ── (4) Locked WALL — the reason the feature exists ────────────────────
+    {
+      const p = await freshPlanner(baseFloor({
+        walls: [{ id: 'wLoop', points: LOOP.map(q => ({ ...q })), kind: 'full' },
+                { id: 'wLock', points: [{ x: 12000, y: 2000 }, { x: 12000, y: 8000 }], kind: 'full', locked: true }],
+      }));
+      clickAt(p, 12000, 5000, { alt: true });
+      const fx = p.identifyFx;
+      ok('4: locked wall identified', fx && fx.kind === 'wall' && fx.id === 'wLock', fx && `${fx.kind}/${fx.id}`);
+      ok('4: locked wall reports locked', fx && fx.locked === true, fx && fx.locked);
+      ok('4: wall label falls back to the kind name', fx && fx.label === 'Wall', fx && fx.label);
+      ok('4: wall did not move', near(p.floor().walls[1].points[0].x, 12000));
+    }
+
+    // ── (5) Ground area (low-priority paint) + kind fallback label ─────────
+    {
+      const p = await freshPlanner(baseFloor({
+        groundAreas: [{ id: 'g1', kind: 'grass', locked: true,
+          points: [{ x: 12000, y: 10000 }, { x: 16000, y: 10000 }, { x: 16000, y: 14000 }, { x: 12000, y: 14000 }] }],
+      }));
+      drawAll(canvas.getContext('2d'), p, view);
+      clickAt(p, 14000, 12000, { alt: true });
+      const fx = p.identifyFx;
+      ok('5: ground area identified', fx && fx.kind === 'ground' && fx.id === 'g1', fx && `${fx.kind}/${fx.id}`);
+      ok('5: unnamed area labelled by kind', fx && fx.label === 'Ground area (grass)', fx && fx.label);
+      ok('5: area selected', p.activeGroundAreaId === 'g1', p.activeGroundAreaId);
+    }
+
+    // ── (6) Edit-only + no dblclick side effect ────────────────────────────
+    {
+      const p = await freshPlanner(baseFloor({
+        switches: [{ id: 'sw1', x: 3000, y: 3000, entity_id: null }],
+      }));
+      p.setUiMode('kiosk');
+      clickAt(p, 3000, 3000, { alt: true });
+      ok('6: kiosk Alt+click does NOT identify', p.identifyFx === null, JSON.stringify(p.identifyFx));
+      ok('6: kiosk Alt+click still toggles (device interaction)',
+         p.floor().switches[0].localState === 'on', String(p.floor().switches[0].localState));
+      ok('6: identifyItem refuses outside edit', p.identifyItem('switch', 'sw1') === false);
+      p.setUiMode('edit');
+      let opened = 0;
+      canvas.addEventListener('open-entity-picker', () => { opened++; });
+      onCanvasDblClick(p, canvas, view, evAt(3000, 3000, { alt: true }));
+      ok('6: Alt dblclick opens no binding modal', opened === 0, opened);
+      ok('6: identifyItem on an unknown id returns false', p.identifyItem('switch', 'nope') === false);
+    }
+
+    // ── (7) 3D contract: the same planner entry point, from a fixture id ───
+    {
+      const p = await freshPlanner(baseFloor({
+        lights: [{ id: 'l1', x: 2000, y: 2000, entity_id: null, label: 'Ceiling' }],
+      }));
+      // three-view maps its raycast kind → IdentifyKind and calls exactly this.
+      const okRet = p.identifyItem('light', 'l1');
+      ok('7: identifyItem(light) returns true', okRet === true);
+      ok('7: latch matches the 2D shape', p.identifyFx && p.identifyFx.kind === 'light' &&
+         p.identifyFx.label === 'Ceiling' && p.identifyFx.locked === false,
+         JSON.stringify(p.identifyFx));
+      ok('7: media/appliance raycast kinds map to furniture (contract)',
+         p.identifyItem('furniture', 'nope') === false);   // resolver reachable, id unknown
+    }
+
+    // ── (8) Sidebar navigation ────────────────────────────────────────────
+    {
+      ok('8: viewport wide enough (>=900)', window.innerWidth >= 900, `innerWidth=${window.innerWidth}`);
+      const p = await freshPlanner(baseFloor({
+        motionSensors: [
+          { id: 'mo1', x: 3000, y: 3000, heading: 0, fov: 90, range: 5000, label: 'Hall' },
+          { id: 'mo2', x: 5000, y: 6000, heading: 0, fov: 90, range: 5000, label: 'Pantry' },
+        ],
+      }));
+      const sb = document.createElement('diorama-sidebar');
+      sb.planner = p;
+      document.getElementById('mount').appendChild(sb);
+      await sb.updateComplete;
+      await frames(2);
+      // Collapse the Motion section AND its room group, so navigation has work.
+      sb._collapsed.add('motion');
+      sb._collapsed.add('motion/rmK');
+      sb.requestUpdate();
+      await sb.updateComplete;
+      await frames(2);
+      ok('8: motion section starts collapsed', sb._collapsed.has('motion'));
+      ok('8: room sub-key starts collapsed', sb._collapsed.has('motion/rmK'));
+      ok('8: the row is not rendered while collapsed', !sb.querySelector('[data-item-row="mo2"]'));
+
+      clickAt(p, 5000, 6000, { alt: true });
+      await waitFor(() => !!sb.querySelector('[data-item-row="mo2"]'), 80);
+      await frames(3);
+      ok('8: identify expanded the section', !sb._collapsed.has('motion'));
+      ok('8: identify expanded the ROOM group sub-key', !sb._collapsed.has('motion/rmK'));
+      const row = sb.querySelector('[data-item-row="mo2"]');
+      ok('8: the item row is rendered', !!row);
+      ok('8: the row is flagged for the pulse', row && row.classList.contains('identify-flash'),
+         row ? row.className : 'no row');
+      ok('8: navigation did NOT steal focus',
+         !(document.activeElement && document.activeElement.getAttribute &&
+           document.activeElement.getAttribute('data-label-for')),
+         document.activeElement ? document.activeElement.tagName : 'null');
+      ok('8: selection still hot after navigation', p.selectionHot === true, p.selectionHot);
+
+      // Every list row carries the marker (the sibling item is tagged too).
+      ok('8: sibling rows are tagged as well', !!sb.querySelector('[data-item-row="mo1"]'));
+
+      // A second identify on a DIFFERENT item navigates again (the once-per-`at`
+      // guard must not stick after the first).
+      const firstAt = p.identifyFx.at;
+      clickAt(p, 3000, 3000, { alt: true });
+      await waitFor(() => p.identifyFx && p.identifyFx.at !== firstAt, 60);
+      await frames(3);
+      const row1 = sb.querySelector('[data-item-row="mo1"]');
+      ok('8: a second identify re-navigates', row1 && row1.classList.contains('identify-flash'),
+         row1 ? row1.className : 'no row');
+      sb.remove();
+    }
+  } catch (err) {
+    ok('harness: no exception', false, (err && err.stack) || String(err));
+  }
+
+  const passed = results.filter(r => r.pass).length;
+  const total = results.length;
+  document.getElementById('rows').innerHTML = results.map(r =>
+    `<div class="row"><span class="name">${r.name}</span>
+     <span class="${r.pass ? 'pass' : 'fail'}">${r.pass ? 'PASS' : 'FAIL'}
+     <span class="extra">${r.extra}</span></span></div>`).join('');
+  const sum = document.getElementById('summary');
+  sum.textContent = `${passed}/${total} passed`;
+  sum.className = passed === total ? 'okbg' : 'badbg';
+  document.title = `IDENTIFY ${passed === total ? 'PASS' : 'FAIL'} ${passed}/${total}`;
+</script>

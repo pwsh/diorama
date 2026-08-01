@@ -232,6 +232,21 @@ diorama-canvas-2d, diorama-three-view { display: block; width: 100%; height: 100
   animation: diorama-calib-pulse 1.1s ease-in-out infinite;
 }
 
+/* Alt+click IDENTIFY: the sidebar scrolls the named item's row into view and
+   pulses it once (~1.5 s) so the eye lands on it. Navigation only — the row is
+   never focused (that would cool the delete-hotkey selection heat). The class is
+   stamped/removed imperatively on the row wrapper, which binds no class
+   attribute of its own, so Lit re-renders can't wipe it mid-pulse. */
+@keyframes diorama-identify-flash {
+  0%, 100% { background: transparent; }
+  15%      { background: rgba(255,213,79,0.30); }
+  60%      { background: rgba(255,213,79,0.12); }
+}
+.identify-flash {
+  animation: diorama-identify-flash 1.5s ease-out 1;
+  border-radius: 4px;
+}
+
 /* ── Visual placement toolbar (bottom dock) ─────────────────────────────── */
 diorama-toolbar { display: block; flex: 0 0 auto; }
 .tb-dock {

@@ -330,6 +330,29 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Universal alignment guides + Alt+click identify** (2026-08-01,
+  user-requested; unreleased — on main past v0.52.0). Alignment
+  rewritten: global cross-category pool (wall corners + room anchors
+  + every fixture/furniture center; polygon drags also see other
+  areas' vertices) with dashed guides + 8px snap for fixtures,
+  furniture, wall vertices (raw-cursor measured, overrides the fired
+  axis of the 15° lock), whole-wall moves (own corners, min-shift),
+  room anchors, polygon vertices and body moves (bbox center); weld/
+  wall-lock release snaps still win; Alt suspends globally; ONE
+  shared kind set (the old split had five kinds snapping with no
+  visible line — fixed). Lazy pool ~579 candidates <1ms on a
+  400-piece floor. Alt+click identify (both views, edit-only):
+  body-level sweep incl. LOCKED items, sets selection + a 3s canvas
+  callout (kind glyph + label + 🔒 line), sidebar expands section +
+  room sub-group, scrolls + flash-pulses the row (28 row wrappers
+  tagged data-item-row); 3D routes raycast kinds via a capture-phase
+  altKey record; touch out of scope v1. Noted: sidebar's 28
+  near-identical row renderers deserve a shared helper (tech-debt).
+  New align-guides 116/116 + identify 45/45; wall-edit 55/55 (§8
+  premise repaired — its midpoint press now hits the new insert
+  handle, verified neutral at HEAD), vertex-insert 109/109, undo
+  44/44, ruler-dims 107/107, sensor-focus 14/14, sidebar-org
+  153/153, door-kinds 97/97 unchanged.
 - **Vertex insert + anchor labels + whole-shape drags** (2026-08-01,
   user-requested; unreleased — on main past v0.52.0). Midpoint "+"
   insert handles on every vertex-draggable polyline/polygon (walls,

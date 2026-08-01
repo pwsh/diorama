@@ -1,4 +1,4 @@
-import { snap, snapVertex15, distMM, worldToLocal, localToWorld, FURNITURE_KINDS, furnitureCorners, furnitureLocalToWorld, furnitureWorldToLocal, resolveFurnitureDef, resolveFurnitureWallCollision, resolveSeatTableCollision, seatBelongsToTable, snapStepLightToSurface, snapFireplaceToWall, snapFloodlightToWall, snapExhaustToWall, snapSwitchToWall, snapAlarmToWall, snapCalendarToWall, snapThermostatToWall, snapPlugToWall, snapInfoCardToWall, snapActionButtonToWall, isBinKind, isWetBathKind, defaultFurnitureElevation, nearestAlign, envScale, ENV_SCALE_MIN, ENV_SCALE_MAX, GRID_MM, floorContentBbox, resolveFloorEdgeDrag, DOOR_DEFAULT_W, doorDefaultWidth, windowDefaultWidth } from './geometry.js';
+import { snap, snapVertex15, distMM, worldToLocal, localToWorld, FURNITURE_KINDS, furnitureCorners, furnitureLocalToWorld, furnitureWorldToLocal, resolveFurnitureDef, resolveFurnitureWallCollision, resolveSeatTableCollision, seatBelongsToTable, snapStepLightToSurface, snapFireplaceToWall, snapFloodlightToWall, snapExhaustToWall, snapSwitchToWall, snapAlarmToWall, snapCalendarToWall, snapThermostatToWall, snapPlugToWall, snapInfoCardToWall, snapActionButtonToWall, isBinKind, isWetBathKind, defaultFurnitureElevation, nearestAlign, bestAlignShift, ALIGN_DRAG_KINDS, ALIGN_POLY_DRAG_KINDS, envScale, ENV_SCALE_MIN, ENV_SCALE_MAX, GRID_MM, floorContentBbox, resolveFloorEdgeDrag, DOOR_DEFAULT_W, doorDefaultWidth, windowDefaultWidth } from './geometry.js';
 import { newId } from './storage.js';
 import {
   pxToMm, type View,
@@ -19,83 +19,221 @@ import {
   hitDoor, hitDoorEnd, hitDoorLock, hitWindow, hitWindowEnd, hitFloorEdge,
   hitWallVertInsert, hitPresenceZoneVertexInsert, hitGroundAreaVertexInsert,
   hitPathVertexInsert, hitPoolVertexInsert, hitVoidAreaVertexInsert,
-  hitRoomLabel,
+  hitRoomLabel, hitGeoLandmark,
 } from './canvas-hit.js';
-import type { Planner, Drag } from './planner.js';
+import type { Planner, Drag, IdentifyKind } from './planner.js';
 import { NEW_ROOM, NEW_LANDMARK } from './planner.js';
 import type { Vec2, Furniture, ObjectRecipe, Light, WindowKind, DoorKind, RulerEnd } from './types.js';
 
-// Drag kinds that move a single placeable and therefore get alignment guides
-// (Feature C). Wall vertices / doors / windows / zones are excluded.
-const ALIGN_MOVE_KINDS = new Set(['sensor', 'motion', 'env', 'ble', 'safety', 'alert', 'robot', 'camera', 'projector', 'fixture', 'furnMove']);
+// ── Smart alignment guides (universal, cross-category) ─────────────────────
+// The pool is EVERY structural reference point on the current floor — wall
+// vertices (the "corners" the user means), room anchors and the centre of every
+// placed fixture / furniture piece — regardless of category, plus (only while a
+// polygon/centerline is being edited) the vertices of the OTHER ground areas /
+// pools / voids / presence zones. Snapshotted ONCE per drag as two flat
+// coordinate arrays (`Planner.alignPool`), never rescanned per frame, and
+// dropped on release. The dragged item's own coordinates are excluded so a
+// shape can never align to itself.
+const ALIGN_TOL_PX = 8;
 
-// Peer-center candidates for alignment, snapshotted once at drag start. Same
-// category only: lights + switches share one "fixtures" pool; furniture aligns
-// with furniture; each sensor kind with its own kind. The dragged item is
-// excluded.
-function buildAlignCandidates(p: Planner, drag: Drag): { x: number; y: number }[] {
-  const f = p.floor();
-  const out: { x: number; y: number }[] = [];
-  const add = (o: { x: number; y: number }) => out.push({ x: o.x, y: o.y });
+// Every id whose coordinates must stay OUT of the pool for this drag.
+function alignSelfIds(f: ReturnType<Planner['floor']>, drag: Drag): Set<string> {
+  const out = new Set<string>();
+  const add = (id: string | undefined | null) => { if (id) out.add(id); };
   switch (drag.kind) {
-    case 'fixture': {
-      const draggedId = (drag.fxKind === 'light' ? f.lights : f.switches)[drag.idx]?.id;
-      for (const l of f.lights) if (!(drag.fxKind === 'light' && l.id === draggedId)) add(l);
-      for (const s of f.switches) if (!(drag.fxKind === 'switch' && s.id === draggedId)) add(s);
-      break;
-    }
-    case 'furnMove': {
-      const id = f.furniture[drag.idx]?.id;
-      for (const o of f.furniture) if (o.id !== id) add(o);
-      break;
-    }
-    case 'sensor': for (const o of f.sensors) if (o.id !== drag.id) add(o); break;
-    case 'motion': for (const o of f.motionSensors) if (o.id !== drag.id) add(o); break;
-    case 'env': for (const o of f.envSensors) if (o.id !== drag.id) add(o); break;
-    case 'ble': for (const o of (f.bleProxies ?? [])) if (o.id !== drag.id) add(o); break;
-    case 'safety': for (const o of (f.safetySensors ?? [])) if (o.id !== drag.id) add(o); break;
-    case 'alert': for (const o of (f.alertBeacons ?? [])) if (o.id !== drag.id) add(o); break;
-    case 'robot': for (const o of (f.robots ?? [])) if (o.id !== drag.id) add(o); break;
-    case 'camera': for (const o of (f.cameras ?? [])) if (o.id !== drag.id) add(o); break;
-    case 'projector': for (const o of (f.projectors ?? [])) if (o.id !== drag.id) add(o); break;
-    case 'info': for (const o of (f.infoCards ?? [])) if (o.id !== drag.id) add(o); break;
-    case 'action': for (const o of (f.actionButtons ?? [])) if (o.id !== drag.id) add(o); break;
+    case 'fixture': add((drag.fxKind === 'light' ? f.lights : f.switches)[drag.idx]?.id); break;
+    case 'furnMove': add(f.furniture[drag.idx]?.id); break;
+    case 'wallv': case 'wallMove': add(drag.wallId); break;
+    default: add((drag as { id?: string }).id); break;
   }
   return out;
 }
 
-// The (unlocked) item a move-drag is currently moving, or null. Returned by
-// reference so alignment can nudge its x / y in place.
-function draggedMoveItem(f: ReturnType<Planner['floor']>, drag: Drag)
-    : { x: number; y: number; locked?: boolean } | null {
-  let it: { x: number; y: number; locked?: boolean } | undefined;
-  switch (drag.kind) {
-    case 'fixture': it = (drag.fxKind === 'light' ? f.lights : f.switches)[drag.idx]; break;
-    case 'furnMove': it = f.furniture[drag.idx]; break;
-    case 'sensor': it = f.sensors.find(x => x.id === drag.id); break;
-    case 'motion': it = f.motionSensors.find(x => x.id === drag.id); break;
-    case 'env': it = f.envSensors.find(x => x.id === drag.id); break;
-    case 'ble': it = (f.bleProxies ?? []).find(x => x.id === drag.id); break;
-    case 'safety': it = (f.safetySensors ?? []).find(x => x.id === drag.id); break;
-    case 'alert': it = (f.alertBeacons ?? []).find(x => x.id === drag.id); break;
-    case 'robot': it = (f.robots ?? []).find(x => x.id === drag.id); break;
-    case 'camera': it = (f.cameras ?? []).find(x => x.id === drag.id); break;
-    case 'projector': it = (f.projectors ?? []).find(x => x.id === drag.id); break;
-    case 'info': it = (f.infoCards ?? []).find(x => x.id === drag.id); break;
-    case 'action': it = (f.actionButtons ?? []).find(x => x.id === drag.id); break;
+function buildAlignPool(p: Planner, drag: Drag): { xs: number[]; ys: number[] } {
+  const f = p.floor();
+  const skip = alignSelfIds(f, drag);
+  const xs: number[] = [], ys: number[] = [];
+  const addPt = (x: number, y: number) => { xs.push(x); ys.push(y); };
+  const addAll = (list: { id: string; x: number; y: number }[] | undefined) => {
+    for (const o of list ?? []) if (!skip.has(o.id)) addPt(o.x, o.y);
+  };
+  // Wall vertices (corners) — every wall except the one being edited.
+  for (const w of f.walls ?? []) {
+    if (skip.has(w.id)) continue;
+    for (const pt of w.points) addPt(pt.x, pt.y);
   }
-  return it && !it.locked ? it : null;
+  // Room anchors.
+  for (const rm of f.rooms ?? []) if (!skip.has(rm.id)) addPt(rm.anchor.x, rm.anchor.y);
+  // Every placed fixture / furniture centre.
+  addAll(f.lights); addAll(f.switches); addAll(f.sensors); addAll(f.motionSensors);
+  addAll(f.envSensors); addAll(f.bleProxies); addAll(f.alarmPanels); addAll(f.calendarPanels);
+  addAll(f.thermostats); addAll(f.safetySensors); addAll(f.alertBeacons); addAll(f.robots);
+  addAll(f.cameras); addAll(f.projectors); addAll(f.valves); addAll(f.plugs);
+  addAll(f.sprinklerZones); addAll(f.flagpoles); addAll(f.infoCards); addAll(f.actionButtons);
+  addAll(f.furniture);
+  // Other shapes' vertices — only while editing a shape (a fixture drag aligns
+  // to corners and centres, not to every terrace vertex on the floor).
+  if (ALIGN_POLY_DRAG_KINDS.has(drag.kind)) {
+    const addPoly = (list: { id: string; points: Vec2[] }[] | undefined) => {
+      for (const s of list ?? []) {
+        if (skip.has(s.id)) continue;
+        for (const pt of s.points) addPt(pt.x, pt.y);
+      }
+    };
+    addPoly(f.groundAreas); addPoly(f.pools); addPoly(f.voidAreas); addPoly(f.presenceZones);
+    for (const g of f.groundAreas ?? []) {
+      if (skip.has(g.id) || !g.path) continue;
+      for (const pt of g.path.centerline) addPt(pt.x, pt.y);
+    }
+  }
+  return { xs, ys };
 }
 
-// Snap the dragged item's center to a peer center on X / Y independently (8 px
-// tolerance in mm) and record the active guides. Takes precedence over grid
-// intent — applied after the per-kind move.
-function applyAlignSnap(p: Planner, item: { x: number; y: number }, scale: number): void {
-  const tolMm = 8 / Math.max(scale, 1e-9);
-  const bx = nearestAlign(item.x, p.alignCandidates.map(c => c.x), tolMm);
-  const by = nearestAlign(item.y, p.alignCandidates.map(c => c.y), tolMm);
-  if (bx !== null) { item.x = bx; p.alignGuides.push({ axis: 'x', mm: bx }); }
-  if (by !== null) { item.y = by; p.alignGuides.push({ axis: 'y', mm: by }); }
+// The single (unlocked) POINT a drag is moving — fixture centre, wall vertex,
+// polygon vertex or room anchor. Returned by reference so alignment can nudge
+// its x / y in place. Null for whole-shape moves (see `draggedShape`).
+function draggedMovePoint(p: Planner, f: ReturnType<Planner['floor']>, drag: Drag)
+    : { x: number; y: number } | null {
+  const unlocked = <T extends { locked?: boolean }>(o: T | undefined): T | null =>
+    (o && !o.locked) ? o : null;
+  switch (drag.kind) {
+    case 'fixture': return unlocked((drag.fxKind === 'light' ? f.lights : f.switches)[drag.idx]);
+    case 'furnMove': return unlocked(f.furniture[drag.idx]);
+    case 'sensor': return unlocked(f.sensors.find(x => x.id === drag.id));
+    case 'motion': return unlocked(f.motionSensors.find(x => x.id === drag.id));
+    case 'env': return unlocked(f.envSensors.find(x => x.id === drag.id));
+    case 'ble': return unlocked((f.bleProxies ?? []).find(x => x.id === drag.id));
+    case 'safety': return unlocked((f.safetySensors ?? []).find(x => x.id === drag.id));
+    case 'alert': return unlocked((f.alertBeacons ?? []).find(x => x.id === drag.id));
+    case 'robot': return unlocked((f.robots ?? []).find(x => x.id === drag.id));
+    case 'camera': return unlocked((f.cameras ?? []).find(x => x.id === drag.id));
+    case 'projector': return unlocked((f.projectors ?? []).find(x => x.id === drag.id));
+    case 'info': return unlocked((f.infoCards ?? []).find(x => x.id === drag.id));
+    case 'roomAnchor': {
+      const rm = (f.rooms ?? []).find(x => x.id === drag.id);
+      return rm ? rm.anchor : null;   // rooms carry no lock flag
+    }
+    case 'wallv': {
+      const w = unlocked(f.walls.find(x => x.id === drag.wallId));
+      return w?.points[drag.idx] ?? null;
+    }
+    case 'pzoneVert': {
+      const z = unlocked((f.presenceZones ?? []).find(x => x.id === drag.id));
+      return z?.points[drag.idx] ?? null;
+    }
+    case 'groundVert': {
+      const g = unlocked((f.groundAreas ?? []).find(x => x.id === drag.id));
+      return g?.points[drag.idx] ?? null;
+    }
+    case 'pathVert': {
+      const g = unlocked((f.groundAreas ?? []).find(x => x.id === drag.id));
+      return g?.path?.centerline[drag.idx] ?? null;
+    }
+    case 'poolVert': {
+      const pl = unlocked((f.pools ?? []).find(x => x.id === drag.id));
+      return pl?.points[drag.idx] ?? null;
+    }
+    case 'voidVert': {
+      const vd = unlocked((f.voidAreas ?? []).find(x => x.id === drag.id));
+      return vd?.points[drag.idx] ?? null;
+    }
+  }
+  return null;
+}
+
+// The live point list of a whole-shape move (translated rigidly by one delta),
+// or null. `own` is what those points OFFER for alignment: a WALL offers every
+// vertex (a wall IS its corners — that's what "lines up with a corner" means for
+// it), a polygon offers its bbox CENTRE only (one predictable snapping point,
+// so a 12-vertex terrace doesn't feel magnetic everywhere).
+function draggedShape(p: Planner, f: ReturnType<Planner['floor']>, drag: Drag)
+    : { pts: Vec2[]; own: Vec2[]; regen: (() => void) | null } | null {
+  const bboxCenter = (pts: Vec2[]): Vec2[] => {
+    if (!pts.length) return [];
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const pt of pts) {
+      if (pt.x < x0) x0 = pt.x; if (pt.x > x1) x1 = pt.x;
+      if (pt.y < y0) y0 = pt.y; if (pt.y > y1) y1 = pt.y;
+    }
+    return [{ x: (x0 + x1) / 2, y: (y0 + y1) / 2 }];
+  };
+  switch (drag.kind) {
+    case 'wallMove': {
+      const w = f.walls.find(x => x.id === drag.wallId);
+      if (!w || w.locked) return null;
+      return { pts: w.points, own: w.points, regen: null };
+    }
+    case 'pzoneMove': {
+      const z = (f.presenceZones ?? []).find(x => x.id === drag.id);
+      if (!z || z.locked) return null;
+      return { pts: z.points, own: bboxCenter(z.points), regen: null };
+    }
+    case 'poolMove': {
+      const pl = (f.pools ?? []).find(x => x.id === drag.id);
+      if (!pl || pl.locked) return null;
+      return { pts: pl.points, own: bboxCenter(pl.points), regen: null };
+    }
+    case 'voidMove': {
+      const vd = (f.voidAreas ?? []).find(x => x.id === drag.id);
+      if (!vd || vd.locked) return null;
+      return { pts: vd.points, own: bboxCenter(vd.points), regen: null };
+    }
+    case 'groundMove': {
+      const g = (f.groundAreas ?? []).find(x => x.id === drag.id);
+      if (!g || g.locked) return null;
+      const pathBacked = drag.path && !!g.path;
+      const pts = pathBacked ? g.path!.centerline : g.points;
+      return {
+        pts,
+        // A path-backed area's SHAPE is the ribbon, so align on the ribbon's
+        // bbox centre even though the centerline is what translates.
+        own: bboxCenter(pathBacked ? g.points : pts),
+        regen: pathBacked ? () => p.regenGroundAreaPath(g) : null,
+      };
+    }
+  }
+  return null;
+}
+
+// Snap the drag toward the pool on X / Y independently (8 px tolerance in mm)
+// and record the guides. Applied AFTER the per-kind move so guideline snap wins
+// over grid intent — and, for wall vertices, over the 15° angle lock (a guide
+// is explicit user intent, same spirit). Alt (`free`) suspends it entirely,
+// alongside the other wall snaps. The release-time wall weld and the fixture
+// wall-lock snaps still run afterwards and win.
+// `ref` is the alignment REFERENCE point when it differs from the item's live
+// position — passed only for a wall vertex, whose 15° angle lock can throw the
+// resolved point metres away from the cursor. Measuring against the RAW cursor
+// is what lets a guide fire at all there, and firing OVERRIDES the angle lock
+// on that axis (the axis that does not fire keeps the angle-locked value).
+function applyAlignSnap(p: Planner, view: View, drag: Drag, free: boolean, ref?: Vec2): void {
+  p.alignGuides = [];
+  if (p.uiMode !== 'edit' || free || !ALIGN_DRAG_KINDS.has(drag.kind)) return;
+  const f = p.floor();
+  if (!p.alignPool) p.alignPool = buildAlignPool(p, drag);
+  const pool = p.alignPool;
+  const tolMm = ALIGN_TOL_PX / Math.max(view.scale, 1e-9);
+
+  const shape = draggedShape(p, f, drag);
+  if (shape) {
+    const sx = bestAlignShift(shape.own.map(o => o.x), pool.xs, tolMm);
+    const sy = bestAlignShift(shape.own.map(o => o.y), pool.ys, tolMm);
+    if (sx) { for (const pt of shape.pts) pt.x += sx.delta; p.alignGuides.push({ axis: 'x', mm: sx.mm }); }
+    if (sy) { for (const pt of shape.pts) pt.y += sy.delta; p.alignGuides.push({ axis: 'y', mm: sy.mm }); }
+    if ((sx || sy) && shape.regen) shape.regen();
+    return;
+  }
+  const it = draggedMovePoint(p, f, drag);
+  if (!it) return;
+  const bx = nearestAlign(ref ? ref.x : it.x, pool.xs, tolMm);
+  const by = nearestAlign(ref ? ref.y : it.y, pool.ys, tolMm);
+  if (bx !== null) { it.x = bx; p.alignGuides.push({ axis: 'x', mm: bx }); }
+  if (by !== null) { it.y = by; p.alignGuides.push({ axis: 'y', mm: by }); }
+  // A path centerline vertex regenerates the derived ribbon after the nudge.
+  if ((bx !== null || by !== null) && drag.kind === 'pathVert') {
+    const g = (f.groundAreas ?? []).find(x => x.id === drag.id);
+    if (g?.path) p.regenGroundAreaPath(g);
+  }
 }
 
 // Auto-snap a mountable piece (coffee maker, toaster, …) onto a counter-height
@@ -420,6 +558,132 @@ export function resolveWallPoint(
     : { x: angled.x, y: angled.y };
 }
 
+// ── Alt+click IDENTIFY gesture arming ──────────────────────────────────────
+// Alt is overloaded: held during a DRAG it suspends the wall angle/grid/weld
+// snaps and the alignment guides (free placement); pressed and released WITHOUT
+// moving it identifies whatever is under the cursor. The press therefore falls
+// through into the ordinary drag machinery and the gesture is only resolved at
+// release, by movement. Module-level (one pointer, like `_lastSyntheticClick`
+// in canvas-2d); cleared the moment it is consumed or the slop is exceeded.
+let altPress: { mm: Vec2; cx: number; cy: number } | null = null;
+const ALT_IDENTIFY_SLOP_PX = 5;   // same slop the 3D mouse tap gate uses
+
+// The world point an un-moved Alt press should identify, else null. Does NOT
+// consume the latch (callers do, so mouseup and click can't double-fire).
+function altIdentifyAt(e: MouseEvent | undefined): Vec2 | null {
+  if (!altPress || !e || !e.altKey) return null;
+  if (Math.hypot(e.clientX - altPress.cx, e.clientY - altPress.cy) > ALT_IDENTIFY_SLOP_PX) return null;
+  return altPress.mm;
+}
+
+// ── Alt+click IDENTIFY sweep ───────────────────────────────────────────────
+// Mirrors the select-mode mousedown priority order using the BODY-level hit
+// tests, so a locked item is still identifiable (only the drag HANDLES —
+// vertex / corner / rotate anchors — refuse locked items; the bodies never
+// did). Layer-hidden items stay unhittable, exactly as for a normal click.
+// Returns true when something was named. Runs from mousedown, so no drag ever
+// starts and the follow-up click is swallowed by the Alt guard in onCanvasClick.
+export function identifyAt(p: Planner, view: View, mm: Vec2): boolean {
+  const go = (kind: IdentifyKind, id: string | undefined | null): boolean =>
+    !!id && p.identifyItem(kind, id);
+
+  // Vertex handles first (their shape is the answer), mirroring mousedown.
+  if (zonesInteractive(p)) {
+    const pzv = hitPresenceZoneVertex(p, view, mm);
+    if (pzv) return go('pzone', pzv.zone.id);
+  }
+  if (groundInteractive(p)) {
+    const gv = hitGroundAreaVertex(p, view, mm);
+    if (gv) return go('ground', gv.area.id);
+    const pav = hitPathVertex(p, view, mm);
+    if (pav) return go('ground', pav.area.id);
+    const plv = hitPoolVertex(p, view, mm);
+    if (plv) return go('pool', plv.pool.id);
+    const vv = hitVoidAreaVertex(p, view, mm);
+    if (vv) return go('void', vv.area.id);
+  }
+  if (dimsInteractive(p)) {
+    const reh = hitRulerEnd(p, view, mm);
+    if (reh) return go('ruler', reh.ruler.id);
+  }
+  const wv = hitWallVert(p, view, mm);
+  if (wv) return go('wall', wv.wall.id);
+  const fc = hitFurnitureCorner(p, view, mm);
+  if (fc) return go('furniture', p.floor().furniture[fc.idx]?.id);
+  const fx = hitFixture(p, mm, Math.max(250, hitPx(view) * 3));
+  if (fx) {
+    const arr = fx.kind === 'light' ? p.floor().lights : p.floor().switches;
+    return go(fx.kind, arr[fx.idx]?.id);
+  }
+  const fu = hitFurniture(p, mm);
+  if (fu) return go('furniture', fu.item.id);
+  const dHit = hitDoorLock(p, view, mm) ?? hitDoorEnd(p, view, mm) ?? hitDoor(p, view, mm);
+  if (dHit) return go('door', dHit.door.id);
+  const wEnd = hitWindowEnd(p, view, mm);
+  if (wEnd) return go('window', wEnd.win.id);
+  const wHit = hitWindow(p, view, mm);
+  if (wHit) return go('window', wHit.win.id);
+  const wall = hitWall(p, mm);
+  if (wall) return go('wall', wall.id);
+  const eh = hitEnvSensor(p, view, mm);
+  if (eh) return go('env', eh.id);
+  const ich = hitInfoCard(p, view, mm);
+  if (ich) return go('info', ich.id);
+  const abh = hitActionButton(p, view, mm);
+  if (abh) return go('action', abh.id);
+  const mh = hitMotionSensor(p, view, mm);
+  if (mh) return go('motion', mh.id);
+  const bh = hitBleProxy(p, view, mm);
+  if (bh) return go('ble', bh.id);
+  const ah = hitAlarmPanel(p, view, mm);
+  if (ah) return go('alarm', ah.id);
+  const cph = hitCalendarPanel(p, view, mm);
+  if (cph) return go('calendar', cph.id);
+  const th = hitThermostat(p, view, mm);
+  if (th) return go('thermostat', th.id);
+  const safeH = hitSafetySensor(p, view, mm);
+  if (safeH) return go('safety', safeH.id);
+  const abH = hitAlertBeacon(p, view, mm);
+  if (abH) return go('alert', abH.id);
+  const roboH = hitRobot(p, view, mm);
+  if (roboH) return go('robot', roboH.id);
+  const camH = hitCamera(p, view, mm);
+  if (camH) return go('camera', camH.id);
+  const projH = hitProjector(p, view, mm);
+  if (projH) return go('projector', projH.id);
+  const valH = hitValve(p, view, mm);
+  if (valH) return go('valve', valH.id);
+  const plugH = hitPlug(p, view, mm);
+  if (plugH) return go('plug', plugH.id);
+  const sprH = hitSprinklerZone(p, view, mm);
+  if (sprH) return go('sprinkler', sprH.id);
+  const flagH = hitFlagpole(p, view, mm);
+  if (flagH) return go('flagpole', flagH.id);
+  if (dimsInteractive(p)) {
+    const rbH = hitRulerBody(p, view, mm);
+    if (rbH) return go('ruler', rbH.id);
+  }
+  if (zonesInteractive(p)) {
+    const pzH = hitPresenceZone(p, view, mm);
+    if (pzH) return go('pzone', pzH.id);
+  }
+  const sh = hitSensor(p, view, mm);
+  if (sh) return go('sensor', sh.id);
+  const lmH = hitGeoLandmark(p, view, mm);
+  if (lmH) return go('landmark', lmH.id);
+  const rlH = hitRoomLabel(p, view, mm);
+  if (rlH) return go('room', rlH.room.id);
+  if (groundInteractive(p)) {
+    const plH = hitPool(p, view, mm);
+    if (plH) return go('pool', plH.id);
+    const gH = hitGroundArea(p, view, mm);
+    if (gH) return go('ground', gH.id);
+    const vH = hitVoidArea(p, view, mm);
+    if (vH) return go('void', vH.id);
+  }
+  return false;
+}
+
 // Open the alarm control modal for a panel id (bubbles to app.ts). Used from
 // both the edit click-vs-drag path and the kiosk click branch.
 function openAlarmModal(canvas: HTMLCanvasElement, id: string): void {
@@ -496,6 +760,11 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
     if (wh) p.toggleWallDimension(wh.id);
     e.preventDefault(); return;
   }
+  // Arm the Alt+click IDENTIFY gesture. Alt ALSO means "free placement" for the
+  // wall snaps, so the press must still fall through and start its normal drag;
+  // the gesture only resolves as an identify if the pointer never MOVED (see
+  // `altIdentifyAt` — mouseup for drag-starting presses, click for the rest).
+  altPress = e.altKey ? { mm, cx: e.clientX, cy: e.clientY } : null;
   // A fresh select-tool press resets the selected-vertex latch; a vertex hit
   // below re-sets it. Delete keys off this (deleteSelection prioritizes it).
   p.selectedVertex = null;
@@ -695,7 +964,6 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
     const item = arr[fx.idx];
     p.drag = { kind: 'fixture', fxKind: fx.kind, idx: fx.idx,
                startMm: mm, start: { x: item.x, y: item.y } };
-    p.alignCandidates = buildAlignCandidates(p, p.drag);
     canvas.style.cursor = 'grabbing'; e.preventDefault(); return;
   }
   const fhi = hitFurniture(p, mm);
@@ -703,7 +971,6 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
     p.drag = { kind: 'furnMove', idx: fhi.idx, startMm: mm,
                start: { x: fhi.item.x, y: fhi.item.y } };
     p.activeFurnitureId = fhi.item.id; p.markSelectionHot();
-    p.alignCandidates = buildAlignCandidates(p, p.drag);
     canvas.style.cursor = 'grabbing'; e.preventDefault(); return;
   }
   // Door lock padlock wins over the endpoint + body (small radius near the
@@ -756,35 +1023,30 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
   if (eh) {
     if (p.activeEnvId !== eh.id) p.activeEnvId = eh.id; p.markSelectionHot();
     p.drag = { kind: 'env', id: eh.id, startMm: mm, start: { x: eh.x, y: eh.y } };
-    p.alignCandidates = buildAlignCandidates(p, p.drag);
     canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
   }
   const ich = hitInfoCard(p, view, mm);
   if (ich) {
     if (p.activeInfoId !== ich.id) p.activeInfoId = ich.id; p.markSelectionHot();
     p.drag = { kind: 'info', id: ich.id, startMm: mm, start: { x: ich.x, y: ich.y } };
-    p.alignCandidates = buildAlignCandidates(p, p.drag);
     canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
   }
   const abh = hitActionButton(p, view, mm);
   if (abh) {
     if (p.activeActionId !== abh.id) p.activeActionId = abh.id; p.markSelectionHot();
     p.drag = { kind: 'action', id: abh.id, startMm: mm, start: { x: abh.x, y: abh.y } };
-    p.alignCandidates = buildAlignCandidates(p, p.drag);
     canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
   }
   const mh = hitMotionSensor(p, view, mm);
   if (mh) {
     if (p.activeMotionId !== mh.id) p.activeMotionId = mh.id; p.markSelectionHot();
     p.drag = { kind: 'motion', id: mh.id, startMm: mm, start: { x: mh.x, y: mh.y } };
-    p.alignCandidates = buildAlignCandidates(p, p.drag);
     canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
   }
   const bh = hitBleProxy(p, view, mm);
   if (bh) {
     if (p.activeBleId !== bh.id) p.activeBleId = bh.id; p.markSelectionHot();
     p.drag = { kind: 'ble', id: bh.id, startMm: mm, start: { x: bh.x, y: bh.y } };
-    p.alignCandidates = buildAlignCandidates(p, p.drag);
     canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
   }
   const ah = hitAlarmPanel(p, view, mm);
@@ -809,14 +1071,12 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
   if (safeH) {
     if (p.activeSafetyId !== safeH.id) p.activeSafetyId = safeH.id; p.markSelectionHot();
     p.drag = { kind: 'safety', id: safeH.id, startMm: mm, start: { x: safeH.x, y: safeH.y } };
-    p.alignCandidates = buildAlignCandidates(p, p.drag);
     canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
   }
   const abH = hitAlertBeacon(p, view, mm);
   if (abH) {
     if (p.activeAlertBeaconId !== abH.id) p.activeAlertBeaconId = abH.id; p.markSelectionHot();
     p.drag = { kind: 'alert', id: abH.id, startMm: mm, start: { x: abH.x, y: abH.y } };
-    p.alignCandidates = buildAlignCandidates(p, p.drag);
     canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
   }
   const roboH = hitRobot(p, view, mm);
@@ -824,21 +1084,18 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
     if (p.activeRobotId !== roboH.id) p.activeRobotId = roboH.id; p.markSelectionHot();
     // Drag anchor is the DOCK (roboH.x/y); the live body follows separately.
     p.drag = { kind: 'robot', id: roboH.id, startMm: mm, start: { x: roboH.x, y: roboH.y } };
-    p.alignCandidates = buildAlignCandidates(p, p.drag);
     canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
   }
   const camH = hitCamera(p, view, mm);
   if (camH) {
     if (p.activeCameraId !== camH.id) p.activeCameraId = camH.id; p.markSelectionHot();
     p.drag = { kind: 'camera', id: camH.id, startMm: mm, start: { x: camH.x, y: camH.y } };
-    p.alignCandidates = buildAlignCandidates(p, p.drag);
     canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
   }
   const projH = hitProjector(p, view, mm);
   if (projH) {
     if (p.activeProjectorId !== projH.id) p.activeProjectorId = projH.id; p.markSelectionHot();
     p.drag = { kind: 'projector', id: projH.id, startMm: mm, start: { x: projH.x, y: projH.y } };
-    p.alignCandidates = buildAlignCandidates(p, p.drag);
     canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
   }
   const valH = hitValve(p, view, mm);
@@ -897,7 +1154,6 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
   if (sh) {
     if (p.store.activeSensorId !== sh.id) p.setActiveSensor(sh.id);
     p.drag = { kind: 'sensor', id: sh.id, startMm: mm, start: { x: sh.x, y: sh.y } };
-    p.alignCandidates = buildAlignCandidates(p, p.drag);
     canvas.style.cursor = 'grabbing'; e.preventDefault(); return;
   }
   const bgBody = hitBgBody(p, mm);
@@ -1520,14 +1776,10 @@ export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: V
         break;
       }
     }
-    // Smart alignment guides (Feature C): snap the moved placeable's center to
-    // peer centers on X / Y (edit mode, move-kinds only). Applied AFTER the
-    // per-kind move so guideline snap wins over grid intent.
-    p.alignGuides = [];
-    if (p.uiMode === 'edit' && ALIGN_MOVE_KINDS.has(drag.kind)) {
-      const it = draggedMoveItem(f, drag);
-      if (it) applyAlignSnap(p, it, view.scale);
-    }
+    // Smart alignment guides: snap the drag toward the cross-category pool on
+    // X / Y (edit mode, ALIGN_DRAG_KINDS only). Applied AFTER the per-kind move
+    // so guideline snap wins over grid / angle intent; Alt suspends it.
+    applyAlignSnap(p, view, drag, e.altKey, drag.kind === 'wallv' ? mm : undefined);
     // Live-parent: a moved surface host carries its mounted pieces by the exact
     // frame delta (post align-snap). Locked mounted pieces stay put and keep
     // their mountOnId (they re-snap on their next drag).
@@ -1633,6 +1885,16 @@ export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: V
 // welding for that drop, exactly as it does mid-drag.
 export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement, e?: MouseEvent): void {
   if (!p.drag) return;
+  // An Alt press that never moved is an IDENTIFY gesture, not a drop: abandon
+  // the drag with NO release logic (nothing moved, so nothing to save, weld,
+  // wall-snap or fire) and leave `dragJustEnded` false so the follow-up click
+  // reaches onCanvasClick, which owns the identify (it has the `view` the hit
+  // sweep needs). Presses that started no drag skip straight there.
+  if (altIdentifyAt(e)) {
+    p.drag = null; p.alignGuides = []; p.alignPool = null;
+    canvas.style.cursor = 'default';
+    return;
+  }
   const free = !!e?.altKey;
   const f = p.floor();
   const sa = p.activeSensor();
@@ -1640,7 +1902,7 @@ export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement, e?: Mouse
   p.drag = null;
   p.dragJustEnded = true;
   p.alignGuides = [];
-  p.alignCandidates = [];
+  p.alignPool = null;
   canvas.style.cursor = 'default';
 
   if (drag.kind === 'sensor') {
@@ -2179,6 +2441,19 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
     }
     p.placingCamCalibId = null; p.pendingCamCalibUV = null;
     p.emitConfig();
+    return;
+  }
+
+  // Alt+click IDENTIFY: an Alt press that never moved names what is under the
+  // cursor and does NOTHING else — no toggle, no placement, no modal. Placed
+  // AFTER the placement latches: while a latch is armed the press returns early
+  // and never arms the gesture, so the click must still be allowed to place.
+  // The `altKey && select` guard also swallows an Alt click that MOVED past the
+  // slop (a free-placement drop already handled by mouseup).
+  if (p.tool === 'select' && e.altKey) {
+    const at = altIdentifyAt(e);
+    altPress = null;
+    if (at) identifyAt(p, view, at);
     return;
   }
 
@@ -2921,6 +3196,11 @@ function dblClickMediaFurniture(p: Planner, canvas: HTMLCanvasElement, mm: Vec2)
 export function onCanvasDblClick(p: Planner, canvas: HTMLCanvasElement, view: View, e: MouseEvent): void {
   const mm = pxToMm(canvas, view, e);
   if (p.uiMode === 'view') return;
+  // Alt is the IDENTIFY modifier IN SELECT MODE — a second Alt+click
+  // re-identifies, it never opens a binding modal. Every other tool keeps its
+  // dblclick meaning under Alt (a wall drawn with Alt held for free placement
+  // still FINISHES on a double-click).
+  if (p.uiMode === 'edit' && p.tool === 'select' && e.altKey) return;
   if (p.uiMode === 'kiosk') {
     // Device interaction only: dblclick a bound light opens its
     // color/brightness config (an HA control, not an edit). Nothing else.

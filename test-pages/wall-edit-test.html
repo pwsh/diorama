@@ -375,11 +375,12 @@
       return { started, w: p.floor().walls.find(x => x.id === wallId) };
     }
     {
-      // w2 midpoint (7500,7500) moved so its (7000,7000) end lands 200 mm from
-      // w1's (5000,5000) endpoint.
+      // w2 grabbed at (7700,7700) — OFF its midpoint (7500,7500), which is the
+      // vertex-INSERT ghost and would start a wallv drag instead — and moved so
+      // its (7000,7000) end lands 200 mm from w1's (5000,5000) endpoint.
       const p = await weldPlanner();
-      const { started, w } = dragWallBody(p, 'w2', { x: 7500, y: 7500 },
-        { x: 7500 - 2000, y: 7500 - 2200 });
+      const { started, w } = dragWallBody(p, 'w2', { x: 7700, y: 7700 },
+        { x: 7700 - 2000, y: 7700 - 2200 });
       ok('8: wallMove drag started', started, '');
       ok('8: weld ON → wall translated onto (5000,5000)',
          near(w.points[1].x, 5000) && near(w.points[1].y, 5000),
@@ -388,13 +389,13 @@
     {
       const p = await weldPlanner();
       p.setWallWeld(false);
-      const { w } = dragWallBody(p, 'w2', { x: 7500, y: 7500 }, { x: 5500, y: 5300 });
+      const { w } = dragWallBody(p, 'w2', { x: 7700, y: 7700 }, { x: 5700, y: 5500 });
       ok('8: weld OFF → wall stays where it was dropped',
          Math.abs(w.points[1].y - 5000) > 100, `${w.points[1].x},${w.points[1].y}`);
     }
     {
       const p = await weldPlanner();
-      const { w } = dragWallBody(p, 'w2', { x: 7500, y: 7500 }, { x: 5500, y: 5300 }, { alt: true });
+      const { w } = dragWallBody(p, 'w2', { x: 7700, y: 7700 }, { x: 5700, y: 5500 }, { alt: true });
       ok('8: Alt at mouseup → wallMove does not weld',
          Math.abs(w.points[1].y - 5000) > 100, `${w.points[1].x},${w.points[1].y}`);
     }

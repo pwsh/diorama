@@ -19,7 +19,7 @@ import {
   PLUG_DEFAULTS, plugRotation,
   groundAreaColor, groundKindLabel,
   poolWaterColor, POOL_COPING_COLOR,
-  powerGlowScale,
+  powerGlowScale, ALIGN_DRAG_KINDS, IDENTIFY_TTL_MS, IDENTIFY_FADE_MS,
   hexToRgba, lighten, furnitureKind, furnitureCorners, resolveFurnitureDef, isBinKind, isSinkKind, binStateIsFull,
   isClimateApplianceKind, climateApplianceRun,
   isMechanicalApplianceKind, isPumpKind, mechanicalRun, mechanicalGlowColor,
@@ -466,6 +466,80 @@ export function drawAll(ctx: CanvasRenderingContext2D, p: Planner, view: View,
   // Live dimension readouts for the in-flight drag / draw latch — LAST, over
   // everything, edit mode only, and gone the moment the anchor is released.
   drawLiveDims(ctx, p, view);
+  // Alt+click identify callout — the very last thing painted, so it is never
+  // hidden by the item it names.
+  drawIdentifyCallout(ctx, p, view);
+}
+
+// Glyph per identified kind (the callout's line-1 prefix). A kind with no entry
+// falls back to the generic marker — a missing glyph must never blank the plate.
+const IDENTIFY_GLYPH: Record<string, string> = {
+  wall: '▭', furniture: '🛋', light: '💡', switch: '⏻', sensor: '📡', motion: '👣',
+  env: '🌡', info: '🔢', action: '🔘', ble: '📶', alarm: '🚨', calendar: '📅',
+  thermostat: '🌡', safety: '⚠️', alert: '🔔', robot: '🤖', camera: '📷',
+  projector: '📽', valve: '🚰', plug: '🔌', sprinkler: '🚿', flagpole: '🚩',
+  door: '🚪', window: '🪟', ruler: '📏', pzone: '⬟', ground: '🟩', pool: '🏊',
+  void: '⬛', room: '🏠', landmark: '📍',
+};
+
+// Alt+click IDENTIFY callout: a small dark plate beside the named item saying
+// what it is and, when locked, why it won't move. Edit mode only; fades out over
+// the last IDENTIFY_FADE_MS of the latch's TTL (the RAF redraws every frame, so
+// it animates for free) and disappears with the latch. Screen-clamped like the
+// other chips so an item near the edge still explains itself.
+function drawIdentifyCallout(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
+  if (p.uiMode !== 'edit') return;
+  const fx = p.identifyFx;
+  if (!fx) return;
+  const age = performance.now() - fx.at;
+  if (age >= IDENTIFY_TTL_MS) return;
+  const alpha = age > IDENTIFY_TTL_MS - IDENTIFY_FADE_MS
+    ? Math.max(0, (IDENTIFY_TTL_MS - age) / IDENTIFY_FADE_MS) : 1;
+  const dpr = window.devicePixelRatio || 1;
+  const c = mmToPx(view, fx.x, fx.y);
+  const line1 = `${IDENTIFY_GLYPH[fx.kind] ?? '◈'}  ${fx.label}`;
+  const line2 = fx.locked ? '🔒 locked — unlock in the sidebar' : '';
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.font = `bold ${12 * dpr}px sans-serif`;
+  const w1 = ctx.measureText(line1).width;
+  ctx.font = `${10 * dpr}px sans-serif`;
+  const w2 = line2 ? ctx.measureText(line2).width : 0;
+  const padX = 9 * dpr, padY = 6 * dpr;
+  const bw = Math.max(w1, w2) + padX * 2;
+  const bh = (line2 ? 30 : 17) * dpr + padY * 2;
+  // Prefer up-right of the item; clamp fully on screen.
+  let bx = c.x + 14 * dpr, by = c.y - bh - 12 * dpr;
+  bx = Math.max(4 * dpr, Math.min(ctx.canvas.width - bw - 4 * dpr, bx));
+  by = Math.max(4 * dpr, Math.min(ctx.canvas.height - bh - 4 * dpr, by));
+  // Leader dot on the item itself.
+  ctx.fillStyle = 'rgba(255,213,79,0.95)';
+  ctx.beginPath(); ctx.arc(c.x, c.y, 5 * dpr, 0, 2 * Math.PI); ctx.fill();
+  ctx.strokeStyle = 'rgba(255,213,79,0.6)'; ctx.lineWidth = 1.5 * dpr;
+  ctx.beginPath(); ctx.moveTo(c.x, c.y); ctx.lineTo(bx + padX, by + bh / 2); ctx.stroke();
+  // Plate.
+  ctx.fillStyle = 'rgba(12,18,26,0.94)';
+  ctx.strokeStyle = fx.locked ? 'rgba(255,138,128,0.85)' : 'rgba(255,213,79,0.85)';
+  ctx.lineWidth = 1.5 * dpr;
+  const r = 6 * dpr;
+  ctx.beginPath();
+  ctx.moveTo(bx + r, by);
+  ctx.arcTo(bx + bw, by, bx + bw, by + bh, r);
+  ctx.arcTo(bx + bw, by + bh, bx, by + bh, r);
+  ctx.arcTo(bx, by + bh, bx, by, r);
+  ctx.arcTo(bx, by, bx + bw, by, r);
+  ctx.closePath();
+  ctx.fill(); ctx.stroke();
+  ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+  ctx.fillStyle = '#eceff1';
+  ctx.font = `bold ${12 * dpr}px sans-serif`;
+  ctx.fillText(line1, bx + padX, by + padY);
+  if (line2) {
+    ctx.font = `${10 * dpr}px sans-serif`;
+    ctx.fillStyle = '#ff8a80';
+    ctx.fillText(line2, bx + padX, by + padY + 16 * dpr);
+  }
+  ctx.restore();
 }
 
 // Live aircraft (ADS-B, roadmap P4). Display-only — no hit test, nothing
@@ -763,12 +837,14 @@ function drawFloorEditHandles(ctx: CanvasRenderingContext2D, p: Planner, view: V
   ctx.restore();
 }
 
-// Smart alignment guides (Feature C): dashed accent lines through the aligned
-// coordinate, spanning the full canvas. Edit mode only, and only while a
-// move-kind drag is in flight (stale guides never paint).
-const ALIGN_MOVE_KINDS = new Set(['sensor', 'motion', 'env', 'ble', 'fixture', 'furnMove']);
+// Smart alignment guides: dashed accent lines through the aligned coordinate,
+// spanning the full canvas. Edit mode only, and only while an align-eligible
+// drag is in flight (stale guides never paint). The kind set is the SHARED
+// `ALIGN_DRAG_KINDS` (geometry.ts) — the snapper and this painter used to keep
+// two hand-maintained copies and this one was the smaller, so safety / alert /
+// robot / camera / projector drags snapped with no visible line.
 function drawAlignGuides(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
-  if (p.uiMode !== 'edit' || !p.drag || !ALIGN_MOVE_KINDS.has(p.drag.kind)) return;
+  if (p.uiMode !== 'edit' || !p.drag || !ALIGN_DRAG_KINDS.has(p.drag.kind)) return;
   if (!p.alignGuides.length) return;
   const c = ctx.canvas;
   ctx.save();
