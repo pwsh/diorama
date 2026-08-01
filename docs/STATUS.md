@@ -324,6 +324,26 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Wall-cutaway flash fix** (2026-07-31, user-reported "foreground
+  walls flash translucent→opaque→translucent at irregular 1–12 s
+  intervals, layers irrelevant, several releases old"; unreleased —
+  on main past v0.51.0). CONFIRMED with an instrumented repro: any
+  idle `_keyFloor` change (configRev via the blanket number.*/
+  switch.* slow-path rule, 50 W power buckets, applianceJustFinished
+  time flips, preset changes…) rebuilt walls at base opacity; the
+  per-frame cutaway lerp (τ≈0.16 s) then decayed back — a ~0.2–0.5 s
+  pulse (stairs worst: reborn 1.0 vs cutFloor 0.12; the static-camera
+  predicate itself never flips, 0/150 frames). Fix: cutaway fade
+  state persists across rebuilds (_wallFade/_wallFadeGhost, stable
+  wall/stairs/ghost keys on userData.cutKey; birth at min(carried,
+  base); both fade directions continuous; swap-and-restart self-
+  pruning; cleared on floor switch/destroy). Post-fix: rebuild peak
+  == pre-rebuild exactly. New cutaway-persist-test 32/32; glass-see
+  26/26, ghost-align 22/22, terrain 103/103, camera 66/66, nav-parity
+  54/54, window 53/53, fence-gate 58/58, stairs-fit 78/78 unchanged.
+  Noted follow-up (not done, high blast radius): de-chattify the
+  blanket number.*/switch.* config-path rule + bucket
+  printProgressEntity.
 - **Mower dock calibrate/rotate/front + 2D rect body** (2026-07-31,
   user-requested; released in v0.51.0). "Calibrate to
   dock" button (mower GPS block): Planner.calibrateMowerToDock solves

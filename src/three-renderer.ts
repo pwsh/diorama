@@ -2592,6 +2592,24 @@ export class ThreeDRenderer {
   private _cutawayWalls: THREE.Mesh[] = [];
   private _cutawayGhostWalls: THREE.Mesh[] = [];
   private _cutaway = true;
+  // Eased cutaway opacity, PERSISTED ACROSS REBUILDS (the _plantBlend /
+  // _curtainBlend / _sinkFill idiom). Walls live in _floorGroup, which
+  // _keyFloor rebuilds on ANY configRev bump — and configRev bumps for every
+  // `number.*` / `switch.*` state change anywhere in HA (see _isSlowEntity),
+  // plus power/temp buckets, occupancy, preset flips. A freshly built wall is
+  // born at its BUILD opacity (0.45, or 1.0 for a stairs flight), so a faded
+  // foreground wall re-appeared at full strength and the per-frame ease
+  // (factor 0.1/frame ≈ 0.36 s to decay 90 %) dragged it back down — the
+  // user-visible "walls flash translucent → opaque → translucent at irregular
+  // intervals while sitting still". Keyed by STABLE identity (see
+  // _tagCutawayWall), so a rebuild of the same wall resumes mid-fade.
+  // `_prev` is the previous pass's map: swapped in at the top of each builder
+  // so registration reads it and writes the live map, which PRUNES entries for
+  // walls that no longer exist for free. Cleared on floor switch + destroy.
+  private _wallFade: Record<string, number> = {};
+  private _wallFadePrev: Record<string, number> = {};
+  private _wallFadeGhost: Record<string, number> = {};
+  private _wallFadeGhostPrev: Record<string, number> = {};
 
   // Lighting rig (preset-tunable).
   private _ambient: THREE.AmbientLight | null = null;
@@ -3489,6 +3507,10 @@ export class ThreeDRenderer {
     // per-frame fader can't touch stale geometry before the next rebuild.
     this._cutawayWalls = [];
     this._cutawayGhostWalls = [];
+    // A different floor's walls legitimately start fresh — drop the carried
+    // cutaway fades (both the live maps and the pending prev handoffs).
+    this._wallFade = {}; this._wallFadePrev = {};
+    this._wallFadeGhost = {}; this._wallFadeGhostPrev = {};
     // Drop persistent rigs so updateTargets rebuilds fresh on the next tick.
     for (const key of Object.keys(this._humanoids)) {
       this._disposeHumanoid(this._humanoids[key]);
@@ -5375,6 +5397,11 @@ export class ThreeDRenderer {
     // Foreground wall cutaway: default ON, opt out with wallCutaway === false.
     this._cutaway = scene3d?.wallCutaway !== false;
     this._cutawayWalls = [];
+    // Hand the previous pass's eased opacities to the registration below, and
+    // start a fresh live map — entries for walls that no longer exist simply
+    // never get re-written, so the map self-prunes each rebuild.
+    this._wallFadePrev = this._wallFade;
+    this._wallFade = {};
     // Room-name labels are Sprites whose CanvasTextures _clearGroup won't touch;
     // drop them explicitly (mirrors the _envGroup pairing in updateEnvSensors)
     // before wiping the group, or every rebuild leaks a GPU texture.
@@ -5806,7 +5833,9 @@ export class ThreeDRenderer {
         const { openings } = wallCutsForSegment(a, b, f.doors ?? [], f.windows ?? []);
         const angleY = Math.atan2(-uy, -ux);   // shape t-axis → scene along-wall dir
         const basePos = this._w(a.x, a.y, bY);   // shape origin (t=0, y=0) in scene
-        for (const mesh of this._buildSolidWallSegment(openings, len, kindH, segThick, SILL_TOP, WINDOW_GLASS_H, DOOR_HEAD, segMatFor)) {
+        const segMeshes = this._buildSolidWallSegment(openings, len, kindH, segThick, SILL_TOP, WINDOW_GLASS_H, DOOR_HEAD, segMatFor);
+        for (let mi = 0; mi < segMeshes.length; mi++) {
+          const mesh = segMeshes[mi];
           mesh.position.set(basePos.x, basePos.y, basePos.z);
           mesh.rotation.y = angleY;
           // Cutaway tag: scene-space segment midpoint + horizontal perpendicular
@@ -5814,7 +5843,8 @@ export class ThreeDRenderer {
           // its normal is (-uy, -ux)). Either sign is fine — the fader re-orients.
           // Privacy fence + hedge are opaque solids → cutaway-enrolled like walls.
           const mp = this._w((a.x + b.x) / 2, (a.y + b.y) / 2, 0);
-          this._tagCutawayWall(mesh, mp.x, mp.z, -uy, -ux, this._cutawayWalls);
+          this._tagCutawayWall(mesh, mp.x, mp.z, -uy, -ux, this._cutawayWalls,
+                               `w:${wall.id}:${i}:${mi}`);
           group.add(mesh);
         }
         if (isHedge) {
@@ -6177,6 +6207,7 @@ export class ThreeDRenderer {
         // touches the GLOBAL outline material (outline shells are skipped).
         const c = this._w(fu.x, fu.y, 0);
         const seenMats = new Set<THREE.Material>();
+        let matIdx = 0;
         grp.traverse(o => {
           const m = o as THREE.Mesh;
           if (!m.isMesh || m.userData?.outline) return;
@@ -6188,7 +6219,11 @@ export class ThreeDRenderer {
           // Radial normal (piece center dir) → the cutaway predicate treats the
           // stair block like an outward-facing wall between camera and center.
           m.userData.cutFloor = 0.12;      // don't fully vanish — 0.12 min
-          this._tagCutawayWall(m, c.x, c.z, c.x, c.z, this._cutawayWalls);
+          // Stable per-piece material index: `grp.traverse` walks the same
+          // builder-produced tree in the same order every rebuild, so index N
+          // is the same flight material each time.
+          this._tagCutawayWall(m, c.x, c.z, c.x, c.z, this._cutawayWalls,
+                               `s:${fu.id}:${matIdx++}`);
         });
       }
       // Which named room this piece sits in (live loop resolution; null when
@@ -6507,12 +6542,33 @@ export class ThreeDRenderer {
   // midpoint (scene XZ) + a horizontal perpendicular unit vector + the build-
   // time opacity, and enrolls the mesh in `list` so _updateWallCutaway iterates
   // it without a per-frame scene traversal.
+  //
+  // `key` is the mesh's STABLE cross-rebuild identity — `w:<wallId>:<segIdx>:
+  // <meshIdx>` for active wall runs, `s:<furnitureId>:<matIdx>` for a stairs
+  // flight, `g:<ghostFloorId>:<wallId>:<segIdx>` for a ghost wall. When the
+  // previous pass left an eased opacity under that key the material is BORN at
+  // it (clamped to the current base, so a glass-house toggle that LOWERS the
+  // build opacity can't birth a wall more opaque than its new base) instead of
+  // at baseOpacity — that continuity is what kills the rebuild flash.
+  // `baseOpacity` stays the fade-target authority and is always the fresh
+  // build-time value; only the STARTING point is carried.
   private _tagCutawayWall(mesh: THREE.Mesh, mx: number, mz: number,
-                          nx: number, nz: number, list: THREE.Mesh[]): void {
+                          nx: number, nz: number, list: THREE.Mesh[],
+                          key: string): void {
     const nlen = Math.hypot(nx, nz) || 1;
     const mat = mesh.material as THREE.Material & { opacity?: number; transparent?: boolean };
+    const base = mat.opacity ?? 1;
     mesh.userData.wallCut = { mx, mz, nx: nx / nlen, nz: nz / nlen };
-    mesh.userData.baseOpacity = mat.opacity ?? 1;
+    mesh.userData.baseOpacity = base;
+    const ghost = list === this._cutawayGhostWalls;
+    mesh.userData.cutKey = key;
+    mesh.userData.cutGhost = ghost;
+    const carried = (ghost ? this._wallFadeGhostPrev : this._wallFadePrev)[key];
+    if (carried !== undefined && isFinite(carried)) {
+      mat.opacity = Math.min(carried, base);
+      mat.transparent = true;
+    }
+    (ghost ? this._wallFadeGhost : this._wallFade)[key] = mat.opacity ?? base;
     list.push(mesh);
   }
 
@@ -6621,6 +6677,10 @@ export class ThreeDRenderer {
     if (!this._scene) return;
     this._clearGroup(this._ghostGroup);
     this._cutawayGhostWalls = [];
+    // Same swap-and-self-prune as updateFloor (see _wallFade). The early return
+    // below leaves the live map empty, which is correct — no ghost walls exist.
+    this._wallFadeGhostPrev = this._wallFadeGhost;
+    this._wallFadeGhost = {};
     if (!scene3d?.glassHouse) return;
     // Ghost furniture boxes obey the SAME layer gates as the active floor:
     // appliance-category pieces + bins ride `appliances`, everything else
@@ -6731,7 +6791,8 @@ export class ThreeDRenderer {
           const mxw = a.x + ux * len / 2, myw = a.y + uy * len / 2;
           mesh.position.set(asx(mxw), kindH / 2, asz(myw));
           mesh.rotation.y = angle;
-          this._tagCutawayWall(mesh, asx(mxw), asz(myw), -uy, -ux, this._cutawayGhostWalls);
+          this._tagCutawayWall(mesh, asx(mxw), asz(myw), -uy, -ux, this._cutawayGhostWalls,
+                               `g:${gf.id}:${wall.id}:${s}`);
           gGrp.add(mesh);
         }
       }
@@ -6976,6 +7037,13 @@ export class ThreeDRenderer {
       // Ease toward the target so walls fade rather than pop.
       mat.opacity += (target - mat.opacity) * 0.1;
       mat.transparent = true;
+      // Persist the eased value so the NEXT rebuild of this same wall is born
+      // here instead of at baseOpacity (see _wallFade). Covers both fade
+      // directions — a wall easing back UP resumes mid-climb too.
+      const key = mesh.userData.cutKey as string | undefined;
+      if (key !== undefined) {
+        (mesh.userData.cutGhost ? this._wallFadeGhost : this._wallFade)[key] = mat.opacity;
+      }
     };
     for (const m of this._cutawayWalls) apply(m);
     for (const m of this._cutawayGhostWalls) apply(m);
@@ -22852,6 +22920,10 @@ export class ThreeDRenderer {
     // Aircraft rig bookkeeping (their subtrees + per-rig label/banner textures
     // went with _flightsGroup above); the ISS glyph texture is shared → here only.
     this._flightRigs.clear();
+    // Cutaway bookkeeping (meshes just disposed above).
+    this._cutawayWalls = []; this._cutawayGhostWalls = [];
+    this._wallFade = {}; this._wallFadePrev = {};
+    this._wallFadeGhost = {}; this._wallFadeGhostPrev = {};
     this._bgTextPhase = {};           // per-entry bg-text flight/lap clocks
     this._flightsHaveContent = false;
     this._recordFlightsFrustum();     // no shell left → drop its frustum requirement

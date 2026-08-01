@@ -1,0 +1,280 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>cutaway persist test</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+  // Guard for the "foreground walls flash translucent → opaque → translucent
+  // at irregular intervals while sitting still" bug.
+  //
+  // Walls live in _floorGroup, which three-view's _keyFloor rebuilds on ANY
+  // configRev bump — and configRev bumps for every `number.*` / `switch.*`
+  // state change ANYWHERE in the HA instance (Planner._isSlowEntity), plus
+  // power/temp buckets, occupancy flips and preset changes. Before the fix a
+  // rebuilt wall was born at its BUILD opacity (0.45, or 1.0 for a stairs
+  // flight) and the per-frame cutaway ease (factor 0.1/frame ≈ 0.36 s to decay
+  // 90 %) dragged it back down — a visible half-second flash per rebuild.
+  //
+  // The fix persists the eased cutaway opacity across rebuilds, keyed by a
+  // stable per-mesh identity (_wallFade / _wallFadeGhost in three-renderer.ts,
+  // the _plantBlend / _curtainBlend idiom). See CLAUDE.md "Glass house & wall
+  // cutaway".
+  const mod = await import('./assets/three-renderer.js?v=' + Date.now());
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+
+  let n = 0, pass = 0; const fails = [];
+  const ok = (name, cond, extra = '') => { n++; if (cond) pass++; else fails.push(`${name} ${extra}`); };
+
+  const FW = 8000, FD = 6000;
+  const baseFloor = (extra = {}) => ({
+    id: 'f1', name: 'F', w: FW, d: FD,
+    walls: [], furniture: [], lights: [], switches: [], sensors: [], motionSensors: [],
+    envSensors: [], doors: [], windows: [], bg: null, model3d: null, look3d: null,
+    rooms: [], voidAreas: [], groundAreas: [], pools: [],
+    ...extra,
+  });
+  // Closed rectangular room. The SOUTH run (world y = 1000 → scene z = -2000)
+  // is the one the camera below sits behind, so it is the cutaway-faded wall.
+  const roomWalls = () => [{
+    id: 'w1', kind: 'full',
+    points: [{ x: 1000, y: 1000 }, { x: 7000, y: 1000 }, { x: 7000, y: 5000 },
+             { x: 1000, y: 5000 }, { x: 1000, y: 1000 }],
+  }];
+  const stairs = { id: 'st1', x: 2000, y: 2000, w: 1200, h: 1600, kind: 'stairs', rotation: 0, elevation: 0 };
+  const sc = (extra = {}) => ({ preset: 'day', floorColor: '#8a7860', wallColor: '#cfd2d6',
+                                glassHouse: false, wallCutaway: true, ...extra });
+
+  // Camera on the scene -Z side, well above the "overhead" cutoff.
+  const camFront = () => r.setCameraView([0, 4000, -14000], [0, 0, 0]);
+  // Camera on the OPPOSITE (+Z) side: the south wall stops being foreground.
+  const camBack  = () => r.setCameraView([0, 4000, 14000], [0, 0, 0]);
+
+  const snap = () => r._cutawayWalls.map(m => m.material.opacity);
+  const ghostSnap = () => r._cutawayGhostWalls.map(m => m.material.opacity);
+  const settle = (frames = 200) => { for (let i = 0; i < frames; i++) r._updateWallCutaway(); };
+  // Indices of meshes currently faded well below their build opacity.
+  const fadedIdx = () => r._cutawayWalls
+    .map((m, i) => (m.material.opacity < m.userData.baseOpacity - 0.05 ? i : -1))
+    .filter(i => i >= 0);
+
+  r.resize(1280, 880);
+
+  // ── T1: identical-data rebuild NEVER re-brightens a settled faded wall. ────
+  {
+    const flr = baseFloor({ walls: roomWalls(), furniture: [stairs] });
+    r.updateFloor(flr, sc());
+    camFront();
+    settle();
+
+    const faded = fadedIdx();
+    ok('T1 some wall/stairs mesh is cutaway-faded', faded.length > 0, `${faded.length}`);
+    // A wall run (base 0.45 → floor 0.06) AND a stairs material (base 1.0 →
+    // cutFloor 0.12) must both be in the faded set — the stairs flash was the
+    // worst offender (born fully OPAQUE).
+    const wallFaded = faded.some(i => r._cutawayWalls[i].userData.cutFloor === undefined);
+    const stairFaded = faded.some(i => r._cutawayWalls[i].userData.cutFloor === 0.12);
+    ok('T1 a wall run is faded', wallFaded);
+    ok('T1 a stairs material is faded (cutFloor 0.12)', stairFaded);
+
+    const pre = snap();
+    // THE REBUILD: byte-identical inputs — exactly what a configRev bump from an
+    // unrelated `switch.*` state change produces.
+    r.updateFloor(flr, sc());
+    const birth = snap();
+    ok('T1 mesh count stable across rebuild', birth.length === pre.length, `${pre.length}→${birth.length}`);
+
+    const EPS = 1e-6;
+    let birthOK = true, everAbove = -1, peakExcess = 0;
+    for (let i = 0; i < pre.length; i++) {
+      if (birth[i] > pre[i] + EPS) birthOK = false;
+      peakExcess = Math.max(peakExcess, birth[i] - pre[i]);
+    }
+    ok('T1 no mesh births brighter than its pre-rebuild opacity', birthOK,
+       `peakExcess=${peakExcess.toExponential(2)}`);
+
+    // …and stays down on every subsequent frame (the flash had a ~30-frame tail).
+    for (let fr = 0; fr < 60; fr++) {
+      r._updateWallCutaway();
+      const cur = snap();
+      for (let i = 0; i < cur.length; i++) {
+        if (cur[i] > pre[i] + EPS) { everAbove = fr; peakExcess = Math.max(peakExcess, cur[i] - pre[i]); }
+      }
+      if (everAbove >= 0) break;
+    }
+    ok('T1 no mesh exceeds pre-rebuild opacity on any of 60 following frames',
+       everAbove < 0, `frame=${everAbove} excess=${peakExcess.toExponential(2)}`);
+
+    // Sanity: the fade is genuinely deep (i.e. the carried value is the FADED
+    // one, not "nothing ever faded so nothing can flash").
+    const deepest = Math.min(...faded.map(i => pre[i]));
+    ok('T1 carried fade is deep (< 0.2)', deepest < 0.2, `${deepest.toFixed(4)}`);
+  }
+
+  // ── T2: the ease-back-UP direction is continuous across a rebuild too. ────
+  {
+    const flr = baseFloor({ walls: roomWalls(), furniture: [] });
+    r.clearTransientGroups();
+    r.updateFloor(flr, sc());
+    camFront();
+    settle();
+    const faded = fadedIdx();
+    ok('T2 south wall faded before the flip', faded.length > 0, `${faded.length}`);
+    const fi = faded[0];
+
+    // Flip the camera to the far side: that wall now eases back UP toward base.
+    camBack();
+    for (let i = 0; i < 12; i++) r._updateWallCutaway();   // part-way up
+    const mid = snap()[fi];
+    const base = r._cutawayWalls[fi].userData.baseOpacity;
+    ok('T2 wall is mid-climb (between floor and base)', mid > 0.1 && mid < base - 0.02,
+       `${mid.toFixed(4)} base=${base}`);
+
+    r.updateFloor(flr, sc());
+    const birth = snap()[fi];
+    ok('T2 rebuild resumes mid-climb (not reset to base)', Math.abs(birth - mid) < 1e-6,
+       `${birth.toFixed(4)} vs ${mid.toFixed(4)}`);
+
+    // It must keep climbing toward base, monotonically.
+    let mono = true, prev = birth;
+    for (let i = 0; i < 200; i++) {
+      r._updateWallCutaway();
+      const cur = snap()[fi];
+      if (cur < prev - 1e-9) mono = false;
+      prev = cur;
+    }
+    ok('T2 climb stays monotonic after the rebuild', mono);
+    ok('T2 reaches base opacity', Math.abs(prev - base) < 0.01, `${prev.toFixed(4)} vs ${base}`);
+  }
+
+  // ── T3: a genuinely NEW wall (no persisted key) births at baseOpacity. ────
+  {
+    const flr = baseFloor({ walls: roomWalls(), furniture: [] });
+    r.clearTransientGroups();
+    r.updateFloor(flr, sc());
+    camFront();
+    settle();
+    const beforeCount = r._cutawayWalls.length;
+
+    // Add a SECOND wall — a new id, so a new key. It must not inherit anyone's fade.
+    const extra = { id: 'w2', kind: 'full',
+                    points: [{ x: 1500, y: 1500 }, { x: 1500, y: 4500 }] };
+    const flr2 = baseFloor({ walls: [...roomWalls(), extra], furniture: [] });
+    r.updateFloor(flr2, sc());
+    ok('T3 the new wall added a tagged mesh', r._cutawayWalls.length === beforeCount + 1,
+       `${beforeCount}→${r._cutawayWalls.length}`);
+    const fresh = r._cutawayWalls.find(m => (m.userData.cutKey ?? '').startsWith('w:w2:'));
+    ok('T3 new wall carries its own stable key', !!fresh, fresh ? fresh.userData.cutKey : 'missing (stale chunk?)');
+    ok('T3 new wall births at baseOpacity', fresh && Math.abs(fresh.material.opacity - fresh.userData.baseOpacity) < 1e-9,
+       fresh ? `${fresh.material.opacity} vs ${fresh.userData.baseOpacity}` : '');
+    // …while the pre-existing faded wall is STILL carried.
+    const old = r._cutawayWalls.find(m => (m.userData.cutKey ?? '') === 'w:w1:0:0');
+    ok('T3 pre-existing faded wall still carried through the same rebuild',
+       old && old.material.opacity < 0.2, old ? `${old.material.opacity.toFixed(4)}` : 'missing');
+
+    // Removing the wall again must PRUNE its key (no unbounded growth).
+    r.updateFloor(flr, sc());
+    ok('T3 removed wall pruned from the fade map',
+       Object.keys(r._wallFade ?? {}).every(k => !k.startsWith('w:w2:')),
+       Object.keys(r._wallFade ?? {}).join(','));
+    ok('T3 fade map size tracks live meshes', Object.keys(r._wallFade ?? {}).length === r._cutawayWalls.length,
+       `${Object.keys(r._wallFade ?? {}).length} vs ${r._cutawayWalls.length}`);
+  }
+
+  // ── T4: floor switch clears the persistence (a new floor starts fresh). ──
+  {
+    const flr = baseFloor({ walls: roomWalls(), furniture: [] });
+    r.clearTransientGroups();
+    r.updateFloor(flr, sc());
+    camFront();
+    settle();
+    ok('T4 faded before the switch', fadedIdx().length > 0);
+    ok('T4 fade map populated before the switch', Object.keys(r._wallFade ?? {}).length > 0);
+
+    r.clearTransientGroups();
+    ok('T4 clearTransientGroups empties the fade map', Object.keys(r._wallFade ?? {}).length === 0);
+    ok('T4 clearTransientGroups empties the ghost fade map', Object.keys(r._wallFadeGhost ?? {}).length === 0);
+
+    // A same-id floor rebuilt AFTER the switch must birth at base, not the
+    // pre-switch fade (the prev handoff is cleared too).
+    r.updateFloor(flr, sc());
+    const w0 = r._cutawayWalls.find(m => (m.userData.cutKey ?? '') === 'w:w1:0:0');
+    ok('T4 post-switch rebuild births at baseOpacity',
+       w0 && Math.abs(w0.material.opacity - w0.userData.baseOpacity) < 1e-9,
+       w0 ? `${w0.material.opacity} vs ${w0.userData.baseOpacity}` : 'missing');
+  }
+
+  // ── T5: ghost-floor walls get the same continuity. ─────────────────────────
+  {
+    const scG = sc({ glassHouse: true });
+    const f1 = baseFloor({ walls: roomWalls(), furniture: [] });
+    const f2 = baseFloor({ id: 'f2', walls: roomWalls(), furniture: [] });
+    r.clearTransientGroups();
+    r.updateFloor(f1, scG);
+    r.updateGhostFloors([f1, f2], 'f1', scG, undefined, undefined);
+    camFront();
+    ok('T5 ghost walls tagged', r._cutawayGhostWalls.length > 0, `${r._cutawayGhostWalls.length}`);
+    settle();
+    const gpre = ghostSnap();
+    const gFaded = r._cutawayGhostWalls
+      .map((m, i) => (m.material.opacity < m.userData.baseOpacity - 0.02 ? i : -1)).filter(i => i >= 0);
+    ok('T5 a ghost wall is faded', gFaded.length > 0, `${gFaded.length}`);
+
+    r.updateGhostFloors([f1, f2], 'f1', scG, undefined, undefined);
+    const gpost = ghostSnap();
+    ok('T5 ghost mesh count stable', gpost.length === gpre.length, `${gpre.length}→${gpost.length}`);
+    let gOK = true;
+    for (let i = 0; i < gpre.length; i++) if (gpost[i] > gpre[i] + 1e-6) gOK = false;
+    ok('T5 no ghost wall births brighter than pre-rebuild', gOK,
+       JSON.stringify(gpre.map((v, i) => [+v.toFixed(4), +gpost[i].toFixed(4)])));
+    ok('T5 ghost keys are floor-scoped', r._cutawayGhostWalls.every(m => (m.userData.cutKey ?? '').startsWith('g:f2:')),
+       r._cutawayGhostWalls.map(m => m.userData.cutKey).join(','));
+    // Leaving glass house drops the ghosts AND prunes their fade map.
+    r.updateGhostFloors([f1, f2], 'f1', sc(), undefined, undefined);
+    ok('T5 leaving glassHouse prunes the ghost fade map',
+       Object.keys(r._wallFadeGhost ?? {}).length === 0, `${Object.keys(r._wallFadeGhost ?? {}).length}`);
+  }
+
+  // ── T6: a glass-house toggle that LOWERS the build opacity can't birth a
+  //       wall MORE opaque than its new base (the Math.min clamp). ───────────
+  {
+    const flr = baseFloor({ walls: roomWalls(), furniture: [] });
+    r.clearTransientGroups();
+    r.updateFloor(flr, sc());                       // walls build at 0.45
+    camBack();                                      // nothing faded → carried 0.45
+    settle();
+    const before = r._cutawayWalls.map(m => m.material.opacity);
+    // The non-foreground runs sit at the 0.45 base — ABOVE the 0.22 glass-house
+    // base, so carrying them verbatim would over-brighten. That's what the
+    // Math.min clamp exists for.
+    ok('T6 some wall sits at the 0.45 base (above the 0.22 glass base)',
+       before.some(v => Math.abs(v - 0.45) < 1e-6),
+       JSON.stringify(before.map(v => +v.toFixed(4))));
+    r.updateFloor(flr, sc({ glassHouse: true }));    // walls now build at 0.22
+    const after = r._cutawayWalls.map(m => m.material.opacity);
+    ok('T6 carried value clamps to the NEW lower base', after.every(v => v <= 0.22 + 1e-9),
+       JSON.stringify(after.map(v => +v.toFixed(4))));
+  }
+
+  // ── T7: with a static camera the cutaway predicate itself never oscillates
+  //       (proves the flash source was the rebuild, not the fader). ──────────
+  {
+    const flr = baseFloor({ walls: roomWalls(), furniture: [stairs] });
+    r.clearTransientGroups();
+    r.updateFloor(flr, sc());
+    camFront();
+    settle();
+    let flips = 0, last = null;
+    for (let i = 0; i < 150; i++) {
+      r._updateWallCutaway();
+      const cur = r._cutawayWalls.map(m => m.material.opacity < m.userData.baseOpacity - 0.05).join('');
+      if (last !== null && cur !== last) flips++;
+      last = cur;
+    }
+    ok('T7 predicate stable over 150 static frames', flips === 0, `${flips}`);
+  }
+
+  document.title = `CUTAWAY ${fails.length === 0 ? 'PASS' : 'FAIL'} ${pass}/${n}`;
+  if (fails.length) console.error('FAILS:\n' + fails.join('\n'));
+  window.__DUMP = document.title + (fails.length ? '\n' + fails.join('\n') : '');
+</script>
