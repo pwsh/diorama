@@ -372,7 +372,11 @@ instance.
   pivot moved to −0.26·L (a quarter back, so the raised flag stands
   near the front like photos 2–3), UP = Rx(−π/2), _advanceMailFlags
   writes −(π/2)·blend; 2D glyph + both test pages' pose pins
-  flipped to match. 2D
+  flipped to match. **Fourth pass (user: "was rotated 180 on x AND
+  y; only needed x — now needs 180 on y")**: the head/step flipped
+  to hang BELOW the arm line when down (about the arm's own long
+  axis; raised, the offset becomes a rearward lean over the box) —
+  the perpendicular offset is now pinned in both poses. 2D
   glyph matched (down = arm toward the front edge, up =
   foreshortened blob at the pivot) AND the 2D resolver bug fixed —
   drawFurniture had the bindings swapped (countEntity raised the 2D
@@ -380,7 +384,7 @@ instance.
   (flagEntity → flag, count → badge only, door never opens); the
   user guide's stale copy corrected. 6 mailbox-bearing floorplan
   envelopes regenerated (date-only diffs reverted). Tests:
-  vehicle-mail 52/52 (+13), furniture-polish 28/28 (flipped pins),
+  vehicle-mail 54/54 (+15), furniture-polish 28/28 (flipped pins),
   bath-water 69/69, floorplans:build 425/425.
 - **Death Star moon** (2026-08-01, user-requested "space station"
   checkbox; released in v0.54.0).

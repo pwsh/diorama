@@ -123,8 +123,9 @@
   //     same world flank the 2D glyph draws at plan-local +x.
   //   • flag DOWN (default) = the AUTHORED pose, rotation.x ~ 0 — the arm lies
   //     HORIZONTAL running REARWARD (local +Z) with the stepped paddle head at
-  //     the arm's far (rear) end — the user-directed 180° X flip of the earlier
-  //     forward-pointing pose.
+  //     the arm's far (rear) end, hanging BELOW the arm line (the user-dialed
+  //     orientation over two corrections; raised, that offset becomes a
+  //     rearward lean over the box).
   //   • flag UP (flagEntity 'on') = rotation.x ~ −π/2 — the arm stands VERTICAL
   //     near the front and the head rides ABOVE the roofline (crest = HT).
   //   • the paddle plane stays PARALLEL to the box side face in BOTH poses (the
@@ -222,6 +223,10 @@
           tip.y > piv.y + 100, `tipY=${tip.y.toFixed(1)} pivotY=${piv.y.toFixed(1)}`);
         assert('mailbox UP: the paddle head rides ABOVE the roofline (y > HT)',
           c.y > MB_HT, `padY=${c.y.toFixed(1)} crest=${MB_HT}`);
+        // The head's below-arm offset becomes a REARWARD lean when raised
+        // (Rx(−90°) maps −Y → +Z) — the user-dialed orientation.
+        assert('mailbox UP: the head leans REARWARD of the arm axis (z > pivot z)',
+          c.z > piv.z + 20, `headZ=${c.z.toFixed(1)} pivotZ=${piv.z.toFixed(1)}`);
       } else {
         assert('mailbox DOWN: arm lies HORIZONTAL running REARWARD (+Z)',
           dir.z > 0.999 && Math.abs(dir.y) < 0.03 && Math.abs(dir.x) < 1e-6,
@@ -232,6 +237,10 @@
           `tipZ=${tip.z.toFixed(1)} rear=${(MB_D * 0.96 / 2).toFixed(1)} pivotZ=${piv.z.toFixed(1)}`);
         assert('mailbox DOWN: the paddle head sits BELOW the roofline (y < HT)',
           c.y < MB_HT, `padY=${c.y.toFixed(1)} crest=${MB_HT}`);
+        // Lowered, the stepped head hangs BELOW the arm line (the user-dialed
+        // orientation — head-above-arm was the unwanted extra 180° flip).
+        assert('mailbox DOWN: the head hangs BELOW the arm axis (y < pivot y)',
+          c.y < piv.y - 20, `headY=${c.y.toFixed(1)} pivotY=${piv.y.toFixed(1)}`);
       }
       // 5. Stepped paddle: a tall head + a lower step, both on the arm, both red.
       const step = findTag(g, 'mailFlagStep');

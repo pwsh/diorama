@@ -1214,11 +1214,13 @@ The **`vehicle` cat** (new; `furnitureCat` optgroup "Vehicle / garage") groups
   `(−(W/2+8), bodyBase + BH·0.45, −L·0.26)` (mid-body height, a quarter back
   from the front); arm authored along local **+Z** (REARWARD) = the DOWN pose
   — stepped ⚑ head (head + step box, long-axes ALONG the arm, one-piece
-  stamped look) at the far/rear end (**user-directed 2026-08-01 "rotate 180°
-  about X" — the final word over my forward-pointing reading of photo 1**);
-  UP = `rotation.x = −π/2` (`Rx(−90°)` maps +Z→+Y: arm vertical near the
-  front, the head is the TOP section, clearing the crest by ~100 mm at
-  defaults and leaning slightly toward the door). `_advanceMailFlags` writes
+  stamped look) at the far/rear end, hanging **BELOW the arm line**
+  (**user-dialed 2026-08-01 over two corrections: "rotate 180° about X", then
+  "180° about Y" = about the arm's own long axis — head-above-arm was the
+  unwanted extra flip; both pinned in the test**); UP = `rotation.x = −π/2`
+  (`Rx(−90°)` maps +Z→+Y: arm vertical near the front, the head is the TOP
+  section, clearing the crest by ~100 mm at defaults, the below-arm offset
+  becoming a slight REARWARD lean over the box). `_advanceMailFlags` writes
   `rotation.x = −(π/2)·blend` (τ 0.25 s, keyed by fixture id). The paddle is
   thin in X and X is the only rotation axis, so the paddle plane stays
   PARALLEL to the side in every pose by construction; red `0xe53935` in BOTH
@@ -1232,7 +1234,7 @@ The **`vehicle` cat** (new; `furnitureCat` optgroup "Vehicle / garage") groups
   `_keyFloor` rebuilds the whole floor on any change (which also refreshes an
   adjacent car's indicator when a charger's status flips). Sidebar: car gets the
   generic bind row (binary_sensor); car+ev_charger get `_evChargerRows`; mailbox
-  gets `_mailboxRows`. Test page `vehicle-mail-test.html` (`VEHICLEMAIL PASS 52/52`).
+  gets `_mailboxRows`. Test page `vehicle-mail-test.html` (`VEHICLEMAIL PASS 54/54`).
 
 ### Alert center & beacons (Alert Center feature — see `docs/research/log-events-alerting.md`)
 Surfaces HA's "needs a human's attention" streams (persistent notifications +
@@ -1976,7 +1978,7 @@ type `bathwater` + `capBathWater` — every isWetBathKind piece emits `<kind>` +
 twins on its BASE page (kitchen_sink-running lands on Appliances); toilet capture primes the
 off state then flips (the capSafety age-ramp precedent); the hand-list guard is unaffected
 (furniture counts unguarded by design). Test `bath-water-test.html` (`BATHWATER PASS 69/69`);
-vehicle-mail 52/52, robot 168/168.
+vehicle-mail 54/54, robot 168/168.
 
 ### Sinks v2 (basins, running water, fill/drain)
 Five sink kinds (`isSinkKind`, geometry.ts): `sink` (compact vanity),

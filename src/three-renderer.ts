@@ -11201,12 +11201,15 @@ export class ThreeDRenderer {
         //     mid-body height (front = local −Z).
         //   • DOWN (default) → the AUTHORED pose (rotation.x = 0): the arm lies
         //     HORIZONTAL running REARWARD along local +Z, stepped paddle head at
-        //     the arm's far (rear) end — the user-directed 180° X flip of the
-        //     earlier forward-pointing pose.
+        //     the arm's far (rear) end hanging BELOW the arm line — the pose the
+        //     user dialed in over two corrections ("180° about X" then "180°
+        //     about Y", i.e. about the arm's own long axis; head-above-arm was
+        //     the unwanted extra flip).
         //   • UP (flagEntity 'on') → rotation.x = −π/2, which maps +Z → +Y: the
         //     arm stands VERTICAL near the front with the head as its TOP
         //     section, riding well above the roofline and leaning slightly
-        //     toward the door.
+        //     REARWARD over the box (the below-arm offset turns into the
+        //     rearward lean under Rx(−90°)).
         // The eased blend is driven in _advanceMailFlags; here we seed + apply the
         // persisted value (survives _keyFloor rebuilds — a fresh fixture seeds to
         // its target so the first render is already in pose).
@@ -11228,11 +11231,11 @@ export class ThreeDRenderer {
         const headH = W * 0.5, headL = armLen * 0.42;
         const stepH = W * 0.20, stepL = armLen * 0.22;
         const head = new THREE.Mesh(new THREE.BoxGeometry(10, headH, headL), flagMat);
-        head.position.set(-8, headH / 2, armLen - headL / 2);
+        head.position.set(-8, -headH / 2, armLen - headL / 2);
         head.userData = { mailFlagPaddle: true };
         flagArm.add(head);
         const step = new THREE.Mesh(new THREE.BoxGeometry(10, stepH, stepL), flagMat);
-        step.position.set(-8, 3 + stepH / 2, armLen - headL - stepL / 2);
+        step.position.set(-8, -3 - stepH / 2, armLen - headL - stepL / 2);
         step.userData = { mailFlagStep: true };
         flagArm.add(step);
         flagArm.userData = { mailFlagArm: true, armLen };
@@ -21833,10 +21836,10 @@ export class ThreeDRenderer {
   // Per-frame mailbox flag. Ease each arm's 0→1 blend (τ ≈ 0.25 s) toward UP
   // (flag sensor 'on') / DOWN, applying rotation.x = −(π/2)·blend: blend 0 =
   // DOWN, the AUTHORED pose (arm horizontal along local +Z, lying along the box
-  // side with the stepped paddle head at the arm's far/rear end — the
-  // user-directed 180° X flip of the earlier forward-pointing pose); blend 1 =
-  // UP (Rx(−π/2) maps +Z → +Y, so the arm stands vertical near the front with
-  // the head as its top section, above the roofline). The paddle is thin in X,
+  // side with the stepped paddle head at the arm's far/rear end, hanging BELOW
+  // the arm line — the user-dialed orientation); blend 1 = UP (Rx(−π/2) maps
+  // +Z → +Y, so the arm stands vertical near the front with the head as its
+  // top section, above the roofline, leaning slightly rearward over the box). The paddle is thin in X,
   // and X is the rotation axis, so the paddle plane stays parallel to the
   // mailbox's side face in every pose. Blend keyed by fixture id (survives
   // _keyFloor). Zero alloc.
