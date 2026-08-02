@@ -1213,8 +1213,10 @@ The **`vehicle` cat** (new; `furnitureCat` optgroup "Vehicle / garage") groups
   across the two files puts the flag on OPPOSITE sides. Pivot at
   `(−(W/2+8), bodyBase + BH·0.45, −L·0.26)` (mid-body height, a quarter back
   from the front); arm authored along local **+Z** (REARWARD) = the DOWN pose
-  — stepped ⚑ head (head + step box, long-axes ALONG the arm, one-piece
-  stamped look) at the far/rear end, hanging **BELOW the arm line**
+  — a SINGLE flag-head rectangle (long-axis ALONG the arm; **no step box** —
+  user-directed, the stepped ⚑ silhouette read as a stray block between staff
+  and flag, negative-pinned) at the far/rear end, hanging **BELOW the arm
+  line**
   (**user-dialed 2026-08-01 over two corrections: "rotate 180° about X", then
   "180° about Y" = about the arm's own long axis — head-above-arm was the
   unwanted extra flip; both pinned in the test**); UP = `rotation.x = −π/2`

@@ -122,7 +122,7 @@
   //     you face the door / the viewer's right — the photographed side, and the
   //     same world flank the 2D glyph draws at plan-local +x.
   //   • flag DOWN (default) = the AUTHORED pose, rotation.x ~ 0 — the arm lies
-  //     HORIZONTAL running REARWARD (local +Z) with the stepped paddle head at
+  //     HORIZONTAL running REARWARD (local +Z) with the flag head at
   //     the arm's far (rear) end, hanging BELOW the arm line (the user-dialed
   //     orientation over two corrections; raised, that offset becomes a
   //     rearward lean over the box).
@@ -237,22 +237,21 @@
           `tipZ=${tip.z.toFixed(1)} rear=${(MB_D * 0.96 / 2).toFixed(1)} pivotZ=${piv.z.toFixed(1)}`);
         assert('mailbox DOWN: the paddle head sits BELOW the roofline (y < HT)',
           c.y < MB_HT, `padY=${c.y.toFixed(1)} crest=${MB_HT}`);
-        // Lowered, the stepped head hangs BELOW the arm line (the user-dialed
+        // Lowered, the flag head hangs BELOW the arm line (the user-dialed
         // orientation — head-above-arm was the unwanted extra 180° flip).
         assert('mailbox DOWN: the head hangs BELOW the arm axis (y < pivot y)',
           c.y < piv.y - 20, `headY=${c.y.toFixed(1)} pivotY=${piv.y.toFixed(1)}`);
       }
-      // 5. Stepped paddle: a tall head + a lower step, both on the arm, both red.
-      const step = findTag(g, 'mailFlagStep');
-      assert(`mailbox ${name}: paddle is STEPPED (head + a lower step box)`,
-        !!step && step.geometry.parameters.height < pad.geometry.parameters.height,
-        step ? `head=${pad.geometry.parameters.height.toFixed(0)} step=${step.geometry.parameters.height.toFixed(0)}` : 'no step');
+      // 5. Just the staff and the flag — NO intermediate step box between them
+      //    (user-directed: the earlier stepped ⚑ silhouette read as a stray
+      //    block; the negative pin keeps it from coming back).
+      assert(`mailbox ${name}: flag is staff + head ONLY (no step box)`,
+        !findTag(g, 'mailFlagStep'));
       // Red in BOTH poses (the old build dimmed the lowered flag). Compared
       // channel-wise, not against the literal: _mat() pushes saturation.
       const ph = pad.material.color.getHex();
-      assert(`mailbox ${name}: flag is RED in this pose (head + step share it)`,
-        chMax(ph) === 'r' && ((ph >> 16) & 255) > 200 && (ph & 255) < 80
-        && !!step && step.material.color.getHex() === ph,
+      assert(`mailbox ${name}: flag is RED in this pose`,
+        chMax(ph) === 'r' && ((ph >> 16) & 255) > 200 && (ph & 255) < 80,
         `head=#${pad.material.color.getHexString()}`);
     }
     // 6. The paddle's side-offset is IDENTICAL up vs down (pivot on the plane).

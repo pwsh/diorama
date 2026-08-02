@@ -376,7 +376,11 @@ instance.
   y; only needed x — now needs 180 on y")**: the head/step flipped
   to hang BELOW the arm line when down (about the arm's own long
   axis; raised, the offset becomes a rearward lean over the box) —
-  the perpendicular offset is now pinned in both poses. 2D
+  the perpendicular offset is now pinned in both poses. **Fifth
+  pass (user: orientation finally correct; drop the extra
+  stairstep)**: the step box between staff and head REMOVED — the
+  flag is staff + one head rectangle, negative-pinned
+  (`mailFlagStep` must not exist). 2D
   glyph matched (down = arm toward the front edge, up =
   foreshortened blob at the pivot) AND the 2D resolver bug fixed —
   drawFurniture had the bindings swapped (countEntity raised the 2D

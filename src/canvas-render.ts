@@ -6364,7 +6364,7 @@ export function drawFurniturePrimitiveLocal(
       // user-directed 180° X flip of the earlier forward-pointing pose) and
       // VERTICAL (UP):
       //   DOWN → the arm lies in the plan: a red line running from the pivot
-      //          toward the REAR (top), stepped paddle head at the far end.
+      //          toward the REAR (top), flag head at the far end.
       //   UP   → the arm stands out of the plan, so it foreshortens to a bright
       //          blob at the pivot. (A plan view genuinely cannot show "up" as
       //          length — the inverse of what a lowered flag shows.)
