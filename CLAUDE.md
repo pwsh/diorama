@@ -1203,17 +1203,26 @@ The **`vehicle` cat** (new; `furnitureCat` optgroup "Vehicle / garage") groups
   ~22 mm ABOVE the crest, and a letters-only "U.S. MAIL" canvas decal plane on
   the door (`userData.textPlane` + `outlineSkip`, flat `MeshBasicMaterial` —
   documented `_mat()` exemption). **Flag geometry (2026-08-01,
-  reference-photo-corrected — supersedes the 2026-07-30 spec, which had the
-  poses backwards)**: pivot group on the +X side near the FRONT at the arch
-  springline; arm authored along local +Z = the DOWN pose (horizontal, resting
-  along the side, stepped ⚑ paddle — head + lower step box — toward the REAR);
-  UP = `rotation.x = −π/2` (`Rx(−90°)` maps +Z→+Y: arm vertical, paddle
-  standing ABOVE the roofline). `_advanceMailFlags` writes
-  `rotation.x = −(π/2)·blend` (τ 0.25 s, keyed by fixture id). The paddle is
-  thin in X and X is the only rotation axis, so the paddle plane stays PARALLEL
-  to the side in every pose by construction; red `0xe53935` in BOTH poses. 2D
-  plan glyph matches: DOWN = visible red arm+paddle along the +X side toward
-  the rear; UP = foreshortened bright paddle blob at the pivot. Tags
+  reference-photo-corrected in TWO passes — supersedes the 2026-07-30 spec AND
+  the first rebuild, both of which had it wrong)**: the flag hangs off
+  builder-local **−X**, which renders at WORLD +X — the box's LEFT as you face
+  the door, the photographed side. **Chirality trap (documented at both code
+  sites — do not "fix" one of them)**: the 3D scene mirrors X (`_w` =
+  `fw/2 − wx` + the negated group yaw), so 3D builder-local −X and the 2D
+  glyph's plan-local **+x** are the SAME physical flank; matching local signs
+  across the two files puts the flag on OPPOSITE sides. Pivot at
+  `(−(W/2+8), bodyBase + BH·0.45, −L·0.14)` (mid-body height, a third back
+  from the front); arm authored along local **−Z** (FORWARD) = the DOWN pose —
+  stepped ⚑ head (head + step box, long-axes ALONG the arm, one-piece stamped
+  look) at the far/front end resting beside the latch, ~30 mm proud of the
+  door face; UP = `rotation.x = +π/2` (`Rx(+90°)` maps −Z→+Y: arm vertical,
+  the head is the TOP section, clearing the crest by ~100 mm at defaults).
+  `_advanceMailFlags` writes `rotation.x = +(π/2)·blend` (τ 0.25 s, keyed by
+  fixture id). The paddle is thin in X and X is the only rotation axis, so the
+  paddle plane stays PARALLEL to the side in every pose by construction; red
+  `0xe53935` in BOTH poses. 2D plan glyph matches on the same visual flank
+  (+x): DOWN = red arm+paddle from the mid-body pivot toward the FRONT edge;
+  UP = foreshortened bright paddle blob at the pivot. Tags
   `userData.mailFlagArm`/`mailFlagPaddle` (head box only).
 - **Hash + keys**: three-view's appliance-state hash predicate widened to
   `isVehicleKind || ev_charger || mailbox || evCharger || mailCount`; it folds

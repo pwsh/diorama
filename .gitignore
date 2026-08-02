@@ -18,3 +18,6 @@ docs/STATUS.local.md
 # regen command in its header; ~27 pages write the SAME planner.mod.js name, so
 # a committed copy is only ever "whatever ran last" (a real flake source)
 test-pages/*.mod.js
+
+# runtime dist copy for the test-pages harness (never committed)
+test-pages/assets/

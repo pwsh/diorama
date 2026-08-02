@@ -6356,24 +6356,28 @@ export function drawFurniturePrimitiveLocal(
       ctx.lineWidth = extra?.mailLidOpen ? 2.5 : 1.5;
       const seamY = y + h - Math.max(2, h * 0.08);
       ctx.beginPath(); ctx.moveTo(x + 3, seamY); ctx.lineTo(x + w - 3, seamY); ctx.stroke();
-      // Signal flag on the +X (right) side, matching the 3D geometry: the arm
-      // hinges on the side face near the FRONT (bottom edge here) and swings in
-      // the side plane between HORIZONTAL-REARWARD (DOWN) and VERTICAL (UP).
+      // Signal flag on the +x (right) side. NB the 3D builder hangs its rig off
+      // local −X: the 3D scene mirrors X (`_w` = fw/2 − wx), so builder-local −X
+      // and plan-local +x are the SAME world flank (world +X = the box's left as
+      // you face the door). The arm hinges about a third back from the front and
+      // swings in the side plane between HORIZONTAL-FORWARD (DOWN) and VERTICAL
+      // (UP):
       //   DOWN → the arm lies in the plan: a red line running from the pivot
-      //          toward the REAR (top), with the paddle at its rear end.
+      //          toward the FRONT (bottom), paddle head at the front end beside
+      //          the door (a slight overhang past the front edge is correct).
       //   UP   → the arm stands out of the plan, so it foreshortens to a bright
       //          blob at the pivot. (A plan view genuinely cannot show "up" as
       //          length — the inverse of what a lowered flag shows.)
-      const flagX = x + w + 2, flagPivotY = y + h * 0.82;
+      const flagX = x + w + 2, flagPivotY = y + h * 0.64;
       const flagUp2d = extra?.mailFlagUp === true;
       if (!flagUp2d) {
-        const armEndY = Math.max(y + 2, flagPivotY - h * 0.5);
-        const padW = Math.max(3, halfW * 0.22), padH = Math.max(3, h * 0.16);
+        const armEndY = flagPivotY + h * 0.45;
+        const padW = Math.max(3, halfW * 0.22), padLen = Math.max(3, h * 0.19);
         ctx.strokeStyle = '#c62828';
         ctx.lineWidth = 2;
         ctx.beginPath(); ctx.moveTo(flagX, flagPivotY); ctx.lineTo(flagX, armEndY); ctx.stroke();
         ctx.fillStyle = '#c62828';
-        ctx.fillRect(flagX - padW / 2, armEndY, padW, padH);
+        ctx.fillRect(flagX - padW / 2, armEndY - padLen, padW, padLen);
       }
       // Pivot marker (always); raised, it is ALL the plan can show of the flag.
       ctx.fillStyle = flagUp2d ? '#e53935' : '#c62828';

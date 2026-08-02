@@ -356,8 +356,18 @@ instance.
   tangent; latch tab ~22 mm above the crest; letters-only "U.S. MAIL"
   canvas decal plane, textPlane+outlineSkip). Flag: authored DOWN
   along +Z, UP = Rx(−π/2); _advanceMailFlags writes −(π/2)·blend;
-  paddle-parallel-to-side invariant preserved; red both poses. 2D
-  glyph flipped to match (down = visible arm along the side, up =
+  paddle-parallel-to-side invariant preserved; red both poses.
+  **Second correction pass (same day, user-reported "still wrong
+  way + wrong side")**: (1) the flag moved to builder-local −X =
+  WORLD +X = the box's left facing the door — the 3D scene X-mirror
+  means 3D-local −X and 2D-plan-local +x are the SAME physical
+  flank (the two views had been chirally opposite; front-camera
+  render + world-coord probe verified, documented at both code
+  sites); (2) the down pose re-authored per photo 1 — pivot
+  mid-body at −0.14·L, arm along −Z (FORWARD), head resting beside
+  the latch ~30 mm proud of the door; UP = Rx(+π/2), head = the top
+  section, clearing the crest ~100 mm. 2D
+  glyph matched (down = arm toward the front edge, up =
   foreshortened blob at the pivot) AND the 2D resolver bug fixed —
   drawFurniture had the bindings swapped (countEntity raised the 2D
   flag, flagEntity "opened" a lid) vs 3D's reconciled semantics
