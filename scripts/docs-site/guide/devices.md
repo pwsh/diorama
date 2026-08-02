@@ -146,7 +146,7 @@ Three state-driven furniture kinds bring the driveway to life:
 
 - **Garage car** — a car piece bound to a presence `binary_sensor`. When the bay is empty the car renders **ghosted** (translucent, dashed in 2D); present or unbound, it's solid. Bind EV charging status to it (or a nearby charger) to show a charge bolt with the state of charge.
 - **EV charger** — a charging post with a state-colored port LED (charging, full, error, idle) resolved defensively from whatever your charger reports. Cars within range of a charging post show a green port glow.
-- **Mailbox** — a curbside box. Bind a package-count sensor to float a count badge and raise the flag when mail arrives, and a lid `binary_sensor` to tilt the lid open.
+- **Mailbox** — a classic curbside tunnel box on a wooden post. Bind a package-count sensor to float a count badge when mail arrives, and a flag `binary_sensor` to raise the red side flag (up = vertical above the roof, down = resting along the side, just like the real thing).
 
 ### Media & now-playing
 

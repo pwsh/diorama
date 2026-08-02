@@ -5045,16 +5045,15 @@ function drawFurniture(ctx: CanvasRenderingContext2D, p: Planner, view: View,
     // decorations edge (backrest, headboard, pillows). The functional FRONT
     // (cabinet doors/pulls, TV screens, seat openings, faces — local -Z = world
     // -Y) is at canvas-Y +halfH.
-    // Mailbox: count > 0 raises the flag; a bound lid binary_sensor 'on' tilts
-    // the lid open (build-time per state).
-    let mailFlagUp = false, mailLidOpen = false;
+    // Mailbox: flagEntity 'on' raises the flag (outgoing-mail semantics — the
+    // SAME resolution three-renderer's updateFloor uses; countEntity only drives
+    // the badge, and nothing opens the door). The old 2D read had these swapped,
+    // so 2D and 3D disagreed on the flag whenever only one binding was set.
+    let mailFlagUp = false;
+    const mailLidOpen = false; // door stays closed (furniture-polish reconciliation)
     if (piece.kind === 'mailbox') {
       const mc = piece.mailCount;
-      if (mc?.countEntity && p.hass?.states) {
-        const cnt = parseInt(p.hass.states[mc.countEntity]?.state ?? '', 10);
-        mailFlagUp = isFinite(cnt) && cnt > 0;
-      }
-      if (mc?.flagEntity) mailLidOpen = p.effectiveState({ entity_id: mc.flagEntity })?.state === 'on';
+      if (mc?.flagEntity) mailFlagUp = p.effectiveState({ entity_id: mc.flagEntity })?.state === 'on';
     }
     drawFurniturePrimitiveLocal(ctx, piece, halfW, halfH, customObjects, binFull,
                                 { ghost: vehicleGhost, mailFlagUp, mailLidOpen });
@@ -6347,33 +6346,40 @@ export function drawFurniturePrimitiveLocal(
     }
     // ── mailbox ──
     case 'mailbox': {
-      // Post-mounted box (plan view): body rect + a lid line at the front (-Y)
-      // edge + the red flag on the +X side (raised when mail is waiting).
+      // Curbside tunnel box (plan view): body rect + the door seam at the FRONT
+      // (-Y/bottom) edge + the red side flag on the +X side.
       const ghost = extra?.ghost;
-      fill(bodyFill('rgba(55,71,79,0.5)', 0.5));
+      fill(bodyFill('rgba(35,39,43,0.55)', 0.5));
       stroke('#78909c');
-      // Lid seam near the front (-Y/bottom) edge.
+      // Door seam ON the front edge (the door is a panel proud of that face).
       ctx.strokeStyle = extra?.mailLidOpen ? '#ffb74d' : '#90a4ae';
       ctx.lineWidth = extra?.mailLidOpen ? 2.5 : 1.5;
-      ctx.beginPath(); ctx.moveTo(x + 3, y + h * 0.7); ctx.lineTo(x + w - 3, y + h * 0.7); ctx.stroke();
+      const seamY = y + h - Math.max(2, h * 0.08);
+      ctx.beginPath(); ctx.moveTo(x + 3, seamY); ctx.lineTo(x + w - 3, seamY); ctx.stroke();
       // Signal flag on the +X (right) side, matching the 3D geometry: the arm
       // hinges on the side face near the FRONT (bottom edge here) and swings in
-      // the side plane between REAR-pointing (UP) and straight-DOWN.
-      //   UP   → in plan the arm+paddle run along the side toward the REAR (top).
-      //   DOWN → the arm points out of the plan, so it foreshortens to a stub at
-      //          the pivot. (A plan view genuinely cannot show "down" as length.)
-      const flagX = x + w + 2, flagPivotY = y + h * 0.80;
+      // the side plane between HORIZONTAL-REARWARD (DOWN) and VERTICAL (UP).
+      //   DOWN → the arm lies in the plan: a red line running from the pivot
+      //          toward the REAR (top), with the paddle at its rear end.
+      //   UP   → the arm stands out of the plan, so it foreshortens to a bright
+      //          blob at the pivot. (A plan view genuinely cannot show "up" as
+      //          length — the inverse of what a lowered flag shows.)
+      const flagX = x + w + 2, flagPivotY = y + h * 0.82;
       const flagUp2d = extra?.mailFlagUp === true;
-      ctx.strokeStyle = flagUp2d ? '#e53935' : '#78909c';
-      ctx.lineWidth = flagUp2d ? 3 : 2;
+      if (!flagUp2d) {
+        const armEndY = Math.max(y + 2, flagPivotY - h * 0.5);
+        const padW = Math.max(3, halfW * 0.22), padH = Math.max(3, h * 0.16);
+        ctx.strokeStyle = '#c62828';
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(flagX, flagPivotY); ctx.lineTo(flagX, armEndY); ctx.stroke();
+        ctx.fillStyle = '#c62828';
+        ctx.fillRect(flagX - padW / 2, armEndY, padW, padH);
+      }
+      // Pivot marker (always); raised, it is ALL the plan can show of the flag.
+      ctx.fillStyle = flagUp2d ? '#e53935' : '#c62828';
       ctx.beginPath();
-      ctx.moveTo(flagX, flagPivotY);
-      ctx.lineTo(flagX, flagUp2d ? y + h * 0.08 : flagPivotY - Math.max(3, halfH * 0.12));
-      ctx.stroke();
-      // Pivot marker (always) + the paddle body along the rear half when raised.
-      ctx.fillStyle = flagUp2d ? '#e53935' : '#9e9e9e';
-      ctx.beginPath(); ctx.arc(flagX, flagPivotY, Math.max(1.6, halfW * 0.12), 0, 2 * Math.PI); ctx.fill();
-      if (flagUp2d) ctx.fillRect(flagX, y + h * 0.08, Math.max(3, halfW * 0.22), h * 0.42);
+      ctx.arc(flagX, flagPivotY, Math.max(1.6, halfW * (flagUp2d ? 0.22 : 0.12)), 0, 2 * Math.PI);
+      ctx.fill();
       if (ghost) { /* mailbox is never ghosted; kept for signature symmetry */ }
       break;
     }

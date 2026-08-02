@@ -6368,11 +6368,11 @@ export class ThreeDRenderer {
         evColor = hexToInt(evStatusColor(status));
         if (status === 'charging') evCharging = true;   // pulse the port glow
       }
-      // Mailbox (furniture-polish reconciliation): flagEntity is the
-      // OUTGOING-mail / waiting signal — 'on' raises the flag STRAIGHT UP; else
-      // it rests DOWN (pole horizontal, panel hanging). countEntity > 0 shows
-      // only the count badge (never the flag). The lid stays CLOSED always (its
-      // former driver, flagEntity, now means "flag up").
+      // Mailbox: flagEntity is the OUTGOING-mail / waiting signal — 'on' stands
+      // the flag UP (arm vertical, stepped paddle above the roofline); else it
+      // rests DOWN (arm horizontal along the box side, paddle toward the rear).
+      // countEntity > 0 shows only the count badge (never the flag). The front
+      // door stays CLOSED always (its former driver, flagEntity, means "flag up").
       let mailFlagUp = false; let mailCountLabel: string | undefined;
       if (fu.kind === 'mailbox') {
         const mc = fu.mailCount;
@@ -11099,70 +11099,135 @@ export class ThreeDRenderer {
       }
       // ── mailbox ───────────────────────────────────────────────────────────
       case 'mailbox': {
-        // Post-mounted box: a thin post + a box body with a rounded (half-cyl)
-        // top + a hinged front lid + a red side flag. Front (door) = local -Z.
-        const boxH = HT * 0.28, boxTopY = HT - boxH / 2;
+        // Traditional US curbside mailbox (Gibraltar-style TUNNEL box) on a
+        // wooden post: post + platform board, a flat-sided shell capped by a
+        // half-cylinder arch, an arched front DOOR proud of the front face with
+        // a latch tab + a painted "U.S. MAIL" plate, an arched rear cap, and the
+        // red signal flag on the +X side. Front (door) = local −Z. Everything is
+        // a proportion of (W, D, HT) so a resized piece stays in proportion.
+        const R = W / 2;                                       // arch radius
+        const SH = Math.max(40, Math.min(W, HT * 0.35) - R);   // side-wall height
+        const BH = SH + R;                                     // total body height
+        const bodyBase = Math.max(0, HT - BH);                 // body underside
+        const springline = HT - R;                             // arch starts here
+        const L = D * 0.96;                                    // body length (Z)
+        // Half-cylinder helper: the (z, y) rotation pair lays a thetaLength-π
+        // cylinder along Z with its FLAT cut face DOWN, so it reads as an arch.
+        const mkArch = (rad: number, len: number, mat: THREE.Material,
+                        py: number, pz: number) => {
+          const m = new THREE.Mesh(
+            new THREE.CylinderGeometry(rad, rad, len, 20, 1, false, 0, Math.PI), mat);
+          m.rotation.z = Math.PI / 2; m.rotation.y = Math.PI / 2;
+          m.position.set(0, py, pz);
+          grp.add(m);
+          return m;
+        };
+        // Post + the platform board the box is lag-bolted to (typical install).
         const postMat = this._mat({ color: 0x5d4037, roughness: 0.9 });
-        addBox(W * 0.34, HT - boxH, D * 0.34, postMat, 0, (HT - boxH) / 2, 0);
-        const boxMat = this._mat({ color: tint, roughness: 0.6, metalness: 0.2, side: THREE.DoubleSide });
-        addBox(W, boxH, D * 0.92, boxMat, 0, boxTopY, 0);
-        // Rounded top: a half-cylinder lying along the depth (Z) axis.
-        const arch = new THREE.Mesh(new THREE.CylinderGeometry(W / 2, W / 2, D * 0.92, 16, 1, false, 0, Math.PI), boxMat);
-        arch.rotation.z = Math.PI / 2; arch.rotation.y = Math.PI / 2;
-        arch.position.set(0, boxTopY + boxH / 2, 0);
-        grp.add(arch);
-        // Hinged front lid (a thin panel on the -Z face, hinged at its bottom).
-        // The lid stays CLOSED always (furniture-polish reconciliation): its
-        // former driver — the flag sensor — now means "outgoing-mail flag up",
-        // so no second signal opens the lid. Kept as a group (child order
-        // [lidHinge, flagArm]) for the always-closed hinge.
-        const lidHinge = new THREE.Group();
-        lidHinge.position.set(0, boxTopY - boxH / 2, -D * 0.46);
-        const lid = new THREE.Mesh(new THREE.BoxGeometry(W * 0.86, boxH * 0.86, 16),
-          this._mat({ color: new THREE.Color(tint).multiplyScalar(0.82).getHex(), roughness: 0.6 }));
-        lid.position.set(0, boxH * 0.43, 0);
-        lidHinge.add(lid);
-        grp.add(lidHinge);
-        // Red signal flag on the +X SIDE face (user-specified geometry):
+        if (bodyBase > 40) {
+          const pw = Math.min(90, W * 0.45), postH = bodyBase - 18;
+          addBox(pw, postH, pw, postMat, 0, postH / 2, 0);
+          addBox(W * 1.15, 18, D * 0.7, postMat, 0, bodyBase - 9, 0);
+        }
+        // Body: flat-sided lower shell + the arch. FrontSide (the form is solid).
+        const boxMat = this._mat({ color: tint, roughness: 0.6, metalness: 0.2 });
+        addBox(W, SH, L, boxMat, 0, bodyBase + SH / 2, 0);
+        mkArch(R, L, boxMat, springline, 0);
+        // Panel shade, used by both the door and the rear cap.
+        const panelMat = this._mat({
+          color: new THREE.Color(tint).multiplyScalar(0.85).getHex(),
+          roughness: 0.6, metalness: 0.2,
+        });
+        // Rear cap: an arch-profile back plate closing the +Z end. Inset in W and
+        // lifted 4 mm off the shell floor so no face of it is coplanar-and-facing
+        // the same way as a shell face (the coincident-face gotcha).
+        const CAPT = 12, capRectH = SH - 4;
+        addBox(W * 0.96, capRectH, CAPT, panelMat,
+               0, bodyBase + 4 + capRectH / 2, L / 2 + CAPT / 2).userData.mailRearCap = true;
+        mkArch(R * 0.96, CAPT, panelMat, springline, L / 2 + CAPT / 2)
+          .userData.mailRearCap = true;
+        // Front door: an arched panel PROUD of the front face (its back abuts the
+        // shell, its face stands DT mm forward). It stays permanently CLOSED —
+        // the flag sensor means "outgoing mail", never "door open" — but it keeps
+        // living in a Group so the child order [door, flag] is stable.
+        const DT = 14;
+        const doorGrp = new THREE.Group();
+        doorGrp.position.set(0, 0, -L / 2 - DT / 2);
+        const doorRect = new THREE.Mesh(new THREE.BoxGeometry(W * 0.94, SH - 4, DT), panelMat);
+        doorRect.position.set(0, bodyBase + 4 + (SH - 4) / 2, 0);
+        doorGrp.add(doorRect);
+        const doorArch = new THREE.Mesh(
+          new THREE.CylinderGeometry(R * 0.94, R * 0.94, DT, 20, 1, false, 0, Math.PI), panelMat);
+        doorArch.rotation.z = Math.PI / 2; doorArch.rotation.y = Math.PI / 2;
+        doorArch.position.set(0, springline, 0);
+        doorArch.userData.mailDoorArch = true;
+        doorGrp.add(doorArch);
+        // Latch tab at the door crest, standing proud of the panel and above the
+        // roofline — the most recognizable detail on the real box.
+        const latch = new THREE.Mesh(new THREE.BoxGeometry(Math.max(18, W * 0.12), 34, 18),
+          this._mat({ color: 0xb0bec5, metalness: 0.6, roughness: 0.35 }));
+        latch.position.set(0, HT + 5, -DT / 2 - 2);
+        latch.userData.mailLatch = true;
+        doorGrp.add(latch);
+        // "U.S. MAIL" plate: a crisp canvas-painted DECAL PLANE (house style —
+        // never a texture map on the flat-toon body), letters-only on a
+        // transparent canvas, 2 mm proud of the door face. Flat MeshBasicMaterial
+        // is the documented _mat() exemption for painted text; the per-build
+        // CanvasTexture is freed by the _floorGroup's _disposeSpriteMaps pairing
+        // through userData.textPlane.
+        const plateTex = this._mailPlateTexture();
+        if (plateTex) {
+          const plateW = W * 0.8;
+          const plate = new THREE.Mesh(new THREE.PlaneGeometry(plateW, plateW * 0.25),
+            new THREE.MeshBasicMaterial({ map: plateTex, transparent: true, depthWrite: false }));
+          plate.rotation.y = Math.PI;              // face the front (−Z), un-mirrored
+          plate.position.set(0, bodyBase + SH * 0.45, -DT / 2 - 2);
+          plate.renderOrder = 1;
+          plate.userData = { textPlane: true, outlineSkip: true, mailPlate: true };
+          doorGrp.add(plate);
+        }
+        grp.add(doorGrp);
+        // Red signal flag on the +X SIDE face. Reference-photo geometry:
         //   • the paddle plane is ALWAYS parallel to that side face — the paddle
         //     is thin in X, and the arm's only rotation is about the X axis, so
         //     nothing it does can ever tip the paddle out of the x ≈ const plane.
-        //   • the pivot sits on the side face near the FRONT (front = local −Z).
-        //   • UP   (flagEntity 'on') → the arm points at the REAR: horizontal,
-        //     along local +Z. Authored pose, rotation.x = 0.
-        //   • DOWN (default) → the arm points STRAIGHT DOWN (world −Y).
-        // Rx(π/2) maps local +Z → −Y, so the existing blend mapping
-        // rotation.x = (π/2)·(1−blend) already spans exactly those two poses
-        // (blend 1 = up/rear, blend 0 = down) — only the AUTHORED geometry
-        // changes (the arm was authored along +Y before, which gave a vertical
-        // "up" and a rearward "down": both poses inverted).
+        //   • the pivot sits on the side near the FRONT (front = local −Z), at
+        //     about the arch springline.
+        //   • DOWN (default) → the arm lies HORIZONTAL along the side with the
+        //     stepped paddle toward the REAR. That is the AUTHORED pose (arm
+        //     along local +Z, rotation.x = 0).
+        //   • UP (flagEntity 'on') → rotation.x = −π/2, which maps +Z → +Y: the
+        //     arm stands VERTICAL and the paddle rides above the roofline.
         // The eased blend is driven in _advanceMailFlags; here we seed + apply the
         // persisted value (survives _keyFloor rebuilds — a fresh fixture seeds to
-        // its target so the first render is already correct).
+        // its target so the first render is already in pose).
         const up = opts?.mailFlagUp === true;
         const flagArm = new THREE.Group();
-        const flagPivotZ = -D * 0.30;                        // on the side, near the front
-        flagArm.position.set(W / 2 + 6, boxTopY - boxH * 0.2, flagPivotZ);
-        const flagMat = this._mat({ color: up ? 0xe53935 : 0xc62828, roughness: 0.7 });
-        // Arm: a cylinder laid along local +Z (Rx(π/2) turns the +Y cylinder axis
-        // into +Z), reaching from the pivot back toward the rear face.
-        const armLen = D * 0.72;
-        const post = new THREE.Mesh(new THREE.CylinderGeometry(9, 9, armLen, 8), flagMat);
-        post.rotation.x = Math.PI / 2; post.position.z = armLen / 2;
-        flagArm.add(post);
-        // Paddle: THIN IN X (plane ∥ the side face), standing up off the arm and
-        // running along it. Offset outboard in X so it never shares a face with
-        // the arm cylinder (the coincident-face gotcha).
-        const padLen = armLen * 0.62, padH = boxH * 0.55, padT = 12;
-        const flag = new THREE.Mesh(new THREE.BoxGeometry(padT, padH, padLen), flagMat);
-        flag.position.set(12, padH / 2, armLen - padLen / 2 - 8);
-        flag.userData = { mailFlagPaddle: true };
-        flagArm.add(flag);
+        flagArm.position.set(W / 2 + 8, springline - 10, -L * 0.30);
+        // Red in BOTH poses — the reference boxes carry a red flag lowered too.
+        const flagMat = this._mat({ color: 0xe53935, roughness: 0.7 });
+        const armLen = D * 0.5;
+        const armBar = new THREE.Mesh(new THREE.BoxGeometry(10, 24, armLen), flagMat);
+        armBar.position.set(0, 0, armLen / 2);
+        flagArm.add(armBar);
+        // Stepped ⚑ silhouette at the FAR (rear) end: a tall head plus a lower
+        // step just forward of it. Both sit at x = +8 so they OVERLAP the arm bar
+        // (x ∈ [−5, 5]) instead of sharing a face with it, and the step's base is
+        // lifted 3 mm so it isn't coplanar with the head's base either.
+        const headH = W * 0.52, headL = armLen * 0.42;
+        const stepH = W * 0.20, stepL = armLen * 0.22;
+        const head = new THREE.Mesh(new THREE.BoxGeometry(10, headH, headL), flagMat);
+        head.position.set(8, headH / 2, armLen - headL / 2);
+        head.userData = { mailFlagPaddle: true };
+        flagArm.add(head);
+        const step = new THREE.Mesh(new THREE.BoxGeometry(10, stepH, stepL), flagMat);
+        step.position.set(8, 3 + stepH / 2, armLen - headL - stepL / 2);
+        step.userData = { mailFlagStep: true };
+        flagArm.add(step);
         flagArm.userData = { mailFlagArm: true, armLen };
         const flagId = fu.id ?? `mb_${Math.round(fu.x)}_${Math.round(fu.y)}`;
         if (this._mailFlagBlend[flagId] === undefined) this._mailFlagBlend[flagId] = up ? 1 : 0;
-        const fblend = this._mailFlagBlend[flagId];
-        flagArm.rotation.x = (Math.PI / 2) * (1 - fblend);   // 0 = up, π/2 = down
+        flagArm.rotation.x = -(Math.PI / 2) * this._mailFlagBlend[flagId];  // 0 = down, −π/2 = up
         grp.add(flagArm);
         this._mailFlags.push({ fuId: flagId, arm: flagArm, up });
         // Count badge sprite above the box (only when > 0). Freed by the
@@ -21732,13 +21797,36 @@ export class ThreeDRenderer {
     }
   }
 
+  // "U.S. MAIL" door plate. A letters-only TRANSPARENT canvas so the door's own
+  // toon material reads through around the glyphs — the house decal style (a
+  // painted plane, never a texture map on a flat-toon body). Deterministic: no
+  // Math.random, so a _keyFloor rebuild repaints the identical plate. The
+  // returned CanvasTexture is per-build and freed by the _floorGroup's
+  // _disposeSpriteMaps pairing (the plane carries userData.textPlane).
+  private _mailPlateTexture(): THREE.CanvasTexture | null {
+    const c = document.createElement('canvas');
+    c.width = 256; c.height = 64;
+    const g = c.getContext('2d');
+    if (!g) return null;
+    g.clearRect(0, 0, 256, 64);
+    g.fillStyle = '#e8eaed';
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    g.font = 'bold 34px "Helvetica Neue", Helvetica, Arial, sans-serif';
+    g.fillText('U.S. MAIL', 128, 34);
+    const t = new THREE.CanvasTexture(c);
+    t.needsUpdate = true;
+    return t;
+  }
+
   // Per-frame mailbox flag. Ease each arm's 0→1 blend (τ ≈ 0.25 s) toward UP
-  // (flag sensor 'on') / DOWN, applying rotation.x = (π/2)·(1−blend): blend 1 =
-  // UP (arm horizontal along local +Z = pointing at the box REAR), blend 0 =
-  // DOWN (Rx(π/2) maps +Z → −Y, arm straight down). The paddle is thin in X, and
-  // X is the rotation axis, so the paddle plane stays parallel to the mailbox's
-  // side face in every pose. Blend keyed by fixture id (survives _keyFloor).
-  // Zero alloc.
+  // (flag sensor 'on') / DOWN, applying rotation.x = −(π/2)·blend: blend 0 =
+  // DOWN, the AUTHORED pose (arm horizontal along local +Z, i.e. lying along the
+  // box side with the paddle toward the REAR); blend 1 = UP (Rx(−π/2) maps +Z →
+  // +Y, so the arm stands vertical and the paddle rides above the roofline).
+  // The paddle is thin in X, and X is the rotation axis, so the paddle plane
+  // stays parallel to the mailbox's side face in every pose. Blend keyed by
+  // fixture id (survives _keyFloor). Zero alloc.
   private _advanceMailFlags(dt: number): void {
     if (!this._mailFlags.length) return;
     const alpha = 1 - Math.exp(-dt / 0.25);
@@ -21746,7 +21834,7 @@ export class ThreeDRenderer {
       const cur = this._mailFlagBlend[mf.fuId] ?? 0;
       const next = cur + ((mf.up ? 1 : 0) - cur) * alpha;
       this._mailFlagBlend[mf.fuId] = next;
-      mf.arm.rotation.x = (Math.PI / 2) * (1 - next);
+      mf.arm.rotation.x = -(Math.PI / 2) * next;
     }
   }
 

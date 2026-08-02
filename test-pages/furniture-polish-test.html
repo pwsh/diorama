@@ -6,8 +6,9 @@
 <script type="module">
  try {
   // Furniture-polish batch — seven behaviors:
-  //  1 mailbox flag: DOWN by default / count>0 (pole horizontal, rotation.x~π/2),
-  //    UP on flagEntity 'on' (rotation.x~0); eased blend survives rebuild.
+  //  1 mailbox flag: DOWN by default / count>0 (arm horizontal along the box
+  //    side, the AUTHORED pose, rotation.x~0), UP on flagEntity 'on' (arm
+  //    vertical, rotation.x~-π/2); eased blend survives rebuild.
   //  2 bird_bath: translucent blue water disc just below the rim.
   //  3 swingset: 2 SitSpots, low wide seats (~450×250 @ ~350), occupied seat
   //    pivot oscillates while unoccupied stays ~still, seated rig rides the swing.
@@ -57,16 +58,17 @@
     const flagUp = groupsOf(findByFixtureId(r._floorGroup, 'm_up'))[1];
     const flagCount = groupsOf(findByFixtureId(r._floorGroup, 'm_count'))[1];
     const flagDown = groupsOf(findByFixtureId(r._floorGroup, 'm_down'))[1];
-    const lidUp = groupsOf(findByFixtureId(r._floorGroup, 'm_up'))[0];
-    assert('mailbox: flagEntity on → flag UP (rotation.x ~ 0)', flagUp && Math.abs(flagUp.rotation.x) < 0.02, flagUp ? `rx=${flagUp.rotation.x.toFixed(2)}` : 'no arm');
-    assert('mailbox: count>0 alone keeps flag DOWN (rotation.x ~ π/2) + shows badge',
-      flagCount && flagCount.rotation.x > 1.4 && spritesOf(findByFixtureId(r._floorGroup, 'm_count')).length >= 1,
+    const doorUp = groupsOf(findByFixtureId(r._floorGroup, 'm_up'))[0];
+    const HALF_PI = Math.PI / 2;
+    assert('mailbox: flagEntity on → flag UP (arm vertical, rotation.x ~ -π/2)', flagUp && Math.abs(flagUp.rotation.x + HALF_PI) < 0.02, flagUp ? `rx=${flagUp.rotation.x.toFixed(2)}` : 'no arm');
+    assert('mailbox: count>0 alone keeps flag DOWN (rotation.x ~ 0) + shows badge',
+      flagCount && Math.abs(flagCount.rotation.x) < 0.02 && spritesOf(findByFixtureId(r._floorGroup, 'm_count')).length >= 1,
       flagCount ? `rx=${flagCount.rotation.x.toFixed(2)}` : '');
-    assert('mailbox: default flag DOWN (pole horizontal)', flagDown && flagDown.rotation.x > 1.4, flagDown ? `rx=${flagDown.rotation.x.toFixed(2)}` : '');
-    assert('mailbox: lid stays CLOSED (rotation.x ~ 0)', lidUp && Math.abs(lidUp.rotation.x) < 0.02, lidUp ? `rx=${lidUp.rotation.x.toFixed(2)}` : '');
+    assert('mailbox: default flag DOWN (arm horizontal along the side)', flagDown && Math.abs(flagDown.rotation.x) < 0.02, flagDown ? `rx=${flagDown.rotation.x.toFixed(2)}` : '');
+    assert('mailbox: front door stays CLOSED (rotation.x ~ 0)', doorUp && Math.abs(doorUp.rotation.x) < 0.02, doorUp ? `rx=${doorUp.rotation.x.toFixed(2)}` : '');
 
-    // Eased transition + survives rebuild: build DOWN (seeds blend 0), then rebuild
-    // with flag ON (blend NOT reseeded) → rx eases from π/2 toward 0.
+    // Eased transition + survives rebuild: build DOWN (seeds blend 0, rx = 0),
+    // then rebuild with flag ON (blend NOT reseeded) → rx eases toward −π/2.
     const mb = { id: 'm_e', x: 1000, y: 3000, w: 250, h: 350, kind: 'mailbox', mailCount: { flagEntity: 'binary_sensor.f' } };
     build([mb], { 'binary_sensor.f': { state: 'off', attributes: {} } });
     const rx0 = groupsOf(findByFixtureId(r._floorGroup, 'm_e'))[1].rotation.x;
@@ -75,7 +77,7 @@
     advance(120, 0.033, []);                                                       // ~4 s ease
     const rxAfter = groupsOf(findByFixtureId(r._floorGroup, 'm_e'))[1].rotation.x;
     assert('mailbox: flag blend eases up on transition (survives rebuild)',
-      rx0 > 1.4 && rxMid > 1.4 && rxAfter < rx0 - 0.3,
+      Math.abs(rx0) < 0.02 && Math.abs(rxMid) < 0.02 && rxAfter < rx0 - 0.3,
       `down=${rx0.toFixed(2)} afterRebuild=${rxMid.toFixed(2)} eased=${rxAfter.toFixed(2)}`);
   }
 

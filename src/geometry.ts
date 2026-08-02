@@ -2653,9 +2653,12 @@ export const FURNITURE_KINDS: Record<FurnitureKind, FurnitureKindDef> = {
   // Decorative boulder cluster — ordinary nav-blocking outdoor piece (no binding,
   // no activity, no special nav exemption). 2–4 overlapping grey shapes.
   rock_cluster:  { label: 'Rock cluster',  w: 800,  h: 600,  ht: 500,  back: 'none', color: 0x8b8f93, cat: 'outdoor', frontArrow: false },
-  // Post-mounted mail/parcel box. mailCount.countEntity > 0 raises the flag +
-  // floats a count badge; flagEntity 'on' tilts the lid open. Front (door) = -Z.
-  mailbox:       { label: 'Mailbox',       w: 250,  h: 350,  ht: 1100, back: 'none', color: 0x37474f, cat: 'outdoor' },
+  // Post-mounted curbside mail box — a traditional tunnel box (arched roof,
+  // arched front door) proportioned like the real thing: ~2.4× longer than wide,
+  // near-black (pure black would kill the toon bands). Front (door) = -Z.
+  // mailCount.countEntity > 0 floats a count badge; flagEntity 'on' stands the
+  // side flag UP (arm vertical) — otherwise it lies horizontal along the side.
+  mailbox:       { label: 'Mailbox',       w: 220,  h: 520,  ht: 1150, back: 'none', color: 0x23272b, cat: 'outdoor' },
   // Vehicle / garage. Car binds a binary_sensor (presence): bound off = ghosted
   // "away", on = solid, unbound = always solid. ev_charger is a wall-post EVSE.
   car:           { label: 'Car',           w: 1850, h: 4800, ht: 1450, back: 'none', color: 0x37516b, cat: 'vehicle' },

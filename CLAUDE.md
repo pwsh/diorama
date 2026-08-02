@@ -1188,24 +1188,40 @@ The **`vehicle` cat** (new; `furnitureCat` optgroup "Vehicle / garage") groups
   `_evPulses`, pulsed per frame by `_advanceEvPulses` (fireplace-flicker idiom;
   reset each `updateFloor` like `_speakerPulses`).
 - **Mail/packages badge** (`Furniture.mailCount?: {countEntity?; flagEntity?}` on
-  `mailbox` ~250×350×1100 post box): `countEntity` (Mail-and-Packages numeric
-  sensor) > 0 → floating count badge (2D chip + 3D `_makeTextSprite`, freed by
-  the `_floorGroup` `_disposeSpriteMaps` pairing) + the flag raised; `flagEntity`
-  (binary_sensor lid) `'on'` tilts the lid open (build-time). Zero/unbound =
-  plain closed mailbox, flag down, no badge. **Flag geometry (2026-07-30,
-  user-specified)**: arm+paddle in a pivot group on the +X SIDE face near the
-  front, arm authored along local +Z, pivot rotates about X only — so the
-  paddle plane stays PARALLEL to the side in every pose by construction; UP =
-  arm toward the REAR (+Z), DOWN = `Rx(π/2)` = straight down (the old build
-  authored the arm along +Y — both poses inverted). Tags
-  `userData.mailFlagArm`/`mailFlagPaddle`.
+  `mailbox` — **rebuilt 2026-08-01 from reference photos** as a Gibraltar-style
+  tunnel box, defaults 220×520×1150 near-black `0x23272b`): `countEntity`
+  (Mail-and-Packages numeric sensor) > 0 → floating count badge ONLY (2D chip +
+  3D `_makeTextSprite`, freed by the `_floorGroup` `_disposeSpriteMaps`
+  pairing); `flagEntity` (binary_sensor, "outgoing mail") `'on'` raises the
+  FLAG; **nothing opens the door** (permanently closed) — and the 2D resolver in
+  `drawFurniture` now mirrors this exactly (it used to swap the two bindings:
+  count raised the 2D flag, flagEntity "opened" the 2D lid — a real 2D/3D
+  divergence, fixed). Zero/unbound = flag down, no badge. **Body**: wooden post
+  + platform board + tunnel (rect shell + half-cyl arch, crest at HT, arch
+  radius W/2), flush arched REAR cap, full arched front DOOR panel proud ~7 mm
+  (rect + arch both at 0.94× so the tangent is consistent), latch tab standing
+  ~22 mm ABOVE the crest, and a letters-only "U.S. MAIL" canvas decal plane on
+  the door (`userData.textPlane` + `outlineSkip`, flat `MeshBasicMaterial` —
+  documented `_mat()` exemption). **Flag geometry (2026-08-01,
+  reference-photo-corrected — supersedes the 2026-07-30 spec, which had the
+  poses backwards)**: pivot group on the +X side near the FRONT at the arch
+  springline; arm authored along local +Z = the DOWN pose (horizontal, resting
+  along the side, stepped ⚑ paddle — head + lower step box — toward the REAR);
+  UP = `rotation.x = −π/2` (`Rx(−90°)` maps +Z→+Y: arm vertical, paddle
+  standing ABOVE the roofline). `_advanceMailFlags` writes
+  `rotation.x = −(π/2)·blend` (τ 0.25 s, keyed by fixture id). The paddle is
+  thin in X and X is the only rotation axis, so the paddle plane stays PARALLEL
+  to the side in every pose by construction; red `0xe53935` in BOTH poses. 2D
+  plan glyph matches: DOWN = visible red arm+paddle along the +X side toward
+  the rear; UP = foreshortened bright paddle blob at the pivot. Tags
+  `userData.mailFlagArm`/`mailFlagPaddle` (head box only).
 - **Hash + keys**: three-view's appliance-state hash predicate widened to
   `isVehicleKind || ev_charger || mailbox || evCharger || mailCount`; it folds
-  the car presence (`on`), ev status+power bucket, and mail count+lid states so
+  the car presence (`on`), ev status+power bucket, and mail count+flag states so
   `_keyFloor` rebuilds the whole floor on any change (which also refreshes an
   adjacent car's indicator when a charger's status flips). Sidebar: car gets the
   generic bind row (binary_sensor); car+ev_charger get `_evChargerRows`; mailbox
-  gets `_mailboxRows`. Test page `vehicle-mail-test.html` (`VEHICLEMAIL PASS 25/25`).
+  gets `_mailboxRows`. Test page `vehicle-mail-test.html` (`VEHICLEMAIL PASS 52/52`).
 
 ### Alert center & beacons (Alert Center feature — see `docs/research/log-events-alerting.md`)
 Surfaces HA's "needs a human's attention" streams (persistent notifications +
@@ -1949,7 +1965,7 @@ type `bathwater` + `capBathWater` — every isWetBathKind piece emits `<kind>` +
 twins on its BASE page (kitchen_sink-running lands on Appliances); toilet capture primes the
 off state then flips (the capSafety age-ramp precedent); the hand-list guard is unaffected
 (furniture counts unguarded by design). Test `bath-water-test.html` (`BATHWATER PASS 69/69`);
-vehicle-mail 39/39, robot 168/168.
+vehicle-mail 52/52, robot 168/168.
 
 ### Sinks v2 (basins, running water, fill/drain)
 Five sink kinds (`isSinkKind`, geometry.ts): `sink` (compact vanity),

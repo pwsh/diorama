@@ -1,6 +1,6 @@
 # Project status & pick-up guide
 
-Last updated: 2026-08-01, at **v0.54.0**. This is the single document to
+Last updated: 2026-08-01, at **v0.54.0** (one batch on main past it). This is the single document to
 read (alongside `CLAUDE.md`) to resume work with full context.
 
 ## Where things stand
@@ -341,6 +341,31 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Mailbox rebuilt from reference photos** (2026-08-01, user-rejected
+  the model twice — full review + ground-up rebuild, no patching;
+  unreleased — on main past v0.54.0). The complete review found the
+  FLAG POSES INVERTED (the 2026-07-30 "user-specified" spec was
+  backwards vs the photos: real UP = arm VERTICAL, stepped ⚑ paddle
+  standing above the roofline near the front; DOWN = arm horizontal
+  resting along the side, paddle toward the rear), plus a near-square
+  footprint, a stub door, a plain-rectangle paddle, an open rear, and
+  a 2D/3D binding divergence. Rebuilt: Gibraltar-style tunnel
+  (defaults 220×520×1150 near-black; wooden post + platform board;
+  rect shell + half-cyl arch; flush arched rear cap; full arched
+  front door proud ~7 mm, rect+arch both 0.94× for a consistent
+  tangent; latch tab ~22 mm above the crest; letters-only "U.S. MAIL"
+  canvas decal plane, textPlane+outlineSkip). Flag: authored DOWN
+  along +Z, UP = Rx(−π/2); _advanceMailFlags writes −(π/2)·blend;
+  paddle-parallel-to-side invariant preserved; red both poses. 2D
+  glyph flipped to match (down = visible arm along the side, up =
+  foreshortened blob at the pivot) AND the 2D resolver bug fixed —
+  drawFurniture had the bindings swapped (countEntity raised the 2D
+  flag, flagEntity "opened" a lid) vs 3D's reconciled semantics
+  (flagEntity → flag, count → badge only, door never opens); the
+  user guide's stale copy corrected. 6 mailbox-bearing floorplan
+  envelopes regenerated (date-only diffs reverted). Tests:
+  vehicle-mail 52/52 (+13), furniture-polish 28/28 (flipped pins),
+  bath-water 69/69, floorplans:build 425/425.
 - **Death Star moon** (2026-08-01, user-requested "space station"
   checkbox; released in v0.54.0).
   WeatherConfig.moonStation: the moon disc paints as a battle

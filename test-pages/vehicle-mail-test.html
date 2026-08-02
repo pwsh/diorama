@@ -11,8 +11,9 @@
   //            idle); charging registers a per-frame pulse in _evPulses
   //   chg    — a charging charger within ~1500 mm of a car adds a green port glow
   //            to the car + pulses; far charger does not
-  //   mail   — mailbox count > 0 raises the flag + floats a badge sprite; lid
-  //            sensor 'on' tilts the lid open; unbound = closed/flag-down/no badge
+  //   mail   — mailbox flagEntity 'on' raises the flag (vertical, paddle above
+  //            the roof); count > 0 floats a badge sprite only; the door stays
+  //            closed; unbound = flag-down/no badge
   //   dispose— the badge sprite's CanvasTexture is freed on rebuild
   const mod = await import('./assets/three-renderer.js?v=' + Date.now());
   const r = new mod.ThreeDRenderer(document.getElementById('c'));
@@ -114,25 +115,36 @@
     assert('only the far charger pulses (_evPulses == 1)', r._evPulses.length === 1, `pulses=${r._evPulses.length}`);
   }
 
-  // ── mailbox: badge + flag + lid (furniture-polish reconciliation) ─────────
-  // New semantics: flagEntity 'on' = outgoing-mail WAITING → flag UP, i.e. the
-  // arm horizontal pointing at the box REAR (rotation.x ~ 0); otherwise it rests
-  // DOWN, arm straight down (rotation.x ~ π/2) — and the paddle plane stays
-  // PARALLEL to the mailbox side face in both poses (asserted in world geometry
-  // below). count > 0 shows only the BADGE and never raises the flag. The lid is
-  // built CLOSED always. The blend is seeded to its target on first build so a
-  // fresh scene renders the correct pose without advancing.
+  // ── mailbox: traditional US curbside tunnel box ──────────────────────────
+  // Reference-photo geometry (the model was rebuilt against it):
+  //   • flag DOWN (default) = the AUTHORED pose — the arm lies HORIZONTAL along
+  //     the +X side, stepped paddle toward the REAR, rotation.x ~ 0.
+  //   • flag UP (flagEntity 'on') = rotation.x ~ −π/2 — the arm stands VERTICAL
+  //     and the paddle rides ABOVE the roofline (crest = HT).
+  //   • the paddle plane stays PARALLEL to the box side face in BOTH poses (the
+  //     paddle is thin in X and X is the only rotation axis), and the pivot sits
+  //     on that side near the FRONT (front = local −Z).
+  //   • the body carries an arched front DOOR (proud panel + arch), a latch tab
+  //     standing above the crest, a painted "U.S. MAIL" decal plane, and an
+  //     arched REAR CAP. The flag is red in both poses.
+  // count > 0 shows only the BADGE and never raises the flag. The door is built
+  // CLOSED always. The blend is seeded to its target on first build so a fresh
+  // scene renders the correct pose without advancing.
   function testMailbox() {
     const groups = (grp) => grp.children.filter(o => o.type === 'Group');
     const sprites = (grp) => { const out = []; grp.traverse(o => { if (o.isSprite) out.push(o); }); return out; };
+    // Kind defaults (geometry.ts FURNITURE_KINDS.mailbox) — the fixtures use the
+    // real footprint so every assertion below is dimension-relative to them.
+    const MB_W = 220, MB_D = 520, MB_HT = 1150;
+    const mk = (id, x, mailCount) => ({ id, x, y: 1000, w: MB_W, h: MB_D, kind: 'mailbox', ...(mailCount ? { mailCount } : {}) });
     // mUp:    flagEntity 'on' + count 3 → flag UP + badge.
     // mCount: count 3, NO flagEntity   → flag DOWN + badge (count alone ≠ flag up).
     // mEmpty: count 0                  → flag DOWN, no badge.
     // mUnb:   unbound                  → flag DOWN, no badge.
-    const mUp    = { id: 'mb_up',    x: 1000, y: 1000, w: 250, h: 350, kind: 'mailbox', mailCount: { countEntity: 'sensor.mail', flagEntity: 'binary_sensor.flag' } };
-    const mCount = { id: 'mb_count', x: 3000, y: 1000, w: 250, h: 350, kind: 'mailbox', mailCount: { countEntity: 'sensor.mail' } };
-    const mEmpty = { id: 'mb_empty', x: 5000, y: 1000, w: 250, h: 350, kind: 'mailbox', mailCount: { countEntity: 'sensor.mail2' } };
-    const mUnb   = { id: 'mb_unb',   x: 7000, y: 1000, w: 250, h: 350, kind: 'mailbox' };
+    const mUp    = mk('mb_up',    1000, { countEntity: 'sensor.mail', flagEntity: 'binary_sensor.flag' });
+    const mCount = mk('mb_count', 3000, { countEntity: 'sensor.mail' });
+    const mEmpty = mk('mb_empty', 5000, { countEntity: 'sensor.mail2' });
+    const mUnb   = mk('mb_unb',   7000, null);
     const states = {
       'sensor.mail': { state: '3', attributes: {} }, 'binary_sensor.flag': { state: 'on', attributes: {} },
       'sensor.mail2': { state: '0', attributes: {} },
@@ -142,25 +154,24 @@
     const gCount = findByFixtureId(r._floorGroup, 'mb_count');
     const gEmpty = findByFixtureId(r._floorGroup, 'mb_empty');
     const gUnb = findByFixtureId(r._floorGroup, 'mb_unb');
-    // Group children order: [lidHinge, flagArm].
-    const lidUp = groups(gUp)[0], flagUp = groups(gUp)[1];
+    // Group children order: [doorGrp, flagArm].
+    const doorUp = groups(gUp)[0], flagUp = groups(gUp)[1];
     const flagCount = groups(gCount)[1], flagE = groups(gEmpty)[1], flagU = groups(gUnb)[1];
+    const HALF_PI = Math.PI / 2;
     assert('count > 0 floats a badge sprite', sprites(gUp).length >= 1 && sprites(gCount).length >= 1, `up=${sprites(gUp).length} count=${sprites(gCount).length}`);
     assert('count 0 shows NO badge sprite', sprites(gEmpty).length === 0, `sprites=${sprites(gEmpty).length}`);
     assert('unbound mailbox shows NO badge sprite', sprites(gUnb).length === 0);
-    assert('flag sensor on raises the flag STRAIGHT UP (rotation.x ~ 0)', flagUp && Math.abs(flagUp.rotation.x) < 0.02, flagUp ? `rx=${flagUp.rotation.x.toFixed(2)}` : '');
-    assert('count > 0 alone does NOT raise the flag (rests DOWN, arm rotation.x ~ π/2)', flagCount && flagCount.rotation.x > 1.4, flagCount ? `rx=${flagCount.rotation.x.toFixed(2)}` : '');
-    assert('no flag signal rests the flag DOWN (arm rotation.x > 1.4)', flagE && flagE.rotation.x > 1.4, flagE ? `rx=${flagE.rotation.x.toFixed(2)}` : '');
-    assert('unbound rests the flag DOWN', flagU && flagU.rotation.x > 1.4);
-    assert('lid stays CLOSED (lidHinge.rotation.x ~ 0)', lidUp && Math.abs(lidUp.rotation.x) < 0.02, lidUp ? `rx=${lidUp.rotation.x.toFixed(2)}` : '');
+    assert('flag sensor on stands the flag UP (rotation.x ~ -π/2)', flagUp && Math.abs(flagUp.rotation.x + HALF_PI) < 0.02, flagUp ? `rx=${flagUp.rotation.x.toFixed(2)}` : '');
+    assert('count > 0 alone does NOT raise the flag (rests DOWN, rotation.x ~ 0)', flagCount && Math.abs(flagCount.rotation.x) < 0.02, flagCount ? `rx=${flagCount.rotation.x.toFixed(2)}` : '');
+    assert('no flag signal rests the flag DOWN (rotation.x ~ 0)', flagE && Math.abs(flagE.rotation.x) < 0.02, flagE ? `rx=${flagE.rotation.x.toFixed(2)}` : '');
+    assert('unbound rests the flag DOWN', flagU && Math.abs(flagU.rotation.x) < 0.02);
+    assert('front door stays CLOSED (doorGrp.rotation.x ~ 0)', doorUp && Math.abs(doorUp.rotation.x) < 0.02, doorUp ? `rx=${doorUp.rotation.x.toFixed(2)}` : '');
 
-    // ── Flag GEOMETRY (user-specified, world-measured) ─────────────────────
-    // The paddle plane must stay PARALLEL to the mailbox's side face in every
-    // pose, the pivot must sit ON that side face near the FRONT, and the arm
-    // must point at the REAR when up / straight DOWN when down. Measured in the
-    // furniture group's own frame (so the scene's X mirror + piece yaw drop out).
+    // ── Flag + body GEOMETRY (world-measured in the piece's own frame, so the
+    //    scene's X mirror + piece yaw drop out) ─────────────────────────────
     r._scene.updateMatrixWorld(true);
-    const findFlag = (g, key) => { let f = null; g.traverse(o => { if (!f && o.userData && o.userData[key]) f = o; }); return f; };
+    const findTag = (g, key) => { let f = null; g.traverse(o => { if (!f && o.userData && o.userData[key]) f = o; }); return f; };
+    const allTagged = (g, key) => { const out = []; g.traverse(o => { if (o.userData && o.userData[key]) out.push(o); }); return out; };
     // A scratch Vector3 borrowed off a real object (avoids importing three).
     const vec = (src, x, y, z) => { const t = src.position.clone(); t.set(x, y, z); return t; };
     const inFrame = (g, obj, x, y, z) => g.worldToLocal(obj.localToWorld(vec(obj, x, y, z)));
@@ -170,9 +181,8 @@
       const n = Math.hypot(dx, dy, dz) || 1;
       return { x: dx / n, y: dy / n, z: dz / n };
     };
-    const MB_W = 250, MB_D = 350;
     for (const [name, g, wantUp] of [['UP', gUp, true], ['DOWN', gEmpty, false]]) {
-      const arm = findFlag(g, 'mailFlagArm'), pad = findFlag(g, 'mailFlagPaddle');
+      const arm = findTag(g, 'mailFlagArm'), pad = findTag(g, 'mailFlagPaddle');
       if (!arm || !pad) { assert(`mailbox ${name}: flag arm + paddle present`, false); continue; }
       assert(`mailbox ${name}: flag arm + paddle present`, true);
       // 1. Paddle plane ∥ the side face: its THIN axis (local X) is the side
@@ -190,30 +200,75 @@
       assert(`mailbox ${name}: pivot is on the side face near the FRONT (z < 0)`,
         piv.x > MB_W / 2 && piv.z < 0 && piv.z > -MB_D / 2,
         `pivot=(${piv.x.toFixed(1)},${piv.y.toFixed(1)},${piv.z.toFixed(1)})`);
-      // 4. Arm direction: UP → +Z (rear, horizontal); DOWN → −Y (straight down).
+      // 4. Arm direction + paddle height vs the roofline.
       const dir = axisIn(g, arm, 0, 0, 1);
+      const tip = inFrame(g, arm, 0, 0, arm.userData.armLen);
       if (wantUp) {
-        assert('mailbox UP: arm points at the REAR (+Z), horizontal',
+        assert('mailbox UP: arm stands VERTICAL (+Y)',
+          dir.y > 0.999 && Math.abs(dir.z) < 0.03 && Math.abs(dir.x) < 1e-6,
+          `dir=(${dir.x.toFixed(3)},${dir.y.toFixed(3)},${dir.z.toFixed(3)})`);
+        assert('mailbox UP: the arm tip stands ABOVE its pivot',
+          tip.y > piv.y + 100, `tipY=${tip.y.toFixed(1)} pivotY=${piv.y.toFixed(1)}`);
+        assert('mailbox UP: the paddle head rides ABOVE the roofline (y > HT)',
+          c.y > MB_HT, `padY=${c.y.toFixed(1)} crest=${MB_HT}`);
+      } else {
+        assert('mailbox DOWN: arm lies HORIZONTAL pointing at the REAR (+Z)',
           dir.z > 0.999 && Math.abs(dir.y) < 0.03 && Math.abs(dir.x) < 1e-6,
           `dir=(${dir.x.toFixed(3)},${dir.y.toFixed(3)},${dir.z.toFixed(3)})`);
-        const tip = inFrame(g, arm, 0, 0, arm.userData.armLen);
-        assert('mailbox UP: the arm reaches back toward the rear face without overshooting it',
-          tip.z > piv.z && tip.z <= MB_D / 2 + 1, `tipZ=${tip.z.toFixed(1)} rear=${MB_D / 2}`);
-      } else {
-        assert('mailbox DOWN: arm points STRAIGHT DOWN (−Y)',
-          dir.y < -0.999 && Math.abs(dir.z) < 0.03 && Math.abs(dir.x) < 1e-6,
-          `dir=(${dir.x.toFixed(3)},${dir.y.toFixed(3)},${dir.z.toFixed(3)})`);
-        const tip = inFrame(g, arm, 0, 0, arm.userData.armLen);
-        assert('mailbox DOWN: the arm tip hangs below its pivot',
-          tip.y < piv.y - 100, `tipY=${tip.y.toFixed(1)} pivotY=${piv.y.toFixed(1)}`);
+        assert('mailbox DOWN: the arm tip runs rearward at the pivot height',
+          tip.z > piv.z + 100 && Math.abs(tip.y - piv.y) < 1,
+          `tip=(${tip.y.toFixed(1)},${tip.z.toFixed(1)}) pivot=(${piv.y.toFixed(1)},${piv.z.toFixed(1)})`);
+        assert('mailbox DOWN: the paddle head sits BELOW the roofline (y < HT)',
+          c.y < MB_HT, `padY=${c.y.toFixed(1)} crest=${MB_HT}`);
       }
+      // 5. Stepped paddle: a tall head + a lower step, both on the arm, both red.
+      const step = findTag(g, 'mailFlagStep');
+      assert(`mailbox ${name}: paddle is STEPPED (head + a lower step box)`,
+        !!step && step.geometry.parameters.height < pad.geometry.parameters.height,
+        step ? `head=${pad.geometry.parameters.height.toFixed(0)} step=${step.geometry.parameters.height.toFixed(0)}` : 'no step');
+      // Red in BOTH poses (the old build dimmed the lowered flag). Compared
+      // channel-wise, not against the literal: _mat() pushes saturation.
+      const ph = pad.material.color.getHex();
+      assert(`mailbox ${name}: flag is RED in this pose (head + step share it)`,
+        chMax(ph) === 'r' && ((ph >> 16) & 255) > 200 && (ph & 255) < 80
+        && !!step && step.material.color.getHex() === ph,
+        `head=#${pad.material.color.getHexString()}`);
     }
-    // 5. The paddle's side-offset is IDENTICAL up vs down (pivot on the plane).
+    // 6. The paddle's side-offset is IDENTICAL up vs down (pivot on the plane).
     {
-      const pu = findFlag(gUp, 'mailFlagPaddle'), pd = findFlag(gEmpty, 'mailFlagPaddle');
+      const pu = findTag(gUp, 'mailFlagPaddle'), pd = findTag(gEmpty, 'mailFlagPaddle');
       const xu = inFrame(gUp, pu, 0, 0, 0).x, xd = inFrame(gEmpty, pd, 0, 0, 0).x;
       assert('mailbox: paddle stays on the same side plane in both poses',
         Math.abs(xu - xd) < 1e-6, `up=${xu.toFixed(3)} down=${xd.toFixed(3)}`);
+    }
+    // 7. Body detailing: arched door at the FRONT, latch above the crest, the
+    //    painted U.S. MAIL decal plane, and the arched rear cap at the BACK.
+    {
+      const g = gEmpty;
+      const dArch = findTag(g, 'mailDoorArch');
+      assert('mailbox: arched DOOR panel is present at the front (z < -D/2)',
+        !!dArch && inFrame(g, dArch, 0, 0, 0).z < -MB_D * 0.4,
+        dArch ? `z=${inFrame(g, dArch, 0, 0, 0).z.toFixed(1)}` : 'missing');
+      assert('mailbox: the door arch is inset just inside the box arch (0.94·W/2)',
+        !!dArch && Math.abs(dArch.geometry.parameters.radiusTop - MB_W / 2 * 0.94) < 1,
+        dArch ? `r=${dArch.geometry.parameters.radiusTop.toFixed(1)}` : '');
+      const latch = findTag(g, 'mailLatch');
+      const latchTop = latch ? inFrame(g, latch, 0, latch.geometry.parameters.height / 2, 0).y : 0;
+      assert('mailbox: latch tab stands ABOVE the crest', !!latch && latchTop > MB_HT,
+        latch ? `top=${latchTop.toFixed(1)} crest=${MB_HT}` : 'missing');
+      assert('mailbox: latch tab is proud of the door face (z < -D/2)',
+        !!latch && inFrame(g, latch, 0, 0, 0).z < -MB_D * 0.4);
+      const plate = findTag(g, 'mailPlate');
+      assert('mailbox: "U.S. MAIL" decal plane is tagged userData.textPlane',
+        !!plate && plate.userData.textPlane === true && !!plate.material.map);
+      assert('mailbox: the decal plane is a FLAT unlit material, outline-skipped',
+        !!plate && plate.material.type === 'MeshBasicMaterial' && plate.userData.outlineSkip === true,
+        plate ? plate.material.type : 'missing');
+      const caps = allTagged(g, 'mailRearCap');
+      const capArch = caps.find(o => o.geometry.type === 'CylinderGeometry');
+      assert('mailbox: rear cap closes the +Z end (arch-profile mesh at z > 0)',
+        caps.length === 2 && !!capArch && inFrame(g, capArch, 0, 0, 0).z > MB_D * 0.4,
+        `caps=${caps.length}` + (capArch ? ` z=${inFrame(g, capArch, 0, 0, 0).z.toFixed(1)}` : ''));
     }
   }
 
