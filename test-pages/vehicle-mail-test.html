@@ -290,6 +290,26 @@
         caps.length === 2 && !!capArch && inFrame(g, capArch, 0, 0, 0).z > MB_D * 0.4,
         `caps=${caps.length}` + (capArch ? ` z=${inFrame(g, capArch, 0, 0, 0).z.toFixed(1)}` : ''));
     }
+
+    // 8. Click-to-toggle wiring: the mailbox group is raycast-clickable via the
+    //    'media' tag (single click → toggleItem; dblclick is guarded off in
+    //    three-view), an UNBOUND mailbox's click-flipped localState raises the
+    //    flag, and a bound flag sensor stays authoritative over localState.
+    //    (Fresh build — the _mediaClickables list resets per updateFloor.)
+    {
+      const mLoc  = { id: 'mb_loc',   x: 1000, y: 3500, w: MB_W, h: MB_D, kind: 'mailbox', localState: 'on' };
+      const mLock = { id: 'mb_lockd', x: 3000, y: 3500, w: MB_W, h: MB_D, kind: 'mailbox', localState: 'on', mailCount: { flagEntity: 'binary_sensor.flag2' } };
+      build([mLoc, mLock], { 'binary_sensor.flag2': { state: 'off', attributes: {} } });
+      const gLoc = findByFixtureId(r._floorGroup, 'mb_loc');
+      assert('mailbox: group is click-tagged (userData.kind = media, in _mediaClickables)',
+        !!gLoc && gLoc.userData.kind === 'media' && r._mediaClickables.includes(gLoc));
+      const fLoc = groups(gLoc)[1];
+      const fLock = groups(findByFixtureId(r._floorGroup, 'mb_lockd'))[1];
+      assert('mailbox: unbound localState on raises the flag (click-toggle path)',
+        fLoc && Math.abs(fLoc.rotation.x + HALF_PI) < 0.02, fLoc ? `rx=${fLoc.rotation.x.toFixed(2)}` : '');
+      assert('mailbox: a bound flag sensor is authoritative over localState (off wins)',
+        fLock && Math.abs(fLock.rotation.x) < 0.02, fLock ? `rx=${fLock.rotation.x.toFixed(2)}` : '');
+    }
   }
 
   // ── dispose probe: badge CanvasTexture freed on rebuild ──────────────────

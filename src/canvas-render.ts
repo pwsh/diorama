@@ -5053,7 +5053,10 @@ function drawFurniture(ctx: CanvasRenderingContext2D, p: Planner, view: View,
     const mailLidOpen = false; // door stays closed (furniture-polish reconciliation)
     if (piece.kind === 'mailbox') {
       const mc = piece.mailCount;
+      // Bound flag sensor is authoritative; else the click-toggled localState
+      // raises the flag (unbound-interactive pattern — same resolve as 3D).
       if (mc?.flagEntity) mailFlagUp = p.effectiveState({ entity_id: mc.flagEntity })?.state === 'on';
+      else mailFlagUp = piece.localState === 'on' || piece.localState === 'playing';
     }
     drawFurniturePrimitiveLocal(ctx, piece, halfW, halfH, customObjects, binFull,
                                 { ghost: vehicleGhost, mailFlagUp, mailLidOpen });

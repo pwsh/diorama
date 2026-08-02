@@ -504,6 +504,11 @@ export class ThreeView extends LitElement {
       // unbound TVs aren't raycast targets, but kept for symmetry).
       if (kind === 'media') {
         const fu0 = f.furniture.find(x => x.id === fixtureId);
+        // Mailbox reuses the 'media' click tag (single click raises/lowers the
+        // flag via toggleItem) but its REAL bindings (count + flag sensors)
+        // live on mailCount in the sidebar's _mailboxRows, not entity_id — so
+        // dblclick is a deliberate no-op, never a picker.
+        if (fu0 && fu0.kind === 'mailbox') return;
         // Bins reuse the 'media' click tag but bind a binary_sensor ('on'/'full'
         // = full), not a media_player. Single click already toggles full/empty.
         if (fu0 && isBinKind(fu0.kind)) {

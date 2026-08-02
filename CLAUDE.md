@@ -1196,7 +1196,15 @@ The **`vehicle` cat** (new; `furnitureCat` optgroup "Vehicle / garage") groups
   FLAG; **nothing opens the door** (permanently closed) — and the 2D resolver in
   `drawFurniture` now mirrors this exactly (it used to swap the two bindings:
   count raised the 2D flag, flagEntity "opened" the 2D lid — a real 2D/3D
-  divergence, fixed). Zero/unbound = flag down, no badge. **Body**: wooden post
+  divergence, fixed). **Click-to-toggle (2026-08-01, user-reported)**: the 3D
+  group is tagged `kind:'media'` (+`_mediaClickables`, the bin recipe) and the
+  2D `binClick` branch + kiosk click include the mailbox, so a click →
+  `toggleItem` flips `localState`, which raises/lowers the flag on an UNBOUND
+  mailbox — both resolvers fall back `flagEntity ? sensor : localState==='on'`
+  (a bound flag sensor stays authoritative; the local flip is then inert); 3D
+  dblclick is a deliberate no-op (bindings live on `mailCount` in the
+  sidebar's `_mailboxRows`, not `entity_id`). Zero/unbound with no localState
+  = flag down, no badge. **Body**: wooden post
   + platform board + tunnel (rect shell + half-cyl arch, crest at HT, arch
   radius W/2), flush arched REAR cap, full arched front DOOR panel proud ~7 mm
   (rect + arch both at 0.94× so the tangent is consistent), latch tab standing
@@ -1236,7 +1244,7 @@ The **`vehicle` cat** (new; `furnitureCat` optgroup "Vehicle / garage") groups
   `_keyFloor` rebuilds the whole floor on any change (which also refreshes an
   adjacent car's indicator when a charger's status flips). Sidebar: car gets the
   generic bind row (binary_sensor); car+ev_charger get `_evChargerRows`; mailbox
-  gets `_mailboxRows`. Test page `vehicle-mail-test.html` (`VEHICLEMAIL PASS 54/54`).
+  gets `_mailboxRows`. Test page `vehicle-mail-test.html` (`VEHICLEMAIL PASS 57/57`).
 
 ### Alert center & beacons (Alert Center feature — see `docs/research/log-events-alerting.md`)
 Surfaces HA's "needs a human's attention" streams (persistent notifications +
@@ -1980,7 +1988,7 @@ type `bathwater` + `capBathWater` — every isWetBathKind piece emits `<kind>` +
 twins on its BASE page (kitchen_sink-running lands on Appliances); toilet capture primes the
 off state then flips (the capSafety age-ramp precedent); the hand-list guard is unaffected
 (furniture counts unguarded by design). Test `bath-water-test.html` (`BATHWATER PASS 69/69`);
-vehicle-mail 54/54, robot 168/168.
+vehicle-mail 57/57, robot 168/168.
 
 ### Sinks v2 (basins, running water, fill/drain)
 Five sink kinds (`isSinkKind`, geometry.ts): `sink` (compact vanity),

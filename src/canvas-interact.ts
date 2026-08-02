@@ -2213,8 +2213,11 @@ export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement, e?: Mouse
         Math.hypot(piece.x - drag.start.x, piece.y - drag.start.y) < 30;
       const stoveClick = drag.kind === 'furnMove' && piece.kind === 'stove' && barelyMoved;
       // Curbside bins: a barely-moved click toggles full/empty (bound entity or
-      // unbound localState) instead of nudging the piece.
-      const binClick = drag.kind === 'furnMove' && isBinKind(piece.kind) && barelyMoved;
+      // unbound localState) instead of nudging the piece. The mailbox rides the
+      // same branch — its localState flip raises/lowers the FLAG (a bound flag
+      // sensor stays authoritative; the flip is then inert).
+      const binClick = drag.kind === 'furnMove' &&
+        (isBinKind(piece.kind) || piece.kind === 'mailbox') && barelyMoved;
       // Wet bathroom pieces (sinks / bathtub / shower / toilet): a barely-moved
       // click runs/stops the water — for the toilet it fires the flush one-shot
       // (bound entity or unbound localState) instead of nudging the piece.
@@ -2378,8 +2381,9 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
     if (fu2 && fu2.item.kind === 'stove') {
       fu2.item.doorOpen = !fu2.item.doorOpen; p.save(); p.emitConfig(); return;
     }
-    // Bins → toggle full/empty (session-only in kiosk; save() no-ops).
-    if (fu2 && isBinKind(fu2.item.kind)) { p.toggleItem(fu2.item); return; }
+    // Bins → toggle full/empty; mailbox → raise/lower the flag via localState
+    // (session-only in kiosk; save() no-ops).
+    if (fu2 && (isBinKind(fu2.item.kind) || fu2.item.kind === 'mailbox')) { p.toggleItem(fu2.item); return; }
     // Wet bathroom pieces → run/stop the water / flush (session-only in kiosk).
     if (fu2 && isWetBathKind(fu2.item.kind)) { p.toggleItem(fu2.item); return; }
     // Live aircraft → open the detail card (low priority, after all fixtures).

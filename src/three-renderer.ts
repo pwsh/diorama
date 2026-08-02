@@ -6380,7 +6380,10 @@ export class ThreeDRenderer {
           const cnt = parseInt(stateProvider(mc.countEntity)?.state ?? '', 10);
           if (isFinite(cnt) && cnt > 0) mailCountLabel = cnt > 99 ? '99+' : String(cnt);
         }
+        // A bound flag sensor is authoritative; else the click-toggled
+        // localState raises the flag (the unbound-interactive pattern).
         if (mc?.flagEntity && stateProvider) mailFlagUp = stateProvider(mc.flagEntity)?.state === 'on';
+        else mailFlagUp = fu.localState === 'on' || fu.localState === 'playing';
       }
       const doorSink: { pivot: THREE.Object3D; axis: 'x' | 'y'; openAngle: number }[] = [];
       const plantSink: { pivot: THREE.Object3D; mat: THREE.MeshToonMaterial;
@@ -6501,10 +6504,19 @@ export class ThreeDRenderer {
         grp.userData = { ...grp.userData, kind: 'media', entity_id: fu.entity_id ?? null, fixtureId: fu.id };
         this._mediaClickables.push(grp);
       }
-      // Vehicles / EV chargers / mailboxes: tag the group with its fixtureId
-      // (no `kind` → NOT raycast-clickable) so state-driven builds are locatable.
-      if (isVehicleKind(fu.kind) || fu.kind === 'ev_charger' || fu.kind === 'mailbox') {
+      // Vehicles / EV chargers: tag the group with its fixtureId (no `kind` →
+      // NOT raycast-clickable) so state-driven builds are locatable.
+      if (isVehicleKind(fu.kind) || fu.kind === 'ev_charger') {
         grp.userData = { ...grp.userData, fixtureId: fu.id };
+      }
+      // Mailbox: click-tagged like a bin ('media' → plain toggleItem). Unbound
+      // flag (no mc.flagEntity), the flipped localState raises/lowers the FLAG;
+      // with a flag sensor bound the sensor stays authoritative (the local flip
+      // is inert). Dblclick is guarded off in three-view — the flag/count
+      // bindings live in the sidebar's _mailboxRows, not on entity_id.
+      if (fu.kind === 'mailbox') {
+        grp.userData = { ...grp.userData, kind: 'media', entity_id: fu.entity_id ?? null, fixtureId: fu.id };
+        this._mediaClickables.push(grp);
       }
       // Climate/airflow appliances are click-toggle like appliances (reuse the
       // 'media' click path → toggleItem: toggleEntity when bound (climate/fan/
