@@ -366,7 +366,13 @@ instance.
   sites); (2) the down pose re-authored per photo 1 — pivot
   mid-body at −0.14·L, arm along −Z (FORWARD), head resting beside
   the latch ~30 mm proud of the door; UP = Rx(+π/2), head = the top
-  section, clearing the crest ~100 mm. 2D
+  section, clearing the crest ~100 mm. **Third pass (user-directed
+  "rotate the flag 180° along the x axis")**: the forward-pointing
+  down pose was wrong too — arm now authored along +Z (REARWARD),
+  pivot moved to −0.26·L (a quarter back, so the raised flag stands
+  near the front like photos 2–3), UP = Rx(−π/2), _advanceMailFlags
+  writes −(π/2)·blend; 2D glyph + both test pages' pose pins
+  flipped to match. 2D
   glyph matched (down = arm toward the front edge, up =
   foreshortened blob at the pivot) AND the 2D resolver bug fixed —
   drawFurniture had the bindings swapped (countEntity raised the 2D

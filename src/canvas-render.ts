@@ -6359,25 +6359,25 @@ export function drawFurniturePrimitiveLocal(
       // Signal flag on the +x (right) side. NB the 3D builder hangs its rig off
       // local −X: the 3D scene mirrors X (`_w` = fw/2 − wx), so builder-local −X
       // and plan-local +x are the SAME world flank (world +X = the box's left as
-      // you face the door). The arm hinges about a third back from the front and
-      // swings in the side plane between HORIZONTAL-FORWARD (DOWN) and VERTICAL
-      // (UP):
+      // you face the door). The arm hinges about a quarter back from the front
+      // and swings in the side plane between HORIZONTAL-REARWARD (DOWN — the
+      // user-directed 180° X flip of the earlier forward-pointing pose) and
+      // VERTICAL (UP):
       //   DOWN → the arm lies in the plan: a red line running from the pivot
-      //          toward the FRONT (bottom), paddle head at the front end beside
-      //          the door (a slight overhang past the front edge is correct).
+      //          toward the REAR (top), stepped paddle head at the far end.
       //   UP   → the arm stands out of the plan, so it foreshortens to a bright
       //          blob at the pivot. (A plan view genuinely cannot show "up" as
       //          length — the inverse of what a lowered flag shows.)
-      const flagX = x + w + 2, flagPivotY = y + h * 0.64;
+      const flagX = x + w + 2, flagPivotY = y + h * 0.76;
       const flagUp2d = extra?.mailFlagUp === true;
       if (!flagUp2d) {
-        const armEndY = flagPivotY + h * 0.45;
+        const armEndY = flagPivotY - h * 0.45;
         const padW = Math.max(3, halfW * 0.22), padLen = Math.max(3, h * 0.19);
         ctx.strokeStyle = '#c62828';
         ctx.lineWidth = 2;
         ctx.beginPath(); ctx.moveTo(flagX, flagPivotY); ctx.lineTo(flagX, armEndY); ctx.stroke();
         ctx.fillStyle = '#c62828';
-        ctx.fillRect(flagX - padW / 2, armEndY - padLen, padW, padLen);
+        ctx.fillRect(flagX - padW / 2, armEndY, padW, padLen);
       }
       // Pivot marker (always); raised, it is ALL the plan can show of the flag.
       ctx.fillStyle = flagUp2d ? '#e53935' : '#c62828';

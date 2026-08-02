@@ -1211,18 +1211,20 @@ The **`vehicle` cat** (new; `furnitureCat` optgroup "Vehicle / garage") groups
   `fw/2 − wx` + the negated group yaw), so 3D builder-local −X and the 2D
   glyph's plan-local **+x** are the SAME physical flank; matching local signs
   across the two files puts the flag on OPPOSITE sides. Pivot at
-  `(−(W/2+8), bodyBase + BH·0.45, −L·0.14)` (mid-body height, a third back
-  from the front); arm authored along local **−Z** (FORWARD) = the DOWN pose —
-  stepped ⚑ head (head + step box, long-axes ALONG the arm, one-piece stamped
-  look) at the far/front end resting beside the latch, ~30 mm proud of the
-  door face; UP = `rotation.x = +π/2` (`Rx(+90°)` maps −Z→+Y: arm vertical,
-  the head is the TOP section, clearing the crest by ~100 mm at defaults).
-  `_advanceMailFlags` writes `rotation.x = +(π/2)·blend` (τ 0.25 s, keyed by
-  fixture id). The paddle is thin in X and X is the only rotation axis, so the
-  paddle plane stays PARALLEL to the side in every pose by construction; red
-  `0xe53935` in BOTH poses. 2D plan glyph matches on the same visual flank
-  (+x): DOWN = red arm+paddle from the mid-body pivot toward the FRONT edge;
-  UP = foreshortened bright paddle blob at the pivot. Tags
+  `(−(W/2+8), bodyBase + BH·0.45, −L·0.26)` (mid-body height, a quarter back
+  from the front); arm authored along local **+Z** (REARWARD) = the DOWN pose
+  — stepped ⚑ head (head + step box, long-axes ALONG the arm, one-piece
+  stamped look) at the far/rear end (**user-directed 2026-08-01 "rotate 180°
+  about X" — the final word over my forward-pointing reading of photo 1**);
+  UP = `rotation.x = −π/2` (`Rx(−90°)` maps +Z→+Y: arm vertical near the
+  front, the head is the TOP section, clearing the crest by ~100 mm at
+  defaults and leaning slightly toward the door). `_advanceMailFlags` writes
+  `rotation.x = −(π/2)·blend` (τ 0.25 s, keyed by fixture id). The paddle is
+  thin in X and X is the only rotation axis, so the paddle plane stays
+  PARALLEL to the side in every pose by construction; red `0xe53935` in BOTH
+  poses. 2D plan glyph matches on the same visual flank (+x): DOWN = red
+  arm+paddle from the quarter-back pivot toward the REAR edge; UP =
+  foreshortened bright paddle blob at the pivot. Tags
   `userData.mailFlagArm`/`mailFlagPaddle` (head box only).
 - **Hash + keys**: three-view's appliance-state hash predicate widened to
   `isVehicleKind || ev_charger || mailbox || evCharger || mailCount`; it folds

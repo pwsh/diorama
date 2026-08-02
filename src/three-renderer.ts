@@ -11197,28 +11197,29 @@ export class ThreeDRenderer {
         //   • the paddle plane is ALWAYS parallel to that side face — the paddle
         //     is thin in X, and the arm's only rotation is about the X axis, so
         //     nothing it does can ever tip the paddle out of the x ≈ const plane.
-        //   • the pivot sits about a third back from the front face, at mid-body
-        //     height (front = local −Z).
+        //   • the pivot sits about a quarter back from the front face, at
+        //     mid-body height (front = local −Z).
         //   • DOWN (default) → the AUTHORED pose (rotation.x = 0): the arm lies
-        //     HORIZONTAL running FORWARD along local −Z, so the stepped paddle
-        //     head ends up at the FRONT, right beside the latch/door, reaching to
-        //     just proud of the door face.
-        //   • UP (flagEntity 'on') → rotation.x = +π/2, which maps −Z → +Y: the
-        //     arm stands VERTICAL with the head as its TOP section, riding well
-        //     above the roofline.
+        //     HORIZONTAL running REARWARD along local +Z, stepped paddle head at
+        //     the arm's far (rear) end — the user-directed 180° X flip of the
+        //     earlier forward-pointing pose.
+        //   • UP (flagEntity 'on') → rotation.x = −π/2, which maps +Z → +Y: the
+        //     arm stands VERTICAL near the front with the head as its TOP
+        //     section, riding well above the roofline and leaning slightly
+        //     toward the door.
         // The eased blend is driven in _advanceMailFlags; here we seed + apply the
         // persisted value (survives _keyFloor rebuilds — a fresh fixture seeds to
         // its target so the first render is already in pose).
         const up = opts?.mailFlagUp === true;
         const flagArm = new THREE.Group();
-        flagArm.position.set(-(W / 2 + 8), bodyBase + BH * 0.45, -L * 0.14);
+        flagArm.position.set(-(W / 2 + 8), bodyBase + BH * 0.45, -L * 0.26);
         // Red in BOTH poses — the reference boxes carry a red flag lowered too.
         const flagMat = this._mat({ color: 0xe53935, roughness: 0.7 });
         const armLen = L * 0.45;
         const armBar = new THREE.Mesh(new THREE.BoxGeometry(10, 24, armLen), flagMat);
-        armBar.position.set(0, 0, -armLen / 2);
+        armBar.position.set(0, 0, armLen / 2);
         flagArm.add(armBar);
-        // Stepped ⚑ silhouette at the FAR (front) end: a tall head plus a lower
+        // Stepped ⚑ silhouette at the FAR (rear) end: a tall head plus a lower
         // step between it and the arm, long axes ALONG the arm (the stamped
         // one-piece flag). Both sit at x = −8 — OUTBOARD on this side, and
         // overlapping the arm bar (x ∈ [−5, 5]) instead of sharing a face with
@@ -11227,17 +11228,17 @@ export class ThreeDRenderer {
         const headH = W * 0.5, headL = armLen * 0.42;
         const stepH = W * 0.20, stepL = armLen * 0.22;
         const head = new THREE.Mesh(new THREE.BoxGeometry(10, headH, headL), flagMat);
-        head.position.set(-8, headH / 2, -armLen + headL / 2);
+        head.position.set(-8, headH / 2, armLen - headL / 2);
         head.userData = { mailFlagPaddle: true };
         flagArm.add(head);
         const step = new THREE.Mesh(new THREE.BoxGeometry(10, stepH, stepL), flagMat);
-        step.position.set(-8, 3 + stepH / 2, -armLen + headL + stepL / 2);
+        step.position.set(-8, 3 + stepH / 2, armLen - headL - stepL / 2);
         step.userData = { mailFlagStep: true };
         flagArm.add(step);
         flagArm.userData = { mailFlagArm: true, armLen };
         const flagId = fu.id ?? `mb_${Math.round(fu.x)}_${Math.round(fu.y)}`;
         if (this._mailFlagBlend[flagId] === undefined) this._mailFlagBlend[flagId] = up ? 1 : 0;
-        flagArm.rotation.x = (Math.PI / 2) * this._mailFlagBlend[flagId];   // 0 = down, +π/2 = up
+        flagArm.rotation.x = -(Math.PI / 2) * this._mailFlagBlend[flagId];   // 0 = down, −π/2 = up
         grp.add(flagArm);
         this._mailFlags.push({ fuId: flagId, arm: flagArm, up });
         // Count badge sprite above the box (only when > 0). Freed by the
@@ -21830,13 +21831,15 @@ export class ThreeDRenderer {
   }
 
   // Per-frame mailbox flag. Ease each arm's 0→1 blend (τ ≈ 0.25 s) toward UP
-  // (flag sensor 'on') / DOWN, applying rotation.x = +(π/2)·blend: blend 0 =
-  // DOWN, the AUTHORED pose (arm horizontal along local −Z, lying along the box
-  // side with the stepped paddle head at the FRONT beside the door); blend 1 =
-  // UP (Rx(+π/2) maps −Z → +Y, so the arm stands vertical with the head as its
-  // top section, above the roofline). The paddle is thin in X, and X is the
-  // rotation axis, so the paddle plane stays parallel to the mailbox's side face
-  // in every pose. Blend keyed by fixture id (survives _keyFloor). Zero alloc.
+  // (flag sensor 'on') / DOWN, applying rotation.x = −(π/2)·blend: blend 0 =
+  // DOWN, the AUTHORED pose (arm horizontal along local +Z, lying along the box
+  // side with the stepped paddle head at the arm's far/rear end — the
+  // user-directed 180° X flip of the earlier forward-pointing pose); blend 1 =
+  // UP (Rx(−π/2) maps +Z → +Y, so the arm stands vertical near the front with
+  // the head as its top section, above the roofline). The paddle is thin in X,
+  // and X is the rotation axis, so the paddle plane stays parallel to the
+  // mailbox's side face in every pose. Blend keyed by fixture id (survives
+  // _keyFloor). Zero alloc.
   private _advanceMailFlags(dt: number): void {
     if (!this._mailFlags.length) return;
     const alpha = 1 - Math.exp(-dt / 0.25);
@@ -21844,7 +21847,7 @@ export class ThreeDRenderer {
       const cur = this._mailFlagBlend[mf.fuId] ?? 0;
       const next = cur + ((mf.up ? 1 : 0) - cur) * alpha;
       this._mailFlagBlend[mf.fuId] = next;
-      mf.arm.rotation.x = (Math.PI / 2) * next;
+      mf.arm.rotation.x = -(Math.PI / 2) * next;
     }
   }
 

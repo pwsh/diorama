@@ -122,13 +122,14 @@
   //     you face the door / the viewer's right — the photographed side, and the
   //     same world flank the 2D glyph draws at plan-local +x.
   //   • flag DOWN (default) = the AUTHORED pose, rotation.x ~ 0 — the arm lies
-  //     HORIZONTAL running FORWARD (local −Z) with the stepped paddle head at
-  //     the FRONT beside the door, reaching just proud of the door face.
-  //   • flag UP (flagEntity 'on') = rotation.x ~ +π/2 — the arm stands VERTICAL
-  //     and the head rides ABOVE the roofline (crest = HT).
+  //     HORIZONTAL running REARWARD (local +Z) with the stepped paddle head at
+  //     the arm's far (rear) end — the user-directed 180° X flip of the earlier
+  //     forward-pointing pose.
+  //   • flag UP (flagEntity 'on') = rotation.x ~ −π/2 — the arm stands VERTICAL
+  //     near the front and the head rides ABOVE the roofline (crest = HT).
   //   • the paddle plane stays PARALLEL to the box side face in BOTH poses (the
   //     paddle is thin in X and X is the only rotation axis), and the pivot sits
-  //     on that side about a third back from the front (front = local −Z).
+  //     on that side about a quarter back from the front (front = local −Z).
   //   • the body carries an arched front DOOR (proud panel + arch), a latch tab
   //     standing above the crest, a painted "U.S. MAIL" decal plane, and an
   //     arched REAR CAP. The flag is red in both poses.
@@ -168,7 +169,7 @@
     assert('count > 0 floats a badge sprite', sprites(gUp).length >= 1 && sprites(gCount).length >= 1, `up=${sprites(gUp).length} count=${sprites(gCount).length}`);
     assert('count 0 shows NO badge sprite', sprites(gEmpty).length === 0, `sprites=${sprites(gEmpty).length}`);
     assert('unbound mailbox shows NO badge sprite', sprites(gUnb).length === 0);
-    assert('flag sensor on stands the flag UP (rotation.x ~ +π/2)', flagUp && Math.abs(flagUp.rotation.x - HALF_PI) < 0.02, flagUp ? `rx=${flagUp.rotation.x.toFixed(2)}` : '');
+    assert('flag sensor on stands the flag UP (rotation.x ~ −π/2)', flagUp && Math.abs(flagUp.rotation.x + HALF_PI) < 0.02, flagUp ? `rx=${flagUp.rotation.x.toFixed(2)}` : '');
     assert('count > 0 alone does NOT raise the flag (rests DOWN, rotation.x ~ 0)', flagCount && Math.abs(flagCount.rotation.x) < 0.02, flagCount ? `rx=${flagCount.rotation.x.toFixed(2)}` : '');
     assert('no flag signal rests the flag DOWN (rotation.x ~ 0)', flagE && Math.abs(flagE.rotation.x) < 0.02, flagE ? `rx=${flagE.rotation.x.toFixed(2)}` : '');
     assert('unbound rests the flag DOWN', flagU && Math.abs(flagU.rotation.x) < 0.02);
@@ -204,14 +205,15 @@
       assert(`mailbox ${name}: paddle centre sits on the −X side face (x < −W/2)`,
         c.x < -MB_W / 2, `x=${c.x.toFixed(1)} halfW=${MB_W / 2}`);
       // 3. Pivot on that side, in the FRONT half but NOT at the front face
-      //    (front = local −Z; the arm runs forward from here to the door).
+      //    (front = local −Z; the arm runs REARWARD from here — flag up stands
+      //    near the front like the photos).
       const piv = inFrame(g, arm, 0, 0, 0);
-      assert(`mailbox ${name}: pivot is on the −X side, a third back from the front`,
-        piv.x < -MB_W / 2 && piv.z < 0 && piv.z > -MB_D * 0.25,
+      assert(`mailbox ${name}: pivot is on the −X side, a quarter back from the front`,
+        piv.x < -MB_W / 2 && piv.z < 0 && piv.z > -MB_D * 0.35,
         `pivot=(${piv.x.toFixed(1)},${piv.y.toFixed(1)},${piv.z.toFixed(1)})`);
-      // 4. Arm direction (the arm extends along local −Z) + head vs the roofline.
-      const dir = axisIn(g, arm, 0, 0, -1);
-      const tip = inFrame(g, arm, 0, 0, -arm.userData.armLen);
+      // 4. Arm direction (the arm extends along local +Z) + head vs the roofline.
+      const dir = axisIn(g, arm, 0, 0, 1);
+      const tip = inFrame(g, arm, 0, 0, arm.userData.armLen);
       if (wantUp) {
         assert('mailbox UP: arm stands VERTICAL (+Y)',
           dir.y > 0.999 && Math.abs(dir.z) < 0.03 && Math.abs(dir.x) < 1e-6,
@@ -221,13 +223,13 @@
         assert('mailbox UP: the paddle head rides ABOVE the roofline (y > HT)',
           c.y > MB_HT, `padY=${c.y.toFixed(1)} crest=${MB_HT}`);
       } else {
-        assert('mailbox DOWN: arm lies HORIZONTAL running FORWARD (−Z)',
-          dir.z < -0.999 && Math.abs(dir.y) < 0.03 && Math.abs(dir.x) < 1e-6,
+        assert('mailbox DOWN: arm lies HORIZONTAL running REARWARD (+Z)',
+          dir.z > 0.999 && Math.abs(dir.y) < 0.03 && Math.abs(dir.x) < 1e-6,
           `dir=(${dir.x.toFixed(3)},${dir.y.toFixed(3)},${dir.z.toFixed(3)})`);
-        assert('mailbox DOWN: the arm reaches forward to just proud of the door face',
-          tip.z < piv.z - 100 && Math.abs(tip.y - piv.y) < 1
-          && Math.abs(tip.z - DOOR_FACE_Z) < 60,
-          `tipZ=${tip.z.toFixed(1)} door=${DOOR_FACE_Z.toFixed(1)} pivotZ=${piv.z.toFixed(1)}`);
+        assert('mailbox DOWN: the arm runs rearward at pivot height, inside the body',
+          tip.z > piv.z + 100 && Math.abs(tip.y - piv.y) < 1
+          && tip.z < MB_D * 0.96 / 2,
+          `tipZ=${tip.z.toFixed(1)} rear=${(MB_D * 0.96 / 2).toFixed(1)} pivotZ=${piv.z.toFixed(1)}`);
         assert('mailbox DOWN: the paddle head sits BELOW the roofline (y < HT)',
           c.y < MB_HT, `padY=${c.y.toFixed(1)} crest=${MB_HT}`);
       }
