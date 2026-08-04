@@ -69,6 +69,22 @@ codebase so this doc stays honest as items land.
   `/api/media_player_proxy/...`) + `media_title` floated over speaker/TV
   fixtures; `group_members[0]` is the group leader for speaker-group link
   lines (M/4).
+- **Vehicle model library (aircraft + ground)** — research:
+  `docs/research/vehicle-model-library.md` (2026-08-04; 83 newly ranked
+  models + the 19 shipped BG_CRAFTS = 102 candidates, first waves marked).
+  Generalizes the BG_CRAFTS banner-tow roster into an avatar-pack-style
+  registry (base packs default-on, franchise/fiction opt-in, selectable
+  like avatars), plus a NEW live-ADS-B "named skin" surface — named
+  models build INSIDE each archetype's existing `fusLen`/`fusHalfW`
+  envelope (per-bucket scale constants in research §4.2; the display
+  shell stays deliberately not-to-scale), so label/beacon/trail anchors
+  never move. Ground vehicles (pickup, fire truck, school bus, Jeep,
+  DeLorean, …) surface only as driveway/curb/yard decor via a
+  `car`-extension FurnitureKind — no live feed exists to skin. (M–L,
+  wow 4 overall; the **fighter-skin reuse is S/3 and can ship
+  standalone** — the `category==='A6'` fallback + military-heli case can
+  reuse the ALREADY-BUILT F-16/F-22/Apache BG_CRAFTS geometry with zero
+  new modeling.)
 
 ## Tier 3 — cheap EnvKind / fixture extensions
 

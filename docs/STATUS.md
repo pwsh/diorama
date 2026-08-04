@@ -3088,6 +3088,22 @@ splits) shipped ahead of it in July 2026 — see the ledger above.
 
 ## Open threads / known deferrals
 
+**Vehicle model library (2026-08-04, user-requested research — build
+later)** — `docs/research/vehicle-model-library.md` (Sonnet sweep seeded
+from BG_CRAFTS / the 8 ADS-B archetypes / the car kind / avatar packs): 102
+ranked candidates (83 new: historical military + civilian aircraft, real +
+fiction spacecraft, civilian/military/historical/fiction ground vehicles;
+first waves marked), an avatar-pack-style selectable registry proposal, and
+the archetype→named-skin mapping with per-bucket scale constants (skins
+build INSIDE the existing `fusLen`/`fusHalfW` envelopes — the display shell
+stays deliberately not-to-scale). Roadmap entry added (Tier 2). Cheapest
+standalone win: the `category==='A6'` fighter + military-heli live-flight
+fallback can reuse the already-built F-16/F-22/Apache BG_CRAFTS geometry
+(S effort, zero new modeling). Noted copy nit from the sweep: 2 of 11
+fiction banner-craft labels in modals.ts name their franchise directly
+("X-wing fighter", "Firefly transport") against the descriptive-generic
+precedent the other 9 follow.
+
 **Future improvement (2026-08-01, user-noted)** — fun GROUND-BASED items to
 amend the train background-text option: scenery that dresses the orbit loop
 (e.g. crossing signals/gates that animate as the train passes, a small

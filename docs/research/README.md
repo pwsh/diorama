@@ -158,6 +158,13 @@ primitives and prerequisites. Building these ONCE unlocks several features:
   strobe primitive shared with the logical light. **High conf.**
 - [peripheral-fixtures.md](peripheral-fixtures.md) — mailbox lid + package
   count, 3D-printer progress, NAS/router rack health LED. **High conf** core.
+- [vehicle-model-library.md](vehicle-model-library.md) — 2026-08-04: 102
+  ranked aircraft / spacecraft / ground-vehicle candidates (83 new + the 19
+  shipped BG_CRAFTS) organized as avatar-pack-style selectable packs, with
+  the archetype→named-skin mapping + per-bucket scale constants for the
+  live ADS-B display (skins build INSIDE the existing `fusLen` envelopes).
+  Cheapest win flagged: the fighter/military-heli fallback can reuse the
+  already-built F-16/F-22/Apache geometry (S effort, standalone).
 
 ### Architectural (high ceiling)
 - [frigate-mqtt-bridge.md](frigate-mqtt-bridge.md) — opt-in direct-MQTT bridge
