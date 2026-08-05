@@ -46,14 +46,20 @@ const WEATHER_DIM_CONDITIONS = new Set<string>([
   'lightning', 'lightning-rainy',
 ]);
 
+// `sunElevOverrideDeg` (demo weather source): when finite it REPLACES the
+// `sun.sun` read in clock mode, so an authored elevation of −10 genuinely
+// flips the scene to night at local noon. Absent / non-finite → the existing
+// sun.sun-then-clock ladder, byte-identical.
 export function resolveScenePreset(
   sc: Scene3D | undefined, states: States, weather?: WeatherLightMod,
+  sunElevOverrideDeg?: number | null,
 ): ScenePreset {
   const st = states ?? {};
   const mode = sc?.lightMode ?? 'manual';
   let preset: ScenePreset;
   if (mode === 'clock') {
-    const elev = sunElevation(st);
+    const elev = (sunElevOverrideDeg != null && isFinite(sunElevOverrideDeg))
+      ? sunElevOverrideDeg : sunElevation(st);
     if (isFinite(elev)) preset = elev > 10 ? 'day' : elev > -4 ? 'dusk' : 'night';
     else {
       const h = new Date().getHours();
@@ -84,9 +90,16 @@ export type TimeBucket = 'morning' | 'day' | 'evening' | 'night' | 'late_night';
 //   else (night)     → 'late_night' when hour ≥ 23 or < 5, else 'night'
 // Fallback without sun.sun, clock only:
 //   05–10 morning · 11–16 day · 17–21 evening · 22 night · 23–04 late_night
-export function resolveTimeBucket(states: States): TimeBucket {
+// `sunElevOverrideDeg` (demo weather source) replaces the `sun.sun` read the
+// same way resolveScenePreset's does — a demo night genuinely reads as night to
+// the avatar bubble tiers. The local hour still disambiguates morning/evening
+// (the demo source authors a sun, not a clock). Absent → byte-identical.
+export function resolveTimeBucket(
+  states: States, sunElevOverrideDeg?: number | null,
+): TimeBucket {
   const h = new Date().getHours();
-  const elev = sunElevation(states);
+  const elev = (sunElevOverrideDeg != null && isFinite(sunElevOverrideDeg))
+    ? sunElevOverrideDeg : sunElevation(states);
   if (isFinite(elev)) {
     if (elev > 10) return h < 11 ? 'morning' : 'day';
     if (elev > -4) return h < 12 ? 'morning' : 'evening';

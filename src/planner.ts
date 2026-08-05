@@ -114,6 +114,7 @@ import {
   fetchOpenMeteo, fetchOpenMeteoForecast, geocodeZip, resolveWeatherEntity, deriveFromSensors,
   toCelsius, toKmh, toMmPerH, forecastRainSoon, parseWeatherAlerts,
   conditionIntensity, alertSeverityRank, worstAlertSeverity,
+  demoWeatherNow, demoWeatherAlerts,
   type WeatherNow, type HaCondition, type WeatherAlert,
 } from './weather.js';
 import { isDay } from './time-of-day.js';
@@ -5840,6 +5841,9 @@ export class Planner extends EventTarget {
       void this._pollOpenMeteo();
       this._weatherTimer = setInterval(() => void this._pollOpenMeteo(), Planner.WEATHER_POLL_MS);
     } else {
+      // 'demo' lands here too — _recomputeLocalWeather owns the synthesis (one
+      // home) so a later full-state refresh re-derives the identical value.
+      // No network, no timer, no connection requirement: demo works offline.
       this._recomputeLocalWeather(this.hass?.states ?? {});
     }
     // Entity source: pull the forecast via the modern service call (30 min poll).
@@ -6815,7 +6819,11 @@ export class Planner extends EventTarget {
   // Recompute the normalized active alert list from the bound alert entity.
   // Pure read of `states` + weather.ts parser; [] when unconfigured / absent.
   private _recomputeWeatherAlerts(states: Record<string, HassState>): void {
-    const id = this.store.weather?.alerts?.entityId;
+    const w = this.store.weather;
+    // Demo source: the alert is AUTHORED, so the bound-entity path is bypassed
+    // entirely (a stale alert entity from a previous source can't leak through).
+    if (w?.source === 'demo') { this.weatherAlerts = demoWeatherAlerts(w); return; }
+    const id = w?.alerts?.entityId;
     if (!id) { if (this.weatherAlerts.length) this.weatherAlerts = []; return; }
     this.weatherAlerts = parseWeatherAlerts(states[id] ?? null);
   }
@@ -6825,7 +6833,12 @@ export class Planner extends EventTarget {
   private _recomputeLocalWeather(states: Record<string, HassState>): void {
     const w = this.store.weather;
     if (!w) { this.weatherNow = null; return; }
-    if (w.source === 'entity') {
+    if (w.source === 'demo') {
+      // Hand-authored: a pure, deterministic synthesis of the stored config.
+      // Ignores `states` entirely (nothing is bound) and is never stale, so it
+      // works offline and re-derives identically on every refresh / edit.
+      this.weatherNow = demoWeatherNow(w.demo);
+    } else if (w.source === 'entity') {
       const st = w.entityId ? states[w.entityId] : null;
       if (!st) {
         this.weatherNow = w.entityId

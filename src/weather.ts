@@ -9,7 +9,9 @@
 // unit normalizers, resolveWeatherEntity) have no network dependency and are
 // exported cleanly so W2 / test pages can import them.
 
-import type { HassState, WeatherConfig, WeatherEffectKey } from './types.js';
+import type {
+  HassState, WeatherConfig, WeatherEffectKey, DemoWeatherConfig,
+} from './types.js';
 import type { ForecastRecord } from './ha-client.js';
 import { isDay } from './time-of-day.js';
 
@@ -292,6 +294,108 @@ export function deriveFromSensors(r: SensorReadings): WeatherNow {
     stale: noData,
     label: 'Local station',
   };
+}
+
+// ── Source: DEMO (hand-authored) ────────────────────────────────────────────
+// The fourth source: no entity, no station, no network — the user types the
+// weather. It exists so a kiosk / showcase / screenshot run can dial in a
+// thunderstorm at midnight in July, and so every downstream visualization can
+// be exercised without waiting for the sky to cooperate.
+//
+// PURE + DETERMINISTIC (no Date.now, no Math.random): the same config always
+// synthesizes the same WeatherNow, which is what lets the planner recompute it
+// synchronously on every edit and lets the test page pin the whole matrix.
+// Everything numeric is clamped defensively — a hand-typed field is exactly
+// where a nonsense value comes from — and an absent field falls back to the
+// documented default (or null, which every consumer already treats as "this
+// provider doesn't report it").
+
+const DEMO_DEFAULT_CONDITION: HaCondition = 'sunny';
+const DEMO_DEFAULT_TEMP_C = 22;
+const DEMO_DEFAULT_WIND_KMH = 8;
+
+// Finite-gated clamp: absent / unparseable → null (the "not reported" signal).
+function demoNum(v: unknown, lo: number, hi: number): number | null {
+  const n = Number(v);
+  if (v == null || !isFinite(n)) return null;
+  return Math.max(lo, Math.min(hi, n));
+}
+function demoCondition(v: unknown): HaCondition | undefined {
+  return typeof v === 'string' && HA_CONDITIONS.has(v as HaCondition)
+    ? v as HaCondition : undefined;
+}
+
+// Synthesize the full WeatherNow the demo source reports. `stale` is always
+// false (an authored value is never out of date) and the label is 'Demo' so the
+// chip says so out loud rather than pretending to be a station.
+//
+// isDay: an authored sun elevation wins (that IS the user saying where the sun
+// is); otherwise it derives from the condition — only `clear-night` explicitly
+// means night, everything else reads as day. The sunny ↔ clear-night pair is
+// then re-gated through that isDay exactly like every other source does, so the
+// two can never contradict each other.
+export function demoWeatherNow(demo: DemoWeatherConfig | undefined | null): WeatherNow {
+  const d = demo ?? {};
+  const authored = demoCondition(d.condition) ?? DEMO_DEFAULT_CONDITION;
+  const elev = demoNum(d.sunElevationDeg, -90, 90);
+  const day = elev != null ? elev > 0 : authored !== 'clear-night';
+  const condition: HaCondition =
+    (authored === 'sunny' || authored === 'clear-night')
+      ? (day ? 'sunny' : 'clear-night')
+      : authored;
+  return {
+    condition,
+    tempC: demoNum(d.tempC, -100, 100) ?? DEMO_DEFAULT_TEMP_C,
+    windKmh: demoNum(d.windKmh, 0, 500) ?? DEMO_DEFAULT_WIND_KMH,
+    windBearing: demoNum(d.windBearing, -720, 720),
+    isDay: day,
+    stale: false,
+    label: 'Demo',
+    forecastCondition: demoCondition(d.forecastCondition),
+    rainSoon: d.rainSoon === true,
+    cloudCoverage: demoNum(d.cloudCoverage, 0, 100),
+    visibilityKm: demoNum(d.visibilityKm, 0, 200),
+    uvIndex: demoNum(d.uvIndex, 0, 20),
+    windGustKmh: demoNum(d.windGustKmh, 0, 500),
+    apparentC: demoNum(d.apparentC, -100, 100),
+    humidity: demoNum(d.humidity, 0, 100),
+  };
+}
+
+// THE single override helper every sun consumer consults (three-view's
+// WeatherFxState stamp → scene sun light / sky sun disc / star daylight gate;
+// the solar-panel aim in 3D, 2D and the sidebar readout; the clock-mode
+// lighting preset). Non-null ONLY when the demo source is active AND both sun
+// fields are finite — a half-filled pair degrades to the real sun rather than
+// inventing an axis. `azDeg` is a COMPASS bearing (° CW from true north), the
+// same convention `sun.sun`'s azimuth attribute uses, so callers push it through
+// the identical geo-θ plan mapping (solar.ts compassToPlanDeg).
+export function demoSunAltAz(
+  w: WeatherConfig | undefined | null,
+): { elevDeg: number; azDeg: number } | null {
+  if (!w || w.source !== 'demo' || !w.demo) return null;
+  const elevDeg = demoNum(w.demo.sunElevationDeg, -90, 90);
+  const az = Number(w.demo.sunAzimuthDeg);
+  if (elevDeg == null || w.demo.sunAzimuthDeg == null || !isFinite(az)) return null;
+  return { elevDeg, azDeg: az };
+}
+
+// Forced moon phase, or null to leave the real path alone (the bound moonEntity,
+// else the renderer's full-moon default).
+export function demoMoonPhase(w: WeatherConfig | undefined | null): string | null {
+  if (!w || w.source !== 'demo') return null;
+  const s = (w.demo?.moonPhase ?? '').trim();
+  return s ? s : null;
+}
+
+// One synthetic active alert when the demo config names a severity — enough to
+// light the chip badge + panel and the 3D beacon. [] otherwise (which is also
+// what every non-demo source falls back to here, so the caller can branch once).
+export function demoWeatherAlerts(w: WeatherConfig | undefined | null): WeatherAlert[] {
+  if (!w || w.source !== 'demo') return [];
+  const sev = w.demo?.alertSeverity;
+  if (sev !== 'advisory' && sev !== 'watch' && sev !== 'warning') return [];
+  return [{ event: 'Demo weather alert', severity: sev }];
 }
 
 // ── Source: Open-Meteo (WMO weather codes) ──────────────────────────────────

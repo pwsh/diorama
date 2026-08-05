@@ -4,6 +4,7 @@ import { customElement } from './define.js';
 import { finishZoneEdit, cancelZoneEdit } from '../canvas-interact.js';
 import { alarmStateColor, hvacModeColor, climateFeature, CLIMATE_FEATURE, climateTempUnit, fmtTempNum, clampSetpoint, resolvePivotMode, floorsDisplayOrder } from '../geometry.js';
 import { CONDITION_GLYPH, CONDITION_LABEL, tempText, weatherEffectEnabled, worstAlertSeverity } from '../weather.js';
+import type { HaCondition } from '../weather.js';
 import { listPacks, getPack, packEffectiveState, resolveDef } from '../avatars.js';
 import { OFFLINE_FLAG_KEY } from '../ha-local.js';
 import type { AvatarDef, AvatarPackDef } from '../avatars.js';
@@ -13,7 +14,7 @@ import type { VehicleModelDef, VehiclePackDef } from '../vehicles.js';
 import { VEHICLE_PACK_MANIFEST } from '../vehicle-packs/manifest.js';
 import { listActiveVehiclePacks, resolveVehicleDef } from '../vehicles.js';
 import type { Planner } from '../planner.js';
-import type { Floor, HassState, WeatherConfig, WeatherEffectKey, ScenePreset, FloorTexKind, MqttBridgeConfig, BgTextEntry, BgTextEntryMode, HeatmapConfig, CompassConfig } from '../types.js';
+import type { Floor, HassState, WeatherConfig, DemoWeatherConfig, WeatherEffectKey, ScenePreset, FloorTexKind, MqttBridgeConfig, BgTextEntry, BgTextEntryMode, HeatmapConfig, CompassConfig } from '../types.js';
 import { resolveNorth } from '../compass.js';
 import {
   FLIGHT_LABEL_FIELDS, FLIGHT_LABEL_FIELDS_DEFAULT, sanitizeLabelFields,
@@ -2724,6 +2725,142 @@ export class SettingsDrawer extends LitElement {
     `;
   }
 
+  // ── Demo weather source: the authoring dialog ─────────────────────────────
+  // Shown in place of the entity / station / Open-Meteo rows when source ===
+  // 'demo'. Every control writes straight through `p.setWeather` (which saves,
+  // re-synthesizes weatherNow via _reconfigureWeather, and repaints), so the
+  // scene follows each keystroke-commit. Blank clears an optional field back to
+  // "this provider doesn't report it"; temperatures are edited in °F under
+  // store.imperial (the heat-map comfort-band idiom) but always STORED in °C.
+  private _weatherDemoBlock(
+    w: WeatherConfig | undefined,
+    set: (mut: (x: WeatherConfig) => void) => void,
+  ) {
+    const imp = !!this.planner.store.imperial;
+    const d = w?.demo ?? {};
+    const setD = (mut: (x: DemoWeatherConfig) => void) => set(x => { mut(x.demo ??= {}); });
+    const toDisp = (c: number) => Math.round((imp ? c * 9 / 5 + 32 : c) * 10) / 10;
+    const fromDisp = (v: number) => imp ? (v - 32) * 5 / 9 : v;
+    const unit = imp ? '°F' : '°C';
+
+    // Optional number row: blank = clear the field (back to the default / null).
+    const numRow = (
+      label: string, cur: number | undefined, ph: string,
+      on: (n: number | undefined) => void, step = 1,
+    ) => html`
+      <div class="row"><label>${label}</label>
+        <input type="number" step=${String(step)} placeholder=${ph}
+               style="width:76px;text-align:right"
+               .value=${cur == null ? '' : String(cur)}
+               @change=${(e: Event) => {
+                 const raw = (e.target as HTMLInputElement).value.trim();
+                 const n = parseFloat(raw);
+                 on(raw === '' || !isFinite(n) ? undefined : n);
+               }}>
+      </div>`;
+    // Temperature row: display/edit in the store's unit, store °C.
+    const tempRow = (
+      label: string, curC: number | undefined, phC: string,
+      on: (c: number | undefined) => void,
+    ) => html`
+      <div class="row"><label>${label} (${unit})</label>
+        <input type="number" step="0.5" placeholder=${phC}
+               style="width:76px;text-align:right"
+               .value=${curC == null ? '' : String(toDisp(curC))}
+               @change=${(e: Event) => {
+                 const raw = (e.target as HTMLInputElement).value.trim();
+                 const n = parseFloat(raw);
+                 on(raw === '' || !isFinite(n) ? undefined : fromDisp(n));
+               }}>
+      </div>`;
+    const selRow = (
+      label: string, cur: string | undefined, opts: Array<[string, string]>,
+      on: (v: string | undefined) => void,
+    ) => html`
+      <div class="row"><label>${label}</label>
+        <select style="flex:1;min-width:0" .value=${cur ?? ''}
+                @change=${(e: Event) => {
+                  const v = (e.target as HTMLSelectElement).value;
+                  on(v === '' ? undefined : v);
+                }}>
+          ${opts.map(([v, t]) => html`<option value=${v} ?selected=${(cur ?? '') === v}>${t}</option>`)}
+        </select>
+      </div>`;
+
+    const condOpts: Array<[string, string]> = (Object.keys(CONDITION_LABEL) as HaCondition[])
+      .map(c => [c, `${CONDITION_GLYPH[c]} ${CONDITION_LABEL[c]}`] as [string, string]);
+    const moonOpts: Array<[string, string]> = [
+      ['', '(follow moon entity)'],
+      ['new_moon', 'New moon'], ['waxing_crescent', 'Waxing crescent'],
+      ['first_quarter', 'First quarter'], ['waxing_gibbous', 'Waxing gibbous'],
+      ['full_moon', 'Full moon'], ['waning_gibbous', 'Waning gibbous'],
+      ['last_quarter', 'Last quarter'], ['waning_crescent', 'Waning crescent'],
+    ];
+
+    return html`
+      <div style="font-size:10px;color:var(--text-dim);line-height:1.3;margin:4px 0 6px">
+        Hand-authored weather — nothing is bound and nothing is fetched (works
+        offline). Every visualization follows these values exactly as if a real
+        source reported them: the chip, the 3D precipitation / fog / lightning /
+        wind / clouds, the sky dome + sun + moon + stars, the scene lighting,
+        solar panels, and the avatars' weather thoughts.
+      </div>
+
+      ${selRow('Condition', d.condition ?? 'sunny', condOpts,
+          v => setD(x => { x.condition = v as HaCondition | undefined; }))}
+      ${tempRow('Temperature', d.tempC, String(imp ? 72 : 22),
+          c => setD(x => { x.tempC = c; }))}
+      ${tempRow('Feels like', d.apparentC, '—', c => setD(x => { x.apparentC = c; }))}
+      ${numRow('Humidity (%)', d.humidity, '—', n => setD(x => { x.humidity = n; }))}
+      ${numRow('Wind (km/h)', d.windKmh, '8', n => setD(x => { x.windKmh = n; }))}
+      ${numRow('Wind bearing (°)', d.windBearing, '—', n => setD(x => { x.windBearing = n; }))}
+      ${numRow('Wind gust (km/h)', d.windGustKmh, '—', n => setD(x => { x.windGustKmh = n; }))}
+      ${numRow('Cloud cover (%)', d.cloudCoverage, '—', n => setD(x => { x.cloudCoverage = n; }))}
+      ${numRow('Visibility (km)', d.visibilityKm, '—', n => setD(x => { x.visibilityKm = n; }), 0.5)}
+      ${numRow('UV index', d.uvIndex, '—', n => setD(x => { x.uvIndex = n; }), 0.5)}
+      <div style="font-size:10px;color:var(--text-dim);line-height:1.3;margin:2px 0 4px">
+        Blank = "not reported" (the effect that reads it stays off). Wind bearing
+        is the direction the wind blows FROM. Low visibility thickens the fog.
+      </div>
+
+      <label class="row"><span style="flex:1">Rain coming soon</span>
+        <input type="checkbox" .checked=${d.rainSoon === true}
+               @change=${(e: Event) => setD(x => { x.rainSoon = (e.target as HTMLInputElement).checked; })}>
+      </label>
+      ${selRow('Tomorrow', d.forecastCondition ?? '',
+          [['', '(none)'], ...condOpts],
+          v => setD(x => { x.forecastCondition = v as HaCondition | undefined; }))}
+      <div style="font-size:10px;color:var(--text-dim);line-height:1.3;margin:2px 0 4px">
+        "Rain coming soon" drives the storm-brewing sky; tomorrow's condition
+        drives the avatars' ☔ / ⛄ anticipation thoughts.
+      </div>
+
+      <h4 style="font-size:11px;margin:8px 0 2px;color:var(--text-dim)">Sun &amp; moon</h4>
+      ${numRow('Sun elevation (°)', d.sunElevationDeg, 'auto',
+          n => setD(x => { x.sunElevationDeg = n; }))}
+      ${numRow('Sun azimuth (°)', d.sunAzimuthDeg, 'auto',
+          n => setD(x => { x.sunAzimuthDeg = n; }))}
+      <div style="font-size:10px;color:var(--text-dim);line-height:1.3;margin:2px 0 4px">
+        Set BOTH to place the sun (elevation −90..90, azimuth 0..360 compass
+        degrees CW from true north). Leave either blank for the real sun
+        (<code>sun.sun</code>, else the local clock). A demo sun also drives the
+        3D lighting preset in clock mode and the avatars' time of day.
+      </div>
+      ${selRow('Moon phase', d.moonPhase ?? '', moonOpts,
+          v => setD(x => { x.moonPhase = v as DemoWeatherConfig['moonPhase']; }))}
+
+      <h4 style="font-size:11px;margin:8px 0 2px;color:var(--text-dim)">Alert</h4>
+      ${selRow('Demo alert', d.alertSeverity ?? '', [
+          ['', '(none)'], ['advisory', 'Advisory'], ['watch', 'Watch'], ['warning', 'Warning'],
+        ], v => setD(x => { x.alertSeverity = v as DemoWeatherConfig['alertSeverity']; }))}
+      <div style="font-size:10px;color:var(--text-dim);line-height:1.3;margin:2px 0 6px">
+        Fires a synthetic alert (chip badge + panel, and the 3D sky beacon when
+        it's enabled below). The bound alert entity is ignored while demo is the
+        source.
+      </div>
+    `;
+  }
+
   // DC-D: weather alerts config block (entity bind + beacon toggle + live
   // preview of what parseWeatherAlerts currently extracts).
   private _weatherAlertsBlock(
@@ -2731,16 +2868,24 @@ export class SettingsDrawer extends LitElement {
     set: (mut: (x: WeatherConfig) => void) => void,
   ) {
     const p = this.planner;
+    const demo = w?.source === 'demo';
     const cur = w?.alerts?.entityId;
     const alerts = p.weatherAlerts ?? [];
     const worst = worstAlertSeverity(alerts);
-    const preview = !cur
-      ? 'No alert entity bound.'
-      : (alerts.length
-          ? `${alerts.length} alert${alerts.length > 1 ? 's' : ''} · worst: ${worst}`
-          : 'none parsed');
+    const preview = demo
+      ? (alerts.length ? `demo alert · ${worst}` : 'no demo alert set')
+      : (!cur
+          ? 'No alert entity bound.'
+          : (alerts.length
+              ? `${alerts.length} alert${alerts.length > 1 ? 's' : ''} · worst: ${worst}`
+              : 'none parsed'));
     return html`
       <h3 style="font-size:12px;margin:10px 0 4px">Alerts</h3>
+      ${demo ? html`
+        <div style="font-size:10px;color:var(--text-dim);line-height:1.3;margin:2px 0 4px">
+          The demo source authors its own alert (above); the entity bind is
+          bypassed while it's selected.
+        </div>` : html`
       <div class="row"><label>Alert entity</label>
         <span style="font-size:11px;color:var(--text);flex:1;overflow:hidden;
                      text-overflow:ellipsis;white-space:nowrap">${cur || '—'}</span>
@@ -2756,7 +2901,7 @@ export class SettingsDrawer extends LitElement {
         ${cur ? html`<button class="btn" style="font-size:10px;padding:2px 6px;margin-left:4px"
                              title="Clear the alert entity"
                              @click=${() => set(x => { (x.alerts ??= {}).entityId = undefined; })}>✕</button>` : nothing}
-      </div>
+      </div>`}
       <label class="row"><span style="flex:1">3D beacon</span>
         <input type="checkbox" .checked=${w?.alerts?.beacon !== false}
                @change=${(e: Event) => set(x => { (x.alerts ??= {}).beacon = (e.target as HTMLInputElement).checked; })}>
@@ -2779,7 +2924,7 @@ export class SettingsDrawer extends LitElement {
     const now = p.weatherNow;
     const set = (mut: (x: WeatherConfig) => void) => p.setWeather(mut);
 
-    const sourceRadio = (val: 'entity' | 'sensors' | 'openmeteo', label: string) => html`
+    const sourceRadio = (val: WeatherConfig['source'], label: string) => html`
       <label class="row" style="padding:0;cursor:pointer;gap:6px">
         <input type="radio" name="weather-src" .checked=${src === val}
                @change=${() => set(x => { x.source = val; })}>
@@ -2813,6 +2958,7 @@ export class SettingsDrawer extends LitElement {
       preview = html`<span style="color:var(--text-dim)">${
         src === 'openmeteo'
           ? (w.zip || w.lat != null ? 'Fetching…' : 'Set a zip (or configure zone.home in HA).')
+          : src === 'demo' ? 'Synthesizing…'
           : 'Bind the source entities above.'}</span>`;
     }
 
@@ -2821,7 +2967,10 @@ export class SettingsDrawer extends LitElement {
         ${sourceRadio('entity', 'HA weather entity')}
         ${sourceRadio('sensors', 'Local station sensors')}
         ${sourceRadio('openmeteo', 'Open-Meteo (online)')}
+        ${sourceRadio('demo', 'Demo (hand-authored)')}
       </div>
+
+      ${src === 'demo' ? this._weatherDemoBlock(w, set) : nothing}
 
       ${src === 'entity' ? bindRow('Entity', w?.entityId, 'weather',
           (id: string) => set(x => { x.entityId = id; })) : nothing}

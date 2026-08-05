@@ -52,6 +52,7 @@ import { solveHomography, homographyResidualsMm } from '../homography.js';
 import {
   resolveSunPlan, solarAim, solarRotation, solarPowerValue, solarPowerText,
 } from '../solar.js';
+import { demoSunAltAz } from '../weather.js';
 import { CLOCK_PRESETS, DATE_PRESETS, type ValueRule, type RuleOp } from '../value-rules.js';
 import type { Vec2, InfoCard, InfoCardMount, InfoCardDisplayMode, ActionButton, ActionKind, Ruler, DimensionMode, NeighborhoodConfig, DoorKind } from '../types.js';
 import { resolveRulerEnds } from '../geometry.js';
@@ -3633,7 +3634,10 @@ export class Sidebar extends LitElement {
     const p = this.planner;
     const fit = p.geoFit();
     const theta = fit && fit.transform.quality !== 'none' ? fit.transform.thetaRad : 0;
-    return resolveSunPlan(p.hass?.states?.['sun.sun'] ?? null, theta, Date.now());
+    // Demo weather source: the authored sun overrides `sun.sun` for the readout
+    // too, so the sidebar never claims a different aim than the drawn array.
+    return resolveSunPlan(p.hass?.states?.['sun.sun'] ?? null, theta, Date.now(),
+      demoSunAltAz(p.store.weather));
   }
 
   private _solarItem(sp: SolarPanel) {
@@ -3706,6 +3710,8 @@ export class Sidebar extends LitElement {
           monitor) reads amber. The frame is tinted by the current UV index.
           ${source === 'clock' ? html`<br><span style="color:#ffb74d">No
           <code>sun.sun</code> entity — aiming from the local clock (approximate).</span>` : nothing}
+          ${source === 'demo' ? html`<br><span style="color:#ffb74d">Aiming at the
+          demo weather source's authored sun (Settings ▸ Weather).</span>` : nothing}
         </div>
         <button class="btn danger" style="width:100%;margin-top:6px" @click=${() => {
           const f = p.floor();

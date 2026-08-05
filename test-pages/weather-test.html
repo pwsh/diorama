@@ -25,7 +25,25 @@
        erased), so bundle it into a standalone module before serving:
          npx esbuild src/weather.ts --bundle --format=esm \
            --outfile=<harness>/weather.mod.js
-       (matches the trilateration.html build-then-copy flow; no live HA). -->
+       (matches the trilateration.html build-then-copy flow; no live HA).
+
+       The DEMO-source section additionally drives the REAL Planner over a fake
+       HaApi (the config-test idiom) to prove the synthesis is wired end to end
+       with no network. Build that bundle too:
+         T=$(mktemp -d); cp -r src/* "$T"/
+         cp test-pages/fake-avatar-store.ts "$T"/avatar-store.ts
+         npx esbuild "$T"/planner.ts --bundle --format=esm \
+           --outfile=<harness>/planner.mod.js
+       …plus the pure sun/tracking module the demo-sun override feeds and the
+       lighting/time-bucket resolvers it also overrides:
+         npx esbuild src/solar.ts --format=esm --outfile=<harness>/solar.mod.js
+         npx esbuild src/time-of-day.ts --bundle --format=esm \
+           --outfile=<harness>/timeofday.mod.js
+       …and the geometry bundle a pre-existing section dynamically imports
+       (uvParasolWanted) — missing it stalls the page at "Running…":
+         npx esbuild src/geometry.ts --bundle --format=esm \
+           --outfile=<harness>/geometry.mod.js
+       -->
   <script type="module">
     import {
       wmoToCondition, deriveFromSensors, resolveWeatherEntity,
@@ -33,8 +51,12 @@
       weatherEffectEnabled, visibilityToFogDensity, forecastRainSoon,
       chipAnchorStyle, resolveChipContent, parseOpenMeteoForecast, windText,
       parseWeatherAlerts, alertSeverityRank, worstAlertSeverity,
-      uvBand, parseOpenMeteoCurrent, moonPhaseFraction,
+      uvBand, parseOpenMeteoCurrent, moonPhaseFraction, conditionIntensity,
+      demoWeatherNow, demoSunAltAz, demoMoonPhase, demoWeatherAlerts,
     } from './weather.mod.js';
+    import { resolveSunPlan, compassToPlanDeg, SOLAR_PARK_TILT, solarAim } from './solar.mod.js';
+    import { resolveScenePreset, resolveTimeBucket } from './timeofday.mod.js';
+    import { Planner } from './planner.mod.js';
 
     const tests = [];
     const eq = (name, got, want) =>
@@ -416,6 +438,313 @@
     eq('waning crescent is negative', moonPhaseFraction('waning_crescent') < 0, true);
     eq('gibbous brighter than crescent',
        Math.abs(moonPhaseFraction('waxing_gibbous')) > Math.abs(moonPhaseFraction('waxing_crescent')), true);
+
+    // ══ DEMO weather source ═══════════════════════════════════════════════════
+    // The fourth source: hand-authored, pure, deterministic, no network.
+    // demoWeatherNow is the single home for the defaults / clamps / isDay
+    // derivation; demoSunAltAz / demoMoonPhase / demoWeatherAlerts are the
+    // override helpers every consumer consults.
+    const D = (demo) => demoWeatherNow(demo);
+    const W = (demo, src = 'demo') => ({ source: src, demo });
+
+    // ── defaults (absent config / absent fields) ──
+    {
+      const d = D(undefined);
+      eq('demo default condition sunny',  d.condition, 'sunny');
+      eq('demo default tempC 22',         d.tempC, 22);
+      eq('demo default windKmh 8',        d.windKmh, 8);
+      eq('demo default isDay true',       d.isDay, true);
+      eq('demo never stale',              d.stale, false);
+      eq('demo label is Demo',            d.label, 'Demo');
+      eq('demo default windBearing null', d.windBearing, null);
+      eq('demo default cloud null',       d.cloudCoverage, null);
+      eq('demo default vis null',         d.visibilityKm, null);
+      eq('demo default uv null',          d.uvIndex, null);
+      eq('demo default gust null',        d.windGustKmh, null);
+      eq('demo default apparent null',    d.apparentC, null);
+      eq('demo default humidity null',    d.humidity, null);
+      eq('demo default rainSoon false',   d.rainSoon, false);
+      eq('demo default forecast undef',   d.forecastCondition, undefined);
+      eq('demo empty object == absent',   JSON.stringify(D({})), JSON.stringify(D(undefined)));
+    }
+
+    // ── full field-mapping matrix: every authored field lands on WeatherNow ──
+    {
+      const d = D({
+        condition: 'lightning-rainy', tempC: -4.5, apparentC: -9, humidity: 88,
+        windKmh: 42, windBearing: 215, windGustKmh: 71, cloudCoverage: 95,
+        visibilityKm: 1.2, uvIndex: 3, rainSoon: true, forecastCondition: 'snowy',
+        moonPhase: 'full_moon', sunElevationDeg: 12, sunAzimuthDeg: 140,
+        alertSeverity: 'warning',
+      });
+      eq('demo maps condition',   d.condition, 'lightning-rainy');
+      eq('demo maps tempC',       d.tempC, -4.5);
+      eq('demo maps apparentC',   d.apparentC, -9);
+      eq('demo maps humidity',    d.humidity, 88);
+      eq('demo maps windKmh',     d.windKmh, 42);
+      eq('demo maps windBearing', d.windBearing, 215);
+      eq('demo maps windGust',    d.windGustKmh, 71);
+      eq('demo maps cloudCover',  d.cloudCoverage, 95);
+      eq('demo maps visibility',  d.visibilityKm, 1.2);
+      eq('demo maps uvIndex',     d.uvIndex, 3);
+      eq('demo maps rainSoon',    d.rainSoon, true);
+      eq('demo maps forecast',    d.forecastCondition, 'snowy');
+      eq('demo maps isDay (elev>0)', d.isDay, true);
+      eq('demo is never stale (full)', d.stale, false);
+      // Everything the W3 visuals read is a real number, not a string.
+      eq('demo numerics are numbers',
+         [d.tempC, d.windKmh, d.cloudCoverage, d.visibilityKm, d.uvIndex,
+          d.windGustKmh, d.apparentC, d.humidity].every(v => typeof v === 'number'), true);
+      // The intensity ladder every particle system sizes off resolves normally.
+      near('demo condition drives intensity', conditionIntensity(d.condition), 0.8);
+    }
+
+    // ── isDay derivation + the sunny↔clear-night re-gate ──
+    eq('demo clear-night → night',        D({ condition: 'clear-night' }).isDay, false);
+    eq('demo clear-night stays',          D({ condition: 'clear-night' }).condition, 'clear-night');
+    eq('demo sunny → day',                D({ condition: 'sunny' }).isDay, true);
+    eq('demo rainy reads as day',         D({ condition: 'rainy' }).isDay, true);
+    eq('demo rainy condition untouched',  D({ condition: 'rainy' }).condition, 'rainy');
+    eq('demo sun elev > 0 → day',         D({ condition: 'rainy', sunElevationDeg: 5 }).isDay, true);
+    eq('demo sun elev < 0 → night',       D({ condition: 'rainy', sunElevationDeg: -5 }).isDay, false);
+    eq('demo sun elev 0 → night',         D({ sunElevationDeg: 0 }).isDay, false);
+    eq('demo elev wins over condition',   D({ condition: 'clear-night', sunElevationDeg: 30 }).isDay, true);
+    eq('demo sunny + night elev → clear-night',
+       D({ condition: 'sunny', sunElevationDeg: -10 }).condition, 'clear-night');
+    eq('demo clear-night + day elev → sunny',
+       D({ condition: 'clear-night', sunElevationDeg: 30 }).condition, 'sunny');
+    eq('demo re-gate leaves non-clear alone',
+       D({ condition: 'snowy', sunElevationDeg: -10 }).condition, 'snowy');
+
+    // ── defensive clamps + garbage tolerance (a hand-typed field is exactly
+    //    where a nonsense value comes from) ──
+    eq('demo tempC clamps high',      D({ tempC: 5000 }).tempC, 100);
+    eq('demo tempC clamps low',       D({ tempC: -5000 }).tempC, -100);
+    eq('demo humidity clamps 0..100', D({ humidity: 400 }).humidity, 100);
+    eq('demo humidity clamps low',    D({ humidity: -20 }).humidity, 0);
+    eq('demo cloud clamps 0..100',    D({ cloudCoverage: 180 }).cloudCoverage, 100);
+    eq('demo uv clamps 0..20',        D({ uvIndex: 99 }).uvIndex, 20);
+    eq('demo wind clamps low',        D({ windKmh: -30 }).windKmh, 0);
+    eq('demo wind clamps high',       D({ windKmh: 99999 }).windKmh, 500);
+    eq('demo visibility clamps',      D({ visibilityKm: 9999 }).visibilityKm, 200);
+    eq('demo NaN temp → default',     D({ tempC: NaN }).tempC, 22);
+    eq('demo string temp → default',  D({ tempC: 'hot' }).tempC, 22);
+    eq('demo unknown condition → sunny', D({ condition: 'banana' }).condition, 'sunny');
+    eq('demo unknown forecast → undefined', D({ forecastCondition: 'banana' }).forecastCondition, undefined);
+    eq('demo rainSoon non-true → false', D({ rainSoon: 'yes' }).rainSoon, false);
+    // Deterministic: the same config always synthesizes the same thing.
+    eq('demo synthesis is deterministic',
+       JSON.stringify(D({ condition: 'fog', tempC: 3, uvIndex: 1 }))
+         === JSON.stringify(D({ condition: 'fog', tempC: 3, uvIndex: 1 })), true);
+
+    // ── demoSunAltAz: the ONE sun-override helper ──
+    eq('sunAltAz null weather → null',      demoSunAltAz(null), null);
+    eq('sunAltAz undefined → null',         demoSunAltAz(undefined), null);
+    eq('sunAltAz non-demo source → null',
+       demoSunAltAz({ source: 'entity', demo: { sunElevationDeg: 30, sunAzimuthDeg: 180 } }), null);
+    eq('sunAltAz demo w/o demo block → null', demoSunAltAz({ source: 'demo' }), null);
+    eq('sunAltAz elev only → null',         demoSunAltAz(W({ sunElevationDeg: 30 })), null);
+    eq('sunAltAz az only → null',           demoSunAltAz(W({ sunAzimuthDeg: 180 })), null);
+    eq('sunAltAz garbage az → null',        demoSunAltAz(W({ sunElevationDeg: 30, sunAzimuthDeg: 'south' })), null);
+    deepEq('sunAltAz both → pair',          demoSunAltAz(W({ sunElevationDeg: 30, sunAzimuthDeg: 180 })),
+           { elevDeg: 30, azDeg: 180 });
+    deepEq('sunAltAz elev 0 is valid (parked but resolved)',
+           demoSunAltAz(W({ sunElevationDeg: 0, sunAzimuthDeg: 90 })), { elevDeg: 0, azDeg: 90 });
+    eq('sunAltAz clamps elev high',  demoSunAltAz(W({ sunElevationDeg: 400, sunAzimuthDeg: 0 })).elevDeg, 90);
+    eq('sunAltAz clamps elev low',   demoSunAltAz(W({ sunElevationDeg: -400, sunAzimuthDeg: 0 })).elevDeg, -90);
+    eq('sunAltAz negative elev kept', demoSunAltAz(W({ sunElevationDeg: -12, sunAzimuthDeg: 0 })).elevDeg, -12);
+
+    // ── demoMoonPhase ──
+    eq('moon override full_moon', demoMoonPhase(W({ moonPhase: 'full_moon' })), 'full_moon');
+    eq('moon override absent → null', demoMoonPhase(W({})), null);
+    eq('moon override blank → null', demoMoonPhase(W({ moonPhase: '  ' })), null);
+    eq('moon override non-demo → null',
+       demoMoonPhase({ source: 'entity', demo: { moonPhase: 'new_moon' } }), null);
+    eq('moon override null weather → null', demoMoonPhase(null), null);
+    // The forced phase flows through the SAME terminator math the real path uses.
+    eq('moon override feeds moonPhaseFraction',
+       moonPhaseFraction(demoMoonPhase(W({ moonPhase: 'last_quarter' }))), -0.5);
+
+    // ── demoWeatherAlerts ──
+    deepEq('demo alert warning', demoWeatherAlerts(W({ alertSeverity: 'warning' })),
+           [{ event: 'Demo weather alert', severity: 'warning' }]);
+    eq('demo alert watch severity', demoWeatherAlerts(W({ alertSeverity: 'watch' }))[0].severity, 'watch');
+    eq('demo alert advisory severity', demoWeatherAlerts(W({ alertSeverity: 'advisory' }))[0].severity, 'advisory');
+    eq('demo alert absent → []',   demoWeatherAlerts(W({})).length, 0);
+    eq('demo alert bogus → []',    demoWeatherAlerts(W({ alertSeverity: 'oops' })).length, 0);
+    eq('demo alert non-demo → []', demoWeatherAlerts({ source: 'entity', demo: { alertSeverity: 'warning' } }).length, 0);
+    eq('demo alert null → []',     demoWeatherAlerts(null).length, 0);
+    eq('demo alert feeds worstAlertSeverity',
+       worstAlertSeverity(demoWeatherAlerts(W({ alertSeverity: 'watch' }))), 'watch');
+
+    // ── the demo sun reaches the solar panel through resolveSunPlan ──
+    // (solar.ts stays ZERO-import: the CALLER hands the override in, and the
+    // authored COMPASS bearing rides the same compassToPlanDeg mapping as
+    // sun.sun's own azimuth, so 2D / 3D / sidebar can never fork a convention.)
+    {
+      const now = Date.UTC(2026, 6, 15, 12);
+      const sunEnt = { state: 'above_horizon', attributes: { azimuth: 90, elevation: 20 } };
+      const cfg = W({ sunElevationDeg: 55, sunAzimuthDeg: 210 });
+      const r0 = resolveSunPlan(sunEnt, 0, now, demoSunAltAz(cfg));
+      eq('demo sun wins over sun.sun', r0.source, 'demo');
+      near('demo sun elev reaches the panel', r0.sun.elevDeg, 55);
+      near('demo sun az maps through compassToPlanDeg', r0.sun.azDeg, compassToPlanDeg(210, 0));
+      const th = 0.42;
+      const rT = resolveSunPlan(sunEnt, th, now, demoSunAltAz(cfg));
+      near('demo sun az honors geo θ', rT.sun.azDeg, compassToPlanDeg(210, th));
+      // No override → the untouched entity/clock ladder (byte-compatible).
+      eq('no override → entity source', resolveSunPlan(sunEnt, 0, now, null).source, 'entity');
+      eq('undefined override → entity source', resolveSunPlan(sunEnt, 0, now).source, 'entity');
+      eq('no override, no entity → clock', resolveSunPlan(null, 0, now).source, 'clock');
+      eq('half-filled demo sun falls back',
+         resolveSunPlan(sunEnt, 0, now, demoSunAltAz(W({ sunElevationDeg: 55 }))).source, 'entity');
+      // The aim itself: a high demo sun tilts the panel, a demo night parks it.
+      const aimUp = solarAim(rT.sun.azDeg, rT.sun.elevDeg, 0);
+      near('demo sun tilts the array (90 − elev)', aimUp.tiltDeg, 35);
+      eq('demo daytime array is not parked', aimUp.parked, false);
+      const night = resolveSunPlan(sunEnt, 0, now, demoSunAltAz(W({ sunElevationDeg: -8, sunAzimuthDeg: 10 })));
+      const aimDn = solarAim(night.sun.azDeg, night.sun.elevDeg, 0);
+      eq('demo night parks the array', aimDn.parked, true);
+      eq('demo night parks at the stow tilt', aimDn.tiltDeg, SOLAR_PARK_TILT);
+    }
+
+    // ── the demo sun reaches the LIGHTING preset + the avatar time bucket ──
+    // (optional trailing override on the shared resolvers; absent = unchanged)
+    {
+      const clockSc = { lightMode: 'clock' };
+      const upStates = { 'sun.sun': { state: 'above_horizon', attributes: { elevation: 45 } } };
+      eq('preset: real sun up → day', resolveScenePreset(clockSc, upStates), 'day');
+      eq('preset: demo sun below horizon → night',
+         resolveScenePreset(clockSc, upStates, undefined, -10), 'night');
+      eq('preset: demo dusk elevation → dusk',
+         resolveScenePreset(clockSc, upStates, undefined, 2), 'dusk');
+      eq('preset: demo high sun → day',
+         resolveScenePreset(clockSc, upStates, undefined, 40), 'day');
+      eq('preset: null override = unchanged',
+         resolveScenePreset(clockSc, upStates, undefined, null), 'day');
+      eq('preset: NaN override = unchanged',
+         resolveScenePreset(clockSc, upStates, undefined, NaN), 'day');
+      // Manual mode is untouched by a demo sun (only clock mode reads it).
+      eq('preset: manual mode ignores the demo sun',
+         resolveScenePreset({ lightMode: 'manual', preset: 'night' }, upStates, undefined, 60), 'night');
+      // The weather DIM modifier still composes on top of an overridden sun.
+      eq('preset: demo sun day + rain → dusk',
+         resolveScenePreset(clockSc, upStates, { condition: 'rainy', affect: true }, 40), 'dusk');
+      // Time bucket: a demo night reads as night to the avatar bubble tiers.
+      const tbReal = resolveTimeBucket(upStates);
+      eq('bucket: real sun up is day-ish', tbReal === 'day' || tbReal === 'morning', true);
+      const tbDemo = resolveTimeBucket(upStates, -20);
+      eq('bucket: demo sun below horizon → night-ish',
+         tbDemo === 'night' || tbDemo === 'late_night', true);
+      eq('bucket: null override unchanged', resolveTimeBucket(upStates, null), tbReal);
+    }
+
+    // ══ Planner wiring (REAL Planner + fake HaApi, config-test idiom) ═════════
+    // Proves the synthesis is wired end to end: setWeather → _reconfigureWeather
+    // → weatherNow + weatherAlerts, with ZERO network calls, and that switching
+    // back to a real source restores the entity path.
+    {
+      const clone = (x) => JSON.parse(JSON.stringify(x));
+      class FakeHa {
+        constructor() { this.map = new Map(); this.states = {}; this._s = []; this._c = []; }
+        connect() { for (const cb of this._c) cb('connected'); for (const cb of this._s) cb(this.states, undefined); }
+        onState(fn) { this._s.push(fn); }
+        onConn(fn) { this._c.push(fn); }
+        push(id, st) { this.states[id] = st; for (const cb of this._s) cb(this.states, id); }
+        callService() { return Promise.resolve(); }
+        async getHistory() { return {}; }
+        async getWeatherForecasts() { return null; }
+        async getDevices() { return []; }
+        async getEntityRegistry() { return []; }
+        async getFloorRegistry() { return []; }
+        async getAreaRegistry() { return []; }
+        async updateEntityRegistry() { return true; }
+        async getCalendarEvents() { return []; }
+        async listRepairsIssues() { return []; }
+        async subscribePersistentNotifications() { return () => {}; }
+        async subscribeMqtt() { return () => {}; }
+        async publishMqtt() { return true; }
+        async getUserData(key) { return this.map.has(key) ? clone(this.map.get(key)) : null; }
+        async setUserData(key, value) { this.map.set(key, clone(value)); return true; }
+        async refreshStates() {}
+      }
+      // Count every network call for the whole planner section — a demo source
+      // must never reach out (it has to work offline).
+      let fetches = 0;
+      const realFetch = window.fetch;
+      window.fetch = (...a) => { fetches++; return realFetch.apply(window, a); };
+      try {
+        localStorage.removeItem('diorama:store:v1');
+        localStorage.removeItem('diorama:configs');
+        const ha = new FakeHa();
+        const p = new Planner();
+        p.connectWith(ha);
+        const t0 = Date.now();
+        while (p.configIndex === null && Date.now() - t0 < 4000) {
+          await new Promise(r => setTimeout(r, 10));
+        }
+        eq('planner: config index loaded', p.configIndex !== null, true);
+
+        // 1. Switch to the demo source and author some weather.
+        p.setWeather(x => {
+          x.source = 'demo';
+          x.demo = { condition: 'snowy', tempC: -6, windKmh: 30, cloudCoverage: 90,
+                     uvIndex: 1, sunElevationDeg: -12, sunAzimuthDeg: 300,
+                     moonPhase: 'first_quarter', alertSeverity: 'watch' };
+        });
+        eq('planner: demo weatherNow synthesized', p.weatherNow != null, true);
+        eq('planner: demo condition',   p.weatherNow.condition, 'snowy');
+        eq('planner: demo tempC',       p.weatherNow.tempC, -6);
+        eq('planner: demo windKmh',     p.weatherNow.windKmh, 30);
+        eq('planner: demo cloudCover',  p.weatherNow.cloudCoverage, 90);
+        eq('planner: demo label',       p.weatherNow.label, 'Demo');
+        eq('planner: demo never stale', p.weatherNow.stale, false);
+        eq('planner: demo isDay from authored sun', p.weatherNow.isDay, false);
+        eq('planner: demo alert synthesized', p.weatherAlerts.length, 1);
+        eq('planner: demo alert severity', p.weatherAlerts[0].severity, 'watch');
+        eq('planner: no forecast arrays under demo',
+           p.forecastDaily === null && p.forecastHourly === null, true);
+        eq('planner: demo sun override resolves',
+           JSON.stringify(demoSunAltAz(p.store.weather)), JSON.stringify({ elevDeg: -12, azDeg: 300 }));
+        eq('planner: demo moon override resolves', demoMoonPhase(p.store.weather), 'first_quarter');
+
+        // 2. Every edit re-synthesizes immediately (no poll, no push needed).
+        p.setWeather(x => { x.demo.condition = 'pouring'; x.demo.tempC = 14; });
+        eq('planner: edit re-synthesizes condition', p.weatherNow.condition, 'pouring');
+        eq('planner: edit re-synthesizes temp',      p.weatherNow.tempC, 14);
+        p.setWeather(x => { x.demo.alertSeverity = undefined; });
+        eq('planner: clearing the demo alert empties the feed', p.weatherAlerts.length, 0);
+
+        // 3. A full state refresh re-derives the identical value (idempotent).
+        const before = JSON.stringify(p.weatherNow);
+        ha.connect();
+        eq('planner: refresh keeps the demo value', JSON.stringify(p.weatherNow), before);
+
+        // 4. Switch back to a real source → the entity path takes over and the
+        //    demo block is left intact (switching back restores it).
+        ha.states['weather.home'] = {
+          entity_id: 'weather.home', state: 'sunny',
+          attributes: { temperature: 25, temperature_unit: '°C', friendly_name: 'Home' },
+        };
+        p.setWeather(x => { x.source = 'entity'; x.entityId = 'weather.home'; });
+        eq('planner: entity source takes over', p.weatherNow.condition, 'sunny');
+        eq('planner: entity temp',    p.weatherNow.tempC, 25);
+        eq('planner: entity label',   p.weatherNow.label, 'Home');
+        eq('planner: demo block retained', p.store.weather.demo.condition, 'pouring');
+        eq('planner: demo sun override inert off-source', demoSunAltAz(p.store.weather), null);
+        eq('planner: demo moon override inert off-source', demoMoonPhase(p.store.weather), null);
+        eq('planner: demo alerts inert off-source', demoWeatherAlerts(p.store.weather).length, 0);
+
+        // 5. Back to demo → the authored values return untouched.
+        p.setWeather(x => { x.source = 'demo'; });
+        eq('planner: returning to demo restores it', p.weatherNow.condition, 'pouring');
+        eq('planner: returning to demo restores temp', p.weatherNow.tempC, 14);
+
+        eq('planner: demo source made ZERO network calls', fetches, 0);
+      } finally {
+        window.fetch = realFetch;
+      }
+    }
 
     // ── run + render ────────────────────────────────────────────────────────
     const grid = document.getElementById('grid');

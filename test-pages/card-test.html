@@ -27,8 +27,16 @@
        T=$(mktemp -d); cp -r src/* "$T"/
        cp test-pages/fake-avatar-store.ts "$T"/avatar-store.ts
        cp test-pages/card-entry.ts        "$T"/card-entry.ts
-       npx esbuild "$T"/card-entry.ts --bundle --format=esm --outfile="$H"/card.mod.js
+       cp tsconfig.json                   "$T"/tsconfig.json
+       npx esbuild "$T"/card-entry.ts --bundle --format=esm \
+         --tsconfig="$T"/tsconfig.json \
+         --alias:lit=$PWD/node_modules/lit/index.js \
+         --alias:lit/decorators.js=$PWD/node_modules/lit/decorators.js \
+         --alias:three=$PWD/node_modules/three \
+         --outfile="$H"/card.mod.js
        cd "$H" && python3 -m http.server 8842
+     NB alias `three` to the package DIRECTORY (not build/three.module.js) or
+     the three/examples/jsm/loaders/* prefix rewrite breaks.
      (esbuild inlines the three-renderer dynamic import — only executed if a 3D
      card mounts; the 2D assertions never touch it.) -->
 <script type="module">

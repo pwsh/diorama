@@ -11,6 +11,11 @@ import type { ValueRule, InfoCardFormat } from './value-rules.js';
 // runtime and keeps the schema's single home in that module.
 import type { FlightGlowRule } from './flights.js';
 export type { FlightGlowRule, FlightGlowCriteria, FlightGlowPattern } from './flights.js';
+// Type-only (erased) — weather.ts owns the HA condition vocabulary + the 8-state
+// moon phase enum, and imports this module type-only in return. The demo weather
+// source (below) authors both, so mirroring the unions here would be a second
+// source of truth waiting to drift.
+import type { HaCondition, MoonPhase } from './weather.js';
 
 export interface Vec2 { x: number; y: number; }
 
@@ -1294,7 +1299,7 @@ export interface Floor {
 // whole in Store.weather; effects3d / affectLighting persist now but are only
 // consumed in phase W2 (3D effects + lighting modifier).
 export interface WeatherConfig {
-  source: 'entity' | 'sensors' | 'openmeteo';
+  source: 'entity' | 'sensors' | 'openmeteo' | 'demo';
   entityId?: string;                      // weather.* (preferred when it exists)
   sensors?: { precip?: string; windSpeed?: string; temp?: string; lightning?: string };
   zip?: string; lat?: number; lon?: number; placeLabel?: string;  // Open-Meteo location (zip geocoded → lat/lon cached)
@@ -1339,6 +1344,44 @@ export interface WeatherConfig {
   // sky pulse (default ON when an alert entity is bound). The chip badge + panel
   // are always shown when alerts exist.
   alerts?: { entityId?: string; beacon?: boolean };
+  // ── Demo source: the user AUTHORS the weather (source === 'demo') ──────────
+  // Read ONLY when source === 'demo'; inert otherwise (so switching back to a
+  // real source restores it byte-identically and the authored values survive).
+  demo?: DemoWeatherConfig;
+}
+
+// Hand-authored weather for the `demo` source. EVERY field is optional —
+// `demoWeatherNow` (weather.ts) is the single home for the defaults, the
+// clamps and the isDay derivation, so nothing else has to know the shape.
+// Everything downstream (chip, 3D precipitation / fog / lightning / wind /
+// clouds, sky dome + sun disc + moon + stars, the scene sun light, solar
+// panels, avatar weather bubbles, the alert beacon) consumes the synthesized
+// WeatherNow exactly as if a real source had reported it.
+export interface DemoWeatherConfig {
+  condition?: HaCondition;        // default 'sunny' (re-gated sunny↔clear-night by isDay)
+  tempC?: number;                 // default 22 (stored °C; the UI edits °F under store.imperial)
+  apparentC?: number;             // feels-like °C
+  humidity?: number;              // %
+  windKmh?: number;               // default 8
+  windBearing?: number;           // deg, meteorological FROM-direction (the same
+                                  //   convention a weather.* entity reports)
+  windGustKmh?: number;
+  cloudCoverage?: number;         // %
+  visibilityKm?: number;          // km (drives the continuous fog density)
+  uvIndex?: number;
+  rainSoon?: boolean;             // "rain within ~3 h" → the storm-brewing effect
+  forecastCondition?: HaCondition;// tomorrow → the ☔/⛄ anticipation bubbles
+  // Absent = leave the real moon path alone (the bound moonEntity, else a full
+  // moon). Set = force the 3D moon prop's phase.
+  moonPhase?: MoonPhase;
+  // BOTH must be finite to override the sun; absent = the real sun (`sun.sun`,
+  // else the deterministic clock arc) exactly as today. `sunAzimuthDeg` is a
+  // COMPASS bearing (° CW from true north) like sun.sun's own attribute, so it
+  // rides the same geo-θ plan mapping — never a second convention.
+  sunElevationDeg?: number;       // −90..90
+  sunAzimuthDeg?: number;         // 0..360 compass
+  // A synthetic active alert (chip badge + panel + the 3D beacon). Absent = none.
+  alertSeverity?: 'advisory' | 'watch' | 'warning';
 }
 
 // One toggleable 3D weather visualization (W3). See weatherEffectEnabled.

@@ -42,7 +42,7 @@ import {
 import { compass8, fmtDistanceM, fmtAccuracyM } from './geo.js';
 import { resolveNorth, northMarkerPos, markerScaleOf } from './compass.js';
 import { calendarLines, weatherCardLines, resolveScreenContent, CAL_HEADER_COLOR, type ScreenMode } from './surfaces.js';
-import { CONDITION_GLYPH, uvBand } from './weather.js';
+import { CONDITION_GLYPH, uvBand, demoSunAltAz } from './weather.js';
 import {
   SOLAR_DEFAULTS, resolveSunPlan, solarAim, solarRotation,
   solarPowerValue, solarPowerColor, solarPowerText,
@@ -3114,7 +3114,11 @@ function drawSolarPanels(ctx: CanvasRenderingContext2D, p: Planner, view: View):
   // for that resolution); θ maps the compass bearing into the plan frame.
   const fit = p.geoFit();
   const theta = fit && fit.transform.quality !== 'none' ? fit.transform.thetaRad : 0;
-  const { sun } = resolveSunPlan(states['sun.sun'] ?? null, theta, Date.now());
+  // A demo weather source's authored sun overrides `sun.sun` here exactly as it
+  // does for the 3D array + the scene sun light (weather.ts demoSunAltAz is the
+  // single override helper), so 2D and 3D can never aim differently.
+  const { sun } = resolveSunPlan(states['sun.sun'] ?? null, theta, Date.now(),
+    demoSunAltAz(p.store.weather));
   const uvRaw = p.weatherNow?.uvIndex;
   const uv = (typeof uvRaw === 'number' && isFinite(uvRaw)) ? uvBand(Math.round(uvRaw)) : null;
   for (const sp of list) {

@@ -21,7 +21,7 @@ export interface SunPlan {
   elevDeg: number;  // degrees above the horizon (negative = below)
 }
 
-export type SunSource = 'entity' | 'clock';
+export type SunSource = 'entity' | 'clock' | 'demo';
 
 // Compass bearing (° CW from true north) → plan-frame azimuth degrees, mapped
 // through the fitted geo rotation θ. Byte-identical to the wind/sun mapping in
@@ -72,14 +72,32 @@ export function sunPlanFromClock(nowMs: number, thetaRad = 0): SunPlan {
   return { azDeg: compassToPlanDeg(azCompass, thetaRad), elevDeg };
 }
 
-// The sun the solar fixture tracks: the REAL `sun.sun` reading when both
-// attributes parse, else the deterministic clock arc. `source` drives the
-// sidebar's "running on the clock fallback" note.
+// The sun the solar fixture tracks: an explicit OVERRIDE when the caller has
+// one, else the REAL `sun.sun` reading when both attributes parse, else the
+// deterministic clock arc. `source` drives the sidebar's "running on the clock
+// fallback" / "demo sun" note.
+//
+// `override` (added for the demo weather source; absent = byte-identical to the
+// original two-way resolution) carries a COMPASS azimuth — the same convention
+// `sun.sun`'s attribute uses — so it maps through the SAME `compassToPlanDeg`
+// as every other path and no second convention can appear. This module stays
+// ZERO-import: the caller resolves the override (weather.ts `demoSunAltAz`) and
+// hands it in as a plain pair.
 export function resolveSunPlan(
   sunState: { state?: string; attributes?: Record<string, unknown> } | null | undefined,
   thetaRad: number,
   nowMs: number,
+  override?: { azDeg: number; elevDeg: number } | null,
 ): { sun: SunPlan; source: SunSource } {
+  if (override) {
+    const oAz = Number(override.azDeg), oEl = Number(override.elevDeg);
+    if (isFinite(oAz) && isFinite(oEl)) {
+      return {
+        sun: { azDeg: compassToPlanDeg(oAz, thetaRad), elevDeg: oEl },
+        source: 'demo',
+      };
+    }
+  }
   const attrs = sunState?.attributes;
   if (attrs) {
     const az = sunAzimuthPlanDeg(attrs['azimuth'], thetaRad);

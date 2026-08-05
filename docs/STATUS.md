@@ -363,6 +363,37 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Demo weather source** (2026-08-05, user-requested "demo weather
+  function selectable in the weather settings"; unreleased — on main
+  past v0.57.0). Fourth `WeatherConfig.source` `'demo'` +
+  `demo?: DemoWeatherConfig` (condition/temps/humidity/wind+bearing+
+  gust/cloud/visibility/UV/rainSoon/forecastCondition/moonPhase/sun
+  elev+az/alertSeverity; whole-object weather passthrough). Pure
+  synthesis in weather.ts (`demoWeatherNow`/`demoSunAltAz`/
+  `demoMoonPhase`/`demoWeatherAlerts` — deterministic, zero network,
+  offline-safe, never stale, label "Demo"); planner
+  `_recomputeLocalWeather` demo branch, alert-entity path bypassed.
+  SEVEN sun consumers overridden (enumerated in CLAUDE.md's Demo
+  source bullet — scene sun light/sky disc/star gate via the
+  `_weatherFxState` stamp, `_keySolar` + 2D `drawSolarPanels` +
+  sidebar solar readout, clock-mode preset, moon resolve, and
+  `resolveTimeBucket` so avatar morning/night bubble tiers follow the
+  demo night); `resolveSunPlan`/`resolveScenePreset`/
+  `resolveTimeBucket` gained optional trailing overrides (absent =
+  byte-identical; solar.ts stays zero-import). Settings ▸ Weather
+  "Demo (hand-authored)" radio swaps in the authoring block
+  (imperial-aware temps; wind stays km/h); source rows + alert bind
+  hide under demo. Forecast ARRAYS stay null (chip strips hide —
+  honest); demo forecastCondition still feeds anticipation bubbles.
+  Tests: WEATHER 350/350 (was 214; incl. a real-Planner section with
+  a window.fetch counter pinning zero network calls), SOLAR 144/144
+  (was 127; §9 demo-sun-reaches-the-array incl. a 2D painted-depth
+  end-to-end pin); WFX all cases, sky-real 32/32, churn 48/48 green.
+  Harness recipe fixes: weather-test header gained the
+  geometry.mod.js line (a pre-existing dynamic import that stalled
+  the page when missing); card-test header recipe corrected (lit/
+  three/tsconfig aliases; alias `three` to the package DIRECTORY).
+
 - **Robot window LOS + mower outdoor containment** (2026-08-05,
   user-directed; unreleased — on main past v0.57.0).
   (1) `segCrossesSolidWall` → `navSolids` (windows solid to robots;

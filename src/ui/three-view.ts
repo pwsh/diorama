@@ -18,9 +18,11 @@ import { resolveScreenContent } from '../surfaces.js';
 import { resolveScenePreset, resolveTimeBucket } from '../time-of-day.js';
 import {
   conditionIntensity, weatherEffectEnabled, worstAlertSeverity, weatherRebuildKey,
-  weatherWindBucket, uvBand,
+  weatherWindBucket, uvBand, demoSunAltAz, demoMoonPhase,
 } from '../weather.js';
-import { sunAzimuthPlanDeg, sunElevationDeg as sunElevationDegOf, resolveSunPlan } from '../solar.js';
+import {
+  sunAzimuthPlanDeg, sunElevationDeg as sunElevationDegOf, resolveSunPlan, compassToPlanDeg,
+} from '../solar.js';
 import { roadCapForRadius } from '../neighborhood.js';
 import { FLIGHTS_DEFAULT_RADIUS_NM, flightShellMm } from '../flights.js';
 import { vehicleRegistryRev } from '../vehicles.js';
@@ -848,7 +850,9 @@ export class ThreeView extends LitElement {
     const weatherMod = wnow
       ? { condition: wnow.condition, affect: w?.affectLighting !== false }
       : undefined;
-    return resolveScenePreset(sc, states, weatherMod);
+    // Demo weather source: an authored sun elevation REPLACES the `sun.sun` read
+    // in clock mode, so a demo midnight really does light the scene as night.
+    return resolveScenePreset(sc, states, weatherMod, demoSunAltAz(w)?.elevDeg ?? null);
   }
 
   // W2: derive the renderer WeatherFxState from planner.weatherNow, mapping the
@@ -893,7 +897,10 @@ export class ThreeView extends LitElement {
     // _keyWeather folds the phase so updateWeather rebuilds on a phase change).
     const sc3 = this._sc3();
     const skyBackdrop = sc3?.skyBackdrop ?? (w != null);
-    const moonPhase = w?.moonEntity ? (states[w.moonEntity]?.state ?? null) : null;
+    // Demo source: an authored phase WINS over the bound entity; absent leaves
+    // the real path (bound entity, else the renderer's full-moon default) alone.
+    const moonPhase = demoMoonPhase(w)
+      ?? (w?.moonEntity ? (states[w.moonEntity]?.state ?? null) : null);
     // "That's no moon" — a pure display flag; the phase machinery is unchanged
     // (see _moonTexture). Folded into weatherRebuildKey's skyBucket because the
     // face is picked when the texture is built.
@@ -939,13 +946,25 @@ export class ThreeView extends LitElement {
     // sun-tracking solar-panel fixture so the scene's sun light and the panel
     // can never disagree about where the sun is (each attribute still resolves
     // independently, so a half-populated sun entity degrades exactly as before).
+    //
+    // The demo weather source overrides BOTH here — this single stamp is what
+    // the scene sun light, the sky sun disc, the star daylight gate and every
+    // _keyWeather sun bucket read, so overriding at the stamp covers them all.
+    // The authored azimuth is a COMPASS bearing (like sun.sun's own attribute),
+    // so it goes through the SAME compassToPlanDeg mapping — never a fork.
     let sunAzimuthDeg: number | null = null;
     let sunElevationDeg: number | null = null;
-    const sun = states['sun.sun'];
-    if (sun) {
-      const attrs = sun.attributes as Record<string, unknown> | undefined;
-      sunAzimuthDeg = sunAzimuthPlanDeg(attrs?.azimuth, theta);
-      sunElevationDeg = sunElevationDegOf(attrs?.elevation);
+    const demoSun = demoSunAltAz(w);
+    if (demoSun) {
+      sunAzimuthDeg = compassToPlanDeg(demoSun.azDeg, theta);
+      sunElevationDeg = demoSun.elevDeg;
+    } else {
+      const sun = states['sun.sun'];
+      if (sun) {
+        const attrs = sun.attributes as Record<string, unknown> | undefined;
+        sunAzimuthDeg = sunAzimuthPlanDeg(attrs?.azimuth, theta);
+        sunElevationDeg = sunElevationDegOf(attrs?.elevation);
+      }
     }
 
     return {
@@ -2081,7 +2100,12 @@ export class ThreeView extends LitElement {
       const solarList = f.solarPanels ?? [];
       if (solarList.length || this._keySolar) {
         const solTheta = fx.skyRotRad ?? 0;
-        const solSun = resolveSunPlan(states['sun.sun'] ?? null, solTheta, Date.now()).sun;
+        // Demo weather source: the authored sun wins here exactly as it does in
+        // the WeatherFxState stamp above, so the array and the scene's sun light
+        // can never disagree (the 2D draw + the sidebar readout resolve it the
+        // same way).
+        const solSun = resolveSunPlan(states['sun.sun'] ?? null, solTheta, Date.now(),
+          demoSunAltAz(p.store.weather)).sun;
         const solUvRaw = p.weatherNow?.uvIndex;
         const solUv = (typeof solUvRaw === 'number' && isFinite(solUvRaw)) ? solUvRaw : null;
         const solBand = solUv != null ? uvBand(Math.round(solUv)).label : '-';
@@ -2503,7 +2527,11 @@ export class ThreeView extends LitElement {
           bound: fu.entity_id != null, on: entityOn[fu.id] === true,
           ...(front ? { fnx: front.x, fny: front.y } : {}) });
       }
-      const ctx: ActivityContext = { entityOn, roomNames, timeBucket: resolveTimeBucket(states), weather, recentTriggers, eventTriggers, doorSensorOpen, fireplaceOn,
+      // A demo-authored sun elevation drives the avatar time bucket too (the
+      // kitchen morning/night bubble tiers), so demo night reads as night to
+      // the characters, not just to the lighting rig.
+      const tbSunElev = demoSunAltAz(p.store.weather)?.elevDeg ?? null;
+      const ctx: ActivityContext = { entityOn, roomNames, timeBucket: resolveTimeBucket(states, tbSunElev), weather, recentTriggers, eventTriggers, doorSensorOpen, fireplaceOn,
         interactive, avatarInteract: p.store.avatarInteractions !== false,
         costumes: p.store.avatarCostumes !== false,
         props: p.store.avatarProps !== false };

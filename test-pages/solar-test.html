@@ -26,6 +26,9 @@
   const cr    = await import('./canvas-render.mod.js' + V);
   const mod   = await import('./assets/three-renderer.js' + V);
   const { Planner } = await import('./planner.mod.js' + V);
+  // (6) demo weather source — the authored-sun override helper (section 9):
+  //       npx esbuild src/weather.ts --bundle --format=esm --outfile=<H>/weather.mod.js
+  const { demoSunAltAz } = await import('./weather.mod.js' + V);
 
   const results = [];
   const assert = (name, cond, detail = '') => results.push({ name, ok: !!cond, detail: String(detail) });
@@ -551,6 +554,88 @@
     assert('sensors layer OFF paints nothing', pvBox(drawTo(80)).n === 0);
     p.store.layers2d = {};
     assert('sensors layer back ON paints again', pvBox(drawTo(80)).n > 50);
+  }
+
+  // ── (9) DEMO weather source: the authored sun reaches the array ───────────
+  // The demo source (Settings ▸ Weather) lets the user place the sun by hand.
+  // weather.ts `demoSunAltAz` is the ONE override helper; every consumer
+  // (three-view's WeatherFxState stamp + its solar key, canvas-render's 2D
+  // draw, the sidebar readout) hands it to resolveSunPlan, which maps the
+  // authored COMPASS bearing through the SAME compassToPlanDeg as sun.sun's own
+  // azimuth — so 2D / 3D / sidebar can never aim differently.
+  {
+    const now = atHour(12);
+    const sunEnt = stOf('sun.sun', 'above_horizon', { azimuth: 200, elevation: 42 });
+    const demoCfg = (demo) => ({ source: 'demo', demo });
+    // Pure override contract.
+    const ov = demoSunAltAz(demoCfg({ sunElevationDeg: 20, sunAzimuthDeg: 305 }));
+    const rd = resolveSunPlan(sunEnt, 0, now, ov);
+    assert('demo sun overrides a live sun.sun', rd.source === 'demo', rd.source);
+    assert('demo elevation reaches resolveSunPlan', near(rd.sun.elevDeg, 20, 1e-9), `${rd.sun.elevDeg}`);
+    assert('demo azimuth maps through compassToPlanDeg',
+      near(rd.sun.azDeg, compassToPlanDeg(305, 0), 1e-9), `${rd.sun.azDeg}`);
+    const th = -0.9;
+    assert('demo azimuth honors geo θ',
+      near(resolveSunPlan(sunEnt, th, now, ov).sun.azDeg, compassToPlanDeg(305, th), 1e-9));
+    assert('no override → the untouched entity ladder',
+      resolveSunPlan(sunEnt, 0, now, null).source === 'entity');
+    assert('a half-filled demo sun falls back to the real one',
+      resolveSunPlan(sunEnt, 0, now, demoSunAltAz(demoCfg({ sunElevationDeg: 20 }))).source === 'entity');
+    assert('a non-demo source never overrides',
+      demoSunAltAz({ source: 'openmeteo', demo: { sunElevationDeg: 20, sunAzimuthDeg: 305 } }) === null);
+
+    // 3D: the demo-resolved aim builds into the mesh exactly like a real sun.
+    const spD = { id: 'spD', x: 2000, y: 3000 };
+    r.updateSolarPanels([spD], () => null, rd.sun.azDeg, rd.sun.elevDeg, null);
+    {
+      const { head } = headOf();
+      assert('3D array tilts to the demo sun (90 − 20)',
+        head && near(head.userData.tiltDeg, 70, 1e-9), head && `${head.userData.tiltDeg}`);
+      assert('3D array is not parked under a demo day sun', head && head.userData.parked === false);
+      const n = normalOf(head);
+      const elev = Math.asin(Math.max(-1, Math.min(1, n.y))) * 180 / Math.PI;
+      assert('3D face normal elevation == the demo sun elevation', near(elev, 20, 1e-4), `elev=${elev.toFixed(4)}`);
+    }
+    const rNight = resolveSunPlan(sunEnt, 0, now, demoSunAltAz(demoCfg({ sunElevationDeg: -14, sunAzimuthDeg: 10 })));
+    r.updateSolarPanels([spD], () => null, rNight.sun.azDeg, rNight.sun.elevDeg, null);
+    {
+      const { head } = headOf();
+      assert('3D array parks under a demo night sun', head && head.userData.parked === true);
+      assert('3D array parks at the stow tilt',
+        head && near(head.userData.tiltDeg, SOLAR_PARK_TILT, 1e-9), head && `${head.userData.tiltDeg}`);
+    }
+
+    // 2D: END-TO-END through the real Planner store — sun.sun says 80° (nearly
+    // flat), the demo source says 20° (steeply tilted). The painted plan DEPTH
+    // proves which one the 2D draw actually used.
+    p.floor().solarPanels = [{ id: 'demo1', x: 2000, y: 3000, label: 'Demo' }];
+    p.store.layers2d = {};
+    const savedWeather = p.store.weather;
+    p.store.weather = undefined;
+    const realHi = pvBox(drawTo(80));                   // no demo → follows sun.sun
+    p.store.weather = { source: 'demo', demo: { sunElevationDeg: 20, sunAzimuthDeg: 0 } };
+    const demoLo = pvBox(drawTo(80));                   // sun.sun still 80°, demo says 20°
+    assert('2D follows the demo sun, not sun.sun',
+      demoLo.n > 50 && demoLo.h < realHi.h * 0.6, `real=${realHi.h} demo=${demoLo.h}`);
+    assert('2D demo aim leaves the panel WIDTH unchanged',
+      Math.abs(realHi.w - demoLo.w) <= 2, `real=${realHi.w} demo=${demoLo.w}`);
+    // A demo night parks the 2D array even while sun.sun is high overhead.
+    const arrowPx2 = (img) => {
+      let n = 0;
+      for (let i = 0; i < img.data.length; i += 4) {
+        if (img.data[i] > 150 && img.data[i + 1] > 110 && img.data[i + 2] < 120) n++;
+      }
+      return n;
+    };
+    p.store.weather = { source: 'demo', demo: { sunElevationDeg: -14, sunAzimuthDeg: 10 } };
+    assert('2D parks under a demo night sun (no sun arrow)', arrowPx2(drawTo(80)) === 0);
+    assert('2D parked face is dimmed under a demo night sun', pvBox(drawTo(80)).n === 0);
+    // A demo source with NO authored sun leaves the real one alone.
+    p.store.weather = { source: 'demo', demo: { condition: 'rainy' } };
+    const noSun = pvBox(drawTo(80));
+    assert('a demo source without a sun keeps following sun.sun',
+      noSun.n > 50 && Math.abs(noSun.h - realHi.h) <= 2, `no-sun=${noSun.h} real=${realHi.h}`);
+    p.store.weather = savedWeather;
   }
 
   // ── render ────────────────────────────────────────────────────────────────
