@@ -1,6 +1,6 @@
 # Project status & pick-up guide
 
-Last updated: 2026-08-01, at **v0.54.0** (one batch on main past it). This is the single document to
+Last updated: 2026-08-05, at **v0.55.0**. This is the single document to
 read (alongside `CLAUDE.md`) to resume work with full context.
 
 ## Where things stand
@@ -338,12 +338,19 @@ instance.
   military/NASA + fiction homages — with the news chopper merged
   into the aircraft dropdown, flight profile preserved; the Death
   Star moon option with real phase lighting).
+  → v0.55.0 wheels up (the vehicle model library: avatar-style
+  selectable packs — 23 ground vehicles placeable as yard/driveway
+  decor, 34 aircraft/spacecraft joining the banner-tow roster with
+  vertical rockets, and military ADS-B skins putting real F-16/
+  Apache silhouettes on live flight traffic; the mailbox rebuilt
+  from reference photos with a click-to-toggle flag; new
+  vehicle-models gallery page + a vehicles guide page + a full
+  docs refresh).
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
 - **Docs pass: gallery images + guide review + generic labels**
-  (2026-08-05, user-directed pre-release; unreleased — on main past
-  v0.54.0). (1) The three consumer-brand ground-vehicle labels went
+  (2026-08-05, user-directed pre-release; released in v0.55.0). (1) The three consumer-brand ground-vehicle labels went
   descriptive-generic ("Brass-era antique car" / "Classic round-bodied
   compact" / "Classic split-window van"); police-box stays excluded.
   (2) Gallery catalog 686→712 subjects / 13 pages: NEW
@@ -360,7 +367,7 @@ instance.
   (they still described count-raises-flag / lid-opens semantics);
   base-space-real comment fixed (all three rockets vertical).
 - **Vehicle model library V3 — live-ADS-B military skins** (2026-08-04;
-  batch 3 of 3, the arc is COMPLETE; unreleased — on main past v0.54.0).
+  batch 3 of 3, the arc is COMPLETE; released in v0.55.0).
   Pure `militarySkinFor(fp, archetype?)` in flights.ts (zero-import):
   exact typeCode F16/F22/A10/B2/B52/AH64 → that BG_CRAFTS craft (type
   vs category B2 collision handled by construction — the table only
@@ -381,7 +388,7 @@ instance.
   skinned rigs (only piston archetypes tow; an A-10 typed onto a
   ga-low bucket is vanishingly rare feed garbage).
 - **Vehicle model library V2 — 34 aircraft/space models + banner-tow
-  wiring** (2026-08-04; batch 2 of 3, unreleased — on main past v0.54.0).
+  wiring** (2026-08-04; batch 2 of 3, released in v0.55.0).
   Five lazy packs: military-historical 10 (Spitfire→Fokker triplane),
   military-modern 9 (BG_CRAFTS dupes excluded), civil 8 (747, DC-3,
   Concorde, Cessna, Cub, float Beaver, Constellation, generic
@@ -407,7 +414,7 @@ instance.
   aliases/tsconfig/define — unbuildable as documented).
 - **Vehicle model library V1 — pack registry + 23 ground vehicles**
   (2026-08-04, user-requested "build the models and wire the interface
-  in"; batch 1 of 3, unreleased — on main past v0.54.0). `src/vehicles.ts`
+  in"; batch 1 of 3, released in v0.55.0). `src/vehicles.ts`
   (pure avatars.ts twin: VehicleModelDef/VehiclePrimitive with color
   SLOTS + V2-reserved spin/emissive; registry + memoized
   `vehicleRecipe(id)` → ObjectRecipe) + `src/vehicle-packs/` (eager
@@ -435,7 +442,7 @@ instance.
   skins.
 - **Mailbox rebuilt from reference photos** (2026-08-01, user-rejected
   the model twice — full review + ground-up rebuild, no patching;
-  unreleased — on main past v0.54.0). The complete review found the
+  released in v0.55.0). The complete review found the
   FLAG POSES INVERTED (the 2026-07-30 "user-specified" spec was
   backwards vs the photos: real UP = arm VERTICAL, stepped ⚑ paddle
   standing above the roofline near the front; DOWN = arm horizontal
