@@ -42,6 +42,8 @@ import {
   furnitureCat, type FurnitureCat, isBinKind, isWetBathKind, isVehicleKind, isStairsKind, STAIRS_MIN_RISE_MM, isClimateApplianceKind, isBladedFanKind,
   isTreeKind, TREE_MIN_HEIGHT_MM, TREE_MAX_HEIGHT_MM,
   isMechanicalApplianceKind, mechanicalBindDomains, mechanicalRun,
+  isRackKind, rackHealth, rackHealthColor,
+  sirenSupports, sirenTones, SIREN_FEATURE,
   closedWallLoops, loopContaining, resolveRoomForPointFuzzy, roomLabel,
   resolveAreaBindingForPoint, outdoorLabel, outdoorConfigured,
   floorsDisplayOrder,
@@ -2348,17 +2350,21 @@ export class Sidebar extends LitElement {
           ` : nothing}
           ${s.kind === 'siren'
             ? html`<button class="btn" style="font-size:11px"
-                    title="Toggle the siren (bound siren.*/switch.* or a local demo state)"
+                    ?disabled=${s.allowControl === false}
+                    title=${s.allowControl === false
+                      ? 'Control is off for this siren — it is a display-only state indicator'
+                      : 'Sound / silence the siren (bound siren.*/switch.* or a local demo state)'}
                     @click=${() => p.triggerSiren(s)}>${sounding ? 'Silence' : 'Sound'}</button>`
             : html`<button class="btn" style="font-size:11px"
                     ?disabled=${bound}
                     title=${bound ? 'bound to HA — state comes from the entity' : 'Toggle the local alarm state'}
                     @click=${() => { if (!bound) p.toggleItem(s); }}>Test</button>`}
         </div>
+        ${s.kind === 'siren' ? this._sirenRows(s, upd) : nothing}
         <div style="font-size:10px;color:var(--text-dim);margin-top:4px;line-height:1.3">
           ${s.kind === 'siren'
             ? (bound
-                ? 'Bound: state follows the entity. A siren.*/switch.* can be toggled (Sound/Silence + clicking the beacon); a binary_sensor is display-only.'
+                ? 'Bound: state follows the entity. A siren.*/switch.* can be sounded/silenced (Sound/Silence + clicking the beacon); a binary_sensor is display-only.'
                 : 'Unbound: Sound/Silence (or clicking the beacon) toggles a local demo state.')
             : (bound
                 ? 'Bound: alarm state follows the binary_sensor (on = alarming).'
@@ -2371,6 +2377,63 @@ export class Sidebar extends LitElement {
           p.save(); p.emitConfig();
         }}>Delete</button>
       </div>
+    `;
+  }
+
+  // Siren-only controls (research/sirens-beacons.md §4.5). "Allow control" is
+  // always shown; the tone / volume / duration inputs appear ONLY when the bound
+  // entity is a `siren.*` that ADVERTISES the matching SirenEntityFeature — a
+  // relay switch.* has no such semantics to trust, and an absent flag means the
+  // param would be rejected. HA never echoes back what is actually playing
+  // (§2.3), so the copy says "sent when triggered", never "now playing".
+  private _sirenRows(s: SafetySensor, upd: (mut: () => void) => void) {
+    const p = this.planner;
+    const isSirenDomain = !!s.entity_id && s.entity_id.startsWith('siren.');
+    const st = isSirenDomain ? p.effectiveState(s) : null;
+    const tones = isSirenDomain && sirenSupports(st, SIREN_FEATURE.TONES) ? sirenTones(st) : [];
+    const hasVol = isSirenDomain && sirenSupports(st, SIREN_FEATURE.VOLUME_SET);
+    const hasDur = isSirenDomain && sirenSupports(st, SIREN_FEATURE.DURATION);
+    return html`
+      <div class="row"><label>Allow control</label>
+        <input type="checkbox" .checked=${s.allowControl !== false}
+               @change=${(e: Event) => upd(() => {
+                 const on = (e.target as HTMLInputElement).checked;
+                 if (on) delete s.allowControl; else s.allowControl = false;
+               })}>
+      </div>
+      ${tones.length ? html`
+        <div class="row"><label>Tone</label>
+          <select .value=${s.tone != null ? String(s.tone) : ''}
+                  @change=${(e: Event) => upd(() => {
+                    const v = (e.target as HTMLSelectElement).value;
+                    if (v === '') s.tone = null; else s.tone = v;
+                  })}>
+            <option value="">— device default —</option>
+            ${tones.map(t => html`<option value=${t.value}>${t.label}</option>`)}
+          </select>
+        </div>` : nothing}
+      ${hasVol ? html`
+        <div class="row"><label>Volume</label>
+          <input type="range" min="0" max="1" step="0.05"
+                 .value=${String(s.volume ?? 1)}
+                 @input=${(e: Event) => upd(() => { s.volume = parseFloat((e.target as HTMLInputElement).value); })}>
+          <span style="font-size:11px;color:var(--text-dim);min-width:30px;text-align:right">
+            ${Math.round((s.volume ?? 1) * 100)}%</span>
+        </div>` : nothing}
+      ${hasDur ? html`
+        <div class="row"><label>Duration (s)</label>
+          <input type="number" min="1" .value=${s.duration != null ? String(s.duration) : ''}
+                 placeholder="device default"
+                 @input=${(e: Event) => upd(() => {
+                   const v = parseFloat((e.target as HTMLInputElement).value);
+                   s.duration = isFinite(v) && v > 0 ? Math.round(v) : null;
+                 })}>
+        </div>` : nothing}
+      ${(tones.length || hasVol || hasDur) ? html`
+        <div style="font-size:10px;color:var(--text-dim);margin-top:2px;line-height:1.3">
+          Sent with siren.turn_on when triggered. Home Assistant does not report which
+          tone is actually playing, so this is a request, not a live readout.
+        </div>` : nothing}
     `;
   }
 
@@ -5492,6 +5555,7 @@ export class Sidebar extends LitElement {
         ${curKind === 'car' || curKind === 'ev_charger' ? this._evChargerRows(piece, upd) : nothing}
         ${curKind === 'mailbox' ? this._mailboxRows(piece, upd) : nothing}
         ${isMechanicalApplianceKind(curKind) ? this._mechanicalRows(piece, upd) : nothing}
+        ${isRackKind(curKind) ? this._rackRows(piece, upd) : nothing}
         ${isBladedFanKind(curKind) ? html`
           <div class="row"><label title="While running, the fan head yaws in a slow ±45° sweep (blades keep spinning inside the sweeping head)">Oscillate</label>
             <input type="checkbox" .checked=${piece.oscillate === true}
@@ -6137,6 +6201,67 @@ export class Sidebar extends LitElement {
         stFlag?.state === 'on' ? 'UP' : (stFlag?.state ?? ''), '#e53935',
         () => this._pickEntity('binary_sensor', id => mut(o => o.flagEntity = id)),
         () => mut(o => o.flagEntity = undefined))}`;
+  }
+
+  // Network-rack rows (research/peripheral-fixtures.md §2.3.4). Deliberately
+  // vendor-agnostic: an ADD-ROW list of "entities I consider bad news" (Synology
+  // security status / disk SMART, UniFi device offline, a System Monitor
+  // process-down boolean, an update.* firmware entity) aggregated into ONE LED,
+  // plus two COSMETIC readouts. There is no reboot button — a one-click reboot
+  // is a footgun on a glance panel (the display-only locks precedent).
+  private _rackRows(piece: Furniture, upd: (mut: () => void) => void) {
+    const p = this.planner;
+    const rk = piece.rack ?? {};
+    const ids = rk.problemEntities ?? [];
+    const stOf = (id: string): string => p.hass?.states?.[id]?.state ?? '';
+    const health = rackHealth(ids.map(id => ({ id, state: stOf(id) })));
+    const col = rackHealthColor(health);
+    const word = health === 'problem' ? 'problem' : health === 'update' ? 'update available'
+               : health === 'ok' ? 'ok' : 'no readings';
+    const mut = (fn: (o: NonNullable<Furniture['rack']>) => void) =>
+      upd(() => { piece.rack = { ...(piece.rack ?? {}) }; fn(piece.rack!); });
+    const stCpu = rk.cpuEntity ? stOf(rk.cpuEntity) : '';
+    const stTemp = rk.tempEntity ? stOf(rk.tempEntity) : '';
+    return html`
+      <div class="row"><label title="Aggregate of the problem entities below — this is the colour of the LED in 2D + 3D">Health</label>
+        <span style="font-size:11px;color:${col};flex:1;font-weight:600">${word}</span>
+      </div>
+      <div class="row"><label>Shape</label>
+        <select .value=${rk.shape ?? 'rack_unit'}
+                @change=${(e: Event) => mut(o => {
+                  const v = (e.target as HTMLSelectElement).value;
+                  o.shape = v === 'tower' ? 'tower' : undefined;
+                })}>
+          <option value="rack_unit">Rack cabinet (19")</option>
+          <option value="tower">NAS tower</option>
+        </select>
+      </div>
+      <div style="font-size:10px;color:var(--text-dim);margin:4px 0 2px">
+        Problem entities — any one in a bad state turns the LED red.
+        An <code>update.*</code> entity turns it amber instead.
+      </div>
+      ${ids.map((id, i) => html`
+        <div class="row">
+          <span style="font-size:11px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+                title=${id}>${id}</span>
+          <span style="font-size:10px;color:var(--text-dim);min-width:52px;text-align:right">${stOf(id) || '—'}</span>
+          <button class="btn" style="font-size:11px" title="Remove"
+                  @click=${() => mut(o => { o.problemEntities = ids.filter((_, k) => k !== i); })}>✕</button>
+        </div>`)}
+      <button class="btn" style="width:100%;font-size:11px;margin-top:2px"
+              @click=${() => this._pickEntity(['binary_sensor', 'sensor', 'update'], id => mut(o => {
+                const cur = o.problemEntities ?? [];
+                if (!cur.includes(id)) o.problemEntities = [...cur, id];
+              }))}>+ Add problem entity…</button>
+      ${this._bindRow('CPU', 'OPTIONAL sensor.* — a cosmetic readout; it never colours the LED',
+        rk.cpuEntity ?? undefined, stCpu, '#4dd0ff',
+        () => this._pickEntity('sensor', id => mut(o => o.cpuEntity = id)),
+        () => mut(o => o.cpuEntity = null))}
+      ${this._bindRow('Temperature', 'OPTIONAL sensor.* — a cosmetic readout; it never colours the LED',
+        rk.tempEntity ?? undefined, stTemp, '#ff8a65',
+        () => this._pickEntity('sensor', id => mut(o => o.tempEntity = id)),
+        () => mut(o => o.tempEntity = null))}
+    `;
   }
 
   private _pickFurnitureEntity(piece: Furniture): void {

@@ -13,7 +13,7 @@ import { slugToName, normMac, localToWorld, segCrossesSolidWall, mowerSweepWaypo
          bufferPolyline, PATH_DEFAULT_WIDTH, poolHeaterState, poolPumpOn,
          rotPointDeg, floorContentBbox, GRID_MM, rulerSetLength,
          furnitureLocalToWorld, furnitureDef, resolveFurnitureDef, resolveItemGroundMm, STAIRS_MIN_RISE_MM,
-         IDENTIFY_TTL_MS,
+         IDENTIFY_TTL_MS, sirenTurnOnData,
          type LockGlyphState, type RoomTemp, type TempSample,
          type BicycleState } from './geometry.js';
 import { solveHomography, applyHomography } from './homography.js';
@@ -2491,6 +2491,7 @@ export class Planner extends EventTarget {
         add(x.printProgressEntity); add(x.biasLight?.entityId);
         add(x.evCharger?.statusEntity); add(x.evCharger?.powerEntity);
         add(x.mailCount?.countEntity); add(x.mailCount?.flagEntity);
+        addAll(x.rack?.problemEntities); add(x.rack?.cpuEntity); add(x.rack?.tempEntity);
       }
       for (const x of f.motionSensors ?? []) add(x.entity_id);
       for (const x of f.envSensors ?? []) add(x.entity_id);
@@ -2596,6 +2597,13 @@ export class Planner extends EventTarget {
     // TV "news" screen source entity (sensor.*/event.* headline feed): config-
     // path so the ticker text + _keyNowPlaying rebuild when new headlines land.
     if ((f2.furniture ?? []).some(fu => fu.newsEntity === id)) return true;
+    // Network-rack health bindings (problem/update sensors + the cosmetic
+    // cpu/temp readouts): a fault flips a handful of times a day, so config-path
+    // is right — the sidebar health badge + the _keyFloor appliance hash (which
+    // carries the aggregate) refresh promptly. Scoped to current-floor pieces.
+    if ((f2.furniture ?? []).some(fu => fu.rack != null && (
+      (fu.rack.problemEntities ?? []).includes(id) ||
+      fu.rack.cpuEntity === id || fu.rack.tempEntity === id))) return true;
     // Bound climate/thermostat entities: current_temperature can tick often, but
     // config-cadence is enough for the sidebar reading + the 3D _keyThermo dirty
     // key (which buckets temps). Scoped to the current floor's bound ids.
@@ -3563,16 +3571,44 @@ export class Planner extends EventTarget {
   }
 
   // Siren fixtures (SafetySensor kind 'siren') are CONTROLLABLE, unlike the
-  // passive smoke/co/gas/leak detectors. Bound siren.*/switch.* → toggle the
-  // entity (siren.toggle / switch.toggle via toggleEntity's domain dispatch); a
-  // bound binary_sensor is display-only (read-only, no-op); unbound → flip
-  // localState (demo/test, like the Test button). Refuses in view mode; kiosk
-  // allowed. Detectors never call this.
+  // passive smoke/co/gas/leak detectors.
+  //
+  // A bound `siren.*` is dispatched BY STATE — `siren.turn_on` (carrying the
+  // fixture's configured tone / volume_level / duration, each sent ONLY when the
+  // entity advertises the matching SirenEntityFeature) when it is not already
+  // sounding, else `siren.turn_off`. That is the valve open_valve/close_valve
+  // precedent: where a domain ships explicit services, never fire a blind
+  // toggle — a re-tap while sounding must silence it, not race the device.
+  // A relay-driven `switch.*` (the common DIY siren, §2.4) has no tone/volume/
+  // duration semantics, so it keeps the generic domain toggle; a bound
+  // binary_sensor is display-only (read-only, no-op); unbound → flip localState
+  // (demo/test, like the Test button).
+  //
+  // Refuses in view mode; kiosk allowed. `allowControl === false` refuses in
+  // EVERY mode (the Door.lockControl 'display' precedent) — this is the one
+  // choke point every call site (2D click, kiosk branch, 3D raycast, sidebar
+  // Sound/Silence button) routes through. Detectors never call this.
   triggerSiren(s: SafetySensor): void {
     if (this.uiMode === 'view') return;
+    if (s.allowControl === false) return;
     if (s.entity_id) {
       const dom = s.entity_id.split('.')[0];
-      if (dom === 'siren' || dom === 'switch') this.toggleEntity(s.entity_id);
+      if (dom === 'siren') {
+        const st = this.effectiveState(s);
+        if (!this.hass) return;
+        // Fire-and-forget, like every other service call here: a firmware that
+        // rejects a param (tuya-local #2980) must not break the click handler.
+        try {
+          if (st?.state === 'on') {
+            this.hass.callService('siren', 'turn_off', { entity_id: s.entity_id });
+          } else {
+            this.hass.callService('siren', 'turn_on',
+              { entity_id: s.entity_id, ...sirenTurnOnData(s, st) });
+          }
+        } catch { /* ignore */ }
+      } else if (dom === 'switch') {
+        this.toggleEntity(s.entity_id);
+      }
       // binary_sensor bound → display-only (nothing to toggle).
     } else {
       this.toggleItem(s);

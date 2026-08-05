@@ -6,7 +6,7 @@ import { customElement } from './define.js';
 // startup path never downloads it.
 import type { ThreeDRenderer, ZoneWorld, HaloWorld, TargetWorld, ActivityContext,
   InteractiveItem, GpsPinWorld, GpsLandmarkWorld, GeoEventWorld, WeatherFxState, VacMapEntry } from '../three-renderer.js';
-import { localToWorld, transformVerts, pointInPolygon, sensorColor, hexToInt, motionColor, lightIconKind, isFirepitKind, furnitureKind, resolveFurnitureDef, furnitureCat, isBinKind, isSpeakerKind, isWetBathKind, isVehicleKind, isClimateApplianceKind, isMechanicalApplianceKind, mechanicalBindDomains, isBladedFanKind, isStairsKind, alarmStateColor, valveOpenness, sprinklerRunning, sprinklerHeadKind, sprinklerArcDeg, sprinklerRadius, sprinklerRotation, flagpoleHoistFraction, doorSpanCenter, isDroopPlant, plantThirsty, PLANT_MOISTURE_DEFAULT_THRESHOLD, hasFunctionalFront, frontVectorPlan } from '../geometry.js';
+import { localToWorld, transformVerts, pointInPolygon, sensorColor, hexToInt, motionColor, lightIconKind, isFirepitKind, furnitureKind, resolveFurnitureDef, furnitureCat, isBinKind, isSpeakerKind, isWetBathKind, isVehicleKind, isClimateApplianceKind, isMechanicalApplianceKind, mechanicalBindDomains, isRackKind, rackHealth, isBladedFanKind, isStairsKind, alarmStateColor, valveOpenness, sprinklerRunning, sprinklerHeadKind, sprinklerArcDeg, sprinklerRadius, sprinklerRotation, flagpoleHoistFraction, doorSpanCenter, isDroopPlant, plantThirsty, PLANT_MOISTURE_DEFAULT_THRESHOLD, hasFunctionalFront, frontVectorPlan } from '../geometry.js';
 import { compass8, fmtDistanceM } from '../geo.js';
 import { resolveNorth, markerScaleOf } from '../compass.js';
 import { parseNowPlaying, isMediaPlayerId } from '../geometry.js';
@@ -1285,6 +1285,16 @@ export class ThreeView extends LitElement {
             clim += `:${isFinite(pp) ? Math.round(pp / 2) : raw}`;
           }
         }
+        // Network rack: the ONE derived value the 3D build consumes is the
+        // aggregate health band, so hash THAT (not the raw member states) —
+        // a flapping diagnostic sensor that doesn't change the band can't
+        // thrash the floor rebuild. cpu/temp are cosmetic sidebar readouts and
+        // deliberately stay out of the key.
+        let rack = '';
+        if (isRackKind(fu.kind) && fu.rack) {
+          rack = rackHealth((fu.rack.problemEntities ?? []).map(id => ({ id, state: states[id]?.state ?? null })));
+          rack += `:${fu.rack.shape ?? ''}`;
+        }
         // "Job done" badge (event-focused thought bubbles): the appliance's
         // finished-window flag drives a blue emissive badge built inside
         // updateFloor, so fold it in — no new dirty key (research §D).
@@ -1297,7 +1307,7 @@ export class ThreeView extends LitElement {
           const thr = fu.moistureThreshold ?? PLANT_MOISTURE_DEFAULT_THRESHOLD;
           moist = isFinite(rd) ? (plantThirsty(rd, thr) ? 't' : 'h') : (fu.plantDemoThirsty ? 't' : 'h');
         }
-        return `${fu.id}:${on}:${door}:${pw}:${tp}:${fu.doorOpen ? 1 : 0}:${bias}:${ev}:${mail}:${jd}:${moist}:${clim}`;
+        return `${fu.id}:${on}:${door}:${pw}:${tp}:${fu.doorOpen ? 1 : 0}:${bias}:${ev}:${mail}:${jd}:${moist}:${clim}:${rack}`;
       }).filter(Boolean).join(',');
       // Room occupancy glow (#1): fold each occupancy-bound room's on/off into
       // _keyFloor so the tinted floor patch rebuilds on an occupancy flip.
@@ -2331,10 +2341,14 @@ export class ThreeView extends LitElement {
       }
       const roomNames: Record<string, string> = {};
       for (const rm of f.rooms ?? []) roomNames[rm.id] = rm.name;
-      // Weather for weather-flavored idle chatter (null when no source resolved).
+      // Weather for weather-flavored idle chatter (null when no source resolved)
+      // + the class-3 weather garments: `condition` gates the umbrella, and
+      // `uvIndex` (Open-Meteo current / a weather.* entity's uv_index attribute)
+      // gates the parasol.
       const wn = p.weatherNow;
       const weather = wn
-        ? { condition: wn.condition, tempC: wn.tempC, forecastCondition: wn.forecastCondition ?? null }
+        ? { condition: wn.condition, tempC: wn.tempC, forecastCondition: wn.forecastCondition ?? null,
+            uvIndex: wn.uvIndex ?? null }
         : null;
       // Recent-trigger scan: detect on/off transitions of interactive fixtures on
       // the CURRENT floor (lights, switches, TVs) against the prev-on map, and

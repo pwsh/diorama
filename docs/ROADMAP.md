@@ -33,8 +33,7 @@ codebase so this doc stays honest as items land.
 - ✅ **Water leak sensors** — SHIPPED 2026-07 batch E (SafetySensor kind `leak`: floor puck + growing puddle). Original brief: (`binary_sensor.moisture`): blue puddle decal
   spreading at the sensor — the W3 puddle texture/fade machinery already
   exists; this is now S effort, high payoff (4).
-- **Sirens** (`siren`): pulsing beacon — shares the smoke/CO beacon
-  component (S/4).
+- ✅ **Sirens** — beacon SHIPPED Phase 1 2026-07-17 (SafetyKind `siren`); the state-picked turn_on/turn_off dispatch + feature-gated tone/volume/duration control surface shipped 2026-08-05. Original brief: pulsing beacon sharing the smoke/CO component (S/4).
 - ✅ **Doorbells** — SHIPPED 2026-07 batch F (`Door.doorbellEntity` + the TransientPulse primitive + bubble tier; event/button/binary_sensor all accepted). Original brief: (`event` domain — Ring/Nest; UniFi Protect also has real
   sustained binary_sensors): needs a small **transient-pulse system**
   (flash-then-decay on an event timestamp, distinct from state-bound
@@ -93,9 +92,7 @@ codebase so this doc stays honest as items land.
   puck, optional loudness ripple), `no2`/`o3`/`aqi` (confirmed sensor
   device_classes; the legacy `air_quality` domain is deprecated — never
   target it), split `voc` vs `volatile_organic_compounds_parts`.
-- **UV index**: `weather.*` carries `uv_index` natively and Open-Meteo's
-  API (already wired) exposes `uv_index`/`uv_index_max` — fold into
-  WeatherNow (field already exists) + a chip readout / parasol flourish (S/2).
+- ✅ **UV index** — chip row + WHO band SHIPPED Phase 1 2026-07-17 (`chipContent.uv`); the high-UV avatar parasol (UV ≥ 8 + sunny, rain wins) shipped 2026-08-05. Original brief: fold into WeatherNow + a chip readout / parasol flourish (S/2).
 - ✅ **Garage-bay vehicle presence** — SHIPPED 2026-07 batch 1b (`car` kind + presence ghost/solid). Original brief: pure DIY pattern (ultrasonic/ToF →
   presence binary_sensor) — a car-silhouette furniture kind bound to a
   binary_sensor covers it with zero new mechanism (S/2).
@@ -130,7 +127,7 @@ codebase so this doc stays honest as items land.
   door + mailbox-lid binary_sensor as a door-like fixture (S–M/2).
 - ✅ **Printers** — PARTIAL: `printer_3d` progress/gantry SHIPPED 2026-07 (mechanical batch); 2D-printer ink levels not built (skip-worthy). Original brief: OctoPrint (3D printing progress/temps) is rich; ink
   printers are IPP-generic (S/2, low spatial value).
-- **NAS/server/network**: dashboards, not spatial — skip except maybe a
+- ✅ **NAS/server/network** — the "maybe" rack LED SHIPPED 2026-08-05 (`network_rack` kind: derived health band problem>update>ok>unknown, display-only). Dashboards remain skipped. Original note: dashboards, not spatial — skip except maybe a
   rack fixture with health LED (1–2). UniFi does NOT expose per-client AP
   association in docs — no room-level Wi-Fi mapping.
 - **Update entities**: sidebar badge at most (non-spatial, 1).

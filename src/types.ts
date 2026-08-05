@@ -94,7 +94,11 @@ export type FurnitureKind =
   | 'heat_pump'       // outdoor slim cabinet; side fan + blue/red/white glow
   | 'sump_pump'       // sump barrel + riser pipe; water scrolls while running
   | 'recirc_pump'     // inline pump on a horizontal pipe run; water scrolls
-  | 'printer_3d';     // open-frame FDM printer; head oscillates + print grows
+  | 'printer_3d'      // open-frame FDM printer; head oscillates + print grows
+  // Network / server rack (peripheral fixtures). A dark cabinet whose ONE
+  // aggregate health LED reads green/amber/red from `Furniture.rack`. Display-
+  // only by design (a reboot button is a footgun on a glance panel).
+  | 'network_rack';
 
 // Contextual activity a piece of furniture anchors (Sims-style character
 // behavior — later phases dwell-trigger these). Set on the kind def (or an
@@ -225,6 +229,18 @@ export interface Furniture {
   oscillate?: boolean;        // bladed floor fans (floor_fan/retro_fan/modern_fan) only: while running, the
                               //   fan HEAD yaws in a slow ±45° sine sweep (blades keep spinning inside the
                               //   sweeping head). Item-level → no repairFloor change.
+  rack?: {                    // network_rack only (research/peripheral-fixtures.md §2.3.4).
+                              //   Binds GENERIC entities, never one vendor's ids: any set of
+                              //   binary_sensor/sensor/update entities the user considers
+                              //   "bad news", aggregated by the pure geometry.rackHealth into
+                              //   one LED (problem > update > ok > unknown). cpu/temp are
+                              //   COSMETIC readouts only — they never colour the LED.
+    problemEntities?: string[];
+    cpuEntity?: string | null;
+    tempEntity?: string | null;
+    shape?: 'rack_unit' | 'tower';   // absent = 'rack_unit' (19" cabinet w/ U bars);
+                              //   'tower' = a desktop NAS-style box w/ drive-bay slots
+  };
   printProgressEntity?: string | null; // printer_3d only: an OPTIONAL secondary sensor.* whose numeric state
                               //   (0–100) is the print progress driving the growing print on the bed. Only
                               //   needed when the piece's own entity_id is a switch/binary_sensor — a
@@ -470,8 +486,11 @@ export interface PlugFixture {
 // spreads a blue puddle decal when alarming (not a beacon). siren = ceiling
 // alert BEACON (bound to a controllable siren.*/switch.*, or a display-only
 // binary_sensor) that erupts into a spinning police-style light-bar sweep +
-// expanding rings while 'on' (sounding); clicking a bound siren TOGGLES it
-// (siren.toggle / switch.toggle), unbound flips localState like the Test button.
+// expanding rings while 'on' (sounding); clicking a bound siren SOUNDS/SILENCES
+// it — a `siren.*` is dispatched BY STATE (siren.turn_on with the configured
+// tone/volume/duration, or siren.turn_off), never a blind toggle (the valve
+// open_valve/close_valve precedent); a relay `switch.*` falls back to the
+// generic toggle; unbound flips localState like the Test button.
 // glass_break = acoustic glass-break detector: a small SQUARE plate (wall or
 // ceiling, mounted at the detector height like the other ceiling family) with a
 // microphone grille, cool blue-violet accent. Alarming adds the shared expanding
@@ -487,6 +506,17 @@ export interface SafetySensor {
   localState?: string;        // unbound manual trigger: 'on' = alarming/sounding; inert once bound
   label?: string;
   locked?: boolean;
+  // ── siren-kind only (research/sirens-beacons.md §4.1). All optional,
+  // item-level → no repairFloor change. Detectors ignore them entirely.
+  allowControl?: boolean;     // absent = true. false = the beacon is a DISPLAY-ONLY state
+                              //   indicator: triggerSiren refuses in every UI mode (the
+                              //   Door.lockControl 'display' precedent — one choke point).
+  tone?: string | number | null;  // sent as `tone` on siren.turn_on, ONLY when the entity
+                              //   advertises SirenEntityFeature.TONES. HA never echoes back
+                              //   what is actually playing (§2.3) — this is a REQUEST, and
+                              //   the UI must never imply live confirmation.
+  volume?: number | null;     // 0..1 → `volume_level`, gated on VOLUME_SET
+  duration?: number | null;   // seconds → `duration`, gated on DURATION
 }
 
 // Alert Beacon fixture (Alert Center, Track B). A ceiling-mounted alert puck —

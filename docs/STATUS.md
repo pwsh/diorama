@@ -349,6 +349,33 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Roadmap close-out: siren controls + UV parasol + network rack**
+  (2026-08-05, user-directed "work on the unshipped features";
+  unreleased — on main past v0.55.0). The audit surprise: sirens (as
+  SafetyKind `siren`) and the UV chip row ALREADY shipped Phase 1
+  2026-07-17 — the roadmap just never got their ✅ (CLAUDE.md never
+  documented them either; both now fixed). What was genuinely missing
+  and shipped: (1) the siren CONTROL surface — `triggerSiren`
+  dispatches by state (turn_off when sounding else turn_on), carrying
+  feature-GATED tone/volume/duration (`SIREN_FEATURE`/`sirenSupports`/
+  `sirenTones` list+dict/`sirenTurnOnData` — unadvertised params never
+  sent, the tuya-local hazard), `allowControl` refusing through the one
+  choke point in every mode; (2) the high-UV avatar PARASOL — 14th
+  PROP_DEF, umbrella's sibling, pure `uvParasolWanted` (UV ≥ 8 + sunny;
+  rain wins, active-prop-releases-by-own-predicate),
+  `ActivityContext.weather.uvIndex` stale-chunk-safe; (3) the
+  `network_rack` FurnitureKind (12U cabinet / NAS tower shapes,
+  `Furniture.rack`, pure `rackHealth` problem>update>ok>unknown with
+  unknown-contributes-nothing honesty, display-only, derived-band
+  appliance-hash folding). Tests: siren 45/45 (was 21), rack 44/44
+  new, props 125/125 (was 99), weather 214/214 (was 200); 15 adjacent
+  suites green; floorplans 425/425. Also this session: the ROADMAP
+  marker-sync pass (21 items) + the sirens/UV/NAS lines corrected.
+  Noted tech debt: the shared beacon-ring primitive refactor
+  (sirens-beacons.md §4.2) remains unextracted — smoke/CO and siren
+  rings are still hand-rolled separately (no behavioral payoff, pure
+  refactor risk; left alone deliberately).
+
 - **Docs pass: gallery images + guide review + generic labels**
   (2026-08-05, user-directed pre-release; released in v0.55.0). (1) The three consumer-brand ground-vehicle labels went
   descriptive-generic ("Brass-era antique car" / "Classic round-bodied

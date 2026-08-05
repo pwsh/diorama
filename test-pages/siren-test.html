@@ -32,6 +32,53 @@
   assert('siren defaults present', typeof geom.SAFETY_DEFAULTS.sirenSweepRevPerS === 'number'
       && typeof geom.SAFETY_DEFAULTS.sirenStrobeHz === 'number');
 
+  // ── (1b) siren CAPABILITY helpers (research §2.1/§2.2) ────────────────────
+  const F = geom.SIREN_FEATURE;
+  assert('SIREN_FEATURE values match HA const.py',
+    F.TURN_ON === 1 && F.TURN_OFF === 2 && F.TONES === 4 && F.VOLUME_SET === 8 && F.DURATION === 16,
+    JSON.stringify(F));
+  const stFull = { state: 'off', attributes: { supported_features: 31, available_tones: ['ping', 'siren'] } };
+  const stPlain = { state: 'off', attributes: { supported_features: 3 } };
+  assert('sirenSupports reads the bitmask', geom.sirenSupports(stFull, F.TONES) === true
+      && geom.sirenSupports(stFull, F.DURATION) === true);
+  assert('sirenSupports false for an unadvertised flag', geom.sirenSupports(stPlain, F.TONES) === false
+      && geom.sirenSupports(stPlain, F.VOLUME_SET) === false);
+  assert('sirenSupports tolerates a missing state / attrs',
+    geom.sirenSupports(null, F.TONES) === false && geom.sirenSupports({}, F.TONES) === false
+    && geom.sirenSupports({ attributes: {} }, F.TONES) === false);
+  assert('sirenSupports tolerates a string bitmask', geom.sirenSupports({ attributes: { supported_features: '4' } }, F.TONES) === true);
+  assert('sirenSupports tolerates garbage', geom.sirenSupports({ attributes: { supported_features: 'nope' } }, F.TONES) === false);
+  // available_tones: list form
+  const tl = geom.sirenTones(stFull);
+  assert('sirenTones parses a list', tl.length === 2 && tl[0].value === 'ping' && tl[0].label === 'ping'
+      && tl[1].value === 'siren', JSON.stringify(tl));
+  // available_tones: dict form (id → human name) — key AND value are both valid
+  // service params, so the row keeps the KEY as the value and the name as label.
+  const td = geom.sirenTones({ attributes: { available_tones: { 1: 'Bell', 2: 'Chime' } } });
+  assert('sirenTones parses a dict (key=value, name=label)',
+    td.length === 2 && td[0].value === '1' && td[0].label === 'Bell' && td[1].label === 'Chime',
+    JSON.stringify(td));
+  assert('sirenTones tolerates absent/garbage', geom.sirenTones(null).length === 0
+      && geom.sirenTones({ attributes: {} }).length === 0
+      && geom.sirenTones({ attributes: { available_tones: 7 } }).length === 0
+      && geom.sirenTones({ attributes: { available_tones: [null, {}, 'ok'] } }).length === 1);
+  // sirenTurnOnData: every param is feature-GATED (a firmware that rejects an
+  // unsupported key must never see it — tuya-local #2980).
+  const cfg = { tone: 'bell', volume: 0.5, duration: 30 };
+  const dFull = geom.sirenTurnOnData(cfg, stFull);
+  assert('turn_on data carries all three when advertised',
+    dFull.tone === 'bell' && dFull.volume_level === 0.5 && dFull.duration === 30, JSON.stringify(dFull));
+  const dPlain = geom.sirenTurnOnData(cfg, stPlain);
+  assert('turn_on data drops every unadvertised param', Object.keys(dPlain).length === 0, JSON.stringify(dPlain));
+  assert('turn_on data omits unset params',
+    Object.keys(geom.sirenTurnOnData({}, stFull)).length === 0);
+  assert('turn_on data clamps volume + rounds duration',
+    geom.sirenTurnOnData({ volume: 5 }, stFull).volume_level === 1
+    && geom.sirenTurnOnData({ volume: -2 }, stFull).volume_level === 0
+    && geom.sirenTurnOnData({ duration: 12.6 }, stFull).duration === 13);
+  assert('turn_on data drops a non-positive duration',
+    geom.sirenTurnOnData({ duration: 0 }, stFull).duration === undefined);
+
   // ── (2) 3D build + sweep rotation + strobe ────────────────────────────────
   const r = new mod.ThreeDRenderer(document.getElementById('c'));
   await r.load();
@@ -115,12 +162,53 @@
 
   const mkSiren = (o) => ({ id: 'x', x: 1000, y: 1000, kind: 'siren', entity_id: null, ...o });
 
-  // Bound siren.* → siren.toggle
+  // Bound siren.* is dispatched BY STATE (never a blind toggle — the valve
+  // open_valve/close_valve precedent).
+  stub.states['siren.horn'] = { entity_id: 'siren.horn', state: 'off', attributes: { supported_features: 3 } };
   svc.length = 0; p.uiMode = 'edit';
   p.triggerSiren(mkSiren({ entity_id: 'siren.horn' }));
-  assert('bound siren.* dispatches siren.toggle',
-    svc.length === 1 && svc[0].domain === 'siren' && svc[0].service === 'toggle',
+  assert('bound siren.* OFF dispatches siren.turn_on',
+    svc.length === 1 && svc[0].domain === 'siren' && svc[0].service === 'turn_on'
+    && svc[0].data.entity_id === 'siren.horn',
     JSON.stringify(svc[0] || null));
+  assert('turn_on sends NO optional params when none are advertised',
+    svc.length === 1 && Object.keys(svc[0].data).length === 1, JSON.stringify(svc[0] && svc[0].data));
+
+  stub.states['siren.horn'] = { entity_id: 'siren.horn', state: 'on', attributes: { supported_features: 3 } };
+  svc.length = 0;
+  p.triggerSiren(mkSiren({ entity_id: 'siren.horn' }));
+  assert('bound siren.* ON dispatches siren.turn_off',
+    svc.length === 1 && svc[0].domain === 'siren' && svc[0].service === 'turn_off',
+    JSON.stringify(svc[0] || null));
+  assert('siren dispatch never uses a blind toggle',
+    svc.every(c => c.service !== 'toggle'), JSON.stringify(svc));
+
+  // tone / volume / duration ride turn_on ONLY when the entity advertises them.
+  stub.states['siren.rich'] = { entity_id: 'siren.rich', state: 'off',
+    attributes: { supported_features: 31, available_tones: ['bell', 'ping'] } };
+  svc.length = 0;
+  p.triggerSiren(mkSiren({ entity_id: 'siren.rich', tone: 'bell', volume: 0.4, duration: 20 }));
+  assert('turn_on carries the configured tone/volume/duration when advertised',
+    svc.length === 1 && svc[0].data.tone === 'bell' && svc[0].data.volume_level === 0.4
+    && svc[0].data.duration === 20, JSON.stringify(svc[0] && svc[0].data));
+  stub.states['siren.poor'] = { entity_id: 'siren.poor', state: 'off', attributes: { supported_features: 3 } };
+  svc.length = 0;
+  p.triggerSiren(mkSiren({ entity_id: 'siren.poor', tone: 'bell', volume: 0.4, duration: 20 }));
+  assert('configured params are withheld from an entity that does not advertise them',
+    svc.length === 1 && svc[0].data.tone === undefined && svc[0].data.volume_level === undefined
+    && svc[0].data.duration === undefined, JSON.stringify(svc[0] && svc[0].data));
+
+  // allowControl:false — a DISPLAY-ONLY beacon. Refuses in EVERY mode (edit too),
+  // for bound and unbound alike (the Door.lockControl 'display' precedent).
+  svc.length = 0;
+  p.triggerSiren(mkSiren({ entity_id: 'siren.horn', allowControl: false }));
+  assert('allowControl:false refuses a bound siren in edit mode', svc.length === 0, `calls=${svc.length}`);
+  const dOnly = mkSiren({ entity_id: null, localState: 'off', allowControl: false });
+  p.triggerSiren(dOnly);
+  assert('allowControl:false refuses an unbound siren (localState unchanged)', dOnly.localState === 'off', dOnly.localState);
+  const allowed = mkSiren({ entity_id: null, localState: 'off', allowControl: true });
+  p.triggerSiren(allowed);
+  assert('allowControl:true still controls', allowed.localState === 'on', allowed.localState);
 
   // Bound switch.* (relay siren) → switch.toggle
   svc.length = 0;
@@ -151,6 +239,19 @@
   p.triggerSiren(vb); p.triggerSiren(vu);
   assert('view mode: bound siren refuses (no service call)', svc.length === 0, `calls=${svc.length}`);
   assert('view mode: unbound siren refuses (localState unchanged)', vu.localState === 'off', vu.localState);
+
+  // Kiosk FIRES (a siren is safety-relevant — same call as the alarm keypad).
+  // Planner.save() no-ops outside edit, so an unbound flip is session-only.
+  p.uiMode = 'kiosk';
+  stub.states['siren.horn'] = { entity_id: 'siren.horn', state: 'off', attributes: { supported_features: 3 } };
+  svc.length = 0;
+  p.triggerSiren(mkSiren({ entity_id: 'siren.horn' }));
+  assert('kiosk mode: bound siren fires turn_on',
+    svc.length === 1 && svc[0].service === 'turn_on', JSON.stringify(svc[0] || null));
+  const ku = mkSiren({ entity_id: null, localState: 'off' });
+  p.triggerSiren(ku);
+  assert('kiosk mode: unbound siren flips localState (session-only)', ku.localState === 'on', ku.localState);
+  p.uiMode = 'edit';
 
   // ── render ────────────────────────────────────────────────────────────────
   const pass = results.filter(x => x.ok).length;

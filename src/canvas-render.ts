@@ -23,6 +23,7 @@ import {
   hexToRgba, lighten, furnitureKind, furnitureCorners, resolveFurnitureDef, isBinKind, isSinkKind, binStateIsFull,
   isClimateApplianceKind, climateApplianceRun,
   isMechanicalApplianceKind, isPumpKind, mechanicalRun, mechanicalGlowColor,
+  isRackKind, rackHealth, rackHealthColor,
   isDroopPlant, plantThirsty, PLANT_MOISTURE_DEFAULT_THRESHOLD,
   isVehicleKind, evStatusOf, evStatusColor, evChargePercent, carChargeState,
   isStairsKind, stairChipArrow, stairsRiseMm, stairsTreadCount, FURNITURE_KINDS,
@@ -5014,6 +5015,29 @@ function drawFurniture(ctx: CanvasRenderingContext2D, p: Planner, view: View,
         ctx.restore();
       }
     }
+    // Network rack: the aggregate health LED, in a front corner of the cabinet.
+    // Same pure resolver the 3D bead uses, so the two views can never disagree.
+    // A 'problem' band pulses (it wants a human); ok/update/unknown sit steady.
+    if (isRackKind(piece.kind)) {
+      const hs = rackHealth((piece.rack?.problemEntities ?? []).map(id => ({
+        id, state: p.hass?.states?.[id]?.state ?? null,
+      })));
+      const col = rackHealthColor(hs);
+      const r = Math.max(2, 2.6 * dpr);
+      const lx = -halfW + r * 2.4, ly = -halfH + r * 2.4;
+      ctx.save();
+      if (hs === 'problem') {
+        const pulse = 0.5 + 0.5 * Math.sin(now * 4);
+        ctx.shadowColor = hexToRgba(col, 0.55 + 0.4 * pulse);
+        ctx.shadowBlur = 10 * dpr;
+      } else if (hs !== 'unknown') {
+        ctx.shadowColor = hexToRgba(col, 0.5);
+        ctx.shadowBlur = 6 * dpr;
+      }
+      ctx.fillStyle = hs === 'unknown' ? hexToRgba(col, 0.5) : col;
+      ctx.beginPath(); ctx.arc(lx, ly, r, 0, Math.PI * 2); ctx.fill();
+      ctx.restore();
+    }
     // 3D printer: a live progress chip beside the frame when a numeric progress
     // is bound (0/100 included — the number is the point).
     if (piece.kind === 'printer_3d' && mech?.progress != null) {
@@ -6061,6 +6085,23 @@ export function drawFurniturePrimitiveLocal(
       ctx.beginPath(); ctx.moveTo(x + w * 0.06, y + h * 0.12); ctx.lineTo(x + w * 0.94, y + h * 0.12); ctx.stroke();
       ctx.fillStyle = '#2ec5b6';
       ctx.fillRect(-w * 0.09, -h * 0.09, w * 0.18, h * 0.18);          // the print
+      break;
+    }
+    case 'network_rack': {
+      // Cabinet rect + a stack of thin rack-unit / drive-bay dashes toward the
+      // front (-Y / top) edge. The health LED is drawn by drawFurniture (it
+      // needs live state, which this pure primitive painter never sees).
+      const tower = piece.rack?.shape === 'tower';
+      ctx.fillStyle = bodyFill('rgba(43,50,56,0.62)', 0.62);
+      ctx.strokeStyle = '#78848c'; ctx.lineWidth = 1.5;
+      ctx.fillRect(x, y, w, h); ctx.strokeRect(x, y, w, h);
+      ctx.fillStyle = 'rgba(15,20,23,0.95)';
+      const rows = tower ? 4 : 5;
+      for (let i = 0; i < rows; i++) {
+        const ry = y + h * (0.12 + 0.155 * i);
+        if (tower) ctx.fillRect(x + w * 0.3, ry, w * 0.4, Math.max(1.5, h * 0.085));
+        else ctx.fillRect(x + w * 0.12, ry, w * 0.76, Math.max(1.5, h * 0.075));
+      }
       break;
     }
     case 'exercise_equipment': {

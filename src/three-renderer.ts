@@ -16,6 +16,8 @@ import {
   hasFunctionalFront, frontVectorPlan,
   isClimateApplianceKind, isBladedFanKind, climateApplianceRun,
   isMechanicalApplianceKind, isPumpKind, mechanicalRun, mechanicalGlowColor, type MechanicalRun,
+  isRackKind, rackHealth, rackHealthColor, type RackHealth,
+  uvParasolWanted,
   plantThirsty, PLANT_MOISTURE_DEFAULT_THRESHOLD,
   isStairsKind, stairsRiseMm, stairsTreadCount,
   isTreeKind, treeHeightMm,
@@ -430,7 +432,10 @@ export interface ActivityContext {
   // bubbles only.
   // Current weather for weather-flavored idle chatter (condition + temp + a
   // best-effort tomorrow forecast for anticipation glyphs). Null when no source.
-  weather?: { condition: string; tempC: number | null; forecastCondition?: string | null } | null;
+  // `uvIndex` (optional within the optional block — a stale app.js chunk simply
+  // omits it) additionally gates the class-3 PARASOL prop, the UV flourish.
+  weather?: { condition: string; tempC: number | null; forecastCondition?: string | null;
+              uvIndex?: number | null } | null;
   // Recently toggled interactive fixtures (lights/switches/TVs/fireplaces) —
   // x/y in WORLD mm, ageS since the transition. Drives the top-priority
   // "someone just flipped this near me" bubble tier. three-view maintains the
@@ -1658,6 +1663,25 @@ export const PROP_DEFS: Record<string, PropDef> = {
     ],
     poseHold: () => ({ rSh: 2.0, rEl: 0.4 }),
   },
+  parasol: {
+    // The UV flourish (research/moon-uv-vehicle.md). Structurally the umbrella's
+    // sibling — same class 3 "passive weather garment", same raised-arm hold and
+    // upright authoring frame — but read as a SUN parasol at a glance: a wider,
+    // shallower, pale canopy on a pale shaft, tilted back off the head. Rain
+    // beats sun (the caller checks the umbrella first), so the two never fight.
+    id: 'parasol', users: 'hands', category: 'weather', cls: 3, sessionDurS: [0, 0],
+    handPitch: 2.40,
+    primitives: [
+      { shape: 'cylinder', size: [13, 13, 1010], anchor: 'handR', pos: [0, 215, 130], rot: [0.5, 0, 0], color: 0xd9cdb4 },
+      // Shallow dome (a parasol is flatter than a rain umbrella) + a scalloped
+      // rim ring just below it, so the silhouette differs even at kiosk zoom.
+      { shape: 'cone', size: [640, 210], anchor: 'handR', pos: [0, 650, 395], rot: [0.5, 0, 0], color: 0xf3e6c8 },
+      { shape: 'cylinder', size: [640, 620, 26], anchor: 'handR', pos: [0, 548, 340], rot: [0.5, 0, 0], color: 'tint' },
+      // Finial — sits ON the dome apex, small enough to read as a knob.
+      { shape: 'sphere', size: 40, anchor: 'handR', pos: [0, 772, 460], color: 0xd9cdb4 },
+    ],
+    poseHold: () => ({ rSh: 2.0, rEl: 0.4 }),
+  },
   plate_of_food: {
     // Plate held LEVEL (upright frame) in the left hand; the right hand lifts
     // food to the mouth on a slow beat.
@@ -2458,6 +2482,10 @@ export class ThreeDRenderer {
   // This frame's weather condition + entityOn map (captured from ctx) — read by
   // the prop trigger classes (umbrella weather gate; popcorn TV-on room gate).
   private _propWeatherCondition: string | null = null;
+  // This frame's UV index (ctx.weather.uvIndex) — gates the class-3 PARASOL the
+  // same way the condition gates the umbrella. Null when no weather source /
+  // provider reports it (a stale app.js chunk sends no field → no parasols).
+  private _propUvIndex: number | null = null;
   private _entityOnFrame: Record<string, boolean> = EMPTY_ENTITY_ON;
   private _raycaster = new THREE.Raycaster();
   // Per-target humanoid rigs, persisted across frames so we can carry
@@ -6371,6 +6399,17 @@ export class ThreeDRenderer {
           if (ps.progress != null) mech = { ...mech, running: ps.running || mech.running, progress: ps.progress };
         }
       }
+      // Network rack: aggregate the bound problem/update entities into ONE
+      // health band through the pure `rackHealth` (problem > update > ok >
+      // unknown). No reading at all → 'unknown' (a dim LED), never a false
+      // green — the same "unknown ≠ good" honesty the heat-map follows.
+      let rackHl: RackHealth | undefined;
+      if (isRackKind(fu.kind)) {
+        const ids = fu.rack?.problemEntities ?? [];
+        rackHl = rackHealth(ids.map(id => ({
+          id, state: stateProvider ? (stateProvider(id)?.state ?? null) : null,
+        })));
+      }
       // Bound temperature reading (stove/oven/fridge): a rounded chip/sprite.
       let tempLabel: string | undefined;
       if (fu.tempEntity && stateProvider) {
@@ -6438,7 +6477,7 @@ export class ThreeDRenderer {
                                        { applianceOn, ledScale, doorSink, plantSink, sinkSink, tempLabel, binFull, speakerPlaying, biasOn, biasColor,
                                          vehicleGhost, evCharging, evColor, mailFlagUp, mailCountLabel, jobDone,
                                          climateRunning, climateAir, fanRps, oscillate: (fu as Furniture).oscillate === true,
-                                         mech });
+                                         mech, rackHealth: rackHl });
       grp.position.y += furnGY;   // outdoor pieces stand on the surroundings grade
       this._shadowFlags(grp);
       // Custom-recipe front-arrow indicator: custom objects draw only as a
@@ -6544,9 +6583,13 @@ export class ThreeDRenderer {
         grp.userData = { ...grp.userData, kind: 'media', entity_id: fu.entity_id ?? null, fixtureId: fu.id };
         this._mediaClickables.push(grp);
       }
+      // Network racks are DISPLAY-ONLY (research §4.3: a one-click reboot is a
+      // footgun on a glance panel) — tagged with the fixtureId ONLY, exactly like
+      // vehicles/chargers, so a state-driven build is locatable without ever
+      // becoming a raycast click target.
       // Vehicles / EV chargers: tag the group with its fixtureId (no `kind` →
       // NOT raycast-clickable) so state-driven builds are locatable.
-      if (isVehicleKind(fu.kind) || fu.kind === 'ev_charger') {
+      if (isVehicleKind(fu.kind) || fu.kind === 'ev_charger' || isRackKind(fu.kind)) {
         grp.userData = { ...grp.userData, fixtureId: fu.id };
       }
       // Mailbox: click-tagged like a bin ('media' → plain toggleItem). Unbound
@@ -8903,7 +8946,8 @@ export class ThreeDRenderer {
                                    climateRunning?: boolean;
                                    climateAir?: import('./geometry.js').HvacAirflowKind;
                                    fanRps?: number; oscillate?: boolean;
-                                   mech?: MechanicalRun }): THREE.Group {
+                                   mech?: MechanicalRun;
+                                   rackHealth?: RackHealth }): THREE.Group {
     // A vehicle-pack model resolves into the SAME ObjectRecipe shape a custom
     // object does (vehicles.ts is pure + shared by both graphs, like avatars.ts),
     // so the generic recipe builder below renders it with no new build path. An
@@ -10975,6 +11019,60 @@ export class ThreeDRenderer {
                               running: !!opts?.mech?.running, progress: prog });
         break;
       }
+      case 'network_rack': {
+        // Deliberately the plainest body in the appliance family: a dark
+        // cabinet + gear, whose ONE aggregate health LED is the whole feature
+        // (research §4.3 — "a status LED on a cabinet, not a dashboard").
+        // Display-only: never click-tagged, so a raycast passes through it.
+        const shell = this._mat({ color: tint, roughness: 0.75, metalness: 0.15 });
+        const gear = this._mat({ color: 0x1b2126, roughness: 0.85 });
+        const vent = this._mat({ color: 0x0f1417, roughness: 0.9 });
+        const tower = (fu as Furniture).rack?.shape === 'tower';
+        const frontZ = -D / 2;
+        if (tower) {
+          // Desktop NAS: a compact box (Synology DS920+ proportions) sitting on
+          // a low plinth, with a column of drive-bay slots on the front face.
+          const plinthH = Math.max(20, HT * 0.04);
+          addBox(W * 0.92, plinthH, D * 0.9, gear, 0, plinthH / 2, 0);
+          const bodyH = HT - plinthH;
+          addBox(W * 0.86, bodyH, D * 0.86, shell, 0, plinthH + bodyH / 2, 0);
+          const bays = 4;
+          for (let i = 0; i < bays; i++) {
+            const by = plinthH + bodyH * (0.17 + 0.19 * i);
+            // Slot faces are PROUD of the body face (never coplanar — the
+            // coincident-face gotcha), and inset in x so their caps stay buried.
+            addBox(W * 0.6, bodyH * 0.14, 14, vent, 0, by, frontZ * 0.86 - 8);
+          }
+        } else {
+          // 19" cabinet: side posts + top/bottom panels + a stack of thin
+          // rack-unit faceplates behind them (each inset so nothing is flush).
+          const postW = Math.max(24, W * 0.06);
+          addBox(W, HT * 0.05, D, shell, 0, HT * 0.025, 0);                        // base panel
+          addBox(W, HT * 0.045, D, shell, 0, HT - HT * 0.0225, 0);                 // top panel
+          for (const sx of [-1, 1])
+            addBox(postW, HT * 0.9, D, shell, sx * (W / 2 - postW / 2), HT * 0.5, 0);
+          addBox(W - postW * 2.4, HT * 0.88, D * 0.9, gear, 0, HT * 0.5, D * 0.03); // interior
+          const units = 5;
+          for (let i = 0; i < units; i++) {
+            const uy = HT * (0.13 + 0.16 * i);
+            addBox(W - postW * 2.6, HT * 0.1, 16, vent, 0, uy, frontZ * 0.9 - 8);   // 1U faceplate
+          }
+        }
+        // The aggregate health LED — a small emissive bead on the FRONT face
+        // (local -Z), coloured by the pure rackHealth resolver. 'unknown' stays
+        // dark-ish rather than green: no reading is not a clean bill of health.
+        const hs: RackHealth = opts?.rackHealth ?? 'unknown';
+        const hex = hexToInt(rackHealthColor(hs));
+        const ledY = tower ? HT * 0.86 : HT * 0.93;
+        const led = new THREE.Mesh(new THREE.SphereGeometry(Math.max(14, W * 0.035), 10, 8),
+          this._mat({ color: hex, emissive: hex,
+                      emissiveIntensity: hs === 'unknown' ? 0.15 : 1.0 }));
+        led.position.set(-W * 0.3, ledY, frontZ - 10);
+        led.userData.outlineSkip = true;   // no dark shell on a glowing bead
+        led.userData.rackLed = true;
+        grp.add(led);
+        break;
+      }
       case 'exercise_equipment': {
         // Treadmill: raised running deck + side rails, uprights + console at
         // the front (-Z), matching the appliance front-faces-camera convention.
@@ -11414,9 +11512,11 @@ export class ThreeDRenderer {
     // per-frame animation here; three-view folds appliance state into _keyFloor
     // so this rebuilds on a change). Front face is local -Z.
     // (Mechanical/utility plant is excluded too — its heat/cool/fan GLOW is its
-    // state language; a green dot on top of a red-glowing boiler reads wrong.)
+    // state language; a green dot on top of a red-glowing boiler reads wrong.
+    // The rack is excluded for the same reason: its HEALTH LED is the language,
+    // and a second green dot beside an amber/red one would be a contradiction.)
     if (opts?.applianceOn && furnitureCat(def) === 'appliance' &&
-        !isClimateApplianceKind(kind) && !isMechanicalApplianceKind(kind)) {
+        !isClimateApplianceKind(kind) && !isMechanicalApplianceKind(kind) && !isRackKind(kind)) {
       const led = new THREE.Mesh(
         new THREE.BoxGeometry(34, 34, 12),
         this._mat({ color: 0x69f0ae, emissive: 0x00c853,
@@ -20293,6 +20393,7 @@ export class ThreeDRenderer {
     this._avatarInteractOn = ctx?.avatarInteract === true;
     this._avatarPropsOn = ctx?.props !== false;   // absent/true = on (stale-chunk safe)
     this._propWeatherCondition = ctx?.weather?.condition ?? null;
+    this._propUvIndex = ctx?.weather?.uvIndex ?? null;
     this._entityOnFrame = entityOn;
     this._interactBucket = ctx?.timeBucket ?? 'day';
     // RAW world target positions this frame, keyed by target — the bed-covers
@@ -23110,6 +23211,30 @@ export class ThreeDRenderer {
     return this._outdoors(t.x, t.y);
   }
 
+  // Class 3 parasol — the UV flourish, structurally identical to the umbrella
+  // (passive weather garment, ALL rigs, outdoors-gated) but driven by the UV
+  // index rather than the condition family: harsh sun (UV ≥ 8, the WHO "very
+  // high" band where shade is the standard advice) under a clear DAY sky. Rain
+  // WINS — _updatePropTriggers checks the umbrella first, and this predicate
+  // also refuses outright while a rain condition holds so the two can never
+  // both report "wanted" for the same frame.
+  private _wantParasol(h: Humanoid, t: TargetWorld): boolean {
+    if (!propEligible(h, PROP_DEFS.parasol)) return false;
+    const cond = this._propWeatherCondition;
+    if (cond && RAIN_FAMILY.has(cond)) return false;
+    if (!uvParasolWanted(this._propUvIndex, cond)) return false;
+    return this._outdoors(t.x, t.y);
+  }
+
+  // Is the rig's ACTIVE class-3 garment still wanted? (Which prop it is matters:
+  // walking out of the rain must drop an umbrella even while the UV gate would
+  // hold a parasol, and vice versa.)
+  private _wantActiveWeatherProp(h: Humanoid, t: TargetWorld): boolean {
+    if (h.propKind === 'parasol') return this._wantParasol(h, t);
+    if (h.propKind === 'umbrella') return this._wantUmbrella(h, t);
+    return false;   // an unknown class-3 prop releases rather than sticking
+  }
+
   // ── Shared-prop trigger driver (per rig, per frame) ─────────────────────────
   // Advances an active session (interrupt / timeout / condition), then — if free
   // — evaluates the start conditions for Classes 2/3/4. Class 1 (goal-driven
@@ -23128,7 +23253,7 @@ export class ThreeDRenderer {
       // lie blend engaging (same interrupt idiom as the idle-fidget block).
       const interrupted = !propsOn || h.act > 0.1 || h.privacy > 0.3 || h.lie > 0.5;
       if (cls === 3) {
-        if (interrupted || !this._wantUmbrella(h, t)) this._endPropSession(h);
+        if (interrupted || !this._wantActiveWeatherProp(h, t)) this._endPropSession(h);
         return;
       }
       // Class 2/4 (ambient, fires-in-place) also interrupt if the rig walks off;
@@ -23140,8 +23265,10 @@ export class ThreeDRenderer {
 
     if (!propsOn) return;
 
-    // ── Class 3 umbrella — ALL rigs (real + synthetic). Passive weather equip. ──
+    // ── Class 3 weather garments — ALL rigs (real + synthetic). Passive equip. ──
+    // Rain first: an umbrella beats a parasol whenever both could apply.
     if (this._wantUmbrella(h, t)) { this._startPropSession(h, 'umbrella', null, null, Infinity); return; }
+    if (this._wantParasol(h, t)) { this._startPropSession(h, 'parasol', null, null, Infinity); return; }
 
     // Every remaining class is SYNTHETIC-only (ai / roam) — the avatar-device-
     // interaction precedent ("real people mirror reality, not fiction").

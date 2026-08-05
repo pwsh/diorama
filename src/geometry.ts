@@ -1753,6 +1753,66 @@ export function leakPuddleRadiusMm(ageS: number): number {
 // detectors — clicking it toggles the bound entity / flips localState.
 export function safetyIsSiren(kind: SafetyKind): boolean { return kind === 'siren'; }
 
+// ── Siren capabilities (research/sirens-beacons.md §2.1) ───────────────────
+// HA's `SirenEntityFeature` IntFlag, exact values from siren/const.py. Read off
+// the standard `supported_features` attribute — it rides every get_states
+// snapshot + state_changed event, so no extra plumbing.
+export const SIREN_FEATURE = { TURN_ON: 1, TURN_OFF: 2, TONES: 4, VOLUME_SET: 8, DURATION: 16 } as const;
+// Does this RESOLVED state envelope advertise a feature? Defensive: a missing /
+// non-numeric supported_features reads as "no optional features" (turn_on and
+// turn_off are always attempted — every real siren supports at least one, and a
+// rejected call is fire-and-forget anyway).
+export function sirenSupports(
+  st: { attributes?: Record<string, unknown> } | null | undefined,
+  flag: number,
+): boolean {
+  const f = st?.attributes?.supported_features;
+  const n = typeof f === 'number' ? f : parseFloat(String(f ?? ''));
+  return isFinite(n) && (n & flag) !== 0;
+}
+// `available_tones` is a CAPABILITY attribute, either a list[int|str] or a
+// dict[int, str] (id → human name); either the key or the value is a valid
+// `tone` service param. Normalized to {value,label} rows for the sidebar select.
+// Anything unparseable → [] (never throws — the mqtt-ws/evStatusOf discipline).
+export function sirenTones(
+  st: { attributes?: Record<string, unknown> } | null | undefined,
+): { value: string; label: string }[] {
+  const raw = st?.attributes?.available_tones;
+  if (Array.isArray(raw)) {
+    const out: { value: string; label: string }[] = [];
+    for (const t of raw) {
+      if (t == null || typeof t === 'object') continue;
+      const v = String(t);
+      if (v !== '') out.push({ value: v, label: v });
+    }
+    return out;
+  }
+  if (raw && typeof raw === 'object') {
+    const out: { value: string; label: string }[] = [];
+    for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+      if (v == null || typeof v === 'object') continue;
+      out.push({ value: k, label: String(v) });
+    }
+    return out;
+  }
+  return [];
+}
+// Service data for `siren.turn_on`, gated per-param by the feature flag (§2.2).
+// A param the entity doesn't advertise is NEVER sent (some firmware rejects an
+// unsupported key outright — tuya-local #2980). entity_id is added by the caller.
+export function sirenTurnOnData(
+  s: { tone?: string | number | null; volume?: number | null; duration?: number | null },
+  st: { attributes?: Record<string, unknown> } | null | undefined,
+): Record<string, unknown> {
+  const data: Record<string, unknown> = {};
+  if (s.tone != null && s.tone !== '' && sirenSupports(st, SIREN_FEATURE.TONES)) data.tone = s.tone;
+  if (s.volume != null && isFinite(s.volume) && sirenSupports(st, SIREN_FEATURE.VOLUME_SET))
+    data.volume_level = Math.max(0, Math.min(1, s.volume));
+  if (s.duration != null && isFinite(s.duration) && s.duration > 0 && sirenSupports(st, SIREN_FEATURE.DURATION))
+    data.duration = Math.max(1, Math.round(s.duration));
+  return data;
+}
+
 // ── Presence zones (FP2-style occupancy polygons, roadmap #5) ───────────────
 export const PRESENCE_ZONE_DEFAULTS = { color: '#26c6da', maxVerts: 12 };
 export function presenceZoneColor(z: { color?: string }): string {
@@ -2681,6 +2741,10 @@ export const FURNITURE_KINDS: Record<FurnitureKind, FurnitureKindDef> = {
   sump_pump:     { label: 'Sump pump',     w: 350,  h: 350,  ht: 450,  back: 'none', color: 0x546e7a, cat: 'appliance', frontArrow: false },
   recirc_pump:   { label: 'Recirc pump',   w: 300,  h: 180,  ht: 220,  back: 'none', color: 0x7a5c3a, cat: 'appliance', frontArrow: false },
   printer_3d:    { label: '3D printer',    w: 420,  h: 420,  ht: 480,  back: 'none', color: 0x37474f, cat: 'appliance', mountable: true },
+  // Home network rack: a short floor cabinet (19" gear needs ~600 mm of width;
+  // home racks run 400–600 mm deep and a few U tall — 1200 mm ≈ a 12U cabinet,
+  // NOT a 42U datacentre tower). Front (vented door / drive bays) = -Z.
+  network_rack:  { label: 'Network rack',  w: 600,  h: 500,  ht: 1200, back: 'none', color: 0x2b3238, cat: 'appliance' },
 };
 
 // Ground / yard covering kinds (the "yard" arc): a flat display color for the 2D
@@ -3088,6 +3152,63 @@ export function mechanicalRun(
   // the physical truth — the unit is NOT moving heat.
   if (action) return { running: false, glow: 'none', progress: null };
   return { running: true, glow: natural, progress: null };
+}
+
+// ── Network / server rack (research/peripheral-fixtures.md §2.3) ───────────
+// A deliberately MODEST fixture: a dark cabinet + ONE aggregate health LED. The
+// underlying data (CPU %, disk counters, bandwidth) is dashboard material, not
+// spatial — §2.3.1 notes almost all of it is diagnostic + disabled-by-default.
+export function isRackKind(kind: FurnitureKind | undefined): boolean {
+  return kind === 'network_rack';
+}
+export type RackHealth = 'ok' | 'update' | 'problem' | 'unknown';
+export const RACK_HEALTH_COLORS: Record<RackHealth, string> = {
+  ok: '#4caf50', update: '#ffb300', problem: '#e53935', unknown: '#5c6a72',
+};
+export function rackHealthColor(h: RackHealth): string { return RACK_HEALTH_COLORS[h] ?? RACK_HEALTH_COLORS.unknown; }
+// States that mean "nothing is wrong" for a bound problem entity. Anything
+// present-but-not-here (a text status like 'degraded'/'failed'/'attention', or a
+// binary_sensor 'on') reads as a PROBLEM; an absent/unknown reading reads as
+// UNKNOWN, never as a problem (the heat-map rule: unknown ≠ bad).
+const RACK_GOOD_STATES = new Set(['off', 'false', 'ok', 'normal', 'good', 'healthy',
+                                  'online', 'connected', 'up', 'idle', 'clear', 'safe']);
+const RACK_UNKNOWN_STATES = new Set(['', 'unknown', 'unavailable', 'none', 'null']);
+// Aggregate health from the bound entity list, precedence problem > update > ok
+// > unknown (§2.3.4). An `update.*` entity in 'on' means "firmware update
+// available" = amber, NOT a fault — every other domain's 'on' is a fault.
+export function rackHealth(entries: { id: string; state: string | null | undefined }[]): RackHealth {
+  let sawOk = false, sawUpdate = false;
+  for (const e of entries ?? []) {
+    const id = String(e?.id ?? '');
+    if (!id) continue;
+    const s = String(e?.state ?? '').trim().toLowerCase();
+    if (RACK_UNKNOWN_STATES.has(s)) continue;                 // no reading → no opinion
+    if (id.startsWith('update.')) {
+      if (s === 'on' || s === 'true') sawUpdate = true; else sawOk = true;
+      continue;
+    }
+    if (RACK_GOOD_STATES.has(s)) { sawOk = true; continue; }
+    return 'problem';
+  }
+  if (sawUpdate) return 'update';
+  return sawOk ? 'ok' : 'unknown';
+}
+
+// ── UV parasol (research/moon-uv-vehicle.md §UV flourish) ──────────────────
+// The chip readout is the core UV feature; the parasol is the flourish. It is a
+// PASSIVE weather garment on the avatar-prop system (the umbrella precedent —
+// class 3, all rigs incl. radar/BLE), wanted while the sun is genuinely harsh:
+// UV ≥ 8 ("very high" on the WHO band, where shade is the standard advice) AND
+// a clear DAY condition. HA's day-clear condition is 'sunny' ('clear-night' is
+// its night twin, and rain always wins — the caller checks the umbrella first).
+export const UV_PARASOL_MIN = 8;
+const UV_SUN_CONDITIONS = new Set(['sunny']);
+export function uvParasolWanted(
+  uvIndex: number | null | undefined,
+  condition: string | null | undefined,
+): boolean {
+  if (typeof uvIndex !== 'number' || !isFinite(uvIndex) || uvIndex < UV_PARASOL_MIN) return false;
+  return !!condition && UV_SUN_CONDITIONS.has(condition);
 }
 
 // Floodlight/exhaust wall-plate depth (three-renderer housing Z). Wall-mount

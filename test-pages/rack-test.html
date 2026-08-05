@@ -1,0 +1,225 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>network rack test</title>
+<style>html,body{margin:0;background:#111}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<script type="module">
+  // Network / server rack fixture (research/peripheral-fixtures.md §2.3/§4.3):
+  // ONE `network_rack` FurnitureKind (cat 'appliance') whose single aggregate
+  // health LED is the whole feature. Deliberately modest — a status LED on a
+  // cabinet, not a dashboard.
+  //   pure : geometry.mod.js — FURNITURE_KINDS entry, isRackKind, the
+  //          rackHealth precedence matrix (problem > update > ok > unknown) and
+  //          rackHealthColor.
+  //   3D   : built renderer chunk — both bodyShapes build; the LED bead adopts
+  //          the resolved health colour; 'unknown' stays dark; the generic green
+  //          in-use LED is suppressed; the rack is NOT click-tagged (display-only).
+  //   2D   : canvas-render.mod.js drawFurniturePrimitiveLocal paints pixels for
+  //          both shapes.
+  //
+  // Build (from the repo root):
+  //   npm run build
+  //   H=/tmp/diorama-rack; mkdir -p $H; cp -r dist/* test-pages/* $H/
+  //   npx esbuild src/geometry.ts      --bundle --format=esm --outfile=$H/geometry.mod.js
+  //   npx esbuild src/canvas-render.ts --bundle --format=esm --outfile=$H/canvas-render.mod.js
+  //   (cd $H && python3 -m http.server 8936)
+  const mod = await import('./assets/three-renderer.js?v=' + Date.now());
+  const geo = await import('./geometry.mod.js?v=' + Date.now());
+  const cr  = await import('./canvas-render.mod.js?v=' + Date.now());
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+
+  const results = [];
+  const assert = (name, cond, detail = '') => results.push(`${cond ? 'PASS' : 'FAIL'} ${name}${detail ? ' (' + detail + ')' : ''}`);
+  const findByFixtureId = (grp, id) => {
+    let found = null;
+    grp.traverse(o => { if (!found && o.userData && o.userData.fixtureId === id) found = o; });
+    return found;
+  };
+  const meshCount = (g) => { let n = 0; g && g.traverse(o => { if (o.isMesh) n++; }); return n; };
+  const ledOf = (g) => { let led = null; g && g.traverse(o => { if (!led && o.userData?.rackLed) led = o; }); return led; };
+  const glowHexes = (g) => {
+    const out = new Set();
+    g && g.traverse(o => {
+      if (!o.isMesh || o.userData?.outline) return;
+      const m = o.material;
+      if (!m || Array.isArray(m) || !m.emissive) return;
+      if ((m.emissiveIntensity ?? 0) > 0.1) out.add(m.emissive.getHex());
+    });
+    return out;
+  };
+
+  const baseFloor = (furniture) => ({
+    id: 'f1', name: 'F', w: 20000, d: 12000,
+    walls: [], furniture: furniture || [], lights: [], switches: [],
+    sensors: [], motionSensors: [], envSensors: [], doors: [], windows: [],
+    bg: null, model3d: null, look3d: null, rooms: [],
+  });
+  const build = (furniture, states) =>
+    r.updateFloor(baseFloor(furniture), { preset: 'day' }, undefined, undefined,
+                  id => (states && states[id]) || null);
+  const piece = (over) => Object.assign(
+    { id: 'rack1', x: 2000, y: 2000, w: geo.FURNITURE_KINDS.network_rack.w,
+      h: geo.FURNITURE_KINDS.network_rack.h, kind: 'network_rack' }, over || {});
+
+  let _clock = 1000;
+  performance.now = () => _clock;
+
+  // ── (1) pure: kind def + predicate ───────────────────────────────────────
+  function testPure() {
+    const K = geo.FURNITURE_KINDS.network_rack;
+    assert('network_rack FurnitureKind exists', !!K);
+    assert('pinned footprint/height (600×500×1200 — a home 12U cabinet, not a 42U tower)',
+      K.w === 600 && K.h === 500 && K.ht === 1200, `${K.w}x${K.h}x${K.ht}`);
+    assert('cat=appliance (rides the appliances layer + the _keyFloor hash)', K.cat === 'appliance');
+    assert('isRackKind true for network_rack', geo.isRackKind('network_rack') === true);
+    assert('isRackKind false for other kinds',
+      !geo.isRackKind('printer_3d') && !geo.isRackKind('fridge') && !geo.isRackKind('table')
+      && !geo.isRackKind(undefined));
+    assert('rack is NOT a mechanical appliance (separate state language)',
+      geo.isMechanicalApplianceKind('network_rack') === false);
+    const C = geo.RACK_HEALTH_COLORS;
+    assert('four health bands have distinct colours',
+      new Set([C.ok, C.update, C.problem, C.unknown]).size === 4, JSON.stringify(C));
+    assert('rackHealthColor maps each band', geo.rackHealthColor('problem') === C.problem
+      && geo.rackHealthColor('ok') === C.ok && geo.rackHealthColor('update') === C.update
+      && geo.rackHealthColor('unknown') === C.unknown);
+    assert('rackHealthColor falls back to unknown for garbage',
+      geo.rackHealthColor('nonsense') === C.unknown);
+  }
+
+  // ── (2) pure: the rackHealth aggregate matrix ────────────────────────────
+  function testHealth() {
+    const H = (rows) => geo.rackHealth(rows);
+    const e = (id, state) => ({ id, state });
+    assert('no entities → unknown (nothing bound is not a clean bill of health)',
+      H([]) === 'unknown' && H(undefined) === 'unknown');
+    assert('a single off binary_sensor → ok', H([e('binary_sensor.smart', 'off')]) === 'ok');
+    assert("'on' on a problem binary_sensor → problem",
+      H([e('binary_sensor.smart', 'on')]) === 'problem');
+    assert('one bad member poisons a healthy set',
+      H([e('binary_sensor.a', 'off'), e('binary_sensor.b', 'on'), e('binary_sensor.c', 'off')]) === 'problem');
+    assert('known-good text states read ok',
+      ['ok', 'normal', 'online', 'connected', 'healthy', 'good', 'up', 'idle', 'clear', 'safe']
+        .every(s => H([e('sensor.status', s)]) === 'ok'),
+      'a known-good word regressed');
+    assert('case + whitespace insensitive', H([e('sensor.status', '  OK  ')]) === 'ok');
+    assert('an unrecognised text state reads as a problem (Synology "degraded"/"failed")',
+      H([e('sensor.volume', 'degraded')]) === 'problem' && H([e('sensor.disk', 'failed')]) === 'problem');
+    assert('unknown/unavailable/empty contribute NO opinion (unknown ≠ bad)',
+      H([e('binary_sensor.a', 'unavailable')]) === 'unknown'
+      && H([e('binary_sensor.a', 'unknown')]) === 'unknown'
+      && H([e('binary_sensor.a', '')]) === 'unknown'
+      && H([e('binary_sensor.a', null)]) === 'unknown');
+    assert('an unknown member never masks a real problem',
+      H([e('binary_sensor.a', 'unavailable'), e('binary_sensor.b', 'on')]) === 'problem');
+    assert('an unknown member never downgrades a healthy set',
+      H([e('binary_sensor.a', 'unavailable'), e('binary_sensor.b', 'off')]) === 'ok');
+    // update.* inverts the meaning of 'on': firmware available, not a fault.
+    assert("update.* 'on' → update (amber), NOT problem",
+      H([e('update.udm', 'on')]) === 'update');
+    assert("update.* 'off' → ok", H([e('update.udm', 'off')]) === 'ok');
+    assert('problem beats update (precedence)',
+      H([e('update.udm', 'on'), e('binary_sensor.smart', 'on')]) === 'problem');
+    assert('update beats ok (precedence)',
+      H([e('update.udm', 'on'), e('binary_sensor.smart', 'off')]) === 'update');
+    assert('a same-named non-update domain still faults on "on"',
+      H([e('binary_sensor.update_available', 'on')]) === 'problem');
+    assert('blank ids are skipped', H([e('', 'on')]) === 'unknown');
+    assert('rackHealth never throws on garbage rows',
+      (() => { try { H([null, undefined, {}, e('sensor.x', 42)]); return true; } catch { return false; } })());
+  }
+
+  // ── (3) 3D build: both shapes, LED colour follows health ─────────────────
+  function testBuild() {
+    build([piece({})]);
+    const g = findByFixtureId(r._floorGroup, 'rack1');
+    assert('rack builds a 3D group', !!g);
+    assert('rack cabinet has real geometry', meshCount(g) >= 6, `meshes=${meshCount(g)}`);
+    const led = ledOf(g);
+    assert('rack carries exactly one health LED', !!led);
+    assert('LED is outline-skipped (no dark shell on a glowing bead)', led?.userData?.outlineSkip === true);
+    assert('LED sits on the FRONT face (local -Z)', led && led.position.z < 0, `z=${led?.position.z}`);
+
+    const tower = findByFixtureId(
+      build([piece({ id: 'rack2', rack: { shape: 'tower' } })]) || r._floorGroup, 'rack2')
+      || findByFixtureId(r._floorGroup, 'rack2');
+    assert('tower shape builds too', !!tower && meshCount(tower) >= 5, `meshes=${meshCount(tower)}`);
+    build([piece({ id: 'rackA' }), piece({ id: 'rackB', x: 6000, rack: { shape: 'tower' } })]);
+    const a = findByFixtureId(r._floorGroup, 'rackA'), b = findByFixtureId(r._floorGroup, 'rackB');
+    assert('rack_unit and tower are DIFFERENT bodies', meshCount(a) !== meshCount(b),
+      `rack_unit=${meshCount(a)} tower=${meshCount(b)}`);
+  }
+
+  function testLed() {
+    const C = geo.RACK_HEALTH_COLORS;
+    const hex = (s) => parseInt(s.slice(1), 16);
+    const mk = (states, ids) => {
+      build([piece({ rack: { problemEntities: ids } })], states);
+      return ledOf(findByFixtureId(r._floorGroup, 'rack1'));
+    };
+    const okLed = mk({ 'binary_sensor.a': { state: 'off' } }, ['binary_sensor.a']);
+    assert('healthy rack LED is green', okLed && okLed.material.emissive.getHex() === hex(C.ok),
+      okLed && okLed.material.emissive.getHexString());
+    const badLed = mk({ 'binary_sensor.a': { state: 'on' } }, ['binary_sensor.a']);
+    assert('faulted rack LED is red', badLed && badLed.material.emissive.getHex() === hex(C.problem),
+      badLed && badLed.material.emissive.getHexString());
+    const upLed = mk({ 'update.a': { state: 'on' } }, ['update.a']);
+    assert('firmware-update rack LED is amber', upLed && upLed.material.emissive.getHex() === hex(C.update),
+      upLed && upLed.material.emissive.getHexString());
+    const unLed = mk({}, []);
+    assert('unbound rack LED is the unknown colour', unLed && unLed.material.emissive.getHex() === hex(C.unknown));
+    assert('unknown LED is nearly dark (never a confident glow)',
+      unLed && unLed.material.emissiveIntensity < 0.3, `i=${unLed?.material.emissiveIntensity}`);
+    assert('a resolved band glows at full intensity',
+      okLed && okLed.material.emissiveIntensity >= 0.9, `i=${okLed?.material.emissiveIntensity}`);
+
+    // The health LED IS the state language — the generic green appliance in-use
+    // LED (0x00c853) must never appear alongside it, even with a bound entity on.
+    build([piece({ entity_id: 'switch.rack', rack: { problemEntities: ['binary_sensor.a'] } })],
+          { 'switch.rack': { state: 'on' }, 'binary_sensor.a': { state: 'on' } });
+    const g = findByFixtureId(r._floorGroup, 'rack1');
+    assert('generic green in-use LED is suppressed on a rack',
+      !glowHexes(g).has(0x00c853), [...glowHexes(g)].map(h => h.toString(16)).join(','));
+  }
+
+  // ── (4) display-only: never click-tagged ─────────────────────────────────
+  function testDisplayOnly() {
+    build([piece({ entity_id: 'switch.rack' })], { 'switch.rack': { state: 'on' } });
+    const g = findByFixtureId(r._floorGroup, 'rack1');
+    let tagged = false;
+    g && g.traverse(o => { if (o.userData && o.userData.kind) tagged = true; });
+    assert('rack is display-only (no userData.kind → not raycast-clickable)', !tagged);
+    assert('rack still carries its fixtureId (locatable for state builds)',
+      !!findByFixtureId(r._floorGroup, 'rack1'));
+    const clickable = (r._mediaClickables || []).some(o => o.userData?.fixtureId === 'rack1');
+    assert('rack is not registered as a media clickable', !clickable);
+  }
+
+  // ── (5) 2D primitive paints for both shapes ──────────────────────────────
+  function test2D() {
+    let blank = '';
+    for (const shape of [undefined, 'tower']) {
+      const cv = document.createElement('canvas'); cv.width = 120; cv.height = 120;
+      const g2 = cv.getContext('2d');
+      g2.translate(60, 60);
+      cr.drawFurniturePrimitiveLocal(g2, piece({ rack: shape ? { shape } : undefined }), 36, 26, [], false, {});
+      const px = g2.getImageData(0, 0, 120, 120).data;
+      let any = false;
+      for (let i = 3; i < px.length; i += 4) if (px[i] > 0) { any = true; break; }
+      if (!any) blank += (shape || 'rack_unit') + ' ';
+    }
+    assert('both 2D rack glyphs paint pixels', blank === '', blank);
+  }
+
+  try { testPure(); } catch (e) { assert('testPure threw', false, e.message); }
+  try { testHealth(); } catch (e) { assert('testHealth threw', false, e.message); }
+  try { testBuild(); } catch (e) { assert('testBuild threw', false, e.message); }
+  try { testLed(); } catch (e) { assert('testLed threw', false, e.message); }
+  try { testDisplayOnly(); } catch (e) { assert('testDisplayOnly threw', false, e.message); }
+  try { test2D(); } catch (e) { assert('test2D threw', false, e.message); }
+
+  const pass = results.filter(x => x.startsWith('PASS')).length;
+  const fail = results.filter(x => !x.startsWith('PASS')).length;
+  document.title = `RACK ${fail === 0 ? 'PASS' : 'FAIL'} ${pass}/${pass + fail} | ` + results.join(' · ');
+</script>

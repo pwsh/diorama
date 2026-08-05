@@ -55,6 +55,7 @@
   const setFrame = (o = {}) => {
     r._avatarPropsOn = o.propsOn ?? true;
     r._propWeatherCondition = o.weather ?? null;
+    r._propUvIndex = o.uv ?? null;      // gates the class-3 PARASOL (UV flourish)
     r._wallLoops = o.loops ?? [LOOP];
     r._entityOnFrame = o.entityOn ?? {};
     r._roomZones = o.roomZones ?? [];
@@ -73,7 +74,7 @@
 
   // ── 1. Catalog integrity ────────────────────────────────────────────────────
   const ALL = Object.keys(PROP_DEFS);
-  check('catalog: 13 props', ALL.length === 13, `n=${ALL.length}`);
+  check('catalog: 14 props', ALL.length === 14, `n=${ALL.length}`);
   check('catalog: every users valid', ALL.every(k => PROP_DEFS[k].users === 'hands' || PROP_DEFS[k].users === 'quad'));
   check('catalog: every primitives non-empty', ALL.every(k => Array.isArray(PROP_DEFS[k].primitives) && PROP_DEFS[k].primitives.length > 0));
   check('catalog: every poseHold is a fn', ALL.every(k => typeof PROP_DEFS[k].poseHold === 'function'));
@@ -149,6 +150,115 @@
     setFrame({ weather: 'cloudy' });
     r._updatePropTriggers(hClr, radar({ x: OUTDOOR.x, y: OUTDOOR.y }), 0.1, 0);
     check('umbrella: condition clearing unequips', wasUp && hClr.propKind == null);
+  }
+
+  // ── 4b. Class 3 PARASOL (the UV flourish) — same passive-garment contract ────
+  {
+    const OUT = { x: OUTDOOR.x, y: OUTDOOR.y }, IN = { x: INDOOR.x, y: INDOOR.y };
+    // Harsh sun outdoors → parasol, on a RADAR rig (the umbrella's pinned delta
+    // applies: a weather garment, not a fabricated action).
+    setFrame({ weather: 'sunny', uv: 9 });
+    const hp = idleRig('adult');
+    r._updatePropTriggers(hp, radar(OUT), 0.1, 0);
+    check('parasol: radar outdoors + high UV + sun equips', hp.propKind === 'parasol', `propKind=${hp.propKind}`);
+    check('parasol: session is class 3', hp.propCls === 3);
+    check('parasol: no timeout (Infinity dur)', hp.propDur === Infinity);
+    let held = true;
+    for (let i = 0; i < 100; i++) { r._updatePropTriggers(hp, radar(OUT), 0.1, 0); if (hp.propKind !== 'parasol') held = false; }
+    check('parasol: persists while the UV holds', held);
+    r._updatePropTriggers(hp, radar(IN), 0.1, 0);
+    check('parasol: unequips when stepping indoors', hp.propKind == null, `propKind=${hp.propKind}`);
+
+    // Indoors never equips.
+    const hpi = idleRig('adult');
+    r._updatePropTriggers(hpi, radar(IN), 0.1, 0);
+    check('parasol: indoors + high UV never equips', hpi.propKind == null, `propKind=${hpi.propKind}`);
+
+    // Below the threshold → nothing (UV 7 is "high" but not the WHO "very high"
+    // band where shade is the standard advice).
+    setFrame({ weather: 'sunny', uv: 7 });
+    const hp7 = idleRig('adult');
+    r._updatePropTriggers(hp7, radar(OUT), 0.1, 0);
+    check('parasol: UV 7 (below threshold) never equips', hp7.propKind == null, `propKind=${hp7.propKind}`);
+    setFrame({ weather: 'sunny', uv: 8 });
+    const hp8 = idleRig('adult');
+    r._updatePropTriggers(hp8, radar(OUT), 0.1, 0);
+    check('parasol: UV 8 (threshold, inclusive) equips', hp8.propKind === 'parasol', `propKind=${hp8.propKind}`);
+    r._endPropSession(hp8);
+
+    // Overcast / night-clear with a high UV number → nothing (the condition gate).
+    for (const cond of ['cloudy', 'partlycloudy', 'clear-night', 'fog']) {
+      setFrame({ weather: cond, uv: 11 });
+      const h = idleRig('adult');
+      r._updatePropTriggers(h, radar(OUT), 0.1, 0);
+      check(`parasol: '${cond}' + UV 11 never equips (needs clear DAY sun)`, h.propKind == null, `propKind=${h.propKind}`);
+    }
+    // No UV reading at all (no weather source / a provider that omits it).
+    setFrame({ weather: 'sunny', uv: null });
+    const hNo = idleRig('adult');
+    r._updatePropTriggers(hNo, radar(OUT), 0.1, 0);
+    check('parasol: absent UV never equips (stale-chunk safe)', hNo.propKind == null, `propKind=${hNo.propKind}`);
+
+    // RAIN WINS: a rain condition can never produce a parasol, and while it
+    // holds the umbrella is what equips even at a scorching UV number.
+    setFrame({ weather: 'rainy', uv: 11 });
+    const hRain = idleRig('adult');
+    r._updatePropTriggers(hRain, radar(OUT), 0.1, 0);
+    check('parasol: rain wins — umbrella equips, not the parasol', hRain.propKind === 'umbrella', `propKind=${hRain.propKind}`);
+    r._endPropSession(hRain);
+
+    // Sun→rain mid-session swaps garment (the active-prop release checks the
+    // ACTIVE prop's own predicate, not the umbrella's, so neither sticks).
+    setFrame({ weather: 'sunny', uv: 10 });
+    const hSw = idleRig('adult');
+    r._updatePropTriggers(hSw, radar(OUT), 0.1, 0);
+    const wasParasol = hSw.propKind === 'parasol';
+    setFrame({ weather: 'pouring', uv: 10 });
+    r._updatePropTriggers(hSw, radar(OUT), 0.1, 0);   // release the parasol
+    const dropped = hSw.propKind == null;
+    r._updatePropTriggers(hSw, radar(OUT), 0.1, 0);   // equip the umbrella
+    check('parasol → umbrella when the weather turns', wasParasol && dropped && hSw.propKind === 'umbrella',
+      `was=${wasParasol} dropped=${dropped} now=${hSw.propKind}`);
+    r._endPropSession(hSw);
+
+    // Master gate off (Store.avatarProps === false) suppresses it like every prop.
+    setFrame({ weather: 'sunny', uv: 10, propsOn: false });
+    const hOff = idleRig('adult');
+    r._updatePropTriggers(hOff, radar(OUT), 0.1, 0);
+    check('parasol: honours the avatarProps master gate', hOff.propKind == null, `propKind=${hOff.propKind}`);
+
+    // Eligibility: sessile / noProps rigs refuse it; a quad never carries one.
+    setFrame({ weather: 'sunny', uv: 10 });
+    const hSes = r._buildHumanoid(TINT, 'proptest/plant');
+    hSes.dwell = 3; hSes.sit = 0; hSes.act = 0; hSes.lie = 0; hSes.privacy = 0;
+    r._updatePropTriggers(hSes, radar(OUT), 0.1, 0);
+    check('parasol: sessile rig refuses', hSes.propKind == null, `propKind=${hSes.propKind}`);
+    const hQ = r._buildQuadruped(TINT, 'cat');
+    hQ.dwell = 3; hQ.sit = 0; hQ.act = 0; hQ.lie = 0; hQ.privacy = 0;
+    r._updatePropTriggers(hQ, radar(OUT), 0.1, 0);
+    check('parasol: quad rig refuses (hands-tier prop)', hQ.propKind !== 'parasol', `propKind=${hQ.propKind}`);
+
+    // Geometry: the canopy must sit ABOVE the head (the wrist-less-hand-frame
+    // trap the whole prop batch exists to avoid) and read differently from the
+    // umbrella's — wider and shallower.
+    check('parasol: def is class 3 weather, hands tier',
+      PROP_DEFS.parasol.cls === 3 && PROP_DEFS.parasol.category === 'weather'
+      && PROP_DEFS.parasol.users === 'hands');
+    check('parasol: authored in the UPRIGHT frame (handPitch set)',
+      typeof PROP_DEFS.parasol.handPitch === 'number' && PROP_DEFS.parasol.handPitch > 1);
+    const uCanopy = PROP_DEFS.umbrella.primitives.find(p => p.shape === 'cone');
+    const pCanopy = PROP_DEFS.parasol.primitives.find(p => p.shape === 'cone');
+    check('parasol canopy is wider than the umbrella canopy', pCanopy.size[0] > uCanopy.size[0],
+      `parasol=${pCanopy.size[0]} umbrella=${uCanopy.size[0]}`);
+    check('parasol canopy is shallower than the umbrella canopy', pCanopy.size[1] < uCanopy.size[1],
+      `parasol=${pCanopy.size[1]} umbrella=${uCanopy.size[1]}`);
+    const hG = idleRig('adult');
+    r._startPropSession(hG, 'parasol', null, null, Infinity);
+    check('parasol: builds its 4 primitives', hG.propMeshes.length === 4, `n=${hG.propMeshes.length}`);
+    r._endPropSession(hG);
+    check('parasol: session disposal clears the meshes', hG.propMeshes.length === 0);
+    // (The world-space canopy-above-the-head measurement lives with the other
+    //  pose-geometry checks in §15b, where the pose sweep machinery is set up.)
   }
 
   // ── 5. Class 2 idle-standing vs idle-seated + popcorn TV gate ────────────────
@@ -421,6 +531,14 @@
       const c = out[0];
       check('umbrella: canopy above the head', c.y > head + 400, `y=${c.y.toFixed(0)} headTop=${head}`);
       check('umbrella: canopy over (not far in front of) the head', Math.abs(c.z) < 450, `z=${c.z.toFixed(0)}`);
+    }
+    // (d2) Parasol canopy — same contract as the umbrella (the wrist-less hand
+    //      frame makes "above the head" the assertion that actually matters).
+    {
+      const { out, head } = sweep('parasol', (h, w) => w(h.propMeshes[1]));
+      const c = out[0];
+      check('parasol: canopy above the head', c.y > head + 400, `y=${c.y.toFixed(0)} headTop=${head}`);
+      check('parasol: canopy over (not far in front of) the head', Math.abs(c.z) < 450, `z=${c.z.toFixed(0)}`);
     }
     // (e) Vacuum head runs along the floor ahead of the rig.
     {

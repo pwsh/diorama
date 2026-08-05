@@ -238,6 +238,33 @@
     eq('entity uv_index parse', resolveWeatherEntity('sunny', { uv_index: 7 }, {}).uvIndex, 7);
     eq('entity uv absent → null', resolveWeatherEntity('sunny', {}, {}).uvIndex, null);
 
+    // ── UV flourish: the parasol gate lines up with the WHO bands ──────────
+    // `uvParasolWanted` lives in geometry.ts (the renderer imports it; weather.ts
+    // stays free of avatar concerns), so it is imported from the geometry bundle
+    // and cross-checked against the SAME uvBand labels the chip renders — the
+    // avatar must reach for shade exactly on the bands the chip calls harsh.
+    {
+      const { uvParasolWanted, UV_PARASOL_MIN } = await import('./geometry.mod.js');
+      eq('parasol threshold is the "very high" band floor', UV_PARASOL_MIN, 8);
+      eq('parasol threshold matches uvBand', uvBand(UV_PARASOL_MIN).label, 'very high');
+      eq('parasol: below threshold, clear day', uvParasolWanted(7, 'sunny'), false);
+      eq('parasol: at threshold, clear day', uvParasolWanted(8, 'sunny'), true);
+      eq('parasol: extreme, clear day', uvParasolWanted(12, 'sunny'), true);
+      eq('parasol: every "very high"/"extreme" UV wants shade under clear sun',
+         [8, 9, 10, 11, 12, 15].every(v => uvParasolWanted(v, 'sunny')), true);
+      eq('parasol: no "low"/"moderate"/"high" UV does',
+         [0, 1, 2, 3, 5, 6, 7].some(v => uvParasolWanted(v, 'sunny')), false);
+      eq('parasol: overcast never counts', uvParasolWanted(11, 'cloudy'), false);
+      eq('parasol: partly cloudy never counts', uvParasolWanted(11, 'partlycloudy'), false);
+      eq('parasol: clear NIGHT never counts', uvParasolWanted(11, 'clear-night'), false);
+      eq('parasol: rain never counts', uvParasolWanted(11, 'rainy'), false);
+      eq('parasol: null/absent UV never counts',
+         uvParasolWanted(null, 'sunny') || uvParasolWanted(undefined, 'sunny'), false);
+      eq('parasol: NaN UV never counts', uvParasolWanted(NaN, 'sunny'), false);
+      eq('parasol: missing condition never counts',
+         uvParasolWanted(11, null) || uvParasolWanted(11, ''), false);
+    }
+
     // ── DC-C: wind text ────────────────────────────────────────────────────
     eq('windText metric', windText(12.4, false), '12 km/h');
     eq('windText imperial', windText(16.09344, true), '10 mph');
