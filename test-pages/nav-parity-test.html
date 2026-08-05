@@ -24,7 +24,8 @@
 
   Fixture matrix
    A  multi-room shell — perimeter loop + interior tee walls, 3 doors, 3
-      windows (openings must stay walkable), a rotated interior wall.
+      windows (DOOR openings walkable, WINDOW openings SOLID — a sill is not a
+      way out), a rotated interior wall.
    B  furniture mix — nav-EXEMPT rug / bed / stairs / stair_landing / ramp /
       riser_platform / elevated-300 piece vs BLOCKING sofa / table / counter /
       wardrobe, several rotated off-axis, plus a custom-recipe piece
@@ -42,10 +43,16 @@
       whose shared edge must stay open (onStairTerrain abutment).
    G  diagonal pinch — two halves touching at exactly ONE diagonal cell pair,
       the only fixture that discriminates the no-corner-cut flood-fill rule.
+   H  window-vs-door reachability — a sealed annexe off the main room whose ONLY
+      wall gap is a WINDOW must stay its own region (avatars can't climb a
+      ~900 mm sill), while the identical annexe with that gap as a DOOR merges
+      into one. The two twins differ ONLY in doors[] vs windows[], so the pair
+      isolates the door/window nav discrimination from every other rule.
 
   The matrix is mutation-tested: seeding physical.mjs with a dropped rail loop,
   a dropped bed exemption, non-blocking pools, PERSON_R 170→180, WALL_HALF
-  50→55, or a dropped no-corner-cut rule each turns this page red.
+  50→55, a dropped no-corner-cut rule, or navWallRuns reverted to solidWallRuns
+  (windows walkable again) each turns this page red.
 
   Constants (§C): the renderer keeps `cell` / `PERSON_R` / `WALL_HALF` private
   inside `_buildNav`, so they are pinned numerically rather than by import —
@@ -170,16 +177,24 @@
     ],
   });
   const navA = compare('A shell', floorA);
-  // Sanity: the openings really are walkable (otherwise "agreement" could be
+  // Sanity: DOOR openings really are walkable (otherwise "agreement" could be
   // two identically-wrong grids that block every doorway). A Door's x/y is its
   // HINGE — probe the span CENTRE, exactly like wallCutsForSegment does.
   const dc = (d) => G.doorSpanCenter(d);
   const [cA1, cA2, cA3] = floorA.doors.map(dc);
-  ok('A door + window openings stay walkable',
+  ok('A door openings stay walkable',
      !blockedAt(navA, cA1.x, cA1.y) && !blockedAt(navA, cA2.x, cA2.y) &&
-     !blockedAt(navA, cA3.x, cA3.y) && !blockedAt(navA, 900, 5940),
+     !blockedAt(navA, cA3.x, cA3.y),
      `d1=${blockedAt(navA, cA1.x, cA1.y)} d2=${blockedAt(navA, cA2.x, cA2.y)} ` +
-     `d3=${blockedAt(navA, cA3.x, cA3.y)} w1=${blockedAt(navA, 900, 5940)}`);
+     `d3=${blockedAt(navA, cA3.x, cA3.y)}`);
+  // …and WINDOW openings do NOT. A window sits on a ~900 mm sill, so the wall
+  // capsule runs straight through its span exactly like solid wall. All three
+  // windows are probed just inside the wall line, at their span centres.
+  ok('A window openings block (sill is not walkable)',
+     blockedAt(navA, 900, 5940) === 1 && blockedAt(navA, 7940, 4500) === 1 &&
+     blockedAt(navA, 6200, 60) === 1,
+     `w1=${blockedAt(navA, 900, 5940)} w2=${blockedAt(navA, 7940, 4500)} ` +
+     `w3=${blockedAt(navA, 6200, 60)}`);
   ok('A solid wall stretches block', blockedAt(navA, 3600, 4500) === 1 && blockedAt(navA, 5000, 3000) === 1,
      `x3600y4500=${blockedAt(navA, 3600, 4500)} x5000y3000=${blockedAt(navA, 5000, 3000)}`);
 
@@ -350,6 +365,62 @@
      `a=${blockedAt(navG, 4125, 3225)} b=${blockedAt(navG, 3975, 3375)} ` +
      `o1=${blockedAt(navG, 3975, 3225)} o2=${blockedAt(navG, 4125, 3375)} ` +
      `regA=${navG.region[cellIdx(navG, 4125, 3225)]} regB=${navG.region[cellIdx(navG, 3975, 3375)]}`);
+
+  // ── Fixture H: window-vs-door reachability (twins) ───────────────────────
+  // One perimeter loop split by a full-height partition at x=6000, leaving a
+  // single 900 mm gap at y=3000. Everything is identical between the twins
+  // EXCEPT whether that gap is declared as a window or a door — so any region
+  // -count difference is attributable to nothing else. A window sits on a
+  // ~900 mm sill: the annexe must stay UNREACHABLE (2 regions). The same gap as
+  // a door merges the two sides into ONE region.
+  const shellH = () => ([
+    wall('wH1', [{ x: 0, y: 0 }, { x: 8000, y: 0 }, { x: 8000, y: 6000 }, { x: 0, y: 6000 }, { x: 0, y: 0 }]),
+    wall('wH2', [{ x: 6000, y: 0 }, { x: 6000, y: 6000 }]),
+  ]);
+  const floorHwin = baseFloor({ walls: shellH(), windows: [win('nH1', 6000, 3000, 900, 90)] });
+  const navHwin = compare('H window gap', floorHwin);
+  const floorHdoor = baseFloor({ walls: shellH(), doors: [door('dH1', 6000, 3450, 900, 90)] });
+  const navHdoor = compare('H door gap', floorHdoor);
+
+  const regAt = (n, wx, wy) => n.region[cellIdx(n, wx, wy)];
+  ok('H window gap: the annexe is a SEPARATE region (2) — no walking through a window',
+     navHwin.regionSize.length === 2 &&
+     regAt(navHwin, 3000, 3000) !== regAt(navHwin, 7000, 3000) &&
+     blockedAt(navHwin, 6000, 3000) === 1,
+     `regions=[${[...navHwin.regionSize].join(',')}] main=${regAt(navHwin, 3000, 3000)} ` +
+     `annexe=${regAt(navHwin, 7000, 3000)} gapBlocked=${blockedAt(navHwin, 6000, 3000)}`);
+  ok('H door twin: the SAME gap as a door merges them (1 region)',
+     navHdoor.regionSize.length === 1 &&
+     regAt(navHdoor, 3000, 3000) === regAt(navHdoor, 7000, 3000) &&
+     !blockedAt(navHdoor, 6000, 3000),
+     `regions=[${[...navHdoor.regionSize].join(',')}] main=${regAt(navHdoor, 3000, 3000)} ` +
+     `annexe=${regAt(navHdoor, 7000, 3000)} gapBlocked=${blockedAt(navHdoor, 6000, 3000)}`);
+  // The two twins must differ ONLY at the gap: everything away from the 900 mm
+  // span rasterizes identically, so the discrimination is local (not a
+  // whole-wall behaviour change).
+  let awayDiffs = 0;
+  for (let cy = 0; cy < navHwin.ny; cy++) for (let cx = 0; cx < navHwin.nx; cx++) {
+    const i = cy * navHwin.nx + cx;
+    const wy = (cy + 0.5) * navHwin.cell;
+    if (Math.abs(wy - 3000) < 900) continue;          // the gap band + its capsule reach
+    if (navHwin.blocked[i] !== navHdoor.blocked[i]) awayDiffs++;
+  }
+  ok('H twins are cell-identical away from the gap band', awayDiffs === 0, `${awayDiffs} diffs`);
+  // Non-vacuous: the fixture really does exercise the discrimination (the
+  // renderer's own `solids` complement WOULD have left the window span open).
+  const cutsH = G.wallCutsForSegment({ x: 6000, y: 0 }, { x: 6000, y: 6000 },
+                                     [], floorHwin.windows);
+  ok('H wallCutsForSegment: window is a hole in `solids` but SOLID in `navSolids`',
+     cutsH.solids.length === 2 && cutsH.navSolids.length === 1 &&
+     cutsH.openings.length === 1 && cutsH.openings[0].kind === 'window',
+     `solids=${cutsH.solids.length} navSolids=${cutsH.navSolids.length} ` +
+     `openings=${cutsH.openings.map(o => o.kind).join(',')}`);
+  const cutsHd = G.wallCutsForSegment({ x: 6000, y: 0 }, { x: 6000, y: 6000 },
+                                      floorHdoor.doors, []);
+  ok('H wallCutsForSegment: a door is a hole in BOTH complements',
+     cutsHd.solids.length === 2 && cutsHd.navSolids.length === 2 &&
+     cutsHd.openings[0].kind === 'door',
+     `solids=${cutsHd.solids.length} navSolids=${cutsHd.navSolids.length}`);
 
   // ── §C Constants ─────────────────────────────────────────────────────────
   // cell pitch is exposed directly on _nav.

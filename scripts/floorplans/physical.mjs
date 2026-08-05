@@ -3,8 +3,9 @@
 //
 // The nav rasterizer here (`buildNavGrid`) is a deliberate REPLICA of
 // three-renderer's `_buildNav` (150 mm grid, PERSON_R = 170, same block/exempt
-// rules, same sunken-stairs rails, same 8-neighbour no-corner-cut flood fill)
-// so a plan that passes here is a plan avatars can actually walk.
+// rules, DOOR openings walkable but WINDOWS solid, same sunken-stairs rails,
+// same 8-neighbour no-corner-cut flood fill) so a plan that passes here is a
+// plan avatars can actually walk.
 //
 // PARITY GUARD: `test-pages/nav-parity-test.html` runs BOTH implementations
 // over a fixture matrix and asserts cell-for-cell agreement of the blocked
@@ -95,8 +96,14 @@ export function blocksNav(fu, geom, customObjects) {
   return true;
 }
 
-/** Solid wall runs (openings excised) as {a,b} segments — the nav/collision walls. */
-export function solidWallRuns(f, geom) {
+/**
+ * Wall runs as {a,b} segments, with the chosen opening set excised.
+ * `field` picks WHICH complement wallCutsForSegment supplies:
+ *   'solids'    — both doors and windows are holes (the VISUAL / collision walls)
+ *   'navSolids' — only doors are holes; windows are solid (the WALKABLE walls)
+ * See the note on solidWallRuns / navWallRuns below.
+ */
+function wallRunsBy(f, geom, field) {
   const runs = [];
   for (const wall of (f.walls ?? [])) {
     const pts = wall.points ?? [];
@@ -108,8 +115,10 @@ export function solidWallRuns(f, geom) {
       const len = Math.hypot(dx, dy);
       if (len < 1) continue;
       const ux = dx / len, uy = dy / len;
-      const { solids } = geom.wallCutsForSegment(a, b, f.doors ?? [], f.windows ?? []);
-      for (const s of solids) {
+      const cuts = geom.wallCutsForSegment(a, b, f.doors ?? [], f.windows ?? []);
+      // Stale-geometry tolerance: a build predating `navSolids` falls back to
+      // `solids` rather than throwing (same result on window-free segments).
+      for (const s of (cuts[field] ?? cuts.solids)) {
         if (s.t1 - s.t0 < 1) continue;
         runs.push({
           a: { x: a.x + ux * s.t0, y: a.y + uy * s.t0 },
@@ -120,6 +129,22 @@ export function solidWallRuns(f, geom) {
   }
   return runs;
 }
+
+/**
+ * Solid wall runs (ALL openings excised) as {a,b} segments — the wall VOLUME a
+ * piece of furniture may not overlap (checks 10 / 13). A window opening is a
+ * genuine hole in the wall body, so a piece sitting in it (a window seat, a
+ * radiator under a bay) is not a wall intersection — keep it excised here.
+ */
+export function solidWallRuns(f, geom) { return wallRunsBy(f, geom, 'solids'); }
+
+/**
+ * NAV wall runs — DOOR openings excised, WINDOW openings SOLID. Mirrors
+ * `_buildNav`'s rasterizer input (wallCutsForSegment's `navSolids`): a window
+ * sits on a ~900 mm sill, so it is not a way out of the house. Used ONLY by
+ * buildNavGrid; the wall-overlap checks keep the visual `solidWallRuns`.
+ */
+export function navWallRuns(f, geom) { return wallRunsBy(f, geom, 'navSolids'); }
 
 const fmt = (n) => Math.round(n);
 const fname = (fu) => fu.label || fu.kind || fu.id;
@@ -291,7 +316,8 @@ export function buildNavGrid(f, geom, customObjects) {
   }
 
   const rad = WALL_HALF + PERSON_R;
-  for (const r of solidWallRuns(f, geom)) {
+  // navWallRuns, NOT solidWallRuns: windows block a walker (sill height).
+  for (const r of navWallRuns(f, geom)) {
     const dx = r.b.x - r.a.x, dy = r.b.y - r.a.y;
     const len = Math.hypot(dx, dy) || 1;
     const ux = dx / len, uy = dy / len;

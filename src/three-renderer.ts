@@ -2791,10 +2791,12 @@ export class ThreeDRenderer {
   private _nav: { cell: number; nx: number; ny: number;
                   blocked: Uint8Array; region: Int32Array; regionSize: number[];
                   rev: number; blockedCount: number;
-                  // Solid wall RUNS (openings excised) as plain segments, prepared
-                  // once at build time for cheap repeated line-of-sight tests in
-                  // snap candidate filtering. Invisible walls are excluded (they're
-                  // passable dividers), matching the nav rasterizer + movement.
+                  // Solid wall RUNS as plain segments, prepared once at build time
+                  // for cheap repeated line-of-sight tests in snap candidate
+                  // filtering. DOOR openings are excised; WINDOW openings are NOT
+                  // (a sill is not walkable, and LOS must agree with the bitmap —
+                  // see wallCutsForSegment's `navSolids`). Invisible walls are
+                  // excluded (passable dividers), matching the rasterizer.
                   wallSolids: Float64Array;
                   // Per SUNKEN stairs-family flight (elevation < 0): the deepest
                   // walkable tread cell (world mm) + its groundY. Populated in
@@ -7711,11 +7713,15 @@ export class ThreeDRenderer {
       }
     }
 
-    // Walls: rasterize each solid run of every non-invisible segment as a thick
-    // capsule (half-thickness 50 mm + PERSON_R). Door / window OPENINGS stay
-    // walkable — people walk through doorways, and radar can track a person
-    // straight through a window, so blocking a ~900 mm window gap that sits
-    // next to an open doorway would strand paths worse than letting it pass.
+    // Walls: rasterize each NAV-solid run of every non-invisible segment as a
+    // thick capsule (half-thickness 50 mm + PERSON_R). DOOR openings stay
+    // walkable — people walk through doorways. WINDOW openings do NOT: a window
+    // sits on a ~900 mm sill (a bay higher still), so nobody steps through it,
+    // and leaving the gap open let avatars walk out of the house through a
+    // window (user-reported). That's the whole difference between
+    // `wallCutsForSegment`'s `solids` (VISUAL — both kinds are holes) and its
+    // `navSolids` (WALKABLE — doors only); with no windows on a segment the two
+    // are identical, so plans without windows rasterize byte-for-byte as before.
     // railing / half walls are full-height at body level → they block.
     const WALL_HALF = 100 / 2;
     const rad = WALL_HALF + PERSON_R;
@@ -7730,8 +7736,11 @@ export class ThreeDRenderer {
         const len = Math.hypot(dx, dy);
         if (len < 1) continue;
         const ux = dx / len, uy = dy / len;
-        const { solids } = wallCutsForSegment(a, b, f.doors ?? [], f.windows ?? []);
-        for (const s of solids) {
+        // navSolids, NOT solids: windows are solid to a walker. The same runs
+        // feed BOTH the blocked bitmap and `_nav.wallSolids` (the snap LOS
+        // filter), so a snap candidate can't be seen through a window either.
+        const { navSolids } = wallCutsForSegment(a, b, f.doors ?? [], f.windows ?? []);
+        for (const s of navSolids) {
           const s0x = a.x + ux * s.t0, s0y = a.y + uy * s.t0;
           const s1x = a.x + ux * s.t1, s1y = a.y + uy * s.t1;
           wallSolidRuns.push(s0x, s0y, s1x, s1y);
@@ -7921,8 +7930,8 @@ export class ThreeDRenderer {
   }
 
   // Does the segment (ax,ay)→(bx,by) cross any prepared solid wall run? Cheap
-  // segment-intersection sweep over _nav.wallSolids (openings already excised,
-  // invisible walls excluded). Used to reject snap candidates on the far side of
+  // segment-intersection sweep over _nav.wallSolids (DOOR openings excised,
+  // windows solid, invisible walls excluded). Used to reject snap candidates on the far side of
   // a wall so a rig never teleports outdoors through a bookcase-backed wall.
   private _segCrossesNavWall(ax: number, ay: number, bx: number, by: number): boolean {
     const n = this._nav;

@@ -6947,6 +6947,13 @@ export class Sidebar extends LitElement {
                   title="Reset to default (this sensor's color)"
                   @click=${() => { s.plumbobColor = undefined; p.save(); p.emitConfig(); }}>✕</button>
         </div>
+        <div class="row" title="Always render one simulated person wandering this sensor's room in 3D — no HA device binding or live radar target needed. A display/demo presence that uses this sensor's avatar pool. A bound sensor shows its real targets AND the demo figure.">
+          <label>Demo avatar</label>
+          <button class="btn" style="font-size:11px;flex:1"
+                  @click=${() => { s.demo = !s.demo; p.save(); p.emitConfig(); }}>
+            ${s.demo ? '🎬 On (no device needed)' : '— Off'}
+          </button>
+        </div>
         ${this._avatarGrid(s, (mut: () => void) => { mut(); p.save(); p.emitConfig(); })}
         <div class="row"><label>HA Device</label>
           <!-- Use .value (property) not ?selected (attribute) so a freshly-

@@ -363,6 +363,34 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Windows block nav + mmWave demo avatars** (2026-08-05,
+  user-reported "avatars breaking through windows" + "unbound sensors
+  not generating avatars"; unreleased — on main past v0.57.0).
+  (1) `wallCutsForSegment` gained ADDITIVE `navSolids` (door-cuts-only
+  complement; identity-returns `solids` on window-free segments —
+  byte-identical; `WallOpeningCut.kind` was already the discriminant;
+  `solids` stays the 2D/3D visual truth) consumed by `_buildNav`'s
+  rasterizer + `_nav.wallSolids` LOS + the physical.mjs replica
+  (extracted `wallRunsBy`; checks 10/13 keep `solids` — a window IS a
+  hole in the wall body). NAVPARITY 70/70 (was 54; new window-vs-door
+  twin fixture + both-ways mutation testing); floorplans 425/425 — no
+  plan room was window-only-reachable. (2) Demo-avatar
+  "regression" ROOT-CAUSED as NOT a regression: `MotionSensor.demo`
+  verified working end-to-end in a real-component harness (no commit
+  touched it; not field-stripping; not a layer gate; sidebar row
+  present) — the reported experience = synthetic avatars are 3D-ONLY
+  (2D never drew them) + `avatar:true` on an unbound sensor renders
+  nothing by design. Added the missing half: `Sensor.demo?` — mmWave
+  "Demo avatar" checkbox, key `ais_<sensorId>`, home-room-confined,
+  pool-driven, coexists with live radar rigs when bound. New
+  DEMOAVATAR 23/23 (motion+mmWave spawn/confinement/persistence;
+  bundle needs lit+three aliases, recipe fixed). Noted follow-up:
+  `segCrossesSolidWall` (robot LOS) still sees windows as gaps — the
+  same physical error class in a different subsystem (would move
+  robot-test goldens; deferred deliberately). 2D representation for
+  synthetic avatars would need the AI controller hoisted out of the
+  renderer chunk — noted, not planned.
+
 - **Docs: vehicle gallery rebuild + flying-models page** (2026-08-05,
   user-directed pre-release; released in v0.57.0).
   Gallery 712→778 subjects / 14 pages: all 26 ground vehicles

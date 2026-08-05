@@ -746,18 +746,50 @@ export function bayProjectSign(
 // use the taller GARAGE_DOOR_H; swing doors leave it undefined → the DOOR_HEAD default).
 export interface WallOpeningCut { t0: number; t1: number; kind: 'door' | 'window'; sill?: number; height?: number; head?: number; }
 
+// Merge a sorted-by-t0 opening list into the solid complement of [0, len].
+function solidComplement(cuts: { t0: number; t1: number }[], len: number): { t0: number; t1: number }[] {
+  if (!cuts.length) return [{ t0: 0, t1: len }];
+  const sorted = [...cuts].sort((c1, c2) => c1.t0 - c2.t0);
+  const solids: { t0: number; t1: number }[] = [];
+  let cursor = 0;
+  for (const c of sorted) {
+    if (c.t0 > cursor + 1) solids.push({ t0: cursor, t1: c.t0 });
+    cursor = Math.max(cursor, c.t1);
+  }
+  if (cursor < len - 1) solids.push({ t0: cursor, t1: len });
+  return solids;
+}
+
 // For one wall segment a→b: which door/window openings cut it, and what
 // solid sub-intervals remain. t values are mm along the segment. An opening
 // counts when its center projects onto the segment within `tol` of the axis.
+//
+// THREE outputs, deliberately distinct (all ADDITIVE — existing consumers that
+// destructure `solids` / `openings` are untouched):
+//   solids     — complement of ALL openings. The VISUAL truth: what the 2D
+//                stroke paints and what the 3D builder extrudes as full-height
+//                wall. Both doors and windows are holes here.
+//   openings   — every cut, tagged `kind` (+ per-window sill/height, per-garage
+//                head) so the 3D builder can size sub-sill / header / lintel runs.
+//   navSolids  — complement of the DOOR openings only, i.e. windows count as
+//                SOLID. This is the WALKABLE truth: a window has a ~900 mm sill
+//                (bays higher still), so a person cannot step through it. Nav
+//                used to share `solids`, which let AI/demo/roamer avatars walk
+//                out of the house through a window (user-reported). Consumed by
+//                `_buildNav`'s rasterizer + `_nav.wallSolids` (the snap LOS
+//                filter — a snap must not see through a window either) and
+//                mirrored by scripts/floorplans/physical.mjs's nav replica.
+//                With no windows on the segment this is === `solids` by value.
 export function wallCutsForSegment(
   a: Vec2, b: Vec2,
   doors: { x: number; y: number; w: number; rotation: number; kind?: DoorKind }[],
   windows: { x: number; y: number; w: number; sill?: number; height?: number; kind?: WindowKind }[],
   tol = 150,
-): { solids: { t0: number; t1: number }[]; openings: WallOpeningCut[] } {
+): { solids: { t0: number; t1: number }[]; openings: WallOpeningCut[];
+     navSolids: { t0: number; t1: number }[] } {
   const dx = b.x - a.x, dy = b.y - a.y;
   const len = Math.hypot(dx, dy);
-  if (len < 1) return { solids: [], openings: [] };
+  if (len < 1) return { solids: [], openings: [], navSolids: [] };
   const ux = dx / len, uy = dy / len;
   const openings: WallOpeningCut[] = [];
   const collect = (cx: number, cy: number, w: number, kind: 'door' | 'window',
@@ -779,16 +811,13 @@ export function wallCutsForSegment(
   // the same values the 3D builder's SILL_TOP / WINDOW_GLASS_H fallbacks used.
   for (const w of windows)
     collect(w.x, w.y, w.w, 'window', { sill: windowSillMm(w), height: windowGlassHMm(w) });
-  if (!openings.length) return { solids: [{ t0: 0, t1: len }], openings };
-  const sorted = [...openings].sort((c1, c2) => c1.t0 - c2.t0);
-  const solids: { t0: number; t1: number }[] = [];
-  let cursor = 0;
-  for (const c of sorted) {
-    if (c.t0 > cursor + 1) solids.push({ t0: cursor, t1: c.t0 });
-    cursor = Math.max(cursor, c.t1);
-  }
-  if (cursor < len - 1) solids.push({ t0: cursor, t1: len });
-  return { solids, openings };
+  const solids = solidComplement(openings, len);
+  // Windows are not walkable (sill height) — nav only opens DOOR spans.
+  const doorCuts = openings.filter(c => c.kind === 'door');
+  const navSolids = doorCuts.length === openings.length
+    ? solids                                       // no windows → identical by value
+    : solidComplement(doorCuts, len);
+  return { solids, openings, navSolids };
 }
 
 // Default visual properties for fixtures.

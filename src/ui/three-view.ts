@@ -2226,6 +2226,25 @@ export class ThreeView extends LitElement {
           }
         }
       }
+      // mmWave DEMO avatars (`Sensor.demo`): the MotionSensor.demo contract on a
+      // positional sensor — one synthetic wandering presence anchored at the
+      // sensor, ALWAYS on, no device binding or live radar target needed. Its own
+      // loop (not the radar loop above) because that one `continue`s on a missing
+      // deviceSlug, and an unbound sensor is exactly the case demo mode exists
+      // for. The key is `ais_<sensorId>`, distinct from BOTH the radar target keys
+      // (`<sensorId>_<i>`) and the motion demo keys (`ai_<motionId>`), so a BOUND
+      // sensor renders its real targets AND the demo rig side by side. No `roam`
+      // flag ⇒ the renderer's AI controller home-room-confines it to the wall loop
+      // containing the sensor, exactly like a motion demo avatar. Rendered in
+      // kiosk/view modes too (display, not interaction).
+      for (let si = 0; si < f.sensors.length; si++) {
+        const s = f.sensors[si];
+        if (s.demo !== true) continue;
+        targets.push({ key: 'ais_' + s.id, x: s.x, y: s.y,
+                       color: hexToInt(sensorColor(s, si)), ai: true,
+                       avatar: s.avatarKind ?? 'random', avatars: s.avatarKinds,
+                       plumbobColor: s.plumbobColor ? hexToInt(s.plumbobColor) : undefined });
+      }
       // AI avatars: each motion sensor with `avatar` on whose bound entity is
       // firing projects a synthetic wandering target anchored at the sensor
       // position. The renderer's AI controller owns the actual movement (see

@@ -1,0 +1,299 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>DEMOAVATAR …</title>
+<style>
+  body { margin:0; background:#0d1116; color:#cfd8dc; font:13px/1.5 sans-serif; padding:14px; }
+  h1 { font-size:15px; margin:0 0 10px; }
+  #summary { font-size:14px; font-weight:bold; margin:10px 0; padding:8px 10px; border-radius:5px; }
+  .okbg { background:#12331f; color:#69f0ae; } .badbg { background:#3a1414; color:#ff8a80; }
+  .row { display:flex; justify-content:space-between; gap:10px; padding:2px 0; border-bottom:1px solid #1c2530; }
+  .pass { color:#69f0ae; } .fail { color:#ff5252; }
+  .name { color:#90caf9; } .extra { color:#ffd54f; font-size:11px; }
+  #stage { width:900px; height:560px; }
+</style>
+<h1>Demo avatars — motion + mmWave synthetic presence (three-view target assembly)</h1>
+<div id="summary">Running…</div>
+<div id="rows"></div>
+<div id="stage"></div>
+
+<!-- Drives the REAL <diorama-three-view> over a REAL Planner (LocalApi offline
+     store) and inspects the renderer's live rig set. This is the regression
+     guard for the synthetic-target append path:
+       · MotionSensor.demo → one always-on `ai_<id>` rig, no binding needed
+       · MotionSensor.avatar + a bound, ON entity → one rig; OFF → none
+       · Sensor.demo (mmWave) → one always-on `ais_<id>` rig, distinct from the
+         radar target keys `<sensorId>_<i>`, and coexisting with real radar rigs
+       · avatarKinds pools resolve for BOTH fixture kinds
+       · rigs appear in kiosk / view UI modes (display, not interaction)
+
+     Build recipe (from repo root; NEVER reuse stale bundles):
+       npm run build
+       H=/tmp/diorama-harness-demoav; rm -rf "$H"; mkdir -p "$H"; cp -r dist/* "$H"/
+       cp test-pages/demo-avatar-test.html "$H"/
+       T=$(mktemp -d); cp -r src/* "$T"/; cp tsconfig.json "$T"/
+       cp test-pages/fake-avatar-store.ts "$T"/avatar-store.ts
+       cp test-pages/demo-avatar-entry.ts "$T"/demo-avatar-entry.ts
+       npx esbuild "$T"/demo-avatar-entry.ts --bundle --format=esm --tsconfig="$T"/tsconfig.json \
+         --alias:lit=$PWD/node_modules/lit/index.js \
+         --alias:lit/decorators.js=$PWD/node_modules/lit/decorators.js \
+         --alias:three=$PWD/node_modules/three/build/three.module.js \
+         "--alias:three/examples/jsm/controls/OrbitControls.js=$PWD/node_modules/three/examples/jsm/controls/OrbitControls.js" \
+         "--alias:three/examples/jsm/loaders/OBJLoader.js=$PWD/node_modules/three/examples/jsm/loaders/OBJLoader.js" \
+         "--alias:three/examples/jsm/loaders/MTLLoader.js=$PWD/node_modules/three/examples/jsm/loaders/MTLLoader.js" \
+         --outfile="$H"/demoav.mod.js
+       (cd "$H" && python3 -m http.server 8871 &)
+       google-chrome --headless=new --disable-gpu --use-angle=swiftshader \
+         --run-all-compositor-stages-before-draw --window-size=1200,900 \
+         --virtual-time-budget=40000 --dump-dom \
+         "http://localhost:8871/demo-avatar-test.html" | grep -o "<title>[^<]*"
+     (esbuild inlines three-view's dynamic three-renderer import — the harness
+     reaches the live renderer through the element's private `_renderer`.) -->
+<script type="module">
+  const V = '?v=' + Date.now();
+  const { Planner } = await import('./demoav.mod.js' + V);
+
+  const results = [];
+  const ok = (name, cond, extra = '') => results.push({ name, pass: !!cond, extra: String(extra) });
+  window.__R = results;
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  async function waitFor(cond, tries = 900) {
+    for (let i = 0; i < tries; i++) { if (cond()) return true; await sleep(6); }
+    return !!cond();
+  }
+  const stage = document.getElementById('stage');
+
+  // ── Fake HaApi (offline shape): states map + inert subscriptions ───────────
+  const states = {};
+  const api = {
+    offline: true,
+    states,
+    async connect() {},
+    disconnect() {},
+    onState() {}, onConn() {},
+    async getUserData() { return null; },
+    async setUserData() {},
+    async callService() {},
+    async getDevices() { return []; },
+    async getEntityRegistry() { return []; },
+    async getFloorRegistry() { return []; },
+    async getAreaRegistry() { return []; },
+    async getHistory() { return {}; },
+    async getCalendarEvents() { return []; },
+    async getWeatherForecasts() { return null; },
+    async updateEntityRegistry() {},
+    async subscribePersistentNotifications() { return () => {}; },
+    async listRepairsIssues() { return []; },
+    async ignoreRepairsIssue() {},
+    async subscribeMqtt() { return () => {}; },
+    async publishMqtt() {},
+  };
+
+  const FW = 9000, FD = 7000;
+  const perim = [{ x: 300, y: 300 }, { x: 8700, y: 300 }, { x: 8700, y: 6700 },
+                 { x: 300, y: 6700 }, { x: 300, y: 300 }];
+  // Each fixture gets a FRESH floor id: three-view's floor-switch branch then
+  // runs clearTransientGroups() at the top of the next tick, disposing every
+  // rig from the previous fixture. (Clearing by hand races the element's own
+  // rAF loop, which can re-seed the old floor's rigs between statements.)
+  let fixtureN = 0;
+  const baseFloor = (extra = {}) => ({
+    id: 'f' + (++fixtureN), name: 'Demo', w: FW, d: FD,
+    walls: [{ id: 'perim', points: perim }],
+    furniture: [], lights: [], switches: [], sensors: [], motionSensors: [],
+    envSensors: [], infoCards: [], actionButtons: [], doors: [], windows: [],
+    rooms: [{ id: 'rm1', name: 'Living Room', anchor: { x: 4500, y: 3500 } }],
+    roamers: [], bleProxies: [], alarmPanels: [], calendarPanels: [], thermostats: [],
+    safetySensors: [], alertBeacons: [], robots: [], cameras: [], projectors: [],
+    valves: [], plugs: [], sprinklerZones: [], flagpoles: [], pools: [],
+    presenceZones: [], groundAreas: [], voidAreas: [], rulers: [],
+    bg: null, model3d: null, look3d: null,
+    ...extra,
+  });
+
+  const planner = new Planner();
+  await planner.connectWith(api);
+  const view = document.createElement('diorama-three-view');
+  view.planner = planner;
+  stage.appendChild(view);
+  await view.updateComplete;
+  // Wait for the lazily-imported renderer to finish loading.
+  const R = () => view._renderer;
+  ok('renderer mounted', await waitFor(() => R() && R().loaded), '');
+
+  // Drive N ticks of the real element loop. The element's own rAF is unreliable
+  // under headless virtual time, so call the private tick directly.
+  const tick = async (n = 6) => {
+    for (let i = 0; i < n; i++) { view._tickOnce(); await sleep(6); }
+  };
+  const setFloor = async (f) => {
+    planner.store.floors = [f];
+    planner.store.currentFloorId = f.id;
+    planner.emitConfig();
+    await tick(8);
+  };
+  const rigKeys = () => Object.keys(R()._humanoids).sort();
+  const rigCount = () => rigKeys().length;
+
+  const motion = (id, x, y, extra = {}) => ({
+    id, x, y, heading: 0, fov: 360, range: 6000, label: id,
+    entity_id: null, color: '#ba68c8', intensity: 1, ...extra,
+  });
+  const mmwave = (id, x, y, extra = {}) => ({
+    id, x, y, heading: 0, fov: 120, range: 6000, label: id,
+    deviceSlug: null, ...extra,
+  });
+
+  // ── 1. MotionSensor.demo — always on, no binding ───────────────────────────
+  await setFloor(baseFloor({ motionSensors: [motion('m1', 2500, 3000, { demo: true })] }));
+  ok('1a demo motion sensor spawns exactly one rig', rigCount() === 1, rigKeys().join(','));
+  ok('1b its key is ai_<motionId>', rigKeys()[0] === 'ai_m1', rigKeys().join(','));
+  ok('1c the rig is a live humanoid in the target group',
+     !!R()._humanoids['ai_m1'] && R()._targetGroup.children.includes(R()._humanoids['ai_m1'].group), '');
+  ok('1d an AI controller was seeded for it', !!R()._aiState['ai_m1'], '');
+
+  // ── 2. demo:false + unbound → nothing; avatar+bound-on → one rig ───────────
+  await setFloor(baseFloor({ motionSensors: [motion('m2', 2500, 3000, { avatar: true })] }));
+  ok('2a avatar:true but unbound spawns nothing', rigCount() === 0, rigKeys().join(','));
+
+  states['binary_sensor.hall'] = { entity_id: 'binary_sensor.hall', state: 'on', attributes: {} };
+  await setFloor(baseFloor({ motionSensors: [
+    motion('m3', 2500, 3000, { avatar: true, entity_id: 'binary_sensor.hall' })] }));
+  ok('2b avatar:true + bound ON spawns one rig', rigCount() === 1 && rigKeys()[0] === 'ai_m3',
+     rigKeys().join(','));
+
+  // ── 3. mmWave Sensor.demo — always on, no deviceSlug ───────────────────────
+  await setFloor(baseFloor({ sensors: [mmwave('s1', 3000, 2500, { demo: true })] }));
+  ok('3a demo mmWave sensor spawns exactly one rig', rigCount() === 1, rigKeys().join(','));
+  ok('3b its key is ais_<sensorId> (distinct from radar keys `<id>_<i>`)',
+     rigKeys()[0] === 'ais_s1' && !rigKeys().some(k => /^s1_\d+$/.test(k)), rigKeys().join(','));
+  ok('3c an AI controller was seeded for it', !!R()._aiState['ais_s1'], '');
+
+  await setFloor(baseFloor({ sensors: [mmwave('s2', 3000, 2500)] }));
+  ok('3d mmWave without demo spawns nothing', rigCount() === 0, rigKeys().join(','));
+
+  // ── 4. demo mmWave coexists with real radar targets ───────────────────────
+  const bound = mmwave('s3', 3000, 2500, { demo: true, deviceSlug: 'ld2450_test' });
+  // Inject one live radar target through the planner's lerp slots (the same
+  // source three-view's radar loop reads) BEFORE the first tick on this floor.
+  const slot = (active, cx, cy) => ({ cx, cy, tx: cx, ty: cy, vx: 0, vy: 0, active });
+  planner.lerpBy['s3'] = [slot(true, 0, 1500), slot(false, 0, 0), slot(false, 0, 0)];
+  await setFloor(baseFloor({ sensors: [bound] }));
+  ok('4a bound + demo mmWave renders BOTH the radar rig and the demo rig',
+     rigKeys().includes('ais_s3') && rigKeys().includes('s3_0'), rigKeys().join(','));
+
+  // ── 5. Avatar pools resolve for both fixture kinds ────────────────────────
+  await setFloor(baseFloor({
+    motionSensors: [motion('m4', 2200, 2200, { demo: true, avatarKinds: ['child', 'elder'] })],
+    sensors: [mmwave('s4', 6000, 4200, { demo: true, avatarKinds: ['child', 'elder'] })],
+  }));
+  const mk = R()._humanoids['ai_m4']?.avatarKind;
+  const sk = R()._humanoids['ais_s4']?.avatarKind;
+  ok('5a motion demo rig takes a kind from its pool', ['child', 'elder'].includes(mk), String(mk));
+  ok('5b mmWave demo rig takes a kind from its pool', ['child', 'elder'].includes(sk), String(sk));
+
+  // ── 6. Display presence: kiosk + view modes still render ──────────────────
+  for (const mode of ['kiosk', 'view']) {
+      planner.setUiMode(mode);
+    await setFloor(baseFloor({
+      motionSensors: [motion('m5', 2500, 3000, { demo: true })],
+      sensors: [mmwave('s5', 6000, 4000, { demo: true })],
+    }));
+    ok(`6 ${mode} mode still renders both demo rigs`,
+       rigKeys().includes('ai_m5') && rigKeys().includes('ais_s5'), rigKeys().join(','));
+  }
+  planner.setUiMode('edit');
+
+  // ── 7. The `demo` flag survives a store round-trip, and the rig is stable ──
+  // repairFloor passes the motionSensors / sensors ARRAYS through untouched, so
+  // item-level flags persist. Pinned because the equivalent field-by-field
+  // rebuild is exactly what silently dropped bgTexts fields on every load.
+  await setFloor(baseFloor({
+    motionSensors: [motion('m6', 2500, 3000, { demo: true })],
+    sensors: [mmwave('s6', 6000, 4000, { demo: true })],
+  }));
+  const beforeKeys = rigKeys().join(',');
+  planner._applyHistorySnapshot(JSON.stringify(planner.store));
+  await sleep(30);
+  const rt = planner.floor();
+  ok('7a demo flags survive normalize/repairFloor (motion + mmWave)',
+     rt.motionSensors[0].demo === true && rt.sensors[0].demo === true,
+     `motion=${rt.motionSensors[0].demo} mmwave=${rt.sensors[0].demo}`);
+  await tick(10);
+  ok('7b both rigs are still present after the round trip',
+     rigKeys().includes('ai_m6') && rigKeys().includes('ais_s6'),
+     `${beforeKeys} → ${rigKeys().join(',')}`);
+
+  // From here on, drive SIMULATED time: synchronous ticks alone advance
+  // performance.now by ~0 under headless virtual time, so the AI controller
+  // would never actually walk (a vacuous long-run assertion). Same fake-clock
+  // idiom as ai-test.html.
+  const realNow = performance.now.bind(performance);
+  let fakeNow = realNow();
+  performance.now = () => fakeNow;
+  const stepT = (n, dt = 16.7) => {
+    for (let i = 0; i < n; i++) { fakeNow += dt; view._tickOnce(); }
+  };
+
+  // Long run (~100 s simulated): a demo rig is a PERMANENT display presence —
+  // it must not fade out, shrink away or get pruned after its first cycles.
+  stepT(6000);
+  const hm = R()._humanoids['ai_m6'], hs = R()._humanoids['ais_s6'];
+  ok('7c both rigs survive ~100 s of simulated wandering at full scale',
+     !!hm && !!hs && hm.scale > 0.9 && hs.scale > 0.9 &&
+     hm.group.visible && hs.group.visible,
+     `motion=${hm ? hm.scale.toFixed(2) : 'gone'} mmwave=${hs ? hs.scale.toFixed(2) : 'gone'}`);
+
+  // ── 8. mmWave demo rig is HOME-ROOM confined (the _aiHomeLoop idiom) ──────
+  // Two rooms joined by a real DOOR, so nav is ONE region and nothing but the
+  // confinement rule keeps the rig home. Same contract as a motion demo avatar:
+  // a demo presence vouches for the room its sensor sits in, not the house.
+  const partition = { id: 'part', points: [{ x: 4500, y: 300 }, { x: 4500, y: 6700 }] };
+  await setFloor(baseFloor({
+    walls: [{ id: 'perim', points: perim }, partition],
+    doors: [{ id: 'd1', x: 4500, y: 4000, w: 1000, rotation: 90, kind: 'swing' }],
+    sensors: [mmwave('s7', 2000, 3500, { demo: true })],
+    rooms: [{ id: 'rw', name: 'West', anchor: { x: 2000, y: 3500 } },
+            { id: 're', name: 'East', anchor: { x: 6800, y: 3500 } }],
+  }));
+  const navWorld = (h) => ({ x: FW / 2 - h.navX, y: h.navZ + FD / 2 });
+  const regionOf = (wx, wy) => {
+    const n = R()._nav;
+    const cx = Math.max(0, Math.min(n.nx - 1, Math.floor(wx / n.cell)));
+    const cy = Math.max(0, Math.min(n.ny - 1, Math.floor(wy / n.cell)));
+    return n.region[cy * n.nx + cx];
+  };
+  // (The yard strip outside the perimeter wall is its own region — compare the
+  // two ROOM interiors, not the total region count.)
+  ok('8a the door really joins the two rooms (same nav region)',
+     regionOf(2000, 3500) >= 0 && regionOf(2000, 3500) === regionOf(6800, 3500),
+     `west=${regionOf(2000, 3500)} east=${regionOf(6800, 3500)}`);
+  let maxX = -Infinity, moved = 0;
+  const startX = navWorld(R()._humanoids['ais_s7']).x;
+  for (let i = 0; i < 9000; i++) {
+    fakeNow += 16.7;
+    view._tickOnce();
+    const hh = R()._humanoids['ais_s7'];
+    if (hh) {
+      const w = navWorld(hh);
+      maxX = Math.max(maxX, w.x);
+      moved = Math.max(moved, Math.abs(w.x - startX));
+    }
+  }
+  ok('8b the rig actually wandered (non-vacuous)', moved > 500, `travelled ${Math.round(moved)} mm in x`);
+  ok('8c the demo rig stays in its own room over ~150 s of wandering',
+     maxX < 4500, `max nav x = ${Math.round(maxX)} (partition at 4500)`);
+  ok('8d its AI controller is wander-mode + not a free-range roamer',
+     R()._aiState['ais_s7']?.mode === 'wander' && !R()._aiState['ais_s7']?.roam,
+     `mode=${R()._aiState['ais_s7']?.mode} roam=${R()._aiState['ais_s7']?.roam}`);
+
+  // ── report ────────────────────────────────────────────────────────────────
+  const pass = results.filter(r => r.pass).length;
+  document.title = `DEMOAVATAR ${pass === results.length ? 'PASS' : 'FAIL'} ${pass}/${results.length}`;
+  const sum = document.getElementById('summary');
+  sum.className = pass === results.length ? 'okbg' : 'badbg';
+  sum.textContent = `${pass}/${results.length} passed`;
+  document.getElementById('rows').innerHTML = results.map(r =>
+    `<div class="row"><span class="name">${r.name}</span>` +
+    `<span class="${r.pass ? 'pass' : 'fail'}">${r.pass ? 'PASS' : 'FAIL'} ` +
+    `<span class="extra">${r.extra}</span></span></div>`).join('');
+</script>

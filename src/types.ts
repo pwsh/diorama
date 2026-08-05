@@ -612,6 +612,13 @@ export interface Sensor {
                           // (falling back to the palette tint) so avatars match their source sensor.
   avatarKind?: AvatarKind | 'random';  // LEGACY single-pick (kept for back-compat reads; new UI writes avatarKinds)
   avatarKinds?: AvatarKind[];          // pool of rig variants; each target stably hash-picks one. Empty/absent → adult
+  // 3D: project ONE synthetic AI avatar at this sensor ALWAYS — no device
+  // binding, no live radar target required (the MotionSensor.demo contract, on
+  // mmWave). A pure display presence: it wanders the sensor's home room using
+  // this sensor's avatar pool and renders in kiosk/view modes too. Independent
+  // of binding — a bound sensor shows its real radar rigs AND the demo rig
+  // (their target keys never collide: `ais_<id>` vs `<id>_<i>`).
+  demo?: boolean;
   // Last-known-good zone vertices. Persisted so a reload paints zones from
   // store immediately, before HA's first state push completes — protects
   // against the case where firmware re-publishes partial / zeroed values
