@@ -19,7 +19,7 @@ const pack: VehiclePackDef = {
     // Cues: tall narrow brass-era body, thin big-diameter spoked wheels, a flat
     // canvas top on visible corner posts.
     {
-      id: 'base-ground-military/model_t', label: 'Ford Model T', category: 'ground',
+      id: 'base-ground-military/model_t', label: 'Brass-era antique car', category: 'ground',
       era: 'historical', lenMm: 3400, dims: [1700, 3400, 2100],
       body: '#16181b', accent: '#8d6a2f', surfaces: ['ground'],
       prims: [
@@ -42,7 +42,7 @@ const pack: VehiclePackDef = {
     // ── Volkswagen Beetle (Type 1) 4.08 × 1.54 × 1.50 m ──────────────────────
     // Cues: rounded "bug" dome cabin + a rear ENGINE hump + tiny wheels.
     {
-      id: 'base-ground-military/beetle', label: 'Volkswagen Beetle', category: 'ground',
+      id: 'base-ground-military/beetle', label: 'Classic round-bodied compact', category: 'ground',
       era: 'historical', lenMm: 4080, dims: [1540, 4080, 1500],
       body: '#3f8f6a', accent: '#dfe3e7', surfaces: ['ground'],
       prims: [
@@ -63,7 +63,7 @@ const pack: VehiclePackDef = {
     // ── VW Type 2 "Microbus" 4.28 × 1.75 × 1.94 m ────────────────────────────
     // Cues: FLAT front face with a proud V, two-tone split at the belt line.
     {
-      id: 'base-ground-military/microbus', label: 'Volkswagen Microbus', category: 'ground',
+      id: 'base-ground-military/microbus', label: 'Classic split-window van', category: 'ground',
       era: 'historical', lenMm: 4280, dims: [1750, 4280, 1940],
       body: '#c25b32', accent: '#eef1f4', surfaces: ['ground'],
       prims: [
