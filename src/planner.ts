@@ -5,7 +5,9 @@ import { SensorDiscovery } from './sensor-discovery.js';
 import { loadStore, saveStore, newId, repairFloor, defaultStore,
          cfgBodyKey, loadConfigsCache, saveConfigsCache } from './storage.js';
 import { slugToName, normMac, localToWorld, segCrossesSolidWall, mowerSweepWaypoints,
-         MOWER_KINEMATICS, MOWER_ROW_MM, stepBicycle, mowerWaypointReached, wrapAngle,
+         MOWER_KINEMATICS, MOWER_ROW_MM, MOWER_CONTAINMENT, stepBicycle,
+         mowerWaypointReached, wrapAngle, buildingWallLoops, pointInAnyLoop,
+         nearestPointOutsideLoops,
          ROBOT_DEFAULTS, robotLedColor, dockParkedHeading, parseVacuumPosition, vacuumRawToWorld,
          vacuumRawHeadingRad, isStairsKind, logicLightState, actionButtonKind,
          furnitureKind, normalizeLockState, valveIsOpen, cameraColor, slugifyFrigateName,
@@ -704,6 +706,11 @@ export class Planner extends EventTarget {
   robotStates: Record<string, RobotState> = {};
   // Cached mower sweep waypoints, keyed by floor id + configRev (walls change).
   private _robotWpCache: { key: string; wps: Vec2[] } | null = null;
+  // Cached BUILDING loops (the mower's no-go interiors), same key. A wall vertex
+  // DRAG mutates points without save(), so this can be one gesture stale — the
+  // mower drifting a few mm against a wall being dragged is harmless, and the
+  // release bumps configRev.
+  private _mowerLoopCache: { key: string; loops: Vec2[][] } | null = null;
 
   // Active person (sidebar People list expansion). Runtime only.
   activePersonId: string | null = null;
@@ -7637,11 +7644,118 @@ export class Planner extends EventTarget {
     };
   }
 
-  // Does the segment (x0,y0)→(x1,y1) cross any SOLID wall run on the current
-  // floor? Invisible walls (planning boundaries) are passable; door/window spans
-  // are gaps (via wallCutsForSegment) so a robot walks through openings.
+  // Does the segment (x0,y0)→(x1,y1) cross a wall run this robot cannot drive
+  // through on the current floor? Invisible walls (planning boundaries) are
+  // passable; DOOR spans are gaps (so a robot drives through openings, and a
+  // gate is how a mower leaves a fenced yard) but WINDOWS are solid — a sill is
+  // not a doorway (see segCrossesSolidWall's `navSolids` note). Fences, hedges
+  // and railings block exactly like house walls, matching the avatar nav
+  // rasterizer.
   private _segCrossesWall(f: Floor, x0: number, y0: number, x1: number, y1: number): boolean {
     return segCrossesSolidWall(f.walls, f.doors ?? [], f.windows ?? [], x0, y0, x1, y1);
+  }
+
+  // ── Mower outdoor containment ─────────────────────────────────────────────
+  // BUILDING interiors on this floor — where a mower must never drive. Fence /
+  // hedge / railing loops are deliberately NOT interiors (a fenced yard is lawn);
+  // they still block as solid runs through _segCrossesWall, so the fence contains
+  // the mower and a GATE is the only way across. Cached per (floor, configRev).
+  private _buildingLoops(f: Floor): Vec2[][] {
+    const key = `${f.id}:${this.configRev}`;
+    if (this._mowerLoopCache?.key === key) return this._mowerLoopCache.loops;
+    const loops = buildingWallLoops(f.walls);
+    this._mowerLoopCache = { key, loops };
+    return loops;
+  }
+
+  // Would moving from `prev` to `next` put the mower somewhere it may not be?
+  // Two independent tests, because they catch different failures:
+  //   • the END POINT inside a building loop — catches a walk-in through an
+  //     INVISIBLE wall (passable to the segment test by design) or a rig that
+  //     drifts in around a wall end;
+  //   • the STEP SEGMENT crossing a nav-solid run — catches driving through the
+  //     wall itself, including at speeds where one step spans it.
+  // `wasInside` forgives a mower that already IS indoors (dock placed inside the
+  // house, or a plan edited under it): it may keep moving — the escape bearing
+  // aims it out — but still may not cross a wall, so it leaves through a door.
+  private _mowerStepLegal(f: Floor, loops: Vec2[][], wasInside: boolean,
+                          px: number, py: number, nx: number, ny: number): boolean {
+    if (!wasInside && pointInAnyLoop(loops, nx, ny)) return false;
+    return !this._segCrossesWall(f, px, py, nx, ny);
+  }
+
+  // Is the straight probe of `lookaheadMm` along `heading` clear? The PREDICTIVE
+  // half of the guard: a violation seen this far ahead starts the escape arc
+  // while the mower still has room to turn (a bounded-yaw vehicle that waits
+  // until the step itself is illegal can only stop, not steer).
+  private _mowerHeadingClear(f: Floor, loops: Vec2[][], wasInside: boolean,
+                             x: number, y: number, heading: number): boolean {
+    const R = MOWER_CONTAINMENT.lookaheadMm;
+    const ex = x + Math.cos(heading) * R, ey = y + Math.sin(heading) * R;
+    return this._mowerStepLegal(f, loops, wasInside, x, y, ex, ey);
+  }
+
+  // Smallest deflection from the current heading whose forward probe is open.
+  // The fan is ordered by |offset| (left before right on a tie), so the mower
+  // grazes ALONG an obstacle rather than veering off it, and it is a fixed table
+  // — deterministic, no Math.random in a per-frame path. Nothing open anywhere →
+  // reverse bearing, which the caller can only ever approach at the bounded yaw
+  // rate (it never teleports the mower around).
+  private _mowerEscapeHeading(f: Floor, loops: Vec2[][], wasInside: boolean,
+                              x: number, y: number, heading: number): number {
+    for (const deg of MOWER_CONTAINMENT.escapeFanDeg) {
+      const h = wrapAngle(heading + deg * Math.PI / 180);
+      if (this._mowerHeadingClear(f, loops, wasInside, x, y, h)) return h;
+    }
+    return wrapAngle(heading + Math.PI);
+  }
+
+  // ONE guarded bicycle step. Every mower advance goes through this — sweep,
+  // ellipse, dock return and the GPS carrot chase alike — so there is a single
+  // place the containment invariant is enforced.
+  //   1. take the ordinary step toward the target; commit it when the step is
+  //      legal AND the road ahead stays clear;
+  //   2. else re-take the step from the SAME start toward the escape bearing —
+  //      the mower keeps rolling, it just turns (bounded yaw, so the path stays
+  //      continuous: no jump, no pivot-in-place);
+  //   3. else hold position, brake, and keep turning the wheel toward the escape
+  //      bearing. Yaw rate uses the min-speed turn rate, the same discipline the
+  //      shipped GPS station-keeping and dock-parking branches already use, so a
+  //      mower nosed into a corner works its way back out instead of deadlocking.
+  private _mowerAdvance(bs: BicycleState, tx: number, ty: number, dt: number,
+                        f: Floor, loops: Vec2[][],
+                        opts?: { maxSpeed?: number; stop?: boolean }): void {
+    const K = MOWER_KINEMATICS;
+    const px = bs.x, py = bs.y, ph = bs.heading, pv = bs.speed;
+    const wasInside = pointInAnyLoop(loops, px, py);
+    stepBicycle(bs, tx, ty, dt, opts);
+    if (this._mowerStepLegal(f, loops, wasInside, px, py, bs.x, bs.y) &&
+        this._mowerHeadingClear(f, loops, wasInside, bs.x, bs.y, bs.heading)) return;
+
+    const esc = this._mowerEscapeHeading(f, loops, wasInside, px, py, ph);
+    const probe = Math.max(MOWER_CONTAINMENT.lookaheadMm, 2 * K.turnRadiusMm + 1);
+    bs.x = px; bs.y = py; bs.heading = ph; bs.speed = pv;
+    stepBicycle(bs, px + Math.cos(esc) * probe, py + Math.sin(esc) * probe, dt,
+                { maxSpeed: opts?.maxSpeed });
+    if (this._mowerStepLegal(f, loops, wasInside, px, py, bs.x, bs.y)) return;
+
+    const h = Math.max(0, Math.min(0.2, dt));
+    const wMax = Math.max(K.minSpeedMm, pv) / K.turnRadiusMm;
+    const e = wrapAngle(esc - ph);
+    bs.x = px; bs.y = py;
+    bs.speed = Math.max(0, pv - K.accelMm * h);
+    bs.heading = wrapAngle(ph + Math.max(-wMax * h, Math.min(wMax * h, K.steerGain * e * h)));
+  }
+
+  // Is this mower's DOCK placed inside the house (user error — a mower docks in
+  // the yard or a shed)? The controller drives to the nearest outdoor point and
+  // parks there instead of entering; the sidebar surfaces the mismatch so the
+  // dock can be moved. Cheap: cached loops + one point-in-polygon.
+  mowerDockIndoors(r: RobotFixture): boolean {
+    if (!r || r.kind !== 'mower') return false;
+    const f = this.floor();
+    if (!(f.robots ?? []).some(x => x.id === r.id)) return false;
+    return pointInAnyLoop(this._buildingLoops(f), r.x, r.y);
   }
 
   // Pick a random reachable goal inside the floor rect (straight line-of-sight
@@ -7889,8 +8003,16 @@ export class Planner extends EventTarget {
   // MOWER_KINEMATICS.turnRadiusMm). Nothing here may write rs.x/rs.y directly or
   // snap rs.heading from a motion vector — that would reintroduce strafing.
   // `rs.speed` carries the kinematic velocity across frames (seeded 0 on spawn).
+  //
+  // CONTAINMENT: a mower is an OUTDOOR machine. Every branch that MOVES it goes
+  // through _mowerAdvance (never stepBicycle directly), which refuses any step
+  // that would enter a building loop or cross a nav-solid wall and re-steers
+  // along the nearest open bearing. The two branches that only turn/brake in
+  // place (GPS station-keeping, dock parking) need no guard — they never write
+  // x/y — and are left calling the raw integrator maths.
   private _stepMower(r: RobotFixture, rs: RobotState, f: Floor, act: string, dt: number): void {
     const K = MOWER_KINEMATICS;
+    const loops = this._buildingLoops(f);
     const bs: BicycleState = { x: rs.x, y: rs.y, heading: rs.heading, speed: rs.speed ?? 0 };
     const commit = () => { rs.x = bs.x; rs.y = bs.y; rs.heading = bs.heading; rs.speed = bs.speed; };
     // GPS reality (when calibrated + a fix exists) overrides the sim while
@@ -7901,9 +8023,19 @@ export class Planner extends EventTarget {
     // target instead of a meaningless sub-mm bearing.
     const gps = (act === 'mowing' || act === 'returning') ? this._mowerGps(r) : null;
     if (gps) {
-      const d = Math.hypot(gps.x - rs.x, gps.y - rs.y);
+      // A real mower cannot be in the living room: a fix that projects INSIDE the
+      // house is GPS error, so the CARROT is pulled to the nearest outdoor point
+      // (the same spirit as the yard `clampToBoundary` _mowerGps already applies,
+      // one scale down). Deliberately clamped HERE and not inside _mowerGps:
+      // robotPosInfo must keep reporting the projected fix, so the position
+      // overlay's crosshair-vs-body delta stays the honest "your GPS says this,
+      // the mower is drawn there" readout. The manual GPS TRIM (posOffsetX/Y)
+      // composes first — it is already folded into gps.x/y upstream.
+      const cx = nearestPointOutsideLoops(loops, gps.x, gps.y, MOWER_CONTAINMENT.clampMarginMm);
+      const d = Math.hypot(cx.x - rs.x, cx.y - rs.y);
       if (d > K.arriveMm || gps.headingRad == null) {
-        stepBicycle(bs, gps.x, gps.y, dt, { maxSpeed: K.maxSpeedMm * 2.5, stop: true });
+        this._mowerAdvance(bs, cx.x, cx.y, dt, f, loops,
+                           { maxSpeed: K.maxSpeedMm * 2.5, stop: true });
       } else {
         // Hold station on the fix, easing the yaw toward the reported heading.
         const wMax = Math.max(K.minSpeedMm, bs.speed) / K.turnRadiusMm;
@@ -7916,12 +8048,17 @@ export class Planner extends EventTarget {
       return;
     }
     if (act === 'docked' || act === 'returning') {
-      stepBicycle(bs, r.x, r.y, dt, { stop: true });
+      // A dock placed INSIDE the house is user error. The mower approaches the
+      // nearest outdoor point and parks there rather than driving in (the guard
+      // would refuse the entry step anyway; clamping the target means it settles
+      // cleanly instead of grinding against the wall). Sidebar: mowerDockIndoors.
+      const home = nearestPointOutsideLoops(loops, r.x, r.y, MOWER_CONTAINMENT.clampMarginMm);
+      this._mowerAdvance(bs, home.x, home.y, dt, f, loops, { stop: true });
       // Parked IN the dock: settle the nose toward the dock's own facing so a
       // rotated dock holds a rotated mower. Same bounded-yaw discipline as the
       // GPS station-keeping branch — a car cannot spin on the spot, so the rate
       // ceiling is the min-speed turn rate (never a snap).
-      if (act === 'docked' && Math.hypot(r.x - bs.x, r.y - bs.y) < K.arriveMm) {
+      if (act === 'docked' && Math.hypot(home.x - bs.x, home.y - bs.y) < K.arriveMm) {
         const wMax = Math.max(K.minSpeedMm, bs.speed) / K.turnRadiusMm;
         const e = wrapAngle(dockParkedHeading(r.rotation) - bs.heading);
         const h = Math.max(0, Math.min(0.2, dt));
@@ -7946,12 +8083,12 @@ export class Planner extends EventTarget {
         else if (rs.wpIdx < 0) { rs.wpIdx = 0; rs.wpDir = 1; }
         g = wps[rs.wpIdx];
       }
-      stepBicycle(bs, g.x, g.y, dt);
+      this._mowerAdvance(bs, g.x, g.y, dt, f, loops);
     } else {
       rs.ellipseAng += (K.maxSpeedMm / Math.max(1, Math.max(f.w, f.d))) * dt;
       const a = f.w / 2 + 900, b = f.d / 2 + 900;
       const gx = f.w / 2 + a * Math.cos(rs.ellipseAng), gy = f.d / 2 + b * Math.sin(rs.ellipseAng);
-      stepBicycle(bs, gx, gy, dt);
+      this._mowerAdvance(bs, gx, gy, dt, f, loops);
     }
     commit();
   }

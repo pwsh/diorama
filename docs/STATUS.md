@@ -363,6 +363,29 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Robot window LOS + mower outdoor containment** (2026-08-05,
+  user-directed; unreleased — on main past v0.57.0).
+  (1) `segCrossesSolidWall` → `navSolids` (windows solid to robots;
+  its ONLY production consumer was the vacuum path — call-site table
+  verified, no visual consumer exists, documented at the fn); zero
+  goldens moved (all pre-existing fixtures window-free →
+  identity-path byte-identical). (2) Mower: every position-writing
+  branch routes through `_mowerAdvance` — LEGAL (endpoint not in a
+  building loop + no nav-solid crossing; wasInside forgiveness) +
+  CLEAR (800 mm predictive probe) else a fixed smallest-first escape
+  fan, else brake+wheel at the station-keeping turn rate (max
+  Δθ 0.0397 < 0.042 ceiling); GPS indoor fix clamps the CARROT via
+  `nearestPointOutsideLoops` (robotPosInfo keeps the raw fix —
+  honest overlay); indoor dock → nearest outdoor park +
+  `mowerDockIndoors` sidebar warning. `BOUNDARY_WALL_KINDS` (fences/
+  hedge/railing): contain but aren't building interior —
+  `buildingWallLoops()` shared by guard + `mowerSweepWaypoints` (a
+  fenced yard now sweeps 126 waypoints instead of the silent ellipse
+  fallback); `isFenceLikeKind` delegates. Tests: ROBOT 204/204
+  (+36: window/door twins, 4000-step every-step containment, GPS
+  clamp honesty, gate passability); nav-parity 70/70, floorplans
+  425/425, plan-rotate 72/72, fence-gate 86/86 green.
+
 - **Windows block nav + mmWave demo avatars** (2026-08-05,
   user-reported "avatars breaking through windows" + "unbound sensors
   not generating avatars"; unreleased — on main past v0.57.0).

@@ -560,6 +560,311 @@
       ok('planner mower/vacuum kinematics tests threw', false, String(e && e.message || e));
     }
 
+    // ══ Window LOS + mower outdoor containment ═══════════════════════════════
+    // Two related fixes:
+    //  (1) segCrossesSolidWall now takes `wallCutsForSegment(...).navSolids` (the
+    //      DOOR-only complement) instead of `solids`, so a WINDOW is solid to a
+    //      driving robot exactly as it is to the avatar nav rasterizer.
+    //  (2) the MOWER is contained to outdoor space: no step may end inside a
+    //      building loop or cross a nav-solid run.
+
+    // ── Pure: a window blocks, its door twin does not ────────────────────────
+    {
+      const divider = [{ points: [{x:3000,y:0},{x:3000,y:4000}] }];
+      const win = [{ x: 3000, y: 2000, w: 900 }];
+      const dr  = [{ x: 3000, y: 2000, w: 900, rotation: 90 }];
+      ok('LOS: a WINDOW span is solid to a robot (sill, not a doorway)',
+         segCrossesSolidWall(divider, [], win, 1500, 2000, 4500, 2000) === true);
+      ok('LOS: the DOOR twin of the same span is passable',
+         segCrossesSolidWall(divider, dr, [], 1500, 2000, 4500, 2000) === false);
+      ok('LOS: a window elsewhere on the wall still blocks off-span crossings',
+         segCrossesSolidWall(divider, [], win, 1500, 500, 4500, 500) === true);
+      ok('LOS: a window-free wall is byte-identical (door gap still open)',
+         segCrossesSolidWall(divider, dr, [], 1500, 3500, 4500, 3500) === true &&
+         segCrossesSolidWall(divider, dr, [], 1500, 2000, 4500, 2000) === false);
+    }
+
+    // ── Pure: building loops vs yard boundary runs ───────────────────────────
+    {
+      const { buildingWallLoops, pointInAnyLoop, nearestPointOutsideLoops,
+              isBoundaryWallKind, BOUNDARY_WALL_KINDS } = await import('./geometry.mod.js');
+      const fenceRing = [{ kind: 'fence_picket', points: [
+        {x:2000,y:2000},{x:12000,y:2000},{x:12000,y:8000},{x:2000,y:8000},{x:2000,y:2000}] }];
+      const houseRing = [{ points: [
+        {x:5000,y:4000},{x:9000,y:4000},{x:9000,y:7000},{x:5000,y:7000},{x:5000,y:4000}] }];
+      ok('boundary kinds: the 4 fences + hedge + railing, nothing else',
+         BOUNDARY_WALL_KINDS.size === 5 &&
+         ['fence_picket','fence_privacy','fence_chainlink','hedge','railing'].every(isBoundaryWallKind) &&
+         !isBoundaryWallKind('full') && !isBoundaryWallKind('half') &&
+         !isBoundaryWallKind('invisible') && !isBoundaryWallKind(null),
+         'n=' + BOUNDARY_WALL_KINDS.size);
+      ok('buildingWallLoops: a FENCE ring is not a building (yard stays mowable)',
+         buildingWallLoops(fenceRing).length === 0 &&
+         closedWallLoops(fenceRing).length >= 1,
+         `building=${buildingWallLoops(fenceRing).length} all=${closedWallLoops(fenceRing).length}`);
+      ok('buildingWallLoops: a solid ring IS a building',
+         buildingWallLoops(houseRing).length === 1);
+      ok('buildingWallLoops: a house inside a fence keeps exactly the house',
+         buildingWallLoops([...fenceRing, ...houseRing]).length === 1);
+      const bl = buildingWallLoops(houseRing);
+      ok('pointInAnyLoop: inside / outside the house',
+         pointInAnyLoop(bl, 7000, 5500) === true && pointInAnyLoop(bl, 1000, 1000) === false);
+      // Clamp: an indoor point is pushed out past the nearest boundary edge.
+      const outp = nearestPointOutsideLoops(bl, 5300, 5500, 400);
+      ok('nearestPointOutsideLoops: an indoor point lands OUTSIDE, near the wall',
+         !pointInAnyLoop(bl, outp.x, outp.y) && near(outp.x, 4600, 1) && near(outp.y, 5500, 1),
+         `(${outp.x.toFixed(0)},${outp.y.toFixed(0)})`);
+      const keep = nearestPointOutsideLoops(bl, 1000, 1000, 400);
+      ok('nearestPointOutsideLoops: an outdoor point is returned UNCHANGED',
+         keep.x === 1000 && keep.y === 1000);
+      // Fenced yard: the sweep now finds lawn there (it used to see the fence
+      // ring as "indoors" and fall through to the ellipse orbit).
+      const fw = mowerSweepWaypoints([...fenceRing, ...houseRing], 14000, 10000, 800, 300, MOWER_ROW_MM);
+      let inHouse = 0;
+      for (const w of fw) if (pointInAnyLoop(bl, w.x, w.y)) inHouse++;
+      ok('sweep: a fenced yard yields lawn waypoints', fw.length > 20, `n=${fw.length}`);
+      ok('sweep: none of them are inside the house', inHouse === 0, `inHouse=${inHouse}`);
+    }
+
+    // ── (a) Vacuum: a window is not an exit; its door twin is ────────────────
+    // A closed room whose ONLY gap in the east wall is a WINDOW must contain the
+    // vacuum; swapping that window for a door of the same span must let it out.
+    // (The nav-parity fixture-H idiom, applied to the robot controller.)
+    try {
+      const { Planner } = await import('./planner.mod.js?v=' + Date.now());
+      const roomWalls = () => ([
+        { points: [{x:0,y:0},{x:4000,y:0}] },
+        { points: [{x:0,y:4000},{x:4000,y:4000}] },
+        { points: [{x:0,y:0},{x:0,y:4000}] },
+        { points: [{x:4000,y:0},{x:4000,y:4000}] },
+      ]);
+      const roam = (openings) => {
+        const rngSave = Math.random;
+        let s = 24680;
+        Math.random = () => ((s = (s * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+        try {
+          const p = new Planner();
+          const f = p.floor();
+          f.w = 9000; f.d = 6000; f.walls = roomWalls();
+          f.doors = openings.doors ?? []; f.windows = openings.windows ?? [];
+          f.robots = [{ id: 'vw', kind: 'vacuum', x: 2000, y: 2000 }];
+          p.stepRobots(0.05);
+          const rs = p.robotStates.vw;
+          rs.demoPhase = 'run'; rs.demoTimer = 999999; rs.goalTimer = 0;
+          let maxX = rs.x, escaped = false;
+          for (let i = 0; i < 6000; i++) {          // 300 s @ 20 Hz
+            p.stepRobots(0.05);
+            maxX = Math.max(maxX, rs.x);
+            if (rs.x > 4200) escaped = true;
+          }
+          return { maxX, escaped };
+        } finally { Math.random = rngSave; }
+      };
+      const thruWin = roam({ windows: [{ x: 4000, y: 2000, w: 900 }] });
+      ok('vacuum: a WINDOW is not an exit — stays in the room over 300 s',
+         !thruWin.escaped && thruWin.maxX < 4000, `maxX=${Math.round(thruWin.maxX)}`);
+      const thruDoor = roam({ doors: [{ x: 4000, y: 2000, w: 900, rotation: 90 }] });
+      ok('vacuum: the DOOR twin of the same span lets it out',
+         thruDoor.escaped, `maxX=${Math.round(thruDoor.maxX)}`);
+    } catch (e) {
+      ok('vacuum window-LOS containment tests threw', false, String(e && e.message || e));
+    }
+
+    // ── (b) Mower: never inside the house, over a long simulated sweep ───────
+    try {
+      const { Planner } = await import('./planner.mod.js?v=' + Date.now());
+      const { buildingWallLoops, pointInAnyLoop, nearestPointOutsideLoops } =
+        await import('./geometry.mod.js');
+      const K = MOWER_KINEMATICS;
+      const house = [{ points: [
+        {x:5000,y:4000},{x:9000,y:4000},{x:9000,y:7000},{x:5000,y:7000},{x:5000,y:4000}] }];
+      const pmc = new Planner();
+      const fmc = pmc.floor();
+      fmc.w = 14000; fmc.d = 10000; fmc.walls = house;
+      // A window in the south house wall: solid to the mower like every other run.
+      fmc.windows = [{ x: 7000, y: 4000, w: 1200 }];
+      fmc.robots = [{ id: 'mc', kind: 'mower', x: 1000, y: 1000 }];
+      pmc.stepRobots(0.05);
+      const rmc = pmc.robotStates.mc;
+      rmc.demoPhase = 'run'; rmc.demoTimer = 999999;
+      const loopsC = buildingWallLoops(fmc.walls);
+      let insideSteps = 0, crossSteps = 0, travel = 0, maxDth = 0, worstX = 0, worstY = 0;
+      for (let i = 0; i < 4000; i++) {                       // 200 s @ 20 Hz
+        const px = rmc.x, py = rmc.y, ph = rmc.heading;
+        pmc.stepRobots(0.05);
+        travel += Math.hypot(rmc.x - px, rmc.y - py);
+        maxDth = Math.max(maxDth, Math.abs(wrapAngle(rmc.heading - ph)));
+        if (pointInAnyLoop(loopsC, rmc.x, rmc.y)) { if (!insideSteps) { worstX = rmc.x; worstY = rmc.y; } insideSteps++; }
+        if (segCrossesSolidWall(fmc.walls, [], fmc.windows, px, py, rmc.x, rmc.y)) crossSteps++;
+      }
+      ok('mower: NEVER inside the house — every one of 4000 steps',
+         insideSteps === 0, `insideSteps=${insideSteps}${insideSteps ? ` first@(${worstX.toFixed(0)},${worstY.toFixed(0)})` : ''}`);
+      ok('mower: never crosses a wall run (windows included)',
+         crossSteps === 0, `crossings=${crossSteps}`);
+      ok('mower: containment does not freeze it — still covers ground',
+         travel > 20000, `travelled=${Math.round(travel)} mm`);
+      // The deflection is KINEMATIC: it re-steers, never teleports. Position is
+      // pinned by the crossing test above; heading stays inside the shipped
+      // per-step ceiling (the stalled-escape branch turns at the MIN-speed rate,
+      // the same discipline the GPS station-keeping / dock-parking branches use,
+      // which is strictly below the max-speed ceiling asserted here).
+      ok('mower: heading stays continuous while deflecting (no instant flips)',
+         maxDth <= (K.maxSpeedMm / K.turnRadiusMm) * 0.05 + 1e-6,
+         `maxΔθ=${maxDth.toFixed(4)} rad/step`);
+
+      // Dock placed INSIDE the house (user error): the mower parks at the nearest
+      // outdoor point and never drives in. Reported by mowerDockIndoors.
+      const pdi = new Planner();
+      const fdi = pdi.floor();
+      fdi.w = 14000; fdi.d = 10000; fdi.walls = house;
+      const rdi = { id: 'md', kind: 'mower', x: 7000, y: 5500 };
+      fdi.robots = [rdi];
+      ok('mower: an indoor dock is reported (sidebar warning)', pdi.mowerDockIndoors(rdi) === true);
+      pdi.stepRobots(0.05);
+      const rsdi = pdi.robotStates.md;
+      rsdi.x = 3000; rsdi.y = 5500; rsdi.heading = 0; rsdi.speed = 0;   // outdoors, aimed at the dock
+      rsdi.demoPhase = 'return'; rsdi.demoTimer = 999999;
+      let enteredDock = 0;
+      for (let i = 0; i < 2000; i++) {
+        pdi.stepRobots(0.05);
+        if (pointInAnyLoop(loopsC, rsdi.x, rsdi.y)) enteredDock++;
+      }
+      ok('mower: an indoor dock is never entered', enteredDock === 0, `steps inside=${enteredDock}`);
+      // It parks at the CLAMPED home point — the nearest point outside the house
+      // to the indoor dock — having driven AROUND the building to reach it.
+      const homeDi = nearestPointOutsideLoops(loopsC, 7000, 5500, 400);
+      ok('mower: it settles just outside the house, at the clamped home point',
+         !pointInAnyLoop(loopsC, rsdi.x, rsdi.y) && rsdi.speed < 20 &&
+         Math.hypot(rsdi.x - homeDi.x, rsdi.y - homeDi.y) < K.arriveMm + 50,
+         `(${rsdi.x.toFixed(0)},${rsdi.y.toFixed(0)}) home=(${homeDi.x.toFixed(0)},${homeDi.y.toFixed(0)}) v=${rsdi.speed.toFixed(1)}`);
+      const rout = { id: 'mo', kind: 'mower', x: 1000, y: 1000 };
+      fdi.robots.push(rout);
+      ok('mower: an outdoor dock raises no warning', pdi.mowerDockIndoors(rout) === false);
+      ok('mowerDockIndoors: a vacuum never warns',
+         pdi.mowerDockIndoors({ id: 'x', kind: 'vacuum', x: 7000, y: 5500 }) === false);
+    } catch (e) {
+      ok('mower containment tests threw', false, String(e && e.message || e));
+    }
+
+    // ── (c) Mower GPS: an indoor fix clamps the CARROT, not the readout ──────
+    try {
+      const { Planner } = await import('./planner.mod.js?v=' + Date.now());
+      const { buildingWallLoops, pointInAnyLoop } = await import('./geometry.mod.js');
+      // Calibrate with the same two landmarks the GPS section uses, then place a
+      // house so the plan MIDPOINT (2500, 2000) — where the fix projects — is
+      // INDOORS. A real mower cannot be in the living room: that is GPS error.
+      const pg = new Planner();
+      const fg = pg.floor();
+      fg.w = 5000; fg.d = 4000;
+      fg.walls = [{ points: [
+        {x:1500,y:1000},{x:3500,y:1000},{x:3500,y:3000},{x:1500,y:3000},{x:1500,y:1000}] }];
+      pg.store.geo = { landmarks: [
+        { id: 'l1', name: 'L1', x: L1.x, y: L1.y, lat: L1.lat, lon: L1.lon },
+        { id: 'l2', name: 'L2', x: L2.x, y: L2.y, lat: L2.lat, lon: L2.lon },
+      ] };
+      const midLat = (L1.lat + L2.lat) / 2, midLon = (L1.lon + L2.lon) / 2;
+      const rg = { id: 'mg', kind: 'mower', x: 400, y: 400, trackerEntity: 'device_tracker.mow' };
+      fg.robots = [rg];
+      pg.hass = { states: { 'device_tracker.mow': {
+        state: 'home', attributes: { latitude: midLat, longitude: midLon } } } };
+      const loopsG = buildingWallLoops(fg.walls);
+      const info = pg.robotPosInfo(rg);
+      ok('gps: the fixture fix genuinely projects INDOORS',
+         info && info.mode === 'gps' && pointInAnyLoop(loopsG, info.worldX, info.worldY),
+         info && `(${info.worldX.toFixed(0)},${info.worldY.toFixed(0)})`);
+      // HONESTY: robotPosInfo still reports the RAW lat/lon + the projected
+      // point, so the 2D overlay's crosshair-vs-body delta shows the error.
+      ok('gps: robotPosInfo still reports the raw fix (clamp is carrot-side only)',
+         info && info.rawText === `${midLat.toFixed(5)}, ${midLon.toFixed(5)}`, info && info.rawText);
+      pg.stepRobots(0.05);
+      const rsg = pg.robotStates.mg;
+      rsg.demoPhase = 'run'; rsg.demoTimer = 999999;
+      let insideG = 0;
+      for (let i = 0; i < 2000; i++) {                       // 100 s chasing it
+        pg.stepRobots(0.05);
+        if (pointInAnyLoop(loopsG, rsg.x, rsg.y)) insideG++;
+      }
+      ok('gps: the mower never drives to an indoor fix', insideG === 0, `steps inside=${insideG}`);
+      ok('gps: it holds just outside, near the clamped carrot',
+         !pointInAnyLoop(loopsG, rsg.x, rsg.y) &&
+         Math.hypot(rsg.x - info.worldX, rsg.y - info.worldY) < 1800,
+         `(${rsg.x.toFixed(0)},${rsg.y.toFixed(0)}) d=${Math.hypot(rsg.x - info.worldX, rsg.y - info.worldY).toFixed(0)}`);
+      // An OUTDOOR fix is untouched: the carrot clamp is a no-op there.
+      const pg2 = new Planner();
+      const fg2 = pg2.floor();
+      fg2.w = 5000; fg2.d = 4000; fg2.walls = [];
+      pg2.store.geo = pg.store.geo;
+      const rg2 = { id: 'mg2', kind: 'mower', x: 400, y: 400, trackerEntity: 'device_tracker.mow' };
+      fg2.robots = [rg2];
+      pg2.hass = pg.hass;
+      pg2.stepRobots(0.05);
+      const rsg2 = pg2.robotStates.mg2;
+      rsg2.demoPhase = 'run'; rsg2.demoTimer = 999999;
+      for (let i = 0; i < 2000; i++) pg2.stepRobots(0.05);
+      ok('gps: with no house the mower still converges ON the fix',
+         Math.hypot(rsg2.x - 2500, rsg2.y - 2000) < MOWER_KINEMATICS.arriveMm + 50,
+         `(${rsg2.x.toFixed(0)},${rsg2.y.toFixed(0)})`);
+    } catch (e) {
+      ok('mower GPS containment tests threw', false, String(e && e.message || e));
+    }
+
+    // ── (d) Gate passability: a fenced yard contains, a GATE lets through ────
+    try {
+      const { Planner } = await import('./planner.mod.js?v=' + Date.now());
+      const { buildingWallLoops, pointInAnyLoop } = await import('./geometry.mod.js');
+      // Fence ring 2000..12000 × 2000..8000 with ONE gate span in the east run.
+      const fence = [
+        { kind: 'fence_picket', points: [{x:2000,y:2000},{x:12000,y:2000}] },
+        { kind: 'fence_picket', points: [{x:12000,y:2000},{x:12000,y:8000}] },
+        { kind: 'fence_picket', points: [{x:12000,y:8000},{x:2000,y:8000}] },
+        { kind: 'fence_picket', points: [{x:2000,y:8000},{x:2000,y:2000}] },
+      ];
+      // A door's (x, y) is its HINGE: doorSpanCenter offsets by w/2 along the
+      // rotation, so this hinge at y=5500 / rotation 90 opens the span y 4500..5500
+      // in the vertical east run.
+      const gate = [{ x: 12000, y: 5500, w: 1000, rotation: 90, kind: 'gate' }];
+      ok('gate: the fence run BLOCKS away from the gate',
+         segCrossesSolidWall(fence, gate, [], 11000, 3000, 13000, 3000) === true);
+      ok('gate: the GATE span is passable',
+         segCrossesSolidWall(fence, gate, [], 11000, 5000, 13000, 5000) === false);
+      ok('gate: without a gate the same crossing is blocked',
+         segCrossesSolidWall(fence, [], [], 11000, 5000, 13000, 5000) === true);
+      // The mower inside a fully-closed fence stays inside it; with the gate it
+      // may cross, and only ever on the gate span.
+      const run = (doors) => {
+        const p = new Planner();
+        const f = p.floor();
+        f.w = 16000; f.d = 11000; f.walls = fence; f.doors = doors;
+        f.robots = [{ id: 'mf', kind: 'mower', x: 3000, y: 3000 }];
+        p.stepRobots(0.05);
+        const rs = p.robotStates.mf;
+        rs.demoPhase = 'run'; rs.demoTimer = 999999;
+        let outside = 0, crossOffGate = 0;
+        for (let i = 0; i < 6000; i++) {                     // 300 s @ 20 Hz
+          const px = rs.x, py = rs.y;
+          p.stepRobots(0.05);
+          if (rs.x > 12100 || rs.x < 1900 || rs.y > 8100 || rs.y < 1900) outside++;
+          if (segCrossesSolidWall(fence, doors, [], px, py, rs.x, rs.y)) crossOffGate++;
+        }
+        return { outside, crossOffGate, rs };
+      };
+      const closed = run([]);
+      ok('gate: a fully-fenced yard CONTAINS the mower for 300 s',
+         closed.outside === 0 && closed.crossOffGate === 0,
+         `outside=${closed.outside} crossings=${closed.crossOffGate}`);
+      ok('gate: containment does not stall it inside the fence',
+         pointInAnyLoop([[{x:2000,y:2000},{x:12000,y:2000},{x:12000,y:8000},{x:2000,y:8000}]],
+                        closed.rs.x, closed.rs.y),
+         `(${closed.rs.x.toFixed(0)},${closed.rs.y.toFixed(0)})`);
+      const gated = run(gate);
+      ok('gate: with a gate it never crosses the SOLID fence either',
+         gated.crossOffGate === 0, `crossings=${gated.crossOffGate}`);
+      ok('gate: a fence ring never counts as a building interior',
+         buildingWallLoops(fence).length === 0);
+    } catch (e) {
+      ok('gate passability tests threw', false, String(e && e.message || e));
+    }
+
     // ── Robots view LAYER + position readout + manual alignment nudges ───────
     // Three related surfaces: `Layers2D.robots` (split off `sensors`, absent =
     // ON), the `RobotFixture.showPosInfo` calibration readout resolved by

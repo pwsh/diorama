@@ -423,6 +423,72 @@ export function closedWallLoops(walls: { points: Vec2[] }[]): Vec2[][] {
   return out;
 }
 
+// ── Building envelope vs yard boundary ───────────────────────────────────────
+// Wall kinds that enclose OUTDOOR space rather than house interior: the four
+// fence kinds, a hedge, and a railing (a 914 mm banister fences a deck, it does
+// not roof a room). They are still SOLID to a walker/driver — segCrossesSolidWall
+// blocks every one of them and a gate is the only way through — but the region
+// they enclose is yard, which is exactly where a lawn mower belongs.
+// `canvas-interact.isFenceLikeKind` (which kinds default a dropped door to
+// 'gate') delegates here so the two can never disagree.
+export const BOUNDARY_WALL_KINDS = new Set<WallKind>([
+  'fence_picket', 'fence_privacy', 'fence_chainlink', 'hedge', 'railing',
+]);
+export function isBoundaryWallKind(k: string | null | undefined): boolean {
+  return k != null && BOUNDARY_WALL_KINDS.has(k as WallKind);
+}
+
+// Closed loops that count as BUILDING INTERIOR — `closedWallLoops` over the
+// non-boundary walls only. Invisible walls stay in (they exist to close/subdivide
+// floor regions), fences/hedges/railings drop out (a fenced yard must not read as
+// "indoors" or the mower would have nowhere legal to stand). Pure.
+export function buildingWallLoops(walls: { points: Vec2[]; kind?: WallKind }[]): Vec2[][] {
+  return closedWallLoops(walls.filter(w => !isBoundaryWallKind(wallKind(w))));
+}
+
+// Is (x, y) inside ANY of `loops`? The shared spelling of the containment test
+// the mower's sweep-waypoint generator and its per-step containment guard both
+// run, so they can never disagree about what "indoors" means. Pure.
+export function pointInAnyLoop(loops: Vec2[][], x: number, y: number): boolean {
+  for (const lp of loops) if (pointInPolygon(x, y, lp)) return true;
+  return false;
+}
+
+// Nearest point OUTSIDE every loop, for a point that currently sits inside one:
+// project onto the containing loop's boundary, then step `margin` mm out along
+// that edge's normal, taking whichever side is genuinely outside. Returns the
+// input UNCHANGED when it is already outside (the common case — callers may call
+// it unconditionally). Falls back to the boundary point itself when neither side
+// is free (a corridor thinner than 2·margin). Pure.
+export function nearestPointOutsideLoops(
+  loops: Vec2[][], x: number, y: number, margin = 300,
+): { x: number; y: number } {
+  if (!pointInAnyLoop(loops, x, y)) return { x, y };
+  let best: { x: number; y: number; nx: number; ny: number } | null = null;
+  let bd = Infinity;
+  for (const lp of loops) {
+    for (let i = 0, n = lp.length; i < n; i++) {
+      const a = lp[i], b = lp[(i + 1) % n];
+      const dx = b.x - a.x, dy = b.y - a.y, len2 = dx * dx + dy * dy;
+      if (len2 < 1) continue;
+      let t = ((x - a.x) * dx + (y - a.y) * dy) / len2;
+      t = t < 0 ? 0 : t > 1 ? 1 : t;
+      const px = a.x + t * dx, py = a.y + t * dy;
+      const d = Math.hypot(px - x, py - y);
+      if (d < bd) {
+        const L = Math.sqrt(len2);
+        bd = d; best = { x: px, y: py, nx: -dy / L, ny: dx / L };
+      }
+    }
+  }
+  if (!best) return { x, y };
+  for (const s of [1, -1]) {
+    const cx = best.x + best.nx * margin * s, cy = best.y + best.ny * margin * s;
+    if (!pointInAnyLoop(loops, cx, cy)) return { x: cx, y: cy };
+  }
+  return { x: best.x, y: best.y };
+}
+
 // Is the wall SEGMENT a→b part of the building envelope, i.e. does it bound one
 // of the closed wall loops `closedWallLoops` traced? Pure; loops are the ones
 // that function returned (vertices are welded node positions, no repeated first
@@ -2118,10 +2184,23 @@ export function segmentsIntersect(
          ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0));
 }
 
-// Does the segment (x0,y0)→(x1,y1) cross any SOLID wall run? Invisible walls
-// (planning boundaries) are passable; door/window spans are gaps (via
-// wallCutsForSegment) so a robot walks through openings. Pure — shared by the
-// robot controller (Planner._segCrossesWall) and its test page.
+// Does the segment (x0,y0)→(x1,y1) cross any wall run a DRIVING ROBOT cannot
+// pass? Invisible walls (planning boundaries) are passable; fences, hedges and
+// railings are NOT (they are ordinary solid runs here, exactly as the avatar
+// nav rasterizer treats them — a fenced yard therefore contains the mower and a
+// GATE, being a door, is the one way through).
+//
+// Run source = `wallCutsForSegment(...).navSolids` — the DOOR-only complement.
+// A WINDOW is a hole in the visual `solids` but SOLID here: a ~900 mm sill is
+// not something a vacuum or a mower drives through, and sharing `solids` used to
+// let a simulated vacuum plot straight lines out of a window (the avatar-nav
+// twin of this bug was fixed in _buildNav first; this is the robot half). With
+// no windows on a segment `navSolids` is `solids` by value, so a window-free
+// plan is byte-identical.
+//
+// Pure — shared by the robot controller (Planner._segCrossesWall) and its test
+// page. There is no visual-semantics consumer; if one ever appears it must ask
+// for `solids` explicitly rather than flipping this back.
 export function segCrossesSolidWall(
   walls: { points: Vec2[]; kind?: WallKind }[],
   doors: { x: number; y: number; w: number; rotation: number }[],
@@ -2137,8 +2216,8 @@ export function segCrossesSolidWall(
       const len = Math.hypot(b.x - a.x, b.y - a.y);
       if (len < 1) continue;
       const ux = (b.x - a.x) / len, uy = (b.y - a.y) / len;
-      const { solids } = wallCutsForSegment(a, b, doors, windows);
-      for (const s of solids) {
+      const { navSolids } = wallCutsForSegment(a, b, doors, windows);
+      for (const s of navSolids) {
         const sa = { x: a.x + ux * s.t0, y: a.y + uy * s.t0 };
         const sb = { x: a.x + ux * s.t1, y: a.y + uy * s.t1 };
         if (segmentsIntersect(p1, p2, sa, sb)) return true;
@@ -2149,7 +2228,7 @@ export function segCrossesSolidWall(
 }
 
 // Coarse outdoor sweep waypoints for a simulated mower: grid cells inside the
-// floor rect (0..w × 0..d) but OUTSIDE every closed wall loop, ordered
+// floor rect (0..w × 0..d) but OUTSIDE every BUILDING loop, ordered
 // boustrophedon (alternate rows reversed). Empty → the caller orbits an ellipse
 // ring. Pure — shared by Planner._mowerWaypoints and its test page.
 // `rowCell` (defaults to `cell`, so every legacy caller is byte-identical) is the
@@ -2160,15 +2239,17 @@ export function mowerSweepWaypoints(
   walls: { points: Vec2[]; kind?: WallKind }[],
   w: number, d: number, cell = 800, margin = 300, rowCell = cell,
 ): Vec2[] {
-  const loops = closedWallLoops(walls);
+  // BUILDING loops, not every closed loop: a fenced/hedged yard is a closed loop
+  // too, and excluding it would leave a fenced property with zero mowable cells
+  // (the ellipse fallback) instead of the lawn it actually is. Same rule the
+  // Planner's per-step containment guard uses.
+  const loops = buildingWallLoops(walls);
   const wps: Vec2[] = [];
   let row = 0;
   for (let gy = margin; gy <= d - margin; gy += rowCell, row++) {
     const cells: Vec2[] = [];
     for (let gx = margin; gx <= w - margin; gx += cell) {
-      let inside = false;
-      for (const lp of loops) { if (pointInPolygon(gx, gy, lp)) { inside = true; break; } }
-      if (!inside) cells.push({ x: gx, y: gy });
+      if (!pointInAnyLoop(loops, gx, gy)) cells.push({ x: gx, y: gy });
     }
     if (row % 2) cells.reverse();
     for (const c of cells) wps.push(c);
@@ -2202,6 +2283,29 @@ export const MOWER_KINEMATICS = {
   arriveMm: 420,        // waypoint capture radius
   brakeMm: 900,         // start easing speed down inside this range of a STOP goal
 };
+// ── Mower outdoor containment ────────────────────────────────────────────────
+// A mower is an OUTDOOR machine: nothing may drive it through the house. The
+// sweep waypoints were already generated outdoors, but the PATH between them —
+// and above all the GPS carrot chase, which follows a fix that can land anywhere
+// GPS error puts it — was unconstrained. `Planner._mowerAdvance` guards every
+// step against (a) the new position landing inside a building loop and (b) the
+// step segment crossing a nav-solid wall run, and on a violation re-steers along
+// the smallest OPEN deflection from the current heading instead of teleporting.
+//   lookaheadMm — forward clearance probe. A violation is predicted this far
+//     ahead so the mower begins its arc while it still has room: ≈ the turning
+//     radius plus a body length, so a 90° escape arc (which advances ~R) fits.
+//   escapeFanDeg — candidate deflections, smallest first, left before right on a
+//     tie. Deterministic (no Math.random in a per-frame path) and ordered so the
+//     mower grazes ALONG a wall rather than veering off it.
+//   clampMarginMm — how far outside a loop boundary an indoor GPS fix / indoor
+//     dock is pulled (nearestPointOutsideLoops).
+export const MOWER_CONTAINMENT = {
+  lookaheadMm: 800,
+  escapeFanDeg: [0, 15, -15, 30, -30, 45, -45, 60, -60, 80, -80, 100, -100,
+                 120, -120, 145, -145, 180],
+  clampMarginMm: 400,
+};
+
 // Row pitch for the simulated boustrophedon sweep: ≥ 2·turnRadiusMm (1000 mm)
 // so the row-end 180° reversal fits as one continuous arc instead of an instant
 // heading flip. 1200 leaves headroom for the approach/exit tangents.

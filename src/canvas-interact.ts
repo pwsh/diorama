@@ -1,5 +1,5 @@
 import { vehicleRecipe } from './vehicles.js';
-import { snap, snapVertex15, distMM, worldToLocal, localToWorld, FURNITURE_KINDS, furnitureCorners, furnitureLocalToWorld, furnitureWorldToLocal, resolveFurnitureDef, resolveFurnitureWallCollision, resolveSeatTableCollision, seatBelongsToTable, snapStepLightToSurface, snapFireplaceToWall, snapFloodlightToWall, snapExhaustToWall, snapSwitchToWall, snapAlarmToWall, snapCalendarToWall, snapThermostatToWall, snapPlugToWall, snapInfoCardToWall, snapActionButtonToWall, isBinKind, isWetBathKind, defaultFurnitureElevation, nearestAlign, bestAlignShift, ALIGN_DRAG_KINDS, ALIGN_POLY_DRAG_KINDS, envScale, ENV_SCALE_MIN, ENV_SCALE_MAX, GRID_MM, floorContentBbox, resolveFloorEdgeDrag, DOOR_DEFAULT_W, doorDefaultWidth, windowDefaultWidth } from './geometry.js';
+import { snap, snapVertex15, distMM, worldToLocal, localToWorld, FURNITURE_KINDS, furnitureCorners, furnitureLocalToWorld, furnitureWorldToLocal, resolveFurnitureDef, resolveFurnitureWallCollision, resolveSeatTableCollision, seatBelongsToTable, snapStepLightToSurface, snapFireplaceToWall, snapFloodlightToWall, snapExhaustToWall, snapSwitchToWall, snapAlarmToWall, snapCalendarToWall, snapThermostatToWall, snapPlugToWall, snapInfoCardToWall, snapActionButtonToWall, isBinKind, isWetBathKind, defaultFurnitureElevation, nearestAlign, bestAlignShift, ALIGN_DRAG_KINDS, ALIGN_POLY_DRAG_KINDS, envScale, ENV_SCALE_MIN, ENV_SCALE_MAX, GRID_MM, floorContentBbox, resolveFloorEdgeDrag, DOOR_DEFAULT_W, doorDefaultWidth, windowDefaultWidth, isBoundaryWallKind } from './geometry.js';
 import { newId } from './storage.js';
 import {
   pxToMm, type View,
@@ -503,8 +503,13 @@ export function nearestWallKind(
 // panel — and the 3D gate now styles itself to the railing host, so the default
 // produces the right look with no extra clicks. Explicit Door.kind always wins;
 // only an UNSET kind is defaulted.
+//
+// Delegates to geometry's BOUNDARY_WALL_KINDS — the SAME membership the mower's
+// outdoor-containment rule reads (a boundary run encloses YARD, not house), so
+// "what counts as a fence" can never fork between the two features. Same truth
+// table over every WallKind as the old prefix test.
 export function isFenceLikeKind(k: string | null): boolean {
-  return k != null && (k.startsWith('fence_') || k === 'hedge' || k === 'railing');
+  return isBoundaryWallKind(k);
 }
 
 // Weld `wall`'s endpoints onto other unlocked walls — endpoint-to-endpoint
