@@ -16,7 +16,7 @@ const RED = '#c62828';
 const BLUE_LIGHT = '#3d7bd6';
 
 const pack: VehiclePackDef = {
-  id: 'base-ground-civil', version: 1, label: 'Civil',
+  id: 'base-ground-civil', version: 3, label: 'Civil',
   path: ['Ground Vehicles', 'Civil'], builtin: true,
   models: [
     // ── Full-size pickup (F-150 class) 5.89 × 2.03 × 1.98 m ──────────────────
@@ -27,9 +27,12 @@ const pack: VehiclePackDef = {
       body: '#2e5d8c', accent: '#d8dde3', surfaces: ['ground'],
       prims: [
         box([1900, 560, 5620], [0, 620, 0], 'body'),            // lower body / frame
-        box([1840, 420, 1540], [0, 1080, -2000], 'body'),       // hood
-        box([1820, 780, 1560], [0, 1210, -620], 'body'),        // cab
-        box([1880, 400, 1400], [0, 1380, -620], 'glass'),       // cab glass band
+        // Hood SHORT (1100, was 1540) and the cab TALLER (roof 1800, was 1600)
+        // + longer to take up the slack: a modern crew-cab pickup is mostly
+        // cabin, and the old long-hood/low-cab pair read as a 1970s truck.
+        box([1840, 420, 1100], [0, 1080, -2210], 'body'),       // hood
+        box([1820, 980, 1820], [0, 1310, -780], 'body'),        // cab
+        box([1880, 440, 1560], [0, 1500, -780], 'glass'),       // cab glass band
         box([170, 470, 3000], [-830, 1130, 1250], 'body'),      // bed wall L
         box([170, 470, 3000], [830, 1130, 1250], 'body'),       // bed wall R
         box([1700, 450, 150], [0, 1130, 2700], 'accent'),       // tailgate
@@ -72,7 +75,13 @@ const pack: VehiclePackDef = {
         box([2420, 620, 8300], [0, 2200, 950], 'glass'),        // window band
         box([2440, 150, 8500], [0, 2870, 950], 'accent'),       // roof stripe
         box([2400, 130, 8600], [0, 1180, 950], 'accent'),       // rub rail
-        box([2260, 700, 120], [0, 1900, -5290], 'glass'),       // windshield
+        // The dark nose panel used to be authored at y 1550..2250 — ABOVE the
+        // hood (which tops out at 1525), so it read as a grille floating over
+        // the bonnet. It is now two parts: a GRILLE on the hood's front face,
+        // between the headlamps and inside the hood's height band, and the
+        // windshield where it belongs, on the front of the passenger box.
+        box([1280, 520, 130], [0, 1120, -5280], 'accent'),      // nose grille (below hood top)
+        box([2280, 700, 120], [0, 2200, -3390], 'glass'),       // windshield
         box([70, 500, 700], [-1260, 1500, -3300], RED),         // stop-arm (driver side)
         ...lamps(880, 900, -5290, AMBER, [300, 200, 70]),
         ...lamps(940, 1400, 5330, RED, [240, 260, 60]),
@@ -114,7 +123,12 @@ const pack: VehiclePackDef = {
         box([2140, 500, 260], [0, 1200, -11720], 'accent'),     // chrome grille
         cyl([90, 90, 2000], [-1180, 2400, -9000], 'accent'),    // stack L
         cyl([90, 90, 2000], [1180, 2400, -9000], 'accent'),     // stack R
-        box([2540, 2800, 13400], [0, 2500, 3900], 'accent'),    // trailer box
+        // The trailer's nose now runs FORWARD over the tractor's drive axles
+        // (front face z −5200 vs the frame's rear end −4400 = 800 mm of solid
+        // overlap, sharing 250 mm of height with the frame): the coupling used
+        // to leave a 1600 mm hole where the fifth wheel should be. Only this box
+        // moved — the trailer's tail and its bogie are where they were.
+        box([2540, 2800, 15800], [0, 2500, 2700], 'accent'),    // trailer box
         box([2400, 900, 240], [0, 1300, 3400], 'dark'),         // landing gear cross-beam
         ...lamps(880, 1100, -11740, AMBER, [300, 220, 70]),
         ...lamps(1000, 1300, 10640, RED, [240, 280, 60]),
@@ -137,8 +151,11 @@ const pack: VehiclePackDef = {
         box([2200, 140, 5000], [0, 2120, 1700], '#3d4249'),     // hose bed deck
         box([300, 220, 7200], [-980, 2360, 700], 'accent'),     // roof ladder rail L
         box([300, 220, 7200], [980, 2360, 700], 'accent'),      // roof ladder rail R
-        box([1900, 200, 260], [0, 2960, -3600], RED),           // light bar (red)
-        box([900, 200, 250], [0, 2960, -3600], BLUE_LIGHT),     // light bar (blue centre)
+        // Light bar SEATED on the crew-cab roof (top 2800; underside 2770 = 30 mm
+        // sunk — the ambulance idiom, never floating). Blue centre is taller AND
+        // deeper than the red bar so no sibling faces are coplanar.
+        box([1900, 200, 260], [0, 2870, -3600], RED),           // light bar (red)
+        box([900, 220, 280], [0, 2870, -3600], BLUE_LIGHT),     // light bar (blue centre)
         ...lamps(900, 1000, -4780, AMBER, [300, 200, 70]),
         ...lamps(950, 1500, 4730, RED, [240, 260, 60]),
         ...wheels6(2020, -3300, 2600, 3700, 520, 320),
@@ -158,8 +175,12 @@ const pack: VehiclePackDef = {
         box([2360, 1700, 4200], [0, 2000, 1250], 'body'),       // patient module
         box([2380, 220, 4000], [0, 1650, 1250], 'accent'),      // side stripe
         box([1000, 700, 90], [0, 2100, 3400], 'accent'),        // rear door cross
-        box([1700, 190, 250], [0, 2900, -1500], 'accent'),      // light bar
-        box([760, 190, 240], [0, 2900, -1500], BLUE_LIGHT),     // light bar (blue centre)
+        // The bar SITS ON the cab roof (roof top 2350; the bar's underside 2320
+        // buries 30 mm into it) instead of floating 455 mm above it. The blue
+        // centre section is deliberately 20 mm taller and 10 mm longer than the
+        // red bar it sits inside, so no pair of sibling faces is coplanar.
+        box([1700, 190, 250], [0, 2415, -1500], 'accent'),      // light bar
+        box([760, 210, 260], [0, 2415, -1500], BLUE_LIGHT),     // light bar (blue centre)
         ...lamps(760, 900, -3480, AMBER, [280, 180, 60]),
         ...lamps(880, 1900, 3400, RED, [200, 240, 60]),
         ...wheels4(1900, -2300, 2000, 400, 280),
@@ -179,8 +200,11 @@ const pack: VehiclePackDef = {
         box([1620, 540, 2200], [0, 1130, 120], 'body'),         // cabin
         box([1700, 340, 2020], [0, 1180, 120], 'glass'),        // glass band
         box([1860, 620, 1500], [0, 800, 380], 'accent'),        // white door panels
+        // Bar is seated (underside 1385 vs cabin roof 1400); the red centre is
+        // 15 mm prouder than the blue in y AND z so their faces never sit a
+        // hair apart (the 2.5 mm near-coplanar shimmer).
         box([1300, 170, 230], [0, 1470, -450], BLUE_LIGHT),     // light bar
-        box([620, 175, 235], [0, 1470, -450], RED),             // light bar (red centre)
+        box([620, 200, 260], [0, 1470, -450], RED),             // light bar (red centre)
         box([1700, 320, 130], [0, 640, -2520], '#4a4f55'),      // push bumper
         ...lamps(640, 820, -2470, AMBER, [260, 150, 55]),
         ...lamps(680, 950, 2470, RED, [200, 180, 50]),

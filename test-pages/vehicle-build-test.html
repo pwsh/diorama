@@ -73,10 +73,12 @@
   R.setVehiclePacksConfig(allOn);
 
   // ── Per-member structural build sweep ─────────────────────────────────────
-  // GROUND-placeable members only. Aircraft / space packs declare the 'banner'
-  // surface instead: they are centred VERTICALLY on the origin (the BG_CRAFTS
-  // sky convention) and are never dropped as furniture, so placing one here
-  // would legitimately sink it through the floor. Their own gate is
+  // Members that declare the GROUND surface — which is the gate, NOT the
+  // taxonomy category: the Space pack's two surface rovers are space-category
+  // models that drive, and they place as ordinary furniture like any car.
+  // Banner-only craft are centred VERTICALLY on the origin (the BG_CRAFTS sky
+  // convention) and are never dropped as furniture, so placing one here would
+  // legitimately sink it through the floor; their gate is
   // test-pages/vehicle-craft-test.html.
   let total = 0, skipped = 0;
   const perPack = [];
@@ -84,10 +86,10 @@
     let packMin = 1e9;
     for (const m of pack.models) {
       const tag = m.id;
-      if (m.category !== 'ground') {
+      if (!m.surfaces.includes('ground')) {
         skipped++;
-        ok(`${tag}: sky craft correctly declares no ground surface`,
-           !m.surfaces.includes('ground'), JSON.stringify(m.surfaces));
+        ok(`${tag}: non-placeable craft declares the banner surface instead`,
+           m.surfaces.includes('banner'), JSON.stringify(m.surfaces));
         continue;
       }
       total++;
@@ -134,10 +136,10 @@
       // Nothing sinks below the floor plane the piece stands on.
       ok(`${tag}: sits on the floor (no sunken geometry)`, ext.minY > -60, String(Math.round(ext.minY)));
     }
-    perPack.push(`${pack.id}:${pack.models.filter(m => m.category === 'ground').length}` +
+    perPack.push(`${pack.id}:${pack.models.filter(m => m.surfaces.includes('ground')).length}` +
                  `(min${packMin === 1e9 ? '-' : packMin})`);
   }
-  eq('sweep covered 23 models', total, 23);
+  eq('sweep covered 26 ground-placeable models', total, 26);
 
   // ── Wheels: 4-wheeled road vehicles carry >= 4 rolled cylinders ───────────
   // A wheel is authored as a cylinder rolled 90° about Z (axis onto local X) —
@@ -148,6 +150,9 @@
     'base-ground-military/microbus', 'base-ground-military/jeep_willys',
     'base-ground-military/humvee',
     'franchise-ground-fiction/time_machine_car', 'franchise-ground-fiction/mystery_van',
+    'franchise-ground-fiction/ex_police_sedan',
+    // A space-CATEGORY model with a ground SURFACE builds exactly like a car.
+    'base-space-real/lunar_rover',
   ];
   for (const id of FOUR_WHEELED) {
     const rec = R.vehicleRecipe(id);
@@ -167,6 +172,19 @@
     const drums = bodyMeshes(grp).filter(m =>
       m.geometry.type === 'CylinderGeometry' && Math.abs(Math.abs(m.rotation.z) - Math.PI / 2) < 0.02);
     ok(`${id}: has track end drums`, drums.length >= 4, String(drums.length));
+  }
+
+  // The six-wheeled Mars rover carries three rolled wheels per side.
+  {
+    const id = 'base-space-real/mars_rover';
+    const rec = R.vehicleRecipe(id);
+    ok(`${id}: known model`, !!rec);
+    const grp = buildPiece({ w: rec.w, h: rec.h, kind: 'block', vehicleModelId: id });
+    const rolled = bodyMeshes(grp).filter(m =>
+      m.geometry.type === 'CylinderGeometry' && Math.abs(Math.abs(m.rotation.z) - Math.PI / 2) < 0.02);
+    ok(`${id}: 6 rolled wheel cylinders`, rolled.length === 6, String(rolled.length));
+    const zs = [...new Set(rolled.map(m => Math.round(m.position.z)))].sort((a, b) => a - b);
+    ok(`${id}: three distinct axle stations`, zs.length === 3, JSON.stringify(zs));
   }
 
   // ── Unloaded / deactivated pack → plain-block fallback ────────────────────

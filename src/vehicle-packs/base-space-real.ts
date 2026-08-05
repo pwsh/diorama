@@ -2,28 +2,38 @@
 //
 // From docs/research/vehicle-model-library.md §3.3, the ★ rows MINUS row 2
 // (the Space Shuttle orbiter, already hand-built as BG_CRAFTS `shuttle`) —
-// which leaves THREE, not the four §5.1's taxonomy table claims (that count
-// included the already-shipped shuttle; reported as a stale doc figure).
+// which leaves THREE launch vehicles, not the four §5.1's taxonomy table claims
+// (that count included the already-shipped shuttle; reported as a stale doc
+// figure). Two surface ROVERS were added later, taking the pack to five.
 //
-// All three carry `vertical: true` (authored upright, +Y up; the LM has no nose):
-// they are authored UPRIGHT along +Y (engines down) rather than nose-forward
-// along −Z, so they fly the banner orbit standing up — the research's
-// "vertical-launch novelty" framing, and the only pose in which a rocket towing
-// a side banner reads. The flag also switches the banner standoff onto the hull
-// DIAMETER (`dims[1]`) so a 110 m stack does not trail its message a hundred
-// metres astern. See `bannerCraftHullZMm` in vehicles.ts.
+// The three LAUNCH VEHICLES carry `vertical: true` (authored upright, +Y up;
+// the LM has no nose): they are authored UPRIGHT along +Y (engines down) rather
+// than nose-forward along −Z, so they fly the banner orbit standing up — the
+// research's "vertical-launch novelty" framing, and the only pose in which a
+// rocket towing a side banner reads. The flag also switches the banner standoff
+// onto the hull DIAMETER (`dims[1]`) so a 110 m stack does not trail its message
+// a hundred metres astern. See `bannerCraftHullZMm` in vehicles.ts.
 //
-// Model-local frame: −Z = nose (nose-forward craft) / +Y = up throughout,
-// origin = the hull CENTRE.
+// The two ROVERS are the exception in this pack, and the reason SURFACE (not
+// category) is what decides how a model is authored and consumed: they are space
+// hardware by category — they belong in this tree, not under Ground Vehicles —
+// but they drive on a surface, so they declare `surfaces: ['ground']` and are
+// authored the ground way (origin = footprint centre at y = 0, front = −Z). They
+// place as ordinary yard furniture through `vehicleRecipe`; they never tow a
+// banner. Nothing here is ever both.
+//
+// Model-local frame: −Z = nose / front, +Y = up throughout; origin = the hull
+// CENTRE for the sky craft, the footprint centre at ground level for the rovers.
 import type { VehiclePackDef } from '../vehicles.js';
-import { box, cyl, engineBell, mirrorX } from './prims.js';
+import { box, cone, cyl, engineBell, mirrorX, wheels4, wheels6 } from './prims.js';
 
 const BANNER: ('ground' | 'banner' | 'adsb')[] = ['banner'];
+const GROUND: ('ground' | 'banner' | 'adsb')[] = ['ground'];
 const WHITE = '#eef1f4';
 const SOOT = '#1b1e22';
 
 const pack: VehiclePackDef = {
-  id: 'base-space-real', version: 1, label: 'Real',
+  id: 'base-space-real', version: 2, label: 'Real',
   path: ['Space', 'Real'], builtin: true,
   models: [
     // ── Saturn V 110.6 m tall × 10.1 m dia ───────────────────────────────────
@@ -93,6 +103,67 @@ const pack: VehiclePackDef = {
         cyl([160, 160, 6000], [0, -34000, 1900], 'accent', [-22, 0, 0]),      // legs ±Z
         cyl([160, 160, 6000], [0, -34000, -1900], 'accent', [22, 0, 0]),
         engineBell(900, 2600, [0, -35800, 0], '#7fd4ff'),        // lit centre engine
+      ],
+    },
+
+    // ── Apollo Lunar Roving Vehicle 3.1 × 1.8 × 1.14 m ───────────────────────
+    // GROUND-placeable (see the header note): the moon buggy parks in a yard at
+    // true size. Cues: an open skeletal chassis with nothing above the seats,
+    // four wire-mesh wheels under square fenders, two folding mesh seats, and
+    // the forward mast pair — the umbrella high-gain dish plus the TV camera.
+    {
+      id: 'base-space-real/lunar_rover', label: 'Apollo Lunar Roving Vehicle',
+      category: 'space', era: 'Apollo (1971–1972)',
+      lenMm: 3100, dims: [1800, 3100, 1140],
+      body: '#b9c0c7', accent: '#2f343a', surfaces: GROUND,
+      prims: [
+        box([1240, 90, 2400], [0, 400, 0], 'accent'),            // chassis floor pan
+        box([1100, 120, 500], [0, 470, -1250], 'body'),          // forward equipment deck
+        box([1160, 260, 620], [0, 560, 1150], 'body'),           // rear tool / sample pallet
+        // Two folding seats, and a square fender arching over each wheel (the
+        // fender's underside buries 40 mm into the tyre crown).
+        ...mirrorX([
+          box([460, 90, 460], [330, 560, -60], 'accent'),        // seat pan
+          box([460, 520, 90], [330, 820, 200], 'accent'),        // seat back
+          box([300, 80, 900], [780, 800, -1150], 'body'),        // fender, front
+          box([300, 80, 900], [780, 800, 1150], 'body'),         // fender, rear
+        ]),
+        box([180, 240, 140], [0, 700, -560], 'accent'),          // control console
+        cyl([40, 40, 560], [0, 810, -1180], 'body'),             // high-gain antenna mast
+        cone([400, 180], [0, 1120, -1180], '#e8ecef', [180, 0, 0]),  // umbrella dish (mouth up)
+        cyl([36, 36, 460], [-420, 750, -1150], 'body'),          // TV camera mast
+        box([160, 160, 180], [-420, 1040, -1150], 'accent'),     // TV camera head
+        ...wheels4(1560, -1150, 1150, 400, 240),                 // wire-mesh wheels
+      ],
+    },
+
+    // ── Perseverance Mars rover 3.0 × 2.7 × 2.2 m ────────────────────────────
+    // GROUND-placeable. Cues: six wheels on a VISIBLE rocker-bogie (a long
+    // rocker over the front pair, a short bogie over the rear pair, per side),
+    // the boxy warm-electronics body, the camera mast head with two eyes, the
+    // stowed arm, and the MMRTG finned block angled up-and-back off the tail.
+    {
+      id: 'base-space-real/mars_rover', label: 'Perseverance Mars rover',
+      category: 'space', era: '2021–present',
+      lenMm: 3000, dims: [2700, 3000, 2200],
+      body: '#c9ced4', accent: '#6f767e', surfaces: GROUND,
+      prims: [
+        box([1400, 620, 1900], [0, 1000, 0], 'body'),            // warm electronics box
+        box([1500, 90, 2000], [0, 1330, 0], 'accent'),           // equipment deck plate
+        box([820, 420, 900], [0, 1350, 1350], 'accent', [-25, 0, 0]),   // MMRTG block (tail-up)
+        ...mirrorX([box([70, 620, 940], [300, 1350, 1350], 'accent', [-25, 0, 0])]),  // RTG fins
+        cyl([70, 70, 820], [-380, 1760, -700], 'accent'),        // camera mast
+        box([560, 240, 220], [-380, 2060, -700], 'body'),        // mast head
+        cyl([70, 70, 60], [-530, 2060, -830], 'glass', [90, 0, 0]),     // camera eye L
+        cyl([70, 70, 60], [-230, 2060, -830], 'glass', [90, 0, 0]),     // camera eye R
+        box([150, 150, 900], [320, 820, -1150], 'accent', [-22, 0, 0]), // stowed robotic arm
+        // Rocker-bogie: the arms are what make six wheels read as a suspension
+        // rather than a six-wheeled cart.
+        ...mirrorX([
+          box([70, 90, 1300], [1150, 640, -450], 'accent', [-14, 0, 0]),  // rocker
+          box([70, 90, 900], [1150, 560, 700], 'accent', [10, 0, 0]),     // bogie
+        ]),
+        ...wheels6(2300, -1000, 0, 1000, 262, 400),              // three wheels per side
       ],
     },
   ],

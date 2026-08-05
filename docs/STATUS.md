@@ -355,6 +355,31 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Vehicle model corrections + 3 additions** (2026-08-05, user visual
+  QA — 9 reported defects + 2 same-class finds; unreleased — on main
+  past v0.56.0). All measured via exact rotated-AABB passes, each with
+  a §8 geometry pin so it can't revert: Willys spare tyre rotated
+  face-parallel to the rear; time-machine gullwings CLOSED; hero-car
+  engine cover lowered under the canopy; racing-compact stripes → 9
+  thin angled contour segments + rounded bumpers (the "blocks" were
+  stripe slabs overhanging both ends); school-bus nose panel split
+  into a real grille (below hood top) + the windshield it actually
+  was; semi trailer lengthened forward 800 mm onto the fifth wheel;
+  pickup hood 1540→1100 + cab roof 1600→1800; ambulance light bar
+  seated (was +455 floating); tank tracks Sherman 440→620 / Abrams
+  620→820. Agent-spotted same-class fixes (orchestrator-applied):
+  fire-engine bar seated (was +60 floating) + blue centre prouder;
+  cruiser red centre 15 mm prouder (2.5 mm near-coplanar shimmer).
+  Additions: `ex_police_sedan` (fiction, descriptive-generic label,
+  roof PA horn cue), Apollo Lunar Roving Vehicle + Perseverance Mars
+  rover (base-space-real — the first `category:'space'` +
+  `surfaces:['ground']` crossover; tool-arm's vehicle-tab filter went
+  surface-gated so rovers surface). Pack versions bumped (thumb
+  invalidation). Tests: VEHICLEPACK 1006/1006 (was 839; §8 pins),
+  VEHICLEBUILD 388/388 (surface-gated sweep, 26 ground models),
+  VEHICLECRAFT 483/483 unchanged, toolbar 53/53. Gallery re-capture
+  deferred to the next docs pass.
+
 - **Roadmap close-out: siren controls + UV parasol + network rack**
   (2026-08-05, user-directed "work on the unshipped features";
   released in v0.56.0). The audit surprise: sirens (as

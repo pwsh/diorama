@@ -1943,7 +1943,7 @@ dynamic-import-only chunks + a lazy-only `prims.ts` helper module; the
 avatar-packs chunk discipline): `base-ground-civil` (9: pickup/suv/school_bus/
 transit_bus/semi_truck/fire_engine/ambulance/police_cruiser/motorcycle) +
 `base-ground-military` (7: model_t/beetle/microbus/jeep_willys/humvee/
-sherman/abrams) default loaded+active; `franchise-ground-fiction` (7,
+sherman/abrams) default loaded+active; `franchise-ground-fiction` (8 — incl. the black-and-white ex-police sedan 2026-08-05,
 **default UNLOADED** — labels are DESCRIPTIVE-GENERIC per the IP posture,
 never franchise names). `Store.vehiclePacks?: Record<packId, {loaded?,
 active?, members?}>` (in `_loadFromHa`'s list); Planner
@@ -1957,18 +1957,16 @@ arming runtime `Planner.pendingVehicleModelId` (mutually exclusive with
 pendingCustomObjectId/plain kinds at every arming site; thumbs keyed
 `veh:<id>:<packVersion>`); sidebar furniture editor shows model label + pack
 (dim) instead of the kind dropdown for vehicle pieces. Tests:
-`vehicle-pack-test.html` (`VEHICLEPACK PASS 839/839` — NB its `veh.mod.js` is
+`vehicle-pack-test.html` (`VEHICLEPACK PASS 1006/1006` — NB its `veh.mod.js` is
 ONE bundle carrying vehicles.ts + geometry.ts so the registry instance is
-shared) + `vehicle-build-test.html` (`VEHICLEBUILD PASS 346/346` — builds
-every GROUND member; sky craft assert no-ground-surface and are gated by
-vehicle-craft-test instead — centred-vertically aircraft would sink through
+shared) + `vehicle-build-test.html` (`VEHICLEBUILD PASS 388/388` — builds
+every GROUND member; sky craft (surface-gated since 2026-08-05 — the space rovers place as ground furniture) are gated by vehicle-craft-test instead — centred-vertically aircraft would sink through
 the floor as furniture).
 **Batch V2 — aircraft/space packs + the banner-tow surface (2026-08-04)**:
 five more lazy packs — `base-aircraft-military-historical` (10: Spitfire →
 Fokker Dr.I triplane), `base-aircraft-military-modern` (9 — §3.1 rows 11–24
 minus the five shipped BG_CRAFTS dupes), `base-aircraft-civil` (8 incl. a
-floatplane Beaver + "Modern narrowbody jet"), `base-space-real` (3: Saturn V
-/ Apollo LM / Falcon 9 — the research's "4" counted the shipped shuttle),
+floatplane Beaver + "Modern narrowbody jet"), `base-space-real` (5: Saturn V / Apollo LM / Falcon 9 sky-only + the Apollo Lunar Roving Vehicle and Perseverance Mars rover — GROUND-placeable space hardware, `category:'space'` + `surfaces:['ground']`, added 2026-08-05),
 `franchise-space-fiction` (4, default UNLOADED, descriptive-generic labels;
 the blue call-box row is EXCLUDED pending a product-owner call). All
 `surfaces:['banner']`, REAL-mm prims. **Renderer** `_buildVehicleCraft(def,

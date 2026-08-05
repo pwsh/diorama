@@ -311,14 +311,16 @@ function customCards(p: Planner): ToolCard[] {
   }));
 }
 
-// Ground-vehicle models from every LOADED + ACTIVE vehicle pack (src/vehicles.ts).
-// Aircraft / space models are excluded here — they have no ground placement
-// surface in V1. Empty when every pack is off, which hides the whole tab.
+// Placeable vehicle models from every LOADED + ACTIVE vehicle pack
+// (src/vehicles.ts). The gate is the declared SURFACE, not the taxonomy
+// category: a craft that only tows banners has no ground placement, while the
+// Space pack's surface rovers legitimately do. Empty when every pack is off,
+// which hides the whole tab.
 function vehicleCards(): ToolCard[] {
   const out: ToolCard[] = [];
   for (const { def, models } of listActiveVehiclePacks()) {
     for (const m of models) {
-      if (m.category !== 'ground') continue;
+      if (!m.surfaces.includes('ground')) continue;
       out.push({
         key: `veh:${m.id}`,
         label: m.label,

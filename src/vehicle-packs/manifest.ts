@@ -30,7 +30,7 @@ export const VEHICLE_PACK_MANIFEST: VehiclePackManifestRow[] = [
     load: () => import('./base-aircraft-military-modern.js') },
   { id: 'base-aircraft-civil', label: 'Civil', path: ['Aircraft', 'Civil'], count: 8,
     load: () => import('./base-aircraft-civil.js') },
-  { id: 'base-space-real', label: 'Real', path: ['Space', 'Real'], count: 3,
+  { id: 'base-space-real', label: 'Real', path: ['Space', 'Real'], count: 5,
     load: () => import('./base-space-real.js') },
   { id: 'franchise-space-fiction', label: 'Fiction', path: ['Space', 'Fiction'], count: 4,
     franchise: true, load: () => import('./franchise-space-fiction.js') },
@@ -39,6 +39,6 @@ export const VEHICLE_PACK_MANIFEST: VehiclePackManifestRow[] = [
   { id: 'base-ground-military', label: 'Military & Historical',
     path: ['Ground Vehicles', 'Military & Historical'], count: 7,
     load: () => import('./base-ground-military.js') },
-  { id: 'franchise-ground-fiction', label: 'Fiction', path: ['Ground Vehicles', 'Fiction'], count: 7,
+  { id: 'franchise-ground-fiction', label: 'Fiction', path: ['Ground Vehicles', 'Fiction'], count: 8,
     franchise: true, load: () => import('./franchise-ground-fiction.js') },
 ];

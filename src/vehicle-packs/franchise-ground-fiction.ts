@@ -8,13 +8,13 @@
 // these to the source works.
 // Model-local frame: −Z = nose, y = 0 = ground, origin = footprint centre.
 import type { VehiclePackDef } from '../vehicles.js';
-import { box, cyl, sph, lamps, wheels4 } from './prims.js';
+import { box, cone, cyl, sph, lamps, wheels4 } from './prims.js';
 
 const AMBER = '#ffe9b0';
 const RED = '#c62828';
 
 const pack: VehiclePackDef = {
-  id: 'franchise-ground-fiction', version: 1, label: 'Fiction',
+  id: 'franchise-ground-fiction', version: 2, label: 'Fiction',
   path: ['Ground Vehicles', 'Fiction'], builtin: true, franchise: true,
   models: [
     // ── Chrome time-traveling sports car ─────────────────────────────────────
@@ -29,8 +29,12 @@ const pack: VehiclePackDef = {
         box([1700, 180, 1500], [0, 660, -1250], 'body', [-6, 0, 0]),   // wedge nose deck
         box([1500, 380, 1500], [0, 800, 320], 'body'),          // cabin core
         box([1560, 260, 1300], [0, 880, 300], 'glass'),         // wraparound glass
-        box([700, 90, 1100], [-620, 1130, 250], 'body', [0, 0, -32]),  // gullwing door L (raised)
-        box([700, 90, 1100], [620, 1130, 250], 'body', [0, 0, 32]),    // gullwing door R (raised)
+        // Gullwing doors CLOSED: upright skins flush in the flanks (x 720..900,
+        // 10 mm proud of the 890-wide hull), not the raised ±32° panels that
+        // used to stand 214 mm over the car's own declared 1140 mm roofline and
+        // 15 mm wider than its declared half-width.
+        box([180, 560, 1400], [-810, 700, 250], 'body'),        // gullwing door L (closed)
+        box([180, 560, 1400], [810, 700, 250], 'body'),         // gullwing door R (closed)
         box([1300, 300, 420], [0, 800, 1620], 'accent'),        // rear vent stack
         box([1100, 120, 90], [0, 900, 1860], '#7fd8ff'),        // rear glow bar
         box([1600, 130, 90], [0, 340, -2120], 'accent'),        // front spoiler
@@ -52,8 +56,12 @@ const pack: VehiclePackDef = {
         box([1700, 300, 2200], [0, 720, -1500], 'body', [-7, 0, 0]),   // pointed nose deck
         box([1500, 420, 1500], [0, 860, 500], 'body'),          // cockpit pod
         box([1380, 280, 1250], [0, 940, 480], 'glass'),         // canopy glass
-        cyl([420, 420, 900], [0, 780, 2050], 'accent', [90, 0, 0]),    // rear turbine
-        cyl([300, 300, 300], [0, 780, 2560], '#ff7a2f'),        // turbine glow (afterburner)
+        // Rear engine cover as a LOW hump: the turbine's crown now tops out at
+        // 920 — under the canopy (1080) and well under 0.75 × the declared
+        // 1300 mm height — so the silhouette stays a long low wedge. It used to
+        // balloon to 1200, taller than the cockpit.
+        cyl([300, 300, 900], [0, 620, 2050], 'accent', [90, 0, 0]),    // rear turbine
+        cyl([210, 210, 260], [0, 620, 2560], '#ff7a2f'),        // turbine glow (afterburner)
         box([120, 620, 1400], [-1010, 830, 1500], 'body', [0, 0, -12]),  // tail fin L
         box([120, 620, 1400], [1010, 830, 1500], 'body', [0, 0, 12]),    // tail fin R
         box([1900, 140, 120], [0, 300, -2680], 'accent'),       // splitter
@@ -145,9 +153,24 @@ const pack: VehiclePackDef = {
         sph(560, [0, 860, 120], 'body'),                        // dome roof
         box([1260, 400, 1660], [0, 1120, 120], 'glass'),        // glass band
         box([980, 380, 950], [0, 1000, 1420], 'body'),          // rear engine hump
-        box([320, 900, 3900], [0, 900, -60], 'accent'),         // centre racing stripe
-        box([160, 920, 3900], [-330, 900, -60], '#2f5fbf'),     // blue stripe L
-        box([160, 920, 3900], [330, 900, -60], '#2f5fbf'),      // blue stripe R
+        // Racing livery: three THIN lanes, each in three segments that lie ON
+        // the bodywork — a hood panel angled nose-down (rot.x −8), a flat roof
+        // panel straddling the dome crown, and a deck panel angled tail-down
+        // (rot.x +10) over the engine lid. They used to be single 900 mm-TALL
+        // slabs 3900 mm long, which rode high above the paint AND overhung the
+        // nose and tail, reading as blocky bumper blocks from either end.
+        box([320, 60, 520], [0, 985, -1400], 'accent', [-8, 0, 0]),     // hood, centre
+        box([160, 60, 900], [-330, 880, -1400], '#2f5fbf', [-8, 0, 0]), // hood, blue L
+        box([160, 60, 900], [330, 880, -1400], '#2f5fbf', [-8, 0, 0]),  // hood, blue R
+        box([320, 60, 1560], [0, 1395, 120], 'accent'),          // roof, centre
+        box([160, 60, 1560], [-330, 1395, 120], '#2f5fbf'),      // roof, blue L
+        box([160, 60, 1560], [330, 1395, 120], '#2f5fbf'),       // roof, blue R
+        box([320, 60, 900], [0, 1175, 1430], 'accent', [10, 0, 0]),     // deck, centre
+        box([160, 60, 900], [-330, 1175, 1430], '#2f5fbf', [10, 0, 0]), // deck, blue L
+        box([160, 60, 900], [330, 1175, 1430], '#2f5fbf', [10, 0, 0]),  // deck, blue R
+        // Subtle rounded bumpers in place of the old protruding stripe ends.
+        cyl([70, 70, 1240], [0, 560, -1880], '#c9ced4', [0, 0, 90]),    // front bumper
+        cyl([70, 70, 1240], [0, 560, 1880], '#c9ced4', [0, 0, 90]),     // rear bumper
         cyl([330, 330, 70], [-750, 780, -100], '#fbfbfc', [0, 0, 90]),  // number disc L
         cyl([330, 330, 70], [750, 780, -100], '#fbfbfc', [0, 0, 90]),   // number disc R
         sph(170, [-500, 900, -1740], AMBER),                    // headlamp L
@@ -177,6 +200,35 @@ const pack: VehiclePackDef = {
         sph(160, [620, 1180, -2290], AMBER),                    // headlamp R
         ...lamps(680, 1350, 2320, RED, [180, 220, 55]),
         ...wheels4(1560, -1450, 1400, 330, 240),
+      ],
+    },
+
+    // ── Black-and-white ex-police sedan ──────────────────────────────────────
+    // Cues: a mid-70s full-size body (5.6 × 2.0 × 1.45 m) in decommissioned
+    // squad-car two-tone — black shell, WHITE doors and roof — carrying a big
+    // grey PA loudspeaker horn on the roof, aimed forward. The declared height
+    // is 1900: 1.45 m of sedan plus the horn, which is the signature cue and
+    // genuinely part of the silhouette.
+    {
+      id: 'franchise-ground-fiction/ex_police_sedan',
+      label: 'Black-and-white ex-police sedan', category: 'ground',
+      era: 'historical', lenMm: 5600, dims: [2000, 5600, 1900],
+      body: '#15171a', accent: '#eceff1', surfaces: ['ground'],
+      prims: [
+        box([1940, 560, 5450], [0, 560, 0], 'body'),            // lower body
+        box([1880, 270, 1800], [0, 900, -1650], 'body'),        // long flat hood
+        box([1880, 260, 1250], [0, 890, 1930], 'body'),         // boot lid
+        box([1740, 540, 2250], [0, 1100, 180], 'body'),         // cabin
+        box([1800, 330, 2050], [0, 1180, 180], 'glass'),        // glass band
+        box([1980, 600, 1900], [0, 760, 200], 'accent'),        // white door panels
+        box([1700, 120, 2000], [0, 1410, 200], 'accent'),       // white roof
+        box([260, 190, 320], [0, 1500, -120], '#3d4249'),       // horn mount
+        cone([210, 560], [0, 1680, -330], '#8d949c', [90, 0, 0]),  // roof PA horn (mouth forward)
+        box([1820, 150, 120], [0, 460, -2760], '#9aa1a8'),      // front bumper
+        box([1820, 150, 120], [0, 460, 2760], '#9aa1a8'),       // rear bumper
+        ...lamps(660, 880, -2770, AMBER, [260, 150, 55]),
+        ...lamps(700, 900, 2760, RED, [220, 170, 55]),
+        ...wheels4(1700, -1750, 1700, 350, 250),
       ],
     },
   ],

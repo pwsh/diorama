@@ -73,17 +73,21 @@
       ok(`2c: ${tag} label non-empty`, typeof m.label === 'string' && m.label.trim().length > 0);
       ok(`2d: ${tag} category is a known one`,
          ['ground', 'aircraft', 'space'].includes(m.category), m.category);
-      // Category ↔ surface contract: a ground vehicle is placeable, a sky craft
-      // tows banners. Neither may claim the other's surface.
-      const sky = m.category !== 'ground';
-      ok(`2e: ${tag} declares the surface its category implies`,
-         Array.isArray(m.surfaces)
-         && m.surfaces.includes(sky ? 'banner' : 'ground')
-         && !m.surfaces.includes(sky ? 'ground' : 'banner'),
-         JSON.stringify(m.surfaces));
+      // SURFACE — not the taxonomy category — is what decides how a model is
+      // authored and which consumer accepts it: a banner craft is centred
+      // vertically and never placed, a ground model stands on y = 0. Every model
+      // declares exactly one of the two. The Space pack's surface rovers are the
+      // deliberate crossover (space CATEGORY, ground SURFACE), so the TREE is
+      // checked against the category and the authoring frame against the surface.
+      const ground = Array.isArray(m.surfaces) && m.surfaces.includes('ground');
+      const sky = Array.isArray(m.surfaces) && m.surfaces.includes('banner');
+      ok(`2e: ${tag} declares exactly one of ground / banner`,
+         ground !== sky, JSON.stringify(m.surfaces));
       ok(`2e2: ${tag} pack path matches its category`,
-         sky ? (pack.path[0] === 'Aircraft' || pack.path[0] === 'Space')
-             : pack.path[0] === 'Ground Vehicles', pack.path[0]);
+         m.category === 'ground' ? pack.path[0] === 'Ground Vehicles'
+           : (pack.path[0] === 'Aircraft' || pack.path[0] === 'Space'), pack.path[0]);
+      ok(`2e3: ${tag} a Ground Vehicles member is ground-placeable`,
+         pack.path[0] !== 'Ground Vehicles' || ground, JSON.stringify(m.surfaces));
       ok(`2f: ${tag} dims all positive finite`,
          m.dims.length === 3 && m.dims.every(v => Number.isFinite(v) && v > 0), JSON.stringify(m.dims));
       ok(`2g: ${tag} lenMm positive`, Number.isFinite(m.lenMm) && m.lenMm > 0, String(m.lenMm));
@@ -98,11 +102,11 @@
         || !Array.isArray(p.pos) || p.pos.length !== 3 || !p.pos.every(Number.isFinite)
         || (p.rot && (p.rot.length !== 3 || !p.rot.every(Number.isFinite))));
       ok(`2i: ${tag} all primitives well-formed`, !badPrim, JSON.stringify(badPrim ?? ''));
-      // A GROUND vehicle's origin is its footprint centre AT ground level, so
-      // nothing may be authored below y = 0. A sky craft is centred vertically
-      // instead (the BG_CRAFTS convention) and legitimately has parts below its
-      // origin — it is checked for vertical CENTREDNESS instead.
-      if (!sky) {
+      // A GROUND-surface model's origin is its footprint centre AT ground level,
+      // so nothing may be authored below y = 0. A banner craft is centred
+      // vertically instead (the BG_CRAFTS convention) and legitimately has parts
+      // below its origin — it is checked for vertical CENTREDNESS instead.
+      if (ground) {
         const below = m.prims.filter(p => p.pos[1] < -1);
         ok(`2j: ${tag} nothing authored below ground`, below.length === 0, String(below.length));
       } else {
@@ -123,9 +127,17 @@
       ok(`2k: ${tag} parts inside the footprint envelope`, out.length === 0, String(out.length));
     }
   }
-  eq('2l: 57 models across the eight packs', modelCount, 57);
-  eq('2m: 34 of them are sky craft',
-     PACKS.reduce((n, p) => n + p.models.filter(m => m.category !== 'ground').length, 0), 34);
+  const bySurface = (s) => PACKS.reduce(
+    (n, p) => n + p.models.filter(m => m.surfaces.includes(s)).length, 0);
+  eq('2l: 60 models across the eight packs', modelCount, 60);
+  eq('2m: 34 of them tow banners', bySurface('banner'), 34);
+  eq('2m2: 26 of them are ground-placeable', bySurface('ground'), 26);
+  // The Space pack is the only one that carries BOTH surfaces (three launch
+  // vehicles that fly, two rovers that drive).
+  eq('2m3: the Space ▸ Real pack is the ground/banner crossover',
+     PACKS.filter(p => p.models.some(m => m.surfaces.includes('banner'))
+                       && p.models.some(m => m.surfaces.includes('ground')))
+          .map(p => p.id).join(','), 'base-space-real');
 
   // ═══ 3. IP posture — fiction labels are descriptive-generic ══════════════
   // §5.3: no franchise / proper-noun term may appear in a SHIPPED string. This
@@ -304,6 +316,228 @@
      VEH.activeVehicleIds().filter(id => id.startsWith('base-ground-civil/')).length, 1);
   VEH.setVehiclePacksConfig(undefined);
   ok('7c: undefined config restores pack defaults', !!VEH.resolveVehicleDef(CIVIL_ID));
+
+  // ═══ 8. Shipped-model geometry pins ══════════════════════════════════════
+  // One measurement per correction from the 2026-08-05 visual review, so a fix
+  // cannot silently revert. Everything here is computed from the PRIM DATA (an
+  // exact rotated AABB — the recipe builder applies rot as a THREE 'XYZ' Euler
+  // and nothing else), never eyeballed.
+  {
+    const D2R = Math.PI / 180;
+    const halfOf = (pr) => {
+      const [a, b, c] = [pr.size[0], pr.size[1], pr.size[2] ?? 0];
+      switch (pr.shape) {
+        case 'box': return [a / 2, b / 2, c / 2];
+        case 'cylinder': return [Math.max(a, b), c / 2, Math.max(a, b)];
+        case 'sphere': return [a, a, a];
+        case 'cone': return [a, b / 2, a];
+        default: return [a / 2, b / 2, c / 2];
+      }
+    };
+    const rotM = (rot) => {
+      const [rx, ry, rz] = (rot ?? [0, 0, 0]).map(d => d * D2R);
+      const cx = Math.cos(rx), sx = Math.sin(rx), cy = Math.cos(ry), sy = Math.sin(ry),
+            cz = Math.cos(rz), sz = Math.sin(rz);
+      const mul = (A, B) => A.map((_, i) => [0, 1, 2].map(j =>
+        [0, 1, 2].reduce((s, k) => s + A[i][k] * B[k][j], 0)));
+      return mul(mul([[1, 0, 0], [0, cx, -sx], [0, sx, cx]],
+                     [[cy, 0, sy], [0, 1, 0], [-sy, 0, cy]]),
+                 [[cz, -sz, 0], [sz, cz, 0], [0, 0, 1]]);
+    };
+    // Axis-aligned bounds of one primitive, in model-local mm.
+    const bb = (pr) => {
+      const h = halfOf(pr), R = rotM(pr.rot);
+      const e = [0, 1, 2].map(i =>
+        Math.abs(R[i][0]) * h[0] + Math.abs(R[i][1]) * h[1] + Math.abs(R[i][2]) * h[2]);
+      return { min: pr.pos.map((p, i) => p - e[i]), max: pr.pos.map((p, i) => p + e[i]) };
+    };
+    const mdl = (id) => {
+      for (const p of PACKS) { const m = p.models.find(x => x.id === id); if (m) return m; }
+      return null;
+    };
+    const one = (m, pred, what) => {
+      const hits = m.prims.filter(pred);
+      ok(`8·${what}: exactly one matching prim`, hits.length === 1, `n=${hits.length}`);
+      return hits[0] ?? null;
+    };
+    const le = (name, a, b, extra = '') => ok(name, a <= b, `${extra} ${a} <= ${b}`);
+    const ge = (name, a, b, extra = '') => ok(name, a >= b, `${extra} ${a} >= ${b}`);
+
+    // 8a. Willys spare wheel: the tyre FACE is parallel to the rear panel, i.e.
+    // the cylinder axis runs along Z. Measured, not asserted on the rot literal:
+    // the AABB must be WIDER across the car than it is deep along it.
+    {
+      const m = mdl('base-ground-military/jeep_willys');
+      const sp = one(m, p => p.shape === 'cylinder' && p.pos[2] > 1400, 'jeep-spare');
+      if (sp) {
+        const b = bb(sp);
+        const dx = b.max[0] - b.min[0], dz = b.max[2] - b.min[2];
+        ok('8a: jeep spare tyre faces the rear panel (dx >> dz)', dx > dz * 2, `dx=${dx} dz=${dz}`);
+        ok('8a2: jeep spare sits on the rear panel, not on the ground', b.min[1] > 200, String(b.min[1]));
+      }
+    }
+
+    // 8b. Time-machine car: gullwing doors CLOSED — nothing on the door line may
+    // break the roofline or the declared half-width (raised doors did both).
+    {
+      const m = mdl('franchise-ground-fiction/time_machine_car');
+      const doors = m.prims.filter(p => Math.abs(p.pos[0]) > m.dims[0] * 0.4 && p.pos[1] > 400);
+      eq('8b: two door prims', doors.length, 2);
+      const top = Math.max(...doors.map(d => bb(d).max[1]));
+      const wide = Math.max(...doors.map(d => bb(d).max[0]));
+      le('8b2: closed doors stay under the declared roofline', top, m.dims[2], 'door top');
+      le('8b3: closed doors stay inside the declared half-width', wide, m.dims[0] / 2, 'door |x|');
+      ok('8b4: doors are not tilted open', doors.every(d => !d.rot || d.rot[2] === 0));
+    }
+
+    // 8c. Armored hero car: the rear engine cover is a LOW hump — under the
+    // canopy and under three quarters of the car's declared height.
+    {
+      const m = mdl('franchise-ground-fiction/armored_hero_car');
+      const turb = one(m, p => p.shape === 'cylinder' && p.pos[2] > 1500 && p.size[2] >= 500,
+                       'hero-turbine');
+      const canopy = one(m, p => p.color === 'glass', 'hero-canopy');
+      if (turb && canopy) {
+        le('8c: engine cover under 0.75 × the declared height', bb(turb).max[1], m.dims[2] * 0.75);
+        le('8c2: engine cover no taller than the cockpit canopy',
+           bb(turb).max[1], bb(canopy).max[1]);
+      }
+    }
+
+    // 8d. Racing compact: thin, contoured stripes that stay ON the bodywork —
+    // no tall slabs, and nothing overhanging the nose or tail as a blocky end.
+    {
+      const m = mdl('franchise-ground-fiction/racing_compact');
+      const body = m.prims[0];
+      const stripes = m.prims.filter(p => p.color === 'accent' || p.color === '#2f5fbf');
+      eq('8d: nine stripe segments (3 lanes × hood / roof / deck)', stripes.length, 9);
+      ok('8d2: every stripe is a thin skin (<= 100 mm)',
+         stripes.every(s => s.size[1] <= 100), JSON.stringify(stripes.map(s => s.size[1])));
+      const zLo = Math.min(...stripes.map(s => bb(s).min[2]));
+      const zHi = Math.max(...stripes.map(s => bb(s).max[2]));
+      ok('8d3: no stripe overhangs the nose or tail',
+         zLo >= bb(body).min[2] && zHi <= bb(body).max[2], `${zLo}..${zHi}`);
+      le('8d4: stripes stay under the roofline',
+         Math.max(...stripes.map(s => bb(s).max[1])), m.dims[2]);
+      ok('8d5: the hood and deck lanes are ANGLED (rot.x)',
+         stripes.filter(s => s.rot && s.rot[0] !== 0).length === 6,
+         String(stripes.filter(s => s.rot && s.rot[0] !== 0).length));
+      const bumpers = m.prims.filter(p => p.shape === 'cylinder' && p.size[2] > 1000);
+      eq('8d6: two ROUNDED bumpers replace the old blocky ends', bumpers.length, 2);
+      ok('8d7: bumpers are slim', bumpers.every(b => b.size[0] <= 120));
+    }
+
+    // 8e. School bus: the grille lives on the front face at/below hood level, and
+    // nothing at all floats above the hood ahead of it.
+    {
+      const m = mdl('base-ground-civil/school_bus');
+      const hood = one(m, p => p.color === 'body' && p.pos[2] < -3000, 'bus-hood');
+      const grille = one(m, p => p.color === 'accent' && p.pos[2] < -4000, 'bus-grille');
+      if (hood && grille) {
+        const hoodTop = bb(hood).max[1], hoodFront = bb(hood).min[2];
+        le('8e: grille sits at or below the hood line', bb(grille).max[1], hoodTop);
+        ok('8e2: grille is on the hood front face',
+           bb(grille).min[2] <= hoodFront && bb(grille).max[2] > hoodFront,
+           `${bb(grille).min[2]}..${bb(grille).max[2]} vs ${hoodFront}`);
+        const floaters = m.prims.filter(p => bb(p).max[1] > hoodTop && bb(p).max[2] < hoodFront + 400);
+        eq('8e3: nothing floats above the hood at the nose', floaters.length, 0);
+      }
+    }
+
+    // 8f. Semi truck: the trailer's nose OVERLAPS the tractor frame — no daylight
+    // at the coupling, in both the length and the height axis.
+    {
+      const m = mdl('base-ground-civil/semi_truck');
+      const frame = one(m, p => p.color === 'body' && p.size[2] === 6200, 'semi-frame');
+      const trailer = one(m, p => p.size[2] > 12000, 'semi-trailer');
+      if (frame && trailer) {
+        const dz = bb(frame).max[2] - bb(trailer).min[2];
+        const dy = bb(frame).max[1] - bb(trailer).min[1];
+        ge('8f: trailer nose overlaps the fifth wheel along Z', dz, 200, 'overlap');
+        ge('8f2: …and shares height with the frame', dy, 100, 'overlap');
+      }
+    }
+
+    // 8g. Pickup: short hood, tall cab.
+    {
+      const m = mdl('base-ground-civil/pickup');
+      const hood = one(m, p => p.color === 'body' && p.pos[2] < -1800 && p.pos[1] > 800, 'pickup-hood');
+      const cab = one(m, p => p.color === 'body' && p.size[1] > 900, 'pickup-cab');
+      if (hood && cab) {
+        le('8g: hood no longer than 1200 mm', hood.size[2], 1200);
+        ge('8g2: cab roof at least 1750 mm up', bb(cab).max[1], 1750);
+        ge('8g3: the cab is taller than the hood is long', bb(cab).max[1], hood.size[2]);
+      }
+    }
+
+    // 8h. Ambulance: the light bar RESTS on the cab roof (its underside inside
+    // the roof, never floating above it).
+    {
+      const m = mdl('base-ground-civil/ambulance');
+      const cab = one(m, p => p.color === 'body' && p.pos[2] < -1500 && p.size[1] > 1000, 'amb-cab');
+      const bar = one(m, p => p.color === 'accent' && p.size[0] === 1700, 'amb-bar');
+      if (cab && bar) {
+        const roof = bb(cab).max[1], under = bb(bar).min[1];
+        le('8h: light bar is seated on the cab roof', under, roof, 'bar underside');
+        ge('8h2: …and not sunk through it', under, roof - 120, 'bar underside');
+      }
+    }
+
+    // 8h3. Fire engine + police cruiser: the same light-bar contract as the
+    // ambulance — seated on the roof (never floating), and the two-color bar
+    // pieces never share (or nearly share) face planes: the smaller centre
+    // piece is strictly prouder in BOTH y and z.
+    {
+      const fe = mdl('base-ground-civil/fire_engine');
+      const cab = one(fe, p => p.color === 'body' && p.pos[2] < -2000 && p.size[1] > 1000, 'fe-cab');
+      const red = one(fe, p => p.size[0] === 1900, 'fe-bar-red');
+      const blue = one(fe, p => p.size[0] === 900 && p.pos[1] > 2000, 'fe-bar-blue');
+      if (cab && red && blue) {
+        le('8h3: fire-engine bar seated on the crew-cab roof', bb(red).min[1], bb(cab).max[1], 'bar underside');
+        ge('8h3b: …and not sunk through it', bb(red).min[1], bb(cab).max[1] - 120, 'bar underside');
+        ok('8h3c: blue centre strictly prouder than red in y AND z',
+          blue.size[1] > red.size[1] && blue.size[2] > red.size[2],
+          `blue=${blue.size[1]}x${blue.size[2]} red=${red.size[1]}x${red.size[2]}`);
+      }
+      const pc = mdl('base-ground-civil/police_cruiser');
+      const cabin = one(pc, p => p.color === 'body' && p.size[2] === 2200, 'pc-cabin');
+      const pBlue = one(pc, p => p.size[0] === 1300, 'pc-bar-blue');
+      const pRed = one(pc, p => p.size[0] === 620, 'pc-bar-red');
+      if (cabin && pBlue && pRed) {
+        le('8h4: cruiser bar seated on the cabin roof', bb(pBlue).min[1], bb(cabin).max[1], 'bar underside');
+        ok('8h4b: red centre strictly prouder than blue in y AND z (no near-coplanar shimmer)',
+          pRed.size[1] > pBlue.size[1] + 10 && pRed.size[2] > pBlue.size[2] + 10,
+          `red=${pRed.size[1]}x${pRed.size[2]} blue=${pBlue.size[1]}x${pBlue.size[2]}`);
+      }
+    }
+
+    // 8i. Tanks: the tracks read as tracks — wide belts, still inside the
+    // declared footprint.
+    for (const [id, minW] of [['base-ground-military/sherman', 600],
+                              ['base-ground-military/abrams', 800]]) {
+      const m = mdl(id);
+      const slabs = m.prims.filter(p => p.shape === 'box' && p.color === 'dark' && p.size[2] > 3000);
+      ok(`8i ${id}: two track slabs`, slabs.length === 2, String(slabs.length));
+      for (const s of slabs) {
+        ge(`8i ${id}: track belt width`, s.size[0], minW);
+        le(`8i ${id}: track stays inside the footprint`, bb(s).max[0], m.dims[0] / 2);
+      }
+    }
+
+    // 8j. The two Space rovers: ground surface, space category, real names.
+    for (const id of ['base-space-real/lunar_rover', 'base-space-real/mars_rover']) {
+      const m = mdl(id);
+      ok(`8j ${id}: exists`, !!m);
+      if (!m) continue;
+      eq(`8j ${id}: category is space`, m.category, 'space');
+      eq(`8j ${id}: surface is ground only`, m.surfaces.join(','), 'ground');
+      ok(`8j ${id}: not a vertical-launch craft`, !m.vertical);
+      const wheels = m.prims.filter(p => p.shape === 'cylinder' && p.rot && p.rot[2] === 90);
+      ge(`8j ${id}: rolled wheels`, wheels.length, 4);
+    }
+    eq('8j2: the Space pack still flies three launch vehicles',
+       byId('base-space-real').models.filter(m => m.vertical).length, 3);
+  }
 
   const passN = checks.filter(c => c.pass).length, total = checks.length;
   const fails = checks.filter(c => !c.pass);

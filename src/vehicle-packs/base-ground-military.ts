@@ -6,13 +6,13 @@
 // same posture the shipped BG_CRAFTS military roster already takes.
 // Model-local frame: −Z = nose, y = 0 = ground, origin = footprint centre.
 import type { VehiclePackDef } from '../vehicles.js';
-import { box, cyl, sph, lamps, wheel, wheels4, trackUnit } from './prims.js';
+import { box, cyl, sph, lamps, wheels4, trackUnit } from './prims.js';
 
 const AMBER = '#ffe9b0';
 const RED = '#c62828';
 
 const pack: VehiclePackDef = {
-  id: 'base-ground-military', version: 1, label: 'Military & Historical',
+  id: 'base-ground-military', version: 2, label: 'Military & Historical',
   path: ['Ground Vehicles', 'Military & Historical'], builtin: true,
   models: [
     // ── Ford Model T (1908–1927) 3.4 × 1.7 × 2.1 m ───────────────────────────
@@ -98,7 +98,12 @@ const pack: VehiclePackDef = {
         box([300, 110, 1700], [660, 830, -740], 'body'),        // flat fender R
         box([1280, 460, 80], [0, 1090, -420], 'glass'),         // folding windshield
         box([1120, 130, 720], [0, 830, 340], 'dark'),           // bench seats
-        wheel(0, 1620, 340, 200),                               // spare wheel on the tail
+        // Spare wheel MOUNTED ON the rear panel: the tyre FACE is parallel to
+        // that panel, so the cylinder axis runs along the vehicle's LENGTH (+Z)
+        // — rot [90,0,0], NOT the road-wheel roll [0,0,90] the `wheel()` helper
+        // bakes in (which stood it up like a fifth road wheel). Its rear 50 mm
+        // buries into the tub's back face rather than sitting flush on it.
+        cyl([340, 340, 200], [0, 760, 1650], 'dark', [90, 0, 0]),
         sph(130, [-330, 1080, -1560], AMBER),                   // headlamp L
         sph(130, [330, 1080, -1560], AMBER),                    // headlamp R
         ...wheels4(1340, -1060, 1060, 340, 230),
@@ -132,8 +137,11 @@ const pack: VehiclePackDef = {
       era: 'wwii', lenMm: 5840, dims: [2620, 5840, 2740],
       body: '#4d5535', accent: '#3a4128', surfaces: ['ground'],
       prims: [
-        ...trackUnit(-1080, 5200, 400, 440),                    // track L
-        ...trackUnit(1080, 5200, 400, 440),                     // track R
+        // Tracks read as TRACKS, not tyres: width ≈ 24 % of the hull width
+        // (620 of 2620), outer edge held on the declared half-width 1310 so the
+        // footprint is unchanged. The scale-true 440 mm belt looked like a rail.
+        ...trackUnit(-1000, 5200, 400, 620),                    // track L
+        ...trackUnit(1000, 5200, 400, 620),                     // track R
         box([1960, 760, 5000], [0, 940, 100], 'body'),          // lower hull
         box([1900, 520, 3200], [0, 1560, 300], 'body'),         // upper hull
         cyl([720, 800, 720], [0, 2020, 350], 'body'),           // cast turret
@@ -150,8 +158,10 @@ const pack: VehiclePackDef = {
       era: 'modern', lenMm: 9770, dims: [3660, 9770, 2440],
       body: '#6b6a52', accent: '#55543f', surfaces: ['ground'],
       prims: [
-        ...trackUnit(-1520, 7200, 380, 620, 700),               // track L
-        ...trackUnit(1520, 7200, 380, 620, 700),                // track R
+        // Same rule as the Sherman: 820 of 3660 ≈ 22 %, outer edge on the
+        // declared half-width 1830.
+        ...trackUnit(-1420, 7200, 380, 820, 700),               // track L
+        ...trackUnit(1420, 7200, 380, 820, 700),                // track R
         box([2960, 620, 7000], [0, 830, 700], 'body'),          // hull
         box([2700, 300, 2600], [0, 1200, -1500], 'body', [-14, 0, 0]),  // sloped glacis
         box([2480, 700, 3600], [0, 1620, 1300], 'body'),        // turret
