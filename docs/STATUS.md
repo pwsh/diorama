@@ -1,6 +1,6 @@
 # Project status & pick-up guide
 
-Last updated: 2026-08-05, at **v0.55.0**. This is the single document to
+Last updated: 2026-08-05, at **v0.56.0**. This is the single document to
 read (alongside `CLAUDE.md`) to resume work with full context.
 
 ## Where things stand
@@ -346,12 +346,18 @@ instance.
   from reference photos with a click-to-toggle flag; new
   vehicle-models gallery page + a vehicles guide page + a full
   docs refresh).
+  → v0.56.0 sound the alarm (roadmap close-out: siren fixtures gain
+  real controls — state-picked on/off dispatch with feature-gated
+  tone/volume/duration; avatars raise parasols at very-high UV, rain
+  still winning the umbrella; a network-rack appliance with an
+  honest derived health LED; plus the roadmap marker-sync pass that
+  restored the doc's accuracy).
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
 - **Roadmap close-out: siren controls + UV parasol + network rack**
   (2026-08-05, user-directed "work on the unshipped features";
-  unreleased — on main past v0.55.0). The audit surprise: sirens (as
+  released in v0.56.0). The audit surprise: sirens (as
   SafetyKind `siren`) and the UV chip row ALREADY shipped Phase 1
   2026-07-17 — the roadmap just never got their ✅ (CLAUDE.md never
   documented them either; both now fixed). What was genuinely missing
