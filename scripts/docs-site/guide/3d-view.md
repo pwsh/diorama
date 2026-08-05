@@ -124,11 +124,16 @@ In Display settings you can set the floor color, floor texture
 style), and wall color for the whole home. The **2D plan paints the same floor
 color and texture**, at the same scale, so both views read as one home.
 
-#### Per-floor look overrides
+#### Per-floor and per-room look overrides
 
-Each floor can override the global look. In the **Floors** section, the "This
-floor only" controls let you give a specific level its own floor color,
+Each floor can override the global look. In the **Floor tools** section, the
+"This floor only" controls let you give a specific level its own floor color,
 texture, and wall color — useful for distinguishing a basement or an attic.
+
+Each **room** can then override the floor, from its row in the Rooms section —
+tile in the bathroom, wood in the hall, carpet color in the bedroom. See
+[The 2D editor](editor.html) for how that works and what it changes about the
+2D plan.
 
 ### Imported Sweet Home 3D models
 

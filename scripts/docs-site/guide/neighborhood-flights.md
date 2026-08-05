@@ -115,6 +115,7 @@ you fetch:
 - **Callsign labels** — on by default. With them on, a **Label fields** grid picks what each label shows: callsign, registration, type, operator, altitude, speed, climb/descent, squawk, and distance.
 - **Tow banners (small planes)** — a small propeller aircraft with a callsign tows a real fabric banner instead of a label plate. Turn it off for plain labels everywhere.
 - **Status beacons** — a flashing bead on the fuselage: red for an emergency squawk, yellow for aircraft the feed flags as noteworthy, green for military, white for an FAA privacy program.
+- **Military aircraft skins** — on by default. An aircraft that really is an F-16, F-22, A-10, B-2, B-52, or Apache is drawn with that silhouette instead of the generic model, matched from its type designator, its category, or a military helicopter flag. It's scaled to the same envelope, so labels, beacons, and trails don't move. See [Vehicles & aircraft](vehicles.html).
 - **Dim privacy-flagged aircraft** — on by default. Aircraft enrolled in the FAA's privacy programs are drawn translucent with a 🔒 badge, and an anonymized one shows only its hex code — a courtesy the raw data doesn't enforce for you.
 
 #### Your own glow rules
@@ -135,7 +136,7 @@ emergency beacon regardless of your rules, and the rules do nothing while
 
 ### What you see
 
-- **Aircraft models** vary with what the aircraft reports — a prop, a jet, or a helicopter, with a military tint where the data flags it.
+- **Aircraft models** vary with what the aircraft reports — a prop, a jet, or a helicopter, with a military tint where the data flags it, and a recognizable military airframe where **Military aircraft skins** can identify one.
 - **Labels** — a small propeller aircraft with a callsign tows a real banner behind it; everything else gets a crisp cel-shaded label. Labels show the aircraft's **real altitude**.
 - **Motion** stays smooth between polls: Diorama dead-reckons each aircraft along its track and eases it onto the next fix rather than snapping.
 - **In 2D**, aircraft draw as small darts around your plan.

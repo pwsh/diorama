@@ -5,7 +5,7 @@
 // which leaves THREE, not the four §5.1's taxonomy table claims (that count
 // included the already-shipped shuttle; reported as a stale doc figure).
 //
-// Two of the three are VERTICAL-LAUNCH vehicles and carry `vertical: true`:
+// All three carry `vertical: true` (authored upright, +Y up; the LM has no nose):
 // they are authored UPRIGHT along +Y (engines down) rather than nose-forward
 // along −Z, so they fly the banner orbit standing up — the research's
 // "vertical-launch novelty" framing, and the only pose in which a rocket towing

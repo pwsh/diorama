@@ -74,6 +74,9 @@ For each pack you can toggle **Loaded** and **Active**, pick a **member subset**
 (with color swatches), and **import / export** your own packs as JSON. The core
 row is locked.
 
+**Settings ▸ Vehicles** is the same manager for a second library — the cars,
+warbirds, and rockets of [Vehicles & aircraft](vehicles.html).
+
 ### Choosing looks: pools & re-roll
 
 A sensor, motion sensor, or roamer can hold a **pool** of avatar ids instead of

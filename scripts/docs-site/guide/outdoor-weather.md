@@ -70,6 +70,12 @@ source is set) to replace the flat background with a living sky:
 - A **sun disc** that follows your `sun.sun` entity's real position, and a night **starfield**.
 - A **moon** with correct phases — bind a moon-phase `sensor.` (from Home Assistant's core Moon integration) in the Weather settings and the drawn moon matches tonight's phase; unbound, it shows a full moon.
 
+Under the moon binding there's a **Space station** checkbox. Tick it and the
+moon is drawn as a battle station instead — hull plating, an equatorial trench,
+and a dish in the upper hemisphere — while still waxing and waning through
+tonight's real phase. It's off by default, and it is exactly as serious as it
+sounds.
+
 Once Diorama knows your location, the night sky becomes astronomically correct —
 real stars, constellations, planets, and the moon's true position. See
 [The night sky](3d-view.html).
@@ -82,15 +88,15 @@ pick a mode and either type a static message or bind an entity to display its
 live value:
 
 - **Skywriting (sky)** — glowing cloud letters drifting high in the sky with the wind.
-- **Banner plane** — a plane towing a readable banner on a slow orbit.
+- **Banner plane** — an aircraft towing a readable banner on a slow orbit.
 - **Ground writing** — lettering laid across the ground itself.
 - **Message train** — a toy train circling the property, the message split across its cars. It reads left-to-right from either side, and grows more cars for a longer message (set the maximum).
-- **News chopper** — a toy news helicopter on a tighter, higher orbit, towing its banner from a line below.
 
 Per-entry options:
 
 - **Entity value** — bind any entity and the writing shows its live state, with prefix, suffix, and unit formatting of your choice.
-- **Aircraft** (banner mode) — tow the banner with any of the eight aircraft silhouettes the flight tracker uses, in civil paint, instead of the classic toy plane.
+- **Aircraft** (banner mode) — choose what tows the banner. Beyond the classic toy plane there are airliner and light-aircraft silhouettes, a military and NASA group, a group of fictional craft, the **news helicopter** (which used to be a mode of its own), and — from the [vehicle model packs](vehicles.html) — warbirds, airliners, and rockets that fly upright. Anything you pick keeps its own paint.
+- **Colors** (banner and train) — five swatches: the **vehicle** and **accent** colors, and the banner's **background**, **text**, and **frame**. Each starts on the craft's own livery and has a ✕ to put it back. See [Vehicles & aircraft](vehicles.html) for what each one paints.
 - **Model size ×** (0.5–5) — scale just the model or lettering. The flight path, train loop, and orbit stay where they are; this only makes the thing bigger for a zoomed-out camera.
 
 #### Ground writing
@@ -106,9 +112,9 @@ on the floor. Uncheck **Follow camera** and set a **Rotation (°)** to pin it
 instead — 0° puts the top of the text toward the top of your 2D plan, and
 increasing values turn it clockwise.
 
-Skywriting, the banner plane, and the chopper hide during heavy storms (they'd
-read wrong in a downpour); ground writing and the train stay. The whole family
-rides the **Background text** layer, so a kiosk view can drop the lot.
+Skywriting and anything towing a banner hide during heavy storms (they'd read
+wrong in a downpour); ground writing and the train stay. The whole family rides
+the **Background text** layer, so a kiosk view can drop the lot.
 
 ### Geo landmarks & calibration
 

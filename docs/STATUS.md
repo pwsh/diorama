@@ -341,6 +341,24 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Docs pass: gallery images + guide review + generic labels**
+  (2026-08-05, user-directed pre-release; unreleased — on main past
+  v0.54.0). (1) The three consumer-brand ground-vehicle labels went
+  descriptive-generic ("Brass-era antique car" / "Classic round-bodied
+  compact" / "Classic split-window van"); police-box stays excluded.
+  (2) Gallery catalog 686→712 subjects / 13 pages: NEW
+  vehicle-models page (all 23 ground models, fiction force-loaded in
+  the capture, `surfaces` ground-filter), firepits captured lit
+  (closing the deferred regen), mailbox re-captured + a flag-raise
+  twin, robot docks re-captured (rotation/front strip); hand-list
+  guards green (light 28 / safety 6 / door 8 / window 7), 0 broken
+  refs. (3) Guide: NEW vehicles.md + 7 pages updated (editor.md also
+  corrected 3 stale floor-management claims); GALLERY.md brought
+  current. (4) docs:floorplans --force 70/70 re-captured (stale
+  mailbox geometry); docs:site + docs:demo rebuilt; docs:publish
+  PUSHED to gh-pages. (5) Stale sidebar `_mailboxRows` hints fixed
+  (they still described count-raises-flag / lid-opens semantics);
+  base-space-real comment fixed (all three rockets vertical).
 - **Vehicle model library V3 — live-ADS-B military skins** (2026-08-04;
   batch 3 of 3, the arc is COMPLETE; unreleased — on main past v0.54.0).
   Pure `militarySkinFor(fp, archetype?)` in flights.ts (zero-import):

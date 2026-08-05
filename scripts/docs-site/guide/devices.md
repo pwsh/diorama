@@ -63,6 +63,7 @@ plus adjustable height, floor-pool radius, and intensity:
 - **Lamp** — a floor lamp with a pole, base, and shade.
 - **Ceiling fan** and **fan + light** — a real spinning rotor. Bind a `fan.` entity (or let it fall back to the light's own entity) and the blades spin at the fan's actual percentage, reverse when the entity says reverse, and ramp up and down smoothly rather than snapping.
 - **Fireplace** — an open firebox with a mantel and animated, flickering flames. It forces a warm glow regardless of the bound color, and snaps flush to the nearest wall.
+- **Fire pit (round)** and **fire pit (square)** — outdoor fire features on the same idea, but for the yard. A ring of stones (or a squared-off rim) around an ash basin with crossed logs; lit, it grows swaying flames, an ember bed, and a warm pool of light on the ground around it. Unlit it's a cold, dark basin. They sit **on the ground** and follow your yard's grade and terraces, so a pit on a sunken patio burns at patio level — which also means they ignore the fixture Height setting. They don't snap to walls. Bind a `light.` or `switch.`, or just click one to light it.
 - **Floodlight** — a mount plate with twin angled heads and a wide pool; snaps flush to a wall.
 - **Heat lamp** and three **exhaust** kinds (ceiling, wall, and exhaust + light) — see climate appliances below.
 - **In-ground uplight** and **ground spot** for landscape lighting; see [Yard & terrain](yard-terrain.html).
@@ -146,7 +147,10 @@ Three state-driven furniture kinds bring the driveway to life:
 
 - **Garage car** — a car piece bound to a presence `binary_sensor`. When the bay is empty the car renders **ghosted** (translucent, dashed in 2D); present or unbound, it's solid. Bind EV charging status to it (or a nearby charger) to show a charge bolt with the state of charge.
 - **EV charger** — a charging post with a state-colored port LED (charging, full, error, idle) resolved defensively from whatever your charger reports. Cars within range of a charging post show a green port glow.
-- **Mailbox** — a classic curbside tunnel box on a wooden post. Bind a package-count sensor to float a count badge when mail arrives, and a flag `binary_sensor` to raise the red side flag (up = vertical above the roof, down = resting along the side, just like the real thing).
+- **Mailbox** — a classic curbside tunnel box on a wooden post: a rounded shell with an arched door, a latch tab, and a **U.S. MAIL** decal. The red flag on its side is the moving part — **up** stands vertical above the roofline, **down** rests along the flank — and it eases between the two rather than snapping. Bind a flag `binary_sensor` (the **Lid sensor** row) to drive it from a real sensor, or just **click the mailbox** in either view to flip it by hand. Bind a package-count sensor (**Mail count**) to float a small red **✉ count** badge above the box whenever there's mail waiting; anything over 99 shows as `99+`, and zero shows nothing. The door itself is decorative — it never opens.
+
+Vehicle models — a pickup in the driveway, a fire engine at the curb — are a
+separate library with its own packs; see [Vehicles & aircraft](vehicles.html).
 
 ### Media & now-playing
 
@@ -238,6 +242,27 @@ Clicking a robot starts or returns it (for a bound robot) or flips its
 run/return state (unbound). LED colors show its state: green while working,
 blue returning, amber docked, red on error.
 
+Docks and robots ride their own **Robots** 2D layer, so you can hide them
+without losing your other sensors (a hidden robot isn't clickable either).
+
+#### Aiming the dock
+
+Set a **Rotation (°)** on the dock and it turns; at 0° the opening faces the
+bottom of your plan. A chevron always marks the opening in 2D and a lit entry
+strip marks it in 3D, so you can see which way the robot drives out. The mower
+parks nose-first into its dock and eases onto that heading as it returns,
+steering like a vehicle rather than spinning on the spot.
+
+#### Lining the reported position up with your plan
+
+When a robot reports its own position — a Roborock's map, a mower's GPS — that
+position has to be mapped onto your floor plan, and it rarely lands perfectly
+the first time. Three tools in the robot's sidebar row help:
+
+- **Show position info** draws exactly what the robot is reporting: a crosshair at the reported point, a dashed line to where the robot is actually drawn if the two disagree, and a small readout of the raw value, the projected millimetres, and which mode it's in. Turn it on while you align, off afterwards. (2D only.)
+- **Align position** nudges the mapping with ↑ ↓ ← → buttons at a step you choose (10 mm up to 1 m); a vacuum also gets ↺ / ↻ rotation nudges. Each click is one undo step, and **Reset** clears the lot.
+- **Calibrate to dock** (mower, with GPS) does it in one click: park the mower on its dock, press the button, and Diorama solves the offset so the reported fix lands exactly on the dock you placed. It tells you in its tooltip if it can't yet — you need calibrated [geo landmarks](outdoor-weather.html) and a numeric fix first.
+
 #### Valetudo room map & tap-to-clean
 
 A vacuum running **Valetudo** can draw its own SLAM room segmentation as a
@@ -283,8 +308,8 @@ percentage. Toggle these with the **battery** layer.
 
 Some presence sensors report **areas**, not points — an Aqara FP2's zones, a
 Frigate camera's zones, a bed or sofa occupancy sensor. Draw the shape those
-report on with the **Presence zone (▱)** tool: click 3–12 corners, then
-double-click or press Enter to finish (Esc cancels).
+report on with the **Presence zone (▱)** tool: click at least three corners,
+then double-click or press Enter to finish (Esc cancels).
 
 Bind the zone to a `binary_sensor` and it glows when the sensor is on — an
 outline in 2D and a flat glowing patch in 3D. Unbound zones draw dashed. Select

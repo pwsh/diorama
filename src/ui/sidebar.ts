@@ -6117,8 +6117,10 @@ export class Sidebar extends LitElement {
     `;
   }
 
-  // Mailbox mail/packages bindings. countEntity (numeric sensor) > 0 raises the
-  // flag + shows a badge; flagEntity (binary_sensor lid) 'on' tilts the lid open.
+  // Mailbox mail/packages bindings. countEntity (numeric sensor) > 0 floats the
+  // ✉ count badge ONLY; flagEntity (binary_sensor, "outgoing mail") 'on' raises
+  // the red flag. Unbound flag = click the mailbox to raise/lower it. The door
+  // never opens (see the reconciled semantics in the mailbox renderer).
   private _mailboxRows(piece: Furniture, upd: (mut: () => void) => void) {
     const p = this.planner;
     const mc = piece.mailCount ?? {};
@@ -6127,12 +6129,12 @@ export class Sidebar extends LitElement {
     const mut = (fn: (o: NonNullable<Furniture['mailCount']>) => void) =>
       upd(() => { piece.mailCount = { ...(piece.mailCount ?? {}) }; fn(piece.mailCount!); });
     return html`
-      ${this._bindRow('Mail count', 'numeric sensor.* (Mail-and-Packages) — > 0 raises the flag + badge',
+      ${this._bindRow('Mail count', 'numeric sensor.* (Mail-and-Packages) — > 0 floats a count badge',
         mc.countEntity, stCount?.state ?? '', '#ffb74d',
         () => this._pickEntity('sensor', id => mut(o => o.countEntity = id)),
         () => mut(o => o.countEntity = undefined))}
-      ${this._bindRow('Lid sensor', "binary_sensor.* — 'on' tilts the lid open", mc.flagEntity,
-        stFlag?.state === 'on' ? 'OPEN' : (stFlag?.state ?? ''), '#66bb6a',
+      ${this._bindRow('Flag sensor', "binary_sensor.* — 'on' raises the flag (unbound: click the box)", mc.flagEntity,
+        stFlag?.state === 'on' ? 'UP' : (stFlag?.state ?? ''), '#e53935',
         () => this._pickEntity('binary_sensor', id => mut(o => o.flagEntity = id)),
         () => mut(o => o.flagEntity = undefined))}`;
   }

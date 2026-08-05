@@ -29,7 +29,9 @@ docs-site/
   models/                       # ← the model gallery (this pipeline)
     index.md   index.html       # gallery TOC / landing (markdown + HTML both emitted)
     furniture.* appliances.* bathroom.* outdoor.*   # one page per furnitureCat (.md + .html)
+    theater.* vehicle.*
     lighting.* switches-controls.* sensors.* doors-windows.* robots.*
+    vehicle-models.*                            # ground models from the vehicle packs
     avatars/
       index.*  base.* sci-fi.* pop-culture.* video-games.* cartoons.*   # one page per top-level pack group
     media/**/*.gif              # one GIF per model
@@ -61,9 +63,12 @@ automatically the next time you run it — nothing to hand-maintain.
 
 The catalog is enumerated **dynamically** at capture time from the shipped source
 of truth where the runtime allows it — `FURNITURE_KINDS` + `furnitureCat`,
-`ENV_KINDS`, and **every** avatar pack in `src/avatar-packs/manifest.ts` (all
-packs registered + force-activated so franchise members resolve to their real
-rigs; the core `adult` rig is pushed explicitly — 512/512). The light-icon,
+`ENV_KINDS`, **every** avatar pack in `src/avatar-packs/manifest.ts` (all packs
+registered + force-activated so franchise members resolve to their real rigs;
+the core `adult` rig is pushed explicitly — 512/512), and **every** vehicle pack
+in `src/vehicle-packs/manifest.ts` (same treatment — franchise packs ship
+unloaded, so the harness force-loads them; only models whose `surfaces` accept
+`'ground'` are captured, since the aircraft/space packs are sky props). The light-icon,
 safety, door and window lists are hand-typed in `capture-main.ts` (type unions
 are erased at runtime and can't be enumerated), but `generate.mjs` cross-checks
 their counts against the real unions parsed from `src/types.ts` on EVERY run —
@@ -104,6 +109,8 @@ builders the live panel uses — never a reimplementation:
 | env | chip value ramp crossing warn/danger bands |
 | safety | smoke/co/gas idle→alarm rings; leak puddle grow |
 | bins | lid flip empty↔full (state folded into the floor build) |
+| mailbox flag | flag sensor off→on→off (floor rebuilt per frame, eased arm) + count badge |
+| vehicle | 360° turntable of the pack model at its real size |
 | doors / windows | smooth open→close via a cover-position ramp |
 | robot | dock + roaming rig cycling docked/cleaning/returning LED states |
 | avatar | idle rig (subtle weight-shift), 360° camera orbit, personality bubble forced visible; quadrupeds & hover rigs use their own rig behavior |
@@ -130,7 +137,7 @@ the run exits nonzero only if more than 5% of attempted captures failed.
 ## Size & time expectations
 
 Roughly **0.8 s per subject** (software-WebGL headless Chrome). The catalog is
-~580 subjects, so a full run is on the order of **8–12 minutes** plus a ~1 s build.
+~710 subjects, so a full run is on the order of **9–14 minutes** plus a ~2 s build.
 GIFs are typically 150–850 KB (400 px, 24–34 frames). `--smoke` finishes in ~25 s
 including the build. Use `--only` / `--limit` to iterate on one page quickly.
 
@@ -183,4 +190,5 @@ branch → `gh-pages` / root). The site is then served at
   preserveDrawingBuffer: true })` (default false, renderer-internal-safe) so the
   harness can read finished frames off the canvas. The live panel never sets it.
 - The core `adult` rig is the default fallback and is not a manifest pack member, so
-  it is represented by the base-pack humanoids rather than its own gallery entry.
+  `buildCatalog` pushes it onto the Base avatars page explicitly — gallery coverage
+  is every resolvable avatar id, not just the manifest's members.

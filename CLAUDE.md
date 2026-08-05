@@ -34,7 +34,9 @@ large multilevel) buildable straight into the `Floor`/`Room`/`Wall`/`Furniture`
 model — see `docs/demo-houses/README.md`.
 
 **Docs site & demo floorplans**: the published documentation site
-(https://pwsh.github.io/diorama/ — home + user guide + model-GIF gallery under
+(https://pwsh.github.io/diorama/ — home + user guide (12 pages incl. the
+2026-08-05 "Vehicles & aircraft" page) + model-GIF gallery (712 subjects /
+13 pages incl. vehicle-models) under
 `/models/` + floor-plan library under `/floorplans/` + the **live editable demo**
 under `/demo/`, see "GitHub Pages live demo") is generated into the
 gitignored `docs-site/` by `npm run docs:site` (home + guide from

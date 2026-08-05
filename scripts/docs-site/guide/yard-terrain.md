@@ -83,9 +83,12 @@ house stands on that yard rather than floating at the house's floor level. A
 free-standing full, half, or railing wall out in the yard does the same; walls
 that form part of your house stay with the house.
 
-**Gates** are a door kind. Drop a door onto a fence or hedge run and it becomes
-a **Gate** automatically (a picket-styled swinging panel); you can also set the
-kind by hand in the Doors editor. A gate binds like any other opening — a
+**Gates** are a door kind. Drop a door onto a fence, hedge, or railing run and
+it becomes a **Gate** automatically; you can also set the kind by hand in the
+Doors editor. The panel takes its styling from the wall it's cut into — pickets
+in a fence, a matching banister leaf in a railing — and the run really breaks
+around it, with proper gate posts on each side of the gap. A gate binds like
+any other opening — a
 `cover.` entity with a gate device class swings it open and closed, and it takes
 locks and doorbells too.
 
@@ -168,10 +171,15 @@ the same species doesn't look stamped out: raise the one shading the patio,
 keep the ones along the fence line small. Width and depth are separate, so you
 can spread a canopy without making the tree taller.
 
-Two light kinds are made for landscape lighting:
+Four light kinds are made for the yard:
 
 - **In-ground uplight** — a flush trim ring with a beam widening upward and a tight glow around the lens.
 - **Ground spot** — a staked, aimable head. Set its rotation for direction and its **tilt** for how steeply it aims; a low tilt throws a long pool of light across the lawn.
+- **Fire pit (round)** and **fire pit (square)** — a ring or square of stone around an ash basin with crossed logs. Light it (bind a `light.` or `switch.`, or just click it) and it grows swaying flames, glowing embers, and a warm pool of light; unlit it's a cold basin.
+
+All four sit **on the ground**, so they step up onto a terrace with everything
+else rather than staying at the old level — and for the same reason the fire
+pits ignore the fixture height setting.
 
 ### The 3D ground grid
 

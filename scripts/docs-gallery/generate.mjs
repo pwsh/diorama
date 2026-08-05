@@ -220,7 +220,7 @@ function inspectGif(buf) {
 // ── markdown generation ───────────────────────────────────────────────────────────
 const PAGE_TITLE = {
   furniture: 'Furniture', appliances: 'Appliances', bathroom: 'Bathroom', outdoor: 'Outdoor & yard',
-  theater: 'Home theater', vehicle: 'Vehicle / garage',
+  theater: 'Home theater', vehicle: 'Vehicle / garage', 'vehicle-models': 'Vehicle models',
   lighting: 'Lighting', 'switches-controls': 'Switches & controls', sensors: 'Sensors',
   'doors-windows': 'Doors & windows', robots: 'Robots',
 };
@@ -231,6 +231,7 @@ const PAGE_INTRO = {
   outdoor: 'Outdoor & yard pieces. 360° turntable of the default-size 3D piece.',
   theater: 'Home-theater seating and speakers. 360° turntable of the default-size 3D piece.',
   vehicle: 'Garage vehicle and EV-charging pieces. 360° turntable of the default-size 3D piece.',
+  'vehicle-models': 'Ground vehicles from the vehicle model packs — place them like any furniture piece from the toolbar\'s Vehicles tab. Load and activate packs in Settings ▸ Vehicles; the Fiction pack is opt-in and ships unloaded. 360° turntable of each model at its real size. (The aircraft and space packs are sky props — they fly as banner tow craft and as live-flight skins, so they are not in this gallery.)',
   lighting: 'Light-fixture icon kinds in a corner environment: off → on → color sweep → dim → off (fireplace flickers).',
   'switches-controls': 'Wall controls: switch plate, alarm keypad, and door lock — each cycling its states.',
   sensors: 'Presence, environment, safety, and bin sensors — each showing its live-state animation.',
@@ -307,7 +308,7 @@ function writeMarkdown(subjects) {
 // <page>.html per category page, avatars/index.html + one avatars/<group>.html per
 // pack group, and a single shared assets/site.css (dark editor-vibe theme). No
 // external fonts / CDNs / JS frameworks — a few lines of vanilla JS drive the mobile
-// nav toggle. GIFs lazy-load (~675 of them). Every card carries an anchor id.
+// nav toggle. GIFs lazy-load (~710 of them). Every card carries an anchor id.
 
 let NAV_TOP = [];   // sorted top-level page keys (set by writeHtml)
 let NAV_AV = [];    // sorted avatar page keys ('avatars/<group>')

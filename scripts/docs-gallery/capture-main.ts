@@ -17,6 +17,7 @@
 
 import { GIFEncoder, quantize, applyPalette } from 'gifenc';
 import { AVATAR_PACK_MANIFEST } from '../../src/avatar-packs/manifest.js';
+import { VEHICLE_PACK_MANIFEST } from '../../src/vehicle-packs/manifest.js';
 import {
   FURNITURE_KINDS, furnitureCat, isWetBathKind, ENV_KINDS, envValueText, robotLedColor, isFirepitKind,
 } from '../../src/geometry.js';
@@ -35,6 +36,8 @@ const RENDERER_URL = './assets/three-renderer.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const _packDefs: Record<string, any> = {};
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const _vehiclePackDefs: Record<string, any> = {};
 let _initPromise: Promise<void> | null = null;
 function ensureInit(): Promise<void> {
   if (_initPromise) return _initPromise;
@@ -65,6 +68,24 @@ function ensureInit(): Promise<void> {
     }
     cfg['core'] = { loaded: true, active: true };
     MOD.ThreeDRenderer.setAvatarPacksConfig(cfg);
+
+    // Same treatment for the VEHICLE pack registry (vehicles.ts is the avatars.ts
+    // twin: a pure shared module with its own registry singleton, re-exported
+    // through ThreeDRenderer statics). Franchise packs ship UNLOADED by default
+    // — the gallery documents every shipped model, so force them all
+    // loaded+active here exactly like the franchise avatar packs. Keep the defs
+    // so buildCatalog can enumerate members without a second dynamic import.
+    const vcfg: Record<string, { loaded: boolean; active: boolean }> = {};
+    for (const row of VEHICLE_PACK_MANIFEST) {
+      try {
+        const m = await row.load();
+        const def = (m as { default?: unknown; pack?: unknown }).default
+          ?? (m as { pack?: unknown }).pack;
+        if (def) { MOD.ThreeDRenderer.registerVehiclePack(def); _vehiclePackDefs[row.id] = def; }
+        vcfg[row.id] = { loaded: true, active: true };
+      } catch (e) { console.warn('vehicle pack load failed', row.id, e); }
+    }
+    MOD.ThreeDRenderer.setVehiclePacksConfig(vcfg);
   })();
   return _initPromise;
 }
@@ -215,6 +236,75 @@ function capFurniture(sub: Subject, o: CapOpts): string {
   return runCapture(N, gifPx, fps, 33, (i) => {
     orbitCam(target, radius, 20, (i / N) * Math.PI * 2);
   });
+}
+
+// Vehicle-pack model — a turntable of the placed piece, exactly like
+// capFurniture. A vehicle is NOT a FurnitureKind: it is placed as an ordinary
+// furniture item carrying `vehicleModelId`, which resolveFurnitureDef turns
+// into the same ObjectRecipe shape Custom Objects use (vehicleRecipe), so the
+// whole shipped furniture build path renders it with no renderer special case.
+// The piece's own w/h only drives the footprint/blob — recipe primitives are
+// authored in absolute mm — so they are set from the model's own dims.
+//
+// The turntable is a little slower + framed a little wider than capFurniture's:
+// vehicles are long (a semi is ~16 m against a 2 m sofa) and their silhouette
+// is the whole point, so the aspect must not crop at the ends of the spin.
+function capVehicle(sub: Subject, o: CapOpts): string {
+  const gifPx = o.size ?? 400, N = o.frames ?? 45, fps = o.fps ?? 9;
+  const { w, h, ht, vehicleModelId } = sub.meta;
+  const f = baseFloor(24000, 24000);
+  f.furniture = [{
+    id: 'it', x: f.w / 2, y: f.d / 2, w, h, kind: 'block', rotation: 0,
+    vehicleModelId, entity_id: null,
+  }];
+  R.updateFloor(f, DAY, undefined, undefined, nullState);
+  const maxdim = Math.max(w, h);
+  const target: [number, number, number] = [0, Math.min(ht * 0.5, 1600), 0];
+  const radius = maxdim * 1.35 + ht * 0.9 + 2200;
+  return runCapture(N, gifPx, fps, 33, (i) => {
+    orbitCam(target, radius, 18, (i / N) * Math.PI * 2);
+  });
+}
+
+// Mailbox flag — the `mailbox-flag` twin of the plain mailbox turntable.
+// The flag arm is an EASED per-frame blend (`_advanceMailFlags`, τ ≈ 0.25 s)
+// whose TARGET is resolved at BUILD time from the bound flag sensor, so the
+// capture rebuilds the floor each frame with a flipping state provider (the
+// capBin precedent) AND ticks updateTargets so the ease actually runs. The
+// blend is keyed by fixture id and survives the rebuild, so the arm sweeps
+// smoothly instead of snapping. A bound count sensor adds the ✉ badge.
+//
+// Camera sits off the box's flag side at a low 3/4 so both the arched door and
+// the flag's full down→up arc stay in frame; the door itself never opens (the
+// mailbox has no door animation — the flag IS the state).
+function capMailFlag(sub: Subject, o: CapOpts): string {
+  const gifPx = o.size ?? 400, N = o.frames ?? 34, fps = o.fps ?? 10;
+  const { w, h, ht } = sub.meta;
+  const f = baseFloor(4000, 4000);
+  f.furniture = [{
+    id: 'mb', x: f.w / 2, y: f.d / 2, w, h, kind: 'mailbox', rotation: 0,
+    entity_id: null,
+    mailCount: { countEntity: 'sensor.mail', flagEntity: 'binary_sensor.mail_flag' },
+  }];
+  // Aim high on the post (the box + the badge floating above it are the subject,
+  // not the ground) from a raised 3/4 — a low elevation puts the backdrop grid
+  // edge-on across the frame right where the flag sweeps.
+  const target: [number, number, number] = [0, ht * 0.8, 0];
+  const radius = Math.max(w, h) * 1.2 + ht * 0.75 + 900;
+  orbitCam(target, radius, 22, Math.PI - 0.85);
+  const ctx = { entityOn: {}, roomNames: {}, timeBucket: 'day' };
+  const frame = (i: number): void => {
+    // Flag down for the first ~20 %, up through ~75 %, then back down; the
+    // count badge appears with the raised flag (mail delivered).
+    const t = i / N;
+    const up = t >= 0.2 && t < 0.78;
+    R.updateFloor(f, DAY, undefined, undefined, stateOf({
+      'binary_sensor.mail_flag': { state: up ? 'on' : 'off', attributes: {} },
+      'sensor.mail': { state: up ? '3' : '0', attributes: {} },
+    }));
+    R.updateTargets([], ctx);
+  };
+  return runCapture(N, gifPx, fps, 60, frame, 2, () => frame(0));
 }
 
 // Wet bathroom piece, WATER RUNNING — the `-running` twin of the plain
@@ -682,8 +772,10 @@ function captureSubject(sub: Subject, o: CapOpts): string {
   resetScene();
   switch (sub.type) {
     case 'furniture': return capFurniture(sub, o);
+    case 'vehicle': return capVehicle(sub, o);
     case 'appliance': return capAppliance(sub, o);
     case 'bathwater': return capBathWater(sub, o);
+    case 'mailflag': return capMailFlag(sub, o);
     case 'light': return capLight(sub, o);
     case 'switch': return capSwitch(sub, o);
     case 'alarm': return capAlarm(sub, o);
@@ -777,6 +869,49 @@ function buildCatalog(): any {
         notes: wnote,
         gif: `media/${page}/${safeId(kind)}-running.gif`,
         meta: { id: kind, kind, w: def.w, h: def.h, ht: def.ht, cat },
+      });
+    }
+    // The mailbox is documented as a PAIR too: the turntable above shows the
+    // box, plus a `mailbox-flag` twin showing the flag's down → up → down
+    // sweep with the mail-count badge (the one thing on the piece that moves —
+    // its door is decorative and never opens). Same twin idiom as the wet
+    // bathroom pieces, and likewise a subject type the hand-maintained-list
+    // guard in generate.mjs does not enumerate, so its arithmetic is untouched.
+    if (kind === 'mailbox') {
+      push({
+        type: 'mailflag', id: 'mailbox-flag', page,
+        group: CAT_TITLE[cat] ?? cat, label: `${def.label} — flag up`,
+        notes: 'flag sensor off → on → off · mail-count badge',
+        gif: `media/${page}/mailbox-flag.gif`,
+        meta: { id: kind, kind, w: def.w, h: def.h, ht: def.ht, cat },
+      });
+    }
+  }
+
+  // Vehicle-pack MODELS. `src/vehicles.ts` is a second pack registry alongside
+  // avatars.ts; its ground-surface models are placed as ordinary furniture
+  // (Furniture.vehicleModelId → vehicleRecipe → the Custom-Objects recipe
+  // shape), so they document exactly like a furniture kind. Only models whose
+  // `surfaces` accept 'ground' are captured: the aircraft/space packs exist for
+  // the banner-tow + live-ADS-B SKY surfaces and are deliberately out of the
+  // model gallery (they are sky props, not household models). Members come from
+  // the pack defs loaded (and registered) during ensureInit, so this list can
+  // never drift from what the app actually ships.
+  for (const row of VEHICLE_PACK_MANIFEST) {
+    const def = _vehiclePackDefs[row.id];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const models: any[] = def?.models ?? [];
+    for (const m of models) {
+      if (!(m.surfaces || []).includes('ground')) continue;
+      const [vw, vd, vh] = m.dims;
+      push({
+        type: 'vehicle', id: m.id, page: 'vehicle-models',
+        group: row.path.join(' · '), packId: row.id, franchise: !!row.franchise,
+        label: m.label,
+        notes: `${vw}×${vd}×${vh} mm` + (m.era ? ` · ${m.era}` : '')
+          + (row.franchise ? ' · franchise pack (opt-in)' : ''),
+        gif: `media/vehicle-models/${safeId(m.id)}.gif`,
+        meta: { vehicleModelId: m.id, w: vw, h: vd, ht: vh, category: m.category, lenMm: m.lenMm },
       });
     }
   }

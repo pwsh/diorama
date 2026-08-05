@@ -10,18 +10,20 @@ and tablet sees the same home.
 
 ### Floors
 
-Use the **Floors** section in the sidebar to manage the levels of your home.
+The levels of your home live in two places in the sidebar. **Floors** at the
+very top is a slim, always-open picker — one row per floor with its name and
+size — and **Floor tools** just below it acts on whichever floor you've picked.
 
-- **Add** a floor to build a multi-story home. Each floor has its own walls, rooms, furniture, and devices.
-- **Reorder** floors with the ▲ / ▼ buttons. The list reads like an elevator panel — **the highest story is at the top** — and the order you set is used everywhere: the kiosk floor picker, cross-floor stair links, and the stacking of glass-house ghost floors.
-- **Switch** floors by clicking a row. Your pan and zoom are kept, because every story shares one world coordinate frame — so a bathroom stays under your cursor as you flip between levels. (The view re-frames only when the new floor is a very different size.)
-- **Yard fill** and the "this floor only" look overrides (floor color, texture, wall color) also live here, per floor.
+- **Switch** floors by clicking a row in the picker. The list reads like an elevator panel: **the highest story is at the top**. Your pan and zoom are kept, because every story shares one world coordinate frame — so a bathroom stays under your cursor as you flip between levels. (The view re-frames only when the new floor is a very different size.)
+- **Add, rename, resize, or delete** a floor in **Settings ▸ Floor Plan**, which lists every floor with editable name and width / depth boxes.
+- **Reorder** with **Order ▲ Up / ▼ Down** in Floor tools. The order you set is used everywhere: the kiosk floor picker, cross-floor stair links, and the stacking of glass-house ghost floors.
+- **Yard fill** and the "this floor only" look overrides (floor color, texture, wall color) are in Floor tools too, along with everything else on this page's floor topics — visibility, elevation, the Home Assistant floor binding, and rotating or moving the plan.
 
 #### Show, peek & hide
 
 ![A floor plan with the story above traced over it as a faint dashed onion-skin underlay](img/floor-peek.png)
 
-Each floor row has a three-state visibility button you click to cycle:
+**Visibility** in Floor tools is a three-state button you click to cycle:
 
 | State | Button | What it means |
 |---|---|---|
@@ -42,7 +44,7 @@ moves the ground out from under your home.
 
 By default that height is worked out for you: the lowest floor sits on the
 ground and each story above it is 3 m higher. To set it yourself, use
-**Elevation above ground (mm)** on the current floor's row:
+**Elevation above ground (mm)** in Floor tools:
 
 - Leave it **blank** for automatic stacking (the placeholder shows the value it would use).
 - Type a value for a taller story, a split level, or a low crawl space.
@@ -55,7 +57,7 @@ Settings ▸ Display.
 
 #### Binding a floor to a Home Assistant floor
 
-The **Home Assistant floor** dropdown on the current floor's row ties this
+The **Home Assistant floor** dropdown in Floor tools ties this
 Diorama level to a floor you've defined in Home Assistant. It does one useful
 thing: it scopes the room **area** dropdowns (below) to just that floor's areas,
 so you're picking from "the areas upstairs" rather than every area in the house.
@@ -64,7 +66,7 @@ instead.
 
 #### Rotating & moving the whole plan
 
-Two rows in the Floors section move everything on the current floor at once —
+Two rows in Floor tools move everything on the current floor at once —
 each click is a single undo step.
 
 - **Rotate plan (set a new top)** — ↺ 15° · ↺ 1° · ↻ 1° · ↻ 15° buttons spin the entire floor's contents about its center, so you can re-orient a plan you drew sideways. Walls, rooms, furniture, fixtures, zones, ground areas, paths, and the background image all turn together, and the compass keeps pointing at true north. The floor rectangle only ever grows to fit.
@@ -86,13 +88,9 @@ Sizes snap to the grid, and shrinking stops before it would strand any wall or
 item off the edge (minimum 2 m). Locked items move too, because a boundary edit
 is a change of frame, not a move of individual pieces.
 
-Once the outline is right, **🔒 Lock floor size** hides the drag handles so you
-can't nudge the boundary while you're working inside it.
-
 #### Units
 
-**Imperial units** (in the Floors section, and again in Settings ▸ Display)
-switches every measurement Diorama *shows you* — ruler distances, wall
+**Imperial units** (Settings ▸ Display) switches every measurement Diorama *shows you* — ruler distances, wall
 dimensions, live drag readouts, geo distances — to feet and inches. The values
 you *type* into structural inputs stay in millimetres, since that's what the
 plan is built in.
@@ -105,7 +103,7 @@ The quickest way to put something down is the **toolbar** docked along the
 bottom of the editor. It's a visual catalog: pick a category tab, then click a
 card to arm it and click on the plan to place.
 
-- **Category tabs** — Furniture, Appliances, Bathroom, Theater, Outdoor, Vehicle, Lights, Controls & Sensors, Structure, Ground, and Custom.
+- **Category tabs** — Furniture, Appliances, Bathroom, Theater, Outdoor, Vehicle, Vehicles, Lights, Controls & Sensors, Structure, Ground, and Custom. (**Vehicle** holds the generic garage car and EV charger; **Vehicles** holds the [vehicle model packs](vehicles.html) and only appears once you have a ground pack switched on.)
 - **Cards** show a **real 3D thumbnail** of the actual piece — the same renderer that draws your scene, so what you see is what you place. Sensors and control fixtures use clear glyph tiles.
 - **Variant chips** appear under the cards where a kind has options: door and window types, wall kinds (including fences and hedges), light kinds, and ground coverings. Pick a chip and the next thing you drop uses it.
 - The armed card keeps a highlight ring, and it follows along if you change tools from the sidebar instead.
@@ -204,7 +202,7 @@ Doors and windows snap onto the nearest wall when you drop them and again when
 you move them. They cut a real opening: in 3D the wall builds around the gap,
 and open doors swing, windows tilt or slide, and garage doors roll up.
 
-- **Window kinds**: single, double-hung, casement pair, sliding, and picture — set the kind plus sill and height in the Windows editor. Windows also take **curtains**; see [The 3D view](3d-view.html).
+- **Window kinds**: single, double-hung, casement pair, sliding, picture, and two **bay** kinds — set the kind plus sill and height in the Windows editor. A bay projects outward as a three-pane splay with a knee wall and a roof; **bay with bench** adds a cushioned window seat that figures really sit on, facing back into the room. Windows also take **curtains** (bays excepted); see [The 3D view](3d-view.html).
 - Bind a lock entity to a door to show a padlock state, or a doorbell entity to show ring pulses.
 
 #### Door kinds
@@ -222,7 +220,7 @@ sensible width for that kind (a garage door to 2.4 m, a French pair to 1.5 m).
 | **French** | A double pair with glazed leaves. |
 | **Sliding glass** | A wide glazed slider — the patio door. |
 | **Garage** | Five slats that roll up onto a ceiling track, in a taller opening. |
-| **Gate** | A picket-styled swinging panel; doors dropped onto a fence or hedge become gates automatically. |
+| **Gate** | A swinging panel that takes its styling from the wall it's cut into — pickets in a fence or hedge, a matching banister leaf in a railing. Doors dropped onto a fence, hedge, or railing become gates automatically. |
 
 On the sliding kinds, the door's **hinge** side sets which way the panel
 retracts, so you can flip a slider without redrawing it.
@@ -294,6 +292,41 @@ closed loop contains its anchor, so it survives wall edits. Rooms start
 unnamed (shown as a dim "Unnamed room") until you type a name in the sidebar;
 an anchor that isn't inside any wall loop shows an amber "not enclosed by
 walls" marker.
+
+The room's **name label is drawn at its anchor** — in both 2D and 3D — and in
+Select mode you can simply **drag the label** to put it where it reads best.
+Because the anchor *is* the room, dropping the label in a different enclosed
+loop moves the room there, taking its flooring and bindings with it.
+
+#### Per-room flooring
+
+Each room row has a **Floor color** and **Texture** of its own, so the kitchen
+can be tile while the living room is wood. Both start as "inherit" — they fall
+back to this floor's look, then to the whole-home look — and a **↺** button next
+to the color puts it back. The override applies to the room's wall loop in
+**both** the 2D plan and the 3D scene, and the 2D texture grain runs
+continuously from room to room rather than restarting at each wall.
+
+In 3D, a room's **occupancy glow** still takes over while someone's in it; the
+flooring comes back when the room clears.
+
+One consequence worth knowing: once your plan has enclosed rooms, the 2D floor
+fill is painted **only inside them**. Everything outside reads as ground — your
+yard fill and painted areas, exactly as they look outdoors. (A plan with no
+closed wall loops keeps the old edge-to-edge fill.) Nothing about movement
+changes: the yard is still walkable.
+
+#### Outdoors
+
+Below the room list sits an **Outdoors** row — a pseudo-room covering everything
+outside every wall loop. It has no anchor and no shape; give it a name, or bind
+it to a Home Assistant area, and the sidebar's "— No room —" grouping starts
+using that name. Clear both and the row disappears again.
+
+Individual **ground areas** can be bound to an area too, from their own sidebar
+row. Diorama then resolves "which area is this point in?" as: the room you're
+standing in, else the smallest bound ground area under you, else Outdoors — so
+a thermostat on the deck opens its entity picker scoped to your Deck area.
 
 Room names feed the avatar behavior system, so naming matters:
 
@@ -371,7 +404,7 @@ checkbox, grouped into six categories:
 | **Labels** | Room & area labels · Object labels · Person name labels · Dimensions · Battery warnings |
 | **Structure & furniture** | Walls · Doors & windows · Furniture · Appliances · Peek floors · Background image · 3D grid |
 | **Ground & areas** | Ground / yard · Zones & halos · Temperature heat-map · Activity glow · Vacuum room map |
-| **Devices** | Lights · Switches · mmWave sensors · Motion sensors · Env sensors · Info cards |
+| **Devices** | Lights · Switches · mmWave sensors · Motion sensors · Env sensors · Info cards · Robots |
 | **People & presence** | Avatars |
 | **Outside world** | Geo landmarks · Weather effects (3D) · Flights · Neighborhood · Background text |
 
@@ -380,6 +413,7 @@ A few distinctions worth knowing:
 - **Room & area labels** covers the names of rooms *and* of ground areas and pools — one "what is this space called" switch. **Object labels** covers the name text on fixtures, doors, windows, and furniture. Value readouts (a sensor's reading, an info card's number, a thermostat's temperature) stay with their own fixture layer, since they're state rather than a caption.
 - **Walls** and **Doors & windows** are real layers — turn openings off and they stop being clickable too, so a door can't swallow a click you meant for the room behind it.
 - **Peek floors** hides the onion-skin underlay from other floors without changing those floors' own show / peek / hide setting.
+- **Robots** is its own switch (split off the sensor layers), so you can hide vacuum and mower docks without losing your mmWave fixtures. A hidden robot can't be clicked either.
 - **Activity glow** (warm pools where lights are on or motion is firing), the **temperature heat-map**, and the **vacuum room map** ship **off** — they're opt-in views. Everything else is on unless you turn it off.
 
 Save your own combinations as **presets**, and recall them by name. A built-in
@@ -401,11 +435,48 @@ counts, and the floor's size) can be switched off with **"Show floor info readou
 
 ### Alignment guides
 
-While you drag a single item in Select mode, its center snaps to line up with
-other items of the same category on the X and Y axes independently. Dashed
-guide lines show through the aligned coordinate so you can see the match. This
-works for lights and switches (as one group), furniture, environmental
-sensors, motion sensors, mmWave sensors, and BLE proxies.
+While you drag something in Select mode, it snaps to line up with **anything
+else on the floor** — on the X and Y axes independently — and a dashed guide
+line shows through each match so you can see what it caught.
+
+The candidates are every **wall corner**, every **room anchor**, and the
+**center of every fixture and piece of furniture** you've placed, regardless of
+category: a lamp lines up with a doorway's wall corner, a sensor with the sofa
+below it. Dragging a polygon or a path additionally sees other areas', pools',
+voids', and zones' corners.
+
+It applies to furniture, every fixture kind, wall vertices, whole walls, room
+labels, and polygon vertices and shapes. Alignment beats the grid, but the
+snaps that happen when you *let go* — a fireplace or switch locking flush to a
+wall, a wall welding to its neighbor — still win.
+
+**Hold Alt to suspend it** for one gesture — the same free-placement modifier
+that suspends the wall angle, grid, and weld snaps. A few things are
+deliberately left out: doors and windows (they snap to walls anyway), the
+mmWave zone editor, ruler handles, background-image drags, and the corner
+resize handle.
+
+### Reshaping and moving polygons
+
+Ground areas, paths, pools, voids, presence zones, and walls all share the same
+two shortcuts.
+
+- **Add a point** — select the shape and a dim **+** appears at the midpoint of each edge. Press it and the new vertex is inserted *and* picked up for dragging in one motion; let go and that's a single undo step. Very short edges skip the handle so it never crowds the real vertices, and a real vertex always wins the click. A path shows its handles on the **centerline** rather than the outline.
+- **Move the whole shape** — click a shape once to select it, then press and drag it again to slide every point together. The outline stays exactly as drawn, and a path drags its centerline and re-generates as you go. Locked shapes refuse to move.
+
+### Finding something: Alt+click identify
+
+Locked items don't respond to a drag, hidden layers don't respond at all, and a
+crowded plan can make it genuinely hard to work out what you're looking at.
+**Hold Alt and click** anything in Select mode — in either the 2D plan or the
+3D scene — and Diorama identifies it instead of acting on it.
+
+- A callout appears on the 2D plan for a few seconds naming the thing you hit, and adding **🔒 locked — unlock in the sidebar** when that's why it wouldn't move.
+- The item is **selected**, and the sidebar opens the section it lives in, scrolls its row into view, and flashes it. (Walls point you at the Tools section, where the bulk lock lives.)
+- Locked items identify happily — that's the point. Layer-hidden items still don't, since they aren't on screen.
+
+Identify never changes your plan, so it makes no undo step. In 3D it also
+suppresses the click that would normally toggle the device you hit.
 
 ### Background images
 
