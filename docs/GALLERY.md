@@ -32,6 +32,7 @@ docs-site/
     theater.* vehicle.*
     lighting.* switches-controls.* sensors.* doors-windows.* robots.*
     vehicle-models.*                            # ground models from the vehicle packs
+    flying-models.*                             # the banner-tow craft roster (sky models)
     avatars/
       index.*  base.* sci-fi.* pop-culture.* video-games.* cartoons.*   # one page per top-level pack group
     media/**/*.gif              # one GIF per model
@@ -67,14 +68,26 @@ of truth where the runtime allows it — `FURNITURE_KINDS` + `furnitureCat`,
 registered + force-activated so franchise members resolve to their real rigs;
 the core `adult` rig is pushed explicitly — 512/512), and **every** vehicle pack
 in `src/vehicle-packs/manifest.ts` (same treatment — franchise packs ship
-unloaded, so the harness force-loads them; only models whose `surfaces` accept
-`'ground'` are captured, since the aircraft/space packs are sky props). The light-icon,
-safety, door and window lists are hand-typed in `capture-main.ts` (type unions
-are erased at runtime and can't be enumerated), but `generate.mjs` cross-checks
-their counts against the real unions parsed from `src/types.ts` on EVERY run —
-a new kind that misses the capture list fails the build loudly instead of
-silently getting no GIF (added 2026-07-29 after 5 of 8 door kinds shipped
-without gallery entries).
+unloaded, so the harness force-loads them). Vehicle models split by their
+declared `surfaces`: `'ground'` models go to the **vehicle-models** page as
+placeable furniture, `'banner'` models to the **flying-models** page as sky
+props. (The Space ▸ Real pack straddles both — its rockets fly, its two rovers
+drive.)
+
+The light-icon, safety, door and window lists are hand-typed in
+`capture-main.ts` (type unions are erased at runtime and can't be enumerated),
+as is `CRAFT_ROSTER` — the flying page's built-in half, which mirrors the
+Settings ▸ Display ▸ Background text "Aircraft" dropdown verbatim. `generate.mjs`
+cross-checks all six counts against the real unions on EVERY run —
+`LightIconKind` / `SafetyKind` / `DoorKind` / `WindowKind` from `src/types.ts`,
+`AircraftArchetype` from `src/aircraft-types.ts`, and the module-private
+`BgCraftId` from `src/three-renderer.ts` — so a new kind or craft that misses
+the capture list fails the build loudly instead of silently getting no GIF
+(added 2026-07-29 after 5 of 8 door kinds shipped without gallery entries;
+extended to the craft roster with the flying page). A seventh guard cross-checks
+every vehicle pack's hand-maintained manifest `count` against how many of its
+models reached a page, so a model declaring neither surface — invisible in the
+app AND the gallery — fails too.
 
 ## Architecture
 
@@ -111,6 +124,7 @@ builders the live panel uses — never a reimplementation:
 | bins | lid flip empty↔full (state folded into the floor build) |
 | mailbox flag | flag sensor off→on→off (floor rebuilt per frame, eased arm) + count badge |
 | vehicle | 360° turntable of the pack model at its real size |
+| craft (flying) | the craft alone (its towed banner detached + hidden), parked in a high sky slot, 360° turntable framed to fill by the assembly's own vertex bounds, props/rotors turning |
 | doors / windows | smooth open→close via a cover-position ramp |
 | robot | dock + roaming rig cycling docked/cleaning/returning LED states |
 | avatar | idle rig (subtle weight-shift), 360° camera orbit, personality bubble forced visible; quadrupeds & hover rigs use their own rig behavior |
@@ -130,14 +144,19 @@ builders the live panel uses — never a reimplementation:
 | `--keep-serve` | keep the temp serve dir for debugging |
 
 Runs are **idempotent**: existing GIFs are skipped unless `--force`, so a partial
-or resumed run is cheap. Capture is **robust** — a failing subject is recorded and
+or resumed run is cheap. Note the skip test is purely **"does the GIF file
+exist"** — unlike the app's toolbar thumbnails (`src/ui/thumbs-cache.ts`), the
+gallery has no build-tag or pack-version cache key, so it cannot notice that a
+model's *geometry* changed. **After editing an existing model, re-run its page
+with `--force`** (e.g. `--only vehicle-models --force`); a new model needs no
+flag. Capture is **robust** — a failing subject is recorded and
 the run continues; the final summary table reports captured / skipped / failed and
 the run exits nonzero only if more than 5% of attempted captures failed.
 
 ## Size & time expectations
 
 Roughly **0.8 s per subject** (software-WebGL headless Chrome). The catalog is
-~710 subjects, so a full run is on the order of **9–14 minutes** plus a ~2 s build.
+~780 subjects, so a full run is on the order of **10–15 minutes** plus a ~2 s build.
 GIFs are typically 150–850 KB (400 px, 24–34 frames). `--smoke` finishes in ~25 s
 including the build. Use `--only` / `--limit` to iterate on one page quickly.
 

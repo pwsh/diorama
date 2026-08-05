@@ -355,6 +355,27 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Docs: vehicle gallery rebuild + flying-models page** (2026-08-05,
+  user-directed pre-release; unreleased — on main past v0.56.0).
+  Gallery 712→778 subjects / 14 pages: all 26 ground vehicles
+  re-captured with --force (the gallery has NO version-keyed cache —
+  skip = file-exists, now documented in GALLERY.md; spot-checks
+  confirmed closed gullwings / seated ambulance bar / continuous
+  tracks / both rovers), ground page re-sorted (rovers no longer
+  lead), +1 incidental network_rack auto-capture. NEW
+  flying-models page (62 craft, captured via the SHIPPED
+  updateBgTexts path so all four families match what actually
+  flies; props/rotors animate at a capture-only 0.28 spin scale —
+  shipped rotor rates alias backwards at GIF framerates;
+  per-vertex fit-to-frame framing): toy+8 archetypes · 7
+  military/NASA · 12 fiction · 34 pack craft by pack. Parity
+  guards: archetype 8 / BgCraftId 19 / per-pack page-coverage
+  (catches a model declaring neither surface). vehicles.md guide
+  updated + site published. Follow-up noted: the V-22's proprotor
+  discs read edge-on in 3/4 views (data uses spin:'prop' correctly
+  — a model re-authoring nit, not a gallery bug); SolarPanel has no
+  gallery entry (pre-existing fixture-scope boundary shared with
+  valves/plugs/thermostats).
 - **Sun-tracking solar panel fixture** (2026-08-05, user-requested;
   unreleased — on main past v0.56.0). `SolarPanel`/`Floor.solarPanels`
   + pure `src/solar.ts` (zero-import): the panel AIMS at the real sun

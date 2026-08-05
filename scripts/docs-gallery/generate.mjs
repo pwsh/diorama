@@ -221,6 +221,7 @@ function inspectGif(buf) {
 const PAGE_TITLE = {
   furniture: 'Furniture', appliances: 'Appliances', bathroom: 'Bathroom', outdoor: 'Outdoor & yard',
   theater: 'Home theater', vehicle: 'Vehicle / garage', 'vehicle-models': 'Vehicle models',
+  'flying-models': 'Flying models',
   lighting: 'Lighting', 'switches-controls': 'Switches & controls', sensors: 'Sensors',
   'doors-windows': 'Doors & windows', robots: 'Robots',
 };
@@ -231,7 +232,8 @@ const PAGE_INTRO = {
   outdoor: 'Outdoor & yard pieces. 360° turntable of the default-size 3D piece.',
   theater: 'Home-theater seating and speakers. 360° turntable of the default-size 3D piece.',
   vehicle: 'Garage vehicle and EV-charging pieces. 360° turntable of the default-size 3D piece.',
-  'vehicle-models': 'Ground vehicles from the vehicle model packs — place them like any furniture piece from the toolbar\'s Vehicles tab. Load and activate packs in Settings ▸ Vehicles; the Fiction pack is opt-in and ships unloaded. 360° turntable of each model at its real size. (The aircraft and space packs are sky props — they fly as banner tow craft and as live-flight skins, so they are not in this gallery.)',
+  'vehicle-models': 'Ground vehicles from the vehicle model packs — place them like any furniture piece from the toolbar\'s Vehicles tab. Load and activate packs in Settings ▸ Vehicles; the Fiction pack is opt-in and ships unloaded. 360° turntable of each model at its real size. The Space ▸ Real pack contributes two of these: the Apollo Lunar Roving Vehicle and the Perseverance Mars rover are space hardware that drives, so they place on the ground like any other vehicle. Everything else in the aircraft and space packs flies — see the Flying models page.',
+  'flying-models': 'Every craft that can tow a background-text banner around the property, in the order the Aircraft dropdown offers them (Settings ▸ Display ▸ Background text, on a Banner plane entry). Four groups are built in — the classic toy plane plus the eight silhouettes the flight tracker uses, the military & NASA roster, the fiction homages and the news helicopter — and below them one group per loaded, active aircraft or space pack. The two Fiction groups are affectionate nods described generically rather than by name; the Space ▸ Fiction pack is opt-in and ships unloaded. Each card is a 360° turntable of the craft alone (the banner it tows is hidden), framed to fill its frame, with props and rotors turning.',
   lighting: 'Light-fixture icon kinds in a corner environment: off → on → color sweep → dim → off (fireplace flickers).',
   'switches-controls': 'Wall controls: switch plate, alarm keypad, and door lock — each cycling its states.',
   sensors: 'Presence, environment, safety, and bin sensors — each showing its live-state animation.',
@@ -469,12 +471,17 @@ function verifyRefs(subjects) {
 // suite would ever catch it. Cross-check the CAPTURED catalog's subject counts
 // against the real union member count parsed straight out of src/types.ts (the
 // actual source of truth) so a mismatch fails the run loudly instead.
-function countTypeUnionMembers(typeName) {
-  const src = fs.readFileSync(path.join(REPO, 'src', 'types.ts'), 'utf8');
-  const m = src.match(new RegExp(`export type ${typeName}\\s*=([\\s\\S]*?);`));
-  if (!m) throw new Error(`hand-maintained-list guard: could not locate "export type ${typeName}" in src/types.ts`);
-  const members = new Set((m[1].match(/'[^']+'/g) || []).map((s) => s.slice(1, -1)));
-  if (members.size === 0) throw new Error(`hand-maintained-list guard: parsed zero members for ${typeName} — regex out of sync with src/types.ts?`);
+function countTypeUnionMembers(typeName, relFile = 'src/types.ts') {
+  const src = fs.readFileSync(path.join(REPO, relFile), 'utf8');
+  // `export` is optional: BgCraftId is a module-private union inside
+  // src/three-renderer.ts, and it is still the source of truth for the roster.
+  const m = src.match(new RegExp(`(?:export )?type ${typeName}\\s*=([\\s\\S]*?);`));
+  if (!m) throw new Error(`hand-maintained-list guard: could not locate "type ${typeName}" in ${relFile}`);
+  // Strip line comments first — a union member list may be annotated, and a
+  // comment can legitimately contain quoted text.
+  const body = m[1].replace(/\/\/[^\n]*/g, '');
+  const members = new Set((body.match(/'[^']+'/g) || []).map((s) => s.slice(1, -1)));
+  if (members.size === 0) throw new Error(`hand-maintained-list guard: parsed zero members for ${typeName} — regex out of sync with ${relFile}?`);
   return members.size;
 }
 function verifyHandMaintainedLists(subjects) {
@@ -486,18 +493,57 @@ function verifyHandMaintainedLists(subjects) {
     // instead of silently shipping a gallery page missing the new kind.
     { subjectType: 'door', typeName: 'DoorKind' },
     { subjectType: 'window', typeName: 'WindowKind' },
+    // The flying-models page's two hand-typed rosters (capture-main.ts's
+    // CRAFT_ROSTER, mirroring the Settings "Aircraft" dropdown). Matched on the
+    // subject's craftFamily, so the registry-driven vehicle-pack craft on the
+    // same page — which need no hand list — are excluded from the arithmetic.
+    {
+      subjectType: 'craft', craftFamily: 'archetype',
+      typeName: 'AircraftArchetype', file: 'src/aircraft-types.ts',
+    },
+    {
+      subjectType: 'craft', craftFamily: 'bgcraft',
+      typeName: 'BgCraftId', file: 'src/three-renderer.ts',
+    },
   ];
-  for (const { subjectType, typeName } of checks) {
-    const expected = countTypeUnionMembers(typeName);
-    const got = subjects.filter((s) => s.type === subjectType).length;
+  for (const { subjectType, craftFamily, typeName, file } of checks) {
+    const expected = countTypeUnionMembers(typeName, file);
+    const got = subjects.filter((s) => s.type === subjectType
+      && (craftFamily == null || s.craftFamily === craftFamily)).length;
+    const what = craftFamily ? `${subjectType}/${craftFamily}` : subjectType;
     if (got !== expected) {
       throw new Error(
-        `hand-maintained-list guard FAILED: catalog has ${got} '${subjectType}' subject(s) but ` +
-        `src/types.ts's ${typeName} union has ${expected} member(s) — a kind was added to (or ` +
+        `hand-maintained-list guard FAILED: catalog has ${got} '${what}' subject(s) but ` +
+        `${file || 'src/types.ts'}'s ${typeName} union has ${expected} member(s) — a kind was added to (or ` +
         `removed from) the type without updating scripts/docs-gallery/capture-main.ts, or vice versa.`);
     }
-    log(`hand-maintained-list guard OK: ${subjectType} (${typeName}) = ${got}`);
+    log(`hand-maintained-list guard OK: ${what} (${typeName}) = ${got}`);
   }
+}
+
+// ── vehicle-pack coverage guard ────────────────────────────────────────────────
+// Vehicle-pack models are enumerated from the live registry (no hand list), but
+// the MANIFEST carries a hand-maintained `count` per pack that the Settings ▸
+// Vehicles UI shows. Cross-check the catalog against it: every member must land
+// on exactly one page (ground → vehicle-models, banner → flying-models), so a
+// model that declares neither surface — and would therefore be invisible in both
+// the gallery AND the app — fails the run instead of quietly vanishing.
+function verifyVehiclePackCounts(subjects) {
+  const src = fs.readFileSync(path.join(REPO, 'src', 'vehicle-packs', 'manifest.ts'), 'utf8');
+  const rows = [...src.matchAll(/\{\s*id:\s*'([^']+)'[\s\S]*?count:\s*(\d+)/g)]
+    .map((m) => ({ id: m[1], count: parseInt(m[2], 10) }));
+  if (rows.length === 0) throw new Error('vehicle-pack guard: parsed zero manifest rows — regex out of sync?');
+  for (const { id, count } of rows) {
+    const got = subjects.filter((s) => s.packId === id).length;
+    if (got !== count) {
+      throw new Error(
+        `vehicle-pack guard FAILED: pack '${id}' declares count ${count} in ` +
+        `src/vehicle-packs/manifest.ts but ${got} of its models reached the gallery — ` +
+        'either the manifest count is stale, or a model declares no ' +
+        "'ground'/'banner' surface and is documented nowhere.");
+    }
+  }
+  log(`vehicle-pack guard OK: ${rows.length} packs, ${rows.reduce((a, r) => a + r.count, 0)} models`);
 }
 
 // ── smoke subset ──────────────────────────────────────────────────────────────────
@@ -522,6 +568,11 @@ function smokeSelect(subjects) {
   take((s) => s.type === 'safety');
   take((s) => s.type === 'door');
   take((s) => s.type === 'robot');
+  // One vehicle-pack ground model + one of each flying-craft family (a hand-built
+  // roster craft with a spinning rotor, and a registry-driven pack craft).
+  take((s) => s.type === 'vehicle');
+  take((s) => s.type === 'craft' && s.id === 'apache');
+  take((s) => s.type === 'craft' && s.craftFamily === 'pack');
   // de-dupe by gif
   const seen = new Set();
   return pick.filter((s) => s && !seen.has(s.gif) && seen.add(s.gif));
@@ -560,6 +611,7 @@ function pagesOnly() {
   const date = cached.generatedAt ? cached.generatedAt.slice(0, 10) : isoDate();
   log(`pages-only: ${subjects.length} subjects from cached catalog (captured ${date}, v${version})`);
   verifyHandMaintainedLists(subjects);
+  verifyVehiclePackCounts(subjects);
   writeMarkdown(subjects);
   writeHtml(subjects, version, date);
 
@@ -626,6 +678,7 @@ async function main() {
   let subjects = catalog.subjects;
   log(`catalog: ${subjects.length} subjects across ${new Set(subjects.map((s) => s.page)).size} pages`);
   verifyHandMaintainedLists(subjects);
+  verifyVehiclePackCounts(subjects);
 
   // Markdown + HTML always reflect the FULL catalog (generated docs stay complete
   // even on a partial capture run). Persist the catalog so `--pages-only` can

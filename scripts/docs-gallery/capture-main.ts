@@ -266,6 +266,147 @@ function capVehicle(sub: Subject, o: CapOpts): string {
   });
 }
 
+// ── Flying craft (the banner-tow roster) ───────────────────────────────────────
+// Every craft a "Banner plane" background-text entry can pick: the classic toy
+// tow plane, the eight ADS-B archetype silhouettes, the 19 hand-built BG_CRAFTS
+// (military / NASA / fiction homages / the news helicopter), and every
+// 'banner'-surface model in the vehicle packs.
+//
+// All four families are built through ONE shipped entry point —
+// `updateBgTexts()` with a single banner entry — rather than by reaching into
+// the private per-family builders. That is deliberate: the resolution ladder
+// (archetype id → BG_CRAFTS key → vehicle-pack model → toy plane) lives in
+// `_buildBgAircraft`, and the classic toy plane has no standalone builder at all
+// (it is inline in that method), so driving the public path is the only way the
+// gallery can be guaranteed to show exactly what the app flies.
+//
+// Two capture-only adjustments, both on the BUILT rig — neither touches a builder:
+//   1. The trailing text BANNER (and the news chopper's tow wire) is re-parented
+//      out of the craft assembly onto _bgTextGroup and hidden. This is a MODEL
+//      gallery: a ~6 m cloth would shrink every craft to a speck. It stays a
+//      child of the group so the shipped _disposeSpriteMaps + _clearGroup sweep
+//      still frees its CanvasTexture on the next reset.
+//   2. The rig is parked at the origin of a high sky slot. The orbit + bob live
+//      in `_advanceBgText`, which is driven by the renderer's own rAF and never
+//      runs inside the synchronous capture loop, so the craft simply holds still.
+//      Parking it well above the floor keeps the slab + backdrop grid out of a
+//      tight frame, which is what a sky prop should look like.
+//
+// FRAMING IS NORMALIZED: the camera radius is derived from the built assembly's
+// own bounds (bounding-sphere fit to the live camera FOV/aspect), so a Sopwith
+// Camel and a Saturn V both fill their card. Position and size differ only by
+// the uniform `bannerCraftScale` factor the shipped path applies, and a uniform
+// scale is invisible under bbox framing — so this is "display scale, framed to
+// fit", not a second scale rule the app doesn't have.
+const CRAFT_SKY_Y = 20000;        // park height (mm) — clears the floor slab + grid
+// Capture-only spin slowdown. The shipped rates (22 rad/s props, 40–44 rotors)
+// alias badly at a GIF's frame budget — a 4-blade rotor at 44 rad/s advances
+// ~0.84 of its symmetry period per frame and reads as crawling backwards. The
+// scale is applied uniformly so faster craft still read as faster.
+const CRAFT_SPIN_SCALE = 0.28;
+
+// World-space bounds of a built assembly. Walks VISIBLE geometry's actual
+// VERTICES (not just each geometry's bbox corners) and applies the world matrix
+// by hand — the renderer chunk does not re-export THREE, so there is no
+// Box3/Vector3 constructor to borrow here.
+//
+// Real vertices matter for framing: an aircraft is a cross, not a box. Its bbox
+// CORNER sits far out past the wingtip AND the tail together, where there is no
+// geometry at all, so a bbox-derived bounding sphere adds ~20 % of dead air to
+// every card. What the turntable actually needs is
+//   rH — the largest horizontal radius about the spin axis (the worst-case
+//        silhouette half-width at ANY azimuth), and
+//   rV — the vertical half-height,
+// which the fit below combines with the camera elevation.
+function craftBounds(root: AnyRenderer): {
+  cx: number; cy: number; cz: number; rH: number; rV: number;
+} {
+  root.updateMatrixWorld(true);
+  const xs: number[] = [], ys: number[] = [], zs: number[] = [];
+  root.traverse((o: AnyRenderer) => {
+    if (!o.visible) return;
+    const pos = o.geometry?.attributes?.position;
+    if (!pos) return;
+    const e = o.matrixWorld.elements;
+    for (let i = 0; i < pos.count; i++) {
+      const px = pos.getX(i), py = pos.getY(i), pz = pos.getZ(i);
+      xs.push(e[0] * px + e[4] * py + e[8] * pz + e[12]);
+      ys.push(e[1] * px + e[5] * py + e[9] * pz + e[13]);
+      zs.push(e[2] * px + e[6] * py + e[10] * pz + e[14]);
+    }
+  });
+  if (!xs.length) return { cx: 0, cy: CRAFT_SKY_Y, cz: 0, rH: 2000, rV: 800 };
+  // Looped min/max, never Math.min(...arr): a detailed craft runs to tens of
+  // thousands of vertices and spreading that many arguments blows the stack.
+  const mid = (a: number[]): number => {
+    let lo = Infinity, hi = -Infinity;
+    for (let i = 0; i < a.length; i++) { if (a[i] < lo) lo = a[i]; if (a[i] > hi) hi = a[i]; }
+    return (lo + hi) / 2;
+  };
+  const cx = mid(xs), cy = mid(ys), cz = mid(zs);
+  let rH = 0, rV = 0;
+  for (let i = 0; i < xs.length; i++) {
+    const h = Math.hypot(xs[i] - cx, zs[i] - cz);
+    if (h > rH) rH = h;
+    const v = Math.abs(ys[i] - cy);
+    if (v > rV) rV = v;
+  }
+  return { cx, cy, cz, rH: Math.max(300, rH), rV: Math.max(120, rV) };
+}
+
+function capCraft(sub: Subject, o: CapOpts): string {
+  const gifPx = o.size ?? 400, N = o.frames ?? 45, fps = o.fps ?? 9;
+  const aircraft = String(sub.meta.aircraft ?? '');
+  R.updateFloor(baseFloor(8000, 8000), DAY, undefined, undefined, nullState);
+  R.updateBgTexts(
+    [{ id: 'c', mode: 'banner', text: 'DIORAMA', aircraft: aircraft || undefined }],
+    false, 0, 0);
+  const rig = (R._bgRigs || [])[0];
+  if (!rig || !rig.asm) throw new Error(`craft rig did not build: ${sub.id}`);
+  const asm = rig.asm;
+  // Detach + hide the message rigging (kept inside _bgTextGroup so the shipped
+  // disposal sweep still owns its texture).
+  for (const part of [rig.banner, rig.towWire]) {
+    if (part) { part.visible = false; R._bgTextGroup.add(part); }
+  }
+  asm.position.set(0, CRAFT_SKY_Y, 0);
+  asm.rotation.set(0, 0, 0);
+  const b = craftBounds(asm);
+  // Fit against the LIVE camera frustum (square canvas ⇒ aspect 1 ⇒ the two
+  // half-angles coincide, but read both so a harness resize stays correct).
+  // Horizontally the worst case is rH at every azimuth; vertically the tilted
+  // camera sees the height plus the depth foreshortened into it, so take the
+  // larger of the two required distances.
+  const cam = R._camera;
+  const elevDeg = 15;
+  const el = (elevDeg * Math.PI) / 180;
+  const vHalf = ((cam?.fov ?? 50) * Math.PI) / 360;
+  const aspect = cam?.aspect || 1;
+  const hHalf = Math.atan(Math.tan(vHalf) * aspect);
+  const radius = 1.08 * Math.max(
+    b.rH / Math.tan(hHalf),
+    (b.rV * Math.cos(el) + b.rH * Math.sin(el)) / Math.tan(vHalf),
+  );
+  const target: [number, number, number] = [b.cx, b.cy, b.cz];
+  const rotorY = rig.newsChopper === true || rig.rotorY === true;
+  const rate = (rig.propRate ?? (rig.newsChopper ? 42 : 22)) * CRAFT_SPIN_SCALE;
+  return runCapture(N, gifPx, fps, 33, (i) => {
+    orbitCam(target, radius, elevDeg, (i / N) * Math.PI * 2);
+    // Prop / rotor spin — the SAME axis rule _advanceBgAircraft uses (rotorcraft
+    // about Y, everything else about the flight axis Z), off the fake clock.
+    if (rate > 0) {
+      const spin = ((performance.now() / 1000) * rate) % (Math.PI * 2);
+      for (const d of (rig.props ?? [])) {
+        if (rotorY) d.rotation.y = spin; else d.rotation.z = spin;
+      }
+    }
+    if (rig.tailRotor) {
+      rig.tailRotor.rotation.x =
+        ((performance.now() / 1000) * ((rig.propRate ?? 42) * CRAFT_SPIN_SCALE) * 1.6) % (Math.PI * 2);
+    }
+  });
+}
+
 // Mailbox flag — the `mailbox-flag` twin of the plain mailbox turntable.
 // The flag arm is an EASED per-frame blend (`_advanceMailFlags`, τ ≈ 0.25 s)
 // whose TARGET is resolved at BUILD time from the bound flag sensor, so the
@@ -773,6 +914,7 @@ function captureSubject(sub: Subject, o: CapOpts): string {
   switch (sub.type) {
     case 'furniture': return capFurniture(sub, o);
     case 'vehicle': return capVehicle(sub, o);
+    case 'craft': return capCraft(sub, o);
     case 'appliance': return capAppliance(sub, o);
     case 'bathwater': return capBathWater(sub, o);
     case 'mailflag': return capMailFlag(sub, o);
@@ -816,6 +958,69 @@ const LIGHT_KINDS: { id: LightIconKind; label: string; glyph: string }[] = [
   { id: 'firepit_round', label: 'Fire pit (round)', glyph: '◉' },
   { id: 'firepit_square', label: 'Fire pit (square)', glyph: '▣' },
 ];
+// ── Flying-craft roster (the banner-tow "Aircraft" dropdown) ──────────────────
+// Hand-typed to mirror src/ui/modals.ts's AIRCRAFT_GROUPS **verbatim**: those
+// strings are the user-facing names, and the Fiction ones are deliberately
+// descriptive-generic (the IP posture — never "fix" them to franchise names).
+//
+// Two hand-maintained lists back this, and generate.mjs cross-checks BOTH on
+// every run against the real unions (`AircraftArchetype` in
+// src/aircraft-types.ts, `BgCraftId` in src/three-renderer.ts), so a craft added
+// to either without a row here fails the run loudly instead of silently missing
+// its GIF — exactly the guard the light / safety / door / window lists get.
+// The vehicle-pack craft need no list: they are enumerated from the registry.
+type CraftFamily = 'toy' | 'archetype' | 'bgcraft';
+const CRAFT_TOY: [string, string] = ['', 'Classic tow plane'];
+const CRAFT_ROSTER: { group: string; family: CraftFamily; rows: Array<[string, string]> }[] = [
+  {
+    group: 'Toy plane & airliners', family: 'archetype', rows: [
+      ['ga-high', 'Light single, high wing (Cessna)'],
+      ['ga-low', 'Light single, low wing (Cirrus)'],
+      ['twin-prop', 'Twin prop (King Air)'],
+      ['turboprop', 'Regional turboprop (ATR / Dash 8)'],
+      ['narrowbody', 'Airliner — narrowbody (737 / A320)'],
+      ['widebody', 'Airliner — widebody (747 / 777)'],
+      ['bizjet', 'Business jet (Learjet / CRJ)'],
+      ['heli', 'Helicopter'],
+    ],
+  },
+  {
+    group: 'Military & NASA', family: 'bgcraft', rows: [
+      ['f16', 'F-16 Fighting Falcon'],
+      ['a10', 'A-10 Thunderbolt II'],
+      ['f22', 'F-22 Raptor'],
+      ['b2', 'B-2 Spirit (flying wing)'],
+      ['b52', 'B-52 Stratofortress'],
+      ['apache', 'AH-64 Apache'],
+      ['shuttle', 'Space Shuttle orbiter'],
+    ],
+  },
+  {
+    // The news helicopter rides here rather than in its own one-row group: it is
+    // a hand-built roster craft like the rest, and the ONLY one that also swaps
+    // the flight PROFILE. (In Settings it sits under its own "News" optgroup.)
+    group: 'Fiction', family: 'bgcraft', rows: [
+      ['airwolf', 'Black attack helicopter'],
+      ['batwing', 'Bat-winged jet'],
+      ['trimaxion', 'Chrome explorer pod'],
+      ['einstein_rocket', 'Little red rocket'],
+      ['enterprise', 'Starship — classic'],
+      ['enterprise_c', 'Starship — heavy cruiser'],
+      ['xwing', 'X-wing fighter'],
+      ['falcon', 'Freighter (disc hull)'],
+      ['slave1', 'Bounty hunter pod'],
+      ['naboo', 'Royal chrome starship'],
+      ['serenity', 'Firefly transport'],
+      ['news_chopper', 'News helicopter'],
+    ],
+  },
+];
+// Roster craft whose geometry the LIVE ADS-B display may borrow as a military
+// skin (flights.ts militarySkinFor) — worth calling out on the card.
+const CRAFT_MIL_SKIN = new Set(['f16', 'a10', 'f22', 'b2', 'b52', 'apache']);
+// Roster craft that spin their discs about the vertical axis (BG_CRAFTS.rotorY).
+const CRAFT_ROTOR = new Set(['apache', 'airwolf', 'news_chopper', 'heli']);
+
 const CAT_PAGE: Record<string, string> = { furniture: 'furniture', appliance: 'appliances', bathroom: 'bathroom', outdoor: 'outdoor' };
 const CAT_TITLE: Record<string, string> = {
   furniture: 'Furniture', appliance: 'Appliances', bathroom: 'Bathroom', outdoor: 'Outdoor & yard',
@@ -888,20 +1093,60 @@ function buildCatalog(): any {
     }
   }
 
+  // FLYING craft — the hand-built half of the banner-tow roster (the toy plane,
+  // the eight ADS-B archetypes, the 19 BG_CRAFTS). Pushed BEFORE the vehicle-pack
+  // loop so the flying page's group order is: the four built-in dropdown families
+  // first, then one group per pack (the page's groups are emitted in first-seen
+  // order).
+  {
+    const craft = (key: string, label: string, group: string, family: CraftFamily, notes: string) => {
+      const id = key || 'toy_plane';
+      push({
+        type: 'craft', id, page: 'flying-models', group, label,
+        craftFamily: family, notes,
+        gif: `media/flying-models/${safeId(id)}.gif`,
+        meta: { aircraft: key, family },
+      });
+    };
+    craft(CRAFT_TOY[0], CRAFT_TOY[1], 'Toy plane & airliners', 'toy',
+      'the shipped default tow craft · picked when an entry names no aircraft');
+    for (const g of CRAFT_ROSTER) {
+      for (const [key, label] of g.rows) {
+        const bits = g.family === 'archetype'
+          ? ['flight-tracker silhouette · also drawn for live ADS-B traffic']
+          : ['hand-built roster craft'];
+        if (CRAFT_ROTOR.has(key)) bits.push('rotorcraft');
+        if (CRAFT_MIL_SKIN.has(key)) bits.push('also a live-traffic military skin');
+        if (key === 'news_chopper') bits.push('flies the news profile (tighter, higher, corner-hung banner)');
+        craft(key, label, g.group, g.family, bits.join(' · '));
+      }
+    }
+  }
+
   // Vehicle-pack MODELS. `src/vehicles.ts` is a second pack registry alongside
-  // avatars.ts; its ground-surface models are placed as ordinary furniture
-  // (Furniture.vehicleModelId → vehicleRecipe → the Custom-Objects recipe
-  // shape), so they document exactly like a furniture kind. Only models whose
-  // `surfaces` accept 'ground' are captured: the aircraft/space packs exist for
-  // the banner-tow + live-ADS-B SKY surfaces and are deliberately out of the
-  // model gallery (they are sky props, not household models). Members come from
-  // the pack defs loaded (and registered) during ensureInit, so this list can
-  // never drift from what the app actually ships.
-  for (const row of VEHICLE_PACK_MANIFEST) {
-    const def = _vehiclePackDefs[row.id];
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const models: any[] = def?.models ?? [];
-    for (const m of models) {
+  // avatars.ts, and its models split by declared SURFACE:
+  //   • 'ground' → placed as ordinary furniture (Furniture.vehicleModelId →
+  //     vehicleRecipe → the Custom-Objects recipe shape), so they document
+  //     exactly like a furniture kind, on the vehicle-models page. Note the
+  //     space pack contributes here too: the two rovers are ground-placeable
+  //     space hardware.
+  //   • 'banner' → sky props towed behind a background-text banner, documented
+  //     on the flying-models page beside the hand-built roster.
+  // Members come from the pack defs loaded (and registered) during ensureInit,
+  // so neither list can drift from what the app actually ships.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const packModels = (row: { id: string }): any[] => _vehiclePackDefs[row.id]?.models ?? [];
+  // GROUND pass. Manifest order puts the aircraft/space packs first, which would
+  // open a page titled "Vehicle models" with the two space rovers; a stable sort
+  // pulls the Ground Vehicles packs to the front (pages emit their groups in
+  // first-seen order) and leaves the rovers as the tail note the intro explains.
+  const groundRows = VEHICLE_PACK_MANIFEST
+    .map((row, i) => ({ row, i }))
+    .sort((a, b) => ((a.row.path[0] === 'Ground Vehicles' ? 0 : 1)
+      - (b.row.path[0] === 'Ground Vehicles' ? 0 : 1)) || (a.i - b.i))
+    .map((e) => e.row);
+  for (const row of groundRows) {
+    for (const m of packModels(row)) {
       if (!(m.surfaces || []).includes('ground')) continue;
       const [vw, vd, vh] = m.dims;
       push({
@@ -912,6 +1157,25 @@ function buildCatalog(): any {
           + (row.franchise ? ' · franchise pack (opt-in)' : ''),
         gif: `media/vehicle-models/${safeId(m.id)}.gif`,
         meta: { vehicleModelId: m.id, w: vw, h: vd, ht: vh, category: m.category, lenMm: m.lenMm },
+      });
+    }
+  }
+  // BANNER pass, in manifest order — which is exactly the order the Settings
+  // "Aircraft" dropdown appends its registry optgroups in.
+  for (const row of VEHICLE_PACK_MANIFEST) {
+    for (const m of packModels(row)) {
+      const surfaces: string[] = m.surfaces || [];
+      if (surfaces.includes('ground') || !surfaces.includes('banner')) continue;
+      push({
+        type: 'craft', id: m.id, page: 'flying-models',
+        group: row.path.join(' · '), packId: row.id, franchise: !!row.franchise,
+        craftFamily: 'pack', label: m.label,
+        notes: `${(m.lenMm / 1000).toFixed(1)} m real length`
+          + (m.era ? ` · ${m.era}` : '')
+          + (m.vertical ? ' · flies upright' : '')
+          + (row.franchise ? ' · franchise pack (opt-in)' : ''),
+        gif: `media/flying-models/${safeId(m.id)}.gif`,
+        meta: { aircraft: m.id, family: 'pack', lenMm: m.lenMm },
       });
     }
   }
