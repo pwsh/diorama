@@ -5,7 +5,8 @@ import { switchSize, distMM, pointToSeg, transformVerts, centroid, localToWorld,
          lightIconKind, isFirepitKind, FIREPIT_SIZE_MM,
          midpointHandles } from './geometry.js';
 import type { Planner } from './planner.js';
-import type { Vec2, Wall, Sensor, Furniture, BgImage, MotionSensor, EnvSensor, BleProxy, AlarmPanel, CalendarPanel, ThermostatFixture, SafetySensor, AlertBeacon, RobotFixture, CameraFixture, ProjectorFixture, ValveFixture, PlugFixture, SprinklerZone, FlagpoleFixture, PresenceZone, InfoCard, ActionButton, Door, Window as WindowType, Floor, Ruler } from './types.js';
+import type { Vec2, Wall, Sensor, Furniture, BgImage, MotionSensor, EnvSensor, BleProxy, AlarmPanel, CalendarPanel, ThermostatFixture, SafetySensor, AlertBeacon, RobotFixture, CameraFixture, ProjectorFixture, ValveFixture, PlugFixture, SprinklerZone, FlagpoleFixture, SolarPanel, PresenceZone, InfoCard, ActionButton, Door, Window as WindowType, Floor, Ruler } from './types.js';
+import { SOLAR_DEFAULTS } from './solar.js';
 import type { FloorEdge } from './geometry.js';
 import { envChipHalfPx, infoCardHalfPx, actionButtonHalfPx, flightHitPx, roomLabelHalfPx,
          insertHandleMinLenMm, insertHandlesEnabled, POLY_CAPS, type View } from './canvas-render.js';
@@ -417,6 +418,19 @@ export function hitFlagpole(p: Planner, view: View, mm: Vec2): FlagpoleFixture |
   const f = p.floor();
   const h = Math.max(hitPx(view) * 1.3, FLAGPOLE_DEFAULTS.hitRadiusMm);
   const list = f.flagpoles ?? [];
+  for (let i = list.length - 1; i >= 0; i--) {
+    if (list[i].hidden) continue;
+    if (distMM(list[i], mm) < h) return list[i];
+  }
+  return null;
+}
+
+// Solar panel — point-in-circle on the pedestal base (free placement). The
+// tilting array itself is non-interactive; the base is the handle.
+export function hitSolarPanel(p: Planner, view: View, mm: Vec2): SolarPanel | null {
+  const f = p.floor();
+  const h = Math.max(hitPx(view) * 1.3, SOLAR_DEFAULTS.hitRadiusMm);
+  const list = f.solarPanels ?? [];
   for (let i = list.length - 1; i >= 0; i--) {
     if (list[i].hidden) continue;
     if (distMM(list[i], mm) < h) return list[i];

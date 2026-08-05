@@ -85,7 +85,7 @@
       rooms: [{ id: 'rmK', name: 'Kitchen', anchor: { x: 5000, y: 5000 } }],
       bleProxies: [], alarmPanels: [], calendarPanels: [], thermostats: [],
       safetySensors: [], alertBeacons: [], robots: [], presenceZones: [], cameras: [],
-      projectors: [], valves: [], plugs: [], sprinklerZones: [], flagpoles: [],
+      projectors: [], valves: [], plugs: [], sprinklerZones: [], flagpoles: [], solarPanels: [],
       infoCards: [], actionButtons: [], rulers: [], groundAreas: [], voidAreas: [], pools: [],
       ...extra,
     };
@@ -292,6 +292,46 @@
       const row1 = sb.querySelector('[data-item-row="mo1"]');
       ok('8: a second identify re-navigates', row1 && row1.classList.contains('identify-flash'),
          row1 ? row1.className : 'no row');
+      sb.remove();
+    }
+
+    // ── (9) Solar panel: canvas sweep + sidebar navigation ────────────────
+    {
+      const p = await freshPlanner(baseFloor({
+        solarPanels: [{ id: 'sol1', x: 7000, y: 4000, rotation: 20, label: 'Yard array', locked: true }],
+      }));
+      clickAt(p, 7000, 4000, { alt: true });
+      const fx = p.identifyFx;
+      ok('9: solar panel identified', fx && fx.kind === 'solar' && fx.id === 'sol1', fx && fx.kind);
+      ok('9: label from the fixture', fx && fx.label === 'Yard array', fx && fx.label);
+      ok('9: locked flag reported', fx && fx.locked === true, fx && fx.locked);
+      ok('9: anchor is the pedestal base', fx && near(fx.x, 7000) && near(fx.y, 4000), fx && `${fx.x},${fx.y}`);
+      ok('9: panel selected', p.activeSolarId === 'sol1', p.activeSolarId);
+      ok('9: locked panel did NOT move', near(p.floor().solarPanels[0].x, 7000), p.floor().solarPanels[0].x);
+
+      const sb = document.createElement('diorama-sidebar');
+      sb.planner = p;
+      document.getElementById('mount').appendChild(sb);
+      await sb.updateComplete;
+      await frames(2);
+      sb._collapsed.add('solar');
+      sb._collapsed.add('solar/rmK');
+      sb.requestUpdate();
+      await sb.updateComplete;
+      await frames(2);
+      ok('9: solar section starts collapsed', sb._collapsed.has('solar'));
+      ok('9: the row is not rendered while collapsed', !sb.querySelector('[data-item-row="sol1"]'));
+
+      p.clearIdentify();
+      clickAt(p, 7000, 4000, { alt: true });
+      await waitFor(() => !!sb.querySelector('[data-item-row="sol1"]'), 80);
+      await frames(3);
+      ok('9: identify expanded the solar section', !sb._collapsed.has('solar'));
+      ok('9: identify expanded the ROOM group sub-key', !sb._collapsed.has('solar/rmK'));
+      const row = sb.querySelector('[data-item-row="sol1"]');
+      ok('9: the solar row is rendered', !!row);
+      ok('9: the row is flagged for the pulse', row && row.classList.contains('identify-flash'),
+         row ? row.className : 'no row');
       sb.remove();
     }
   } catch (err) {

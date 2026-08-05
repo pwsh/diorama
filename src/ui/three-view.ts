@@ -18,8 +18,9 @@ import { resolveScreenContent } from '../surfaces.js';
 import { resolveScenePreset, resolveTimeBucket } from '../time-of-day.js';
 import {
   conditionIntensity, weatherEffectEnabled, worstAlertSeverity, weatherRebuildKey,
-  weatherWindBucket,
+  weatherWindBucket, uvBand,
 } from '../weather.js';
+import { sunAzimuthPlanDeg, sunElevationDeg as sunElevationDegOf, resolveSunPlan } from '../solar.js';
 import { roadCapForRadius } from '../neighborhood.js';
 import { FLIGHTS_DEFAULT_RADIUS_NM, flightShellMm } from '../flights.js';
 import { vehicleRegistryRev } from '../vehicles.js';
@@ -934,19 +935,17 @@ export class ThreeView extends LitElement {
 
     // Sun azimuth (compass ° CW from true north) → PLAN-frame azimuth degrees via
     // the same geo θ mapping used for wind; elevation passed raw. Absent → null.
+    // Read through solar.ts — the SINGLE home for this math, shared with the
+    // sun-tracking solar-panel fixture so the scene's sun light and the panel
+    // can never disagree about where the sun is (each attribute still resolves
+    // independently, so a half-populated sun entity degrades exactly as before).
     let sunAzimuthDeg: number | null = null;
     let sunElevationDeg: number | null = null;
     const sun = states['sun.sun'];
     if (sun) {
-      const sa = parseFloat(String((sun.attributes as Record<string, unknown>)?.azimuth));
-      const se = parseFloat(String((sun.attributes as Record<string, unknown>)?.elevation));
-      if (isFinite(sa)) {
-        const a = (sa * Math.PI) / 180;
-        const east = Math.sin(a), north = Math.cos(a);
-        const dx = c * east - s * north, dy = s * east + c * north;
-        sunAzimuthDeg = (Math.atan2(dx, dy) * 180) / Math.PI;   // plan compass (0=+Y,90=+X)
-      }
-      if (isFinite(se)) sunElevationDeg = se;
+      const attrs = sun.attributes as Record<string, unknown> | undefined;
+      sunAzimuthDeg = sunAzimuthPlanDeg(attrs?.azimuth, theta);
+      sunElevationDeg = sunElevationDegOf(attrs?.elevation);
     }
 
     return {
@@ -1037,6 +1036,7 @@ export class ThreeView extends LitElement {
   private _keyPool = '';
   private _keySprinklers = '';
   private _keyFlagpoles = '';
+  private _keySolar = '';
   private _keyHeatmap = '';
   private _keyVacMap = '';
   private _keyLights = '';
@@ -1098,7 +1098,7 @@ export class ThreeView extends LitElement {
         this._keyFloor = this._keyDoors = this._keySensors = '';
         this._keyMotion = this._keyEnv = this._keyInfo = this._keyActions = this._keyBle = this._keyAlarm = this._keyCalendar = this._keyThermo = this._keySafety = this._keyAlert = '';
         this._keyCameras = this._keyProjectors = this._keyValves = this._keyPlugs = this._keyCamAlerts = this._keyPzones = this._keyNowPlaying = '';
-        this._keyGround = this._keyPool = this._keySprinklers = this._keyFlagpoles = '';
+        this._keyGround = this._keyPool = this._keySprinklers = this._keyFlagpoles = this._keySolar = '';
         this._keyHeatmap = '';
         this._keyVacMap = '';
         this._keyLights = this._keyZones = this._keyHalos = '';
@@ -2066,6 +2066,37 @@ export class ThreeView extends LitElement {
         this._keyFlagpoles = keyFlagpoles;
         r.updateFlagpoles(flagList, id => states[id] || null,
           fx.windBearingPlanRad ?? 0, fx.windKmh);
+      }
+
+      // Sun-tracking solar panels (sensors layer). The array's aim is BUILT into
+      // the mesh — no per-frame advance — because the sun moves <1°/4 min. The
+      // key buckets azimuth + elevation to 3°, so a rebuild happens roughly every
+      // ~12 minutes of sun travel and never per frame. Sun resolution goes through
+      // solar.ts's resolveSunPlan: the SAME `sun.sun` attribute readers + geo-θ
+      // mapping that feed WeatherFxState's sunAzimuthDeg/sunElevationDeg (and thus
+      // the W3 `sunPosition` scene light), with a deterministic local-clock arc as
+      // the fallback for installs with no sun entity. `powerEntity` stays LIVE-path
+      // (chatty) — the key folds a 100 W-bucketed reading recomputed each tick, the
+      // Furniture/Plug powerEntity precedent.
+      const solarList = f.solarPanels ?? [];
+      if (solarList.length || this._keySolar) {
+        const solTheta = fx.skyRotRad ?? 0;
+        const solSun = resolveSunPlan(states['sun.sun'] ?? null, solTheta, Date.now()).sun;
+        const solUvRaw = p.weatherNow?.uvIndex;
+        const solUv = (typeof solUvRaw === 'number' && isFinite(solUvRaw)) ? solUvRaw : null;
+        const solBand = solUv != null ? uvBand(Math.round(solUv)).label : '-';
+        const keySolar = `${p.configRev}|${f.id}|${layers.sensors !== false ? 1 : 0}|` +
+          `${Math.round(solSun.azDeg / 3)}:${Math.round(solSun.elevDeg / 3)}:${solBand}|` +
+          solarList.map(sp => {
+            const pw = sp.powerEntity ? parseFloat(states[sp.powerEntity]?.state ?? '') : NaN;
+            return `${sp.id}:${Math.round(sp.x)}:${Math.round(sp.y)}:${Math.round(sp.rotation ?? 0)}:` +
+              `${sp.hidden ? 1 : 0}:${isFinite(pw) ? Math.round(pw / 100) : '-'}`;
+          }).join(',');
+        if (keySolar !== this._keySolar) {
+          this._keySolar = keySolar;
+          r.updateSolarPanels(solarList, id => states[id] || null,
+            solSun.azDeg, solSun.elevDeg, solUv);
+        }
       }
 
       // Lights + switches: structural + state/brightness/color per entity.

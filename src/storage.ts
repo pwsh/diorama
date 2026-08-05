@@ -16,7 +16,7 @@ function defaultFloor(): Floor {
     alarmPanels: [], calendarPanels: [], thermostats: [], safetySensors: [], robots: [], alertBeacons: [], presenceZones: [], cameras: [],
     projectors: [], valves: [], plugs: [],
     groundAreas: [], pools: [], sprinklerZones: [], voidAreas: [], infoCards: [], actionButtons: [],
-    flagpoles: [], rulers: [],
+    flagpoles: [], solarPanels: [], rulers: [],
   };
 }
 
@@ -70,6 +70,7 @@ export function repairFloor(f: Partial<Floor> & { id: string; name: string; w: n
     infoCards: f.infoCards ?? [],
     actionButtons: f.actionButtons ?? [],
     flagpoles: f.flagpoles ?? [],
+    solarPanels: f.solarPanels ?? [],
     rulers: f.rulers ?? [],
     dimensionMode: f.dimensionMode,
     boundsLocked: f.boundsLocked,

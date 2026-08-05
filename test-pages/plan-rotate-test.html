@@ -130,6 +130,7 @@
         infoCards: [{ id: 'ic1', x: 3200, y: 5000, rotation: 90, billboard: false, entityId: 'sensor.x' }],
         actionButtons: [{ id: 'ab1', x: 8500, y: 3200, rotation: 0, wallMount: true, actionKind: 'toggle' }],
         flagpoles: [{ id: 'fp1', x: 8800, y: 8800, flag: 'usa' }],
+        solarPanels: [{ id: 'sol1', x: 3400, y: 8200, rotation: 15 }],
       });
       const p = await mkPlanner([F]);
       const cx = 6000, cy = 6000;
@@ -166,6 +167,10 @@
       ok('2: infocard rotation += 90 (90→180)', f.infoCards[0].rotation === 180, f.infoCards[0].rotation);
       img = rot90(8500, 3200); chk('action', f.actionButtons[0], img.x, img.y);
       img = rot90(8800, 8800); chk('flagpole', f.flagpoles[0], img.x, img.y);
+      img = rot90(3400, 8200); chk('solar panel', f.solarPanels[0], img.x, img.y);
+      // The solar panel's BASE yaw is a repo-convention heading (the sun-tracking
+      // aim composes on top), so it bumps by φ like every other oriented fixture.
+      ok('2: solar base rotation += 90 (15→105)', f.solarPanels[0].rotation === 105, f.solarPanels[0].rotation);
       img = rot90(5000, 5000); chk('room anchor', f.rooms[0].anchor, img.x, img.y);
       // Polygon areas preserved (rigid).
       ok('2: presence-zone area preserved', near(shoelace(f.presenceZones[0].points), shoelace(f0.presenceZones[0].points), 1e-3), '');

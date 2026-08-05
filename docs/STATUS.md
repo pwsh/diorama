@@ -355,6 +355,24 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Sun-tracking solar panel fixture** (2026-08-05, user-requested;
+  unreleased — on main past v0.56.0). `SolarPanel`/`Floor.solarPanels`
+  + pure `src/solar.ts` (zero-import): the panel AIMS at the real sun
+  — three-view's `_weatherFxState` sun read now DELEGATES to solar.ts
+  (byte-equivalent, golden-pinned) so the scene sun light and the
+  panel agree by construction; deterministic clock fallback (06:00
+  east → 18:00 west, 60° peak); tilt = clamp(90−elev, 10, 75), parked
+  near-horizontal at night; base `rotation` composes onto the tracked
+  yaw. UV level tints the frame rails via the SAME weather.ts uvBand
+  ladder as the chip; `powerEntity` (LIVE-path) drives a
+  powerGlowScale bead + 2D W chip, AMBER on negative readings. NO
+  advance loop — aim built under `_keySolar` (3°-bucketed az/elev ⇒
+  ~12 min rebuild cadence). 2D foreshortens depth by cos(tilt). Full
+  fixture-recipe coverage (tool ☀️, TOOL_GROUPS, delete/identify/
+  lock/translate/rotate). PV face = flat MeshBasicMaterial (documented
+  toon exemption). Tests: SOLAR 127/127 new; plan-rotate 72/72 (+2),
+  undo 47/47 (+3), toolbar 54/54 (+1), identify 57/57 (+12); terrain/
+  align/sidebar-org/layers2d unchanged green.
 - **Vehicle model corrections + 3 additions** (2026-08-05, user visual
   QA — 9 reported defects + 2 same-class finds; unreleased — on main
   past v0.56.0). All measured via exact rotated-AABB passes, each with

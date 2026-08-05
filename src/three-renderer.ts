@@ -54,7 +54,7 @@ import {
   type VehiclePackDef, type VehiclePacksConfig,
   type VehicleModelDef, type VehiclePrimitive,
 } from './vehicles.js';
-import type { Door, DoorKind, Window as WindowType, WindowCurtainStyle, EnvSensor, BleProxy, AlarmPanel, CalendarPanel, ThermostatFixture, SafetySensor, AlertBeacon, RobotFixture, CameraFixture, ProjectorFixture, ValveFixture, SprinklerZone, FlagpoleFixture, PlugFixture, PresenceZone, InfoCard, ActionButton, ObjectRecipe, ActivityKind, Pool } from './types.js';
+import type { Door, DoorKind, Window as WindowType, WindowCurtainStyle, EnvSensor, BleProxy, AlarmPanel, CalendarPanel, ThermostatFixture, SafetySensor, AlertBeacon, RobotFixture, CameraFixture, ProjectorFixture, ValveFixture, SprinklerZone, FlagpoleFixture, SolarPanel, PlugFixture, PresenceZone, InfoCard, ActionButton, ObjectRecipe, ActivityKind, Pool } from './types.js';
 import { flagEntry } from './flags.js';
 
 // The subset of Planner.RobotState the renderer reads (structural — keeps the
@@ -100,7 +100,8 @@ interface RobotRig {
   progressMats: THREE.MeshToonMaterial[]; // ordered fill segments (strip L→R / ring CW)
 }
 import { wallCutsForSegment, WINDOW_DEFAULTS, isBayWindowKind, windowSillMm, windowGlassHMm, bayProjectSign, bayPlan, closedWallLoops, wallSegmentInLoops, doorSpanCenter, wallKind, WALL_KINDS, furnitureLocalToWorld, furnitureWorldToLocal, pointInPolygon as pip, centroid, loopContaining, resolveRoomForPoint, roomLabel, roomsByLoop, roomFloorLook, intersectLoopWithRect, polygonArea, heatmapColor, groundAreaSkirtBase, poolWaterColor, poolDepthMm, poolRaisedMm, poolHeaterState, poolPumpOn, poolLightOn, poolRimY, poolBasinFloorY, poolWaterSurfaceY, POOL_COPING_COLOR, POOL_HEAT_GLOW, type RoomTemp } from './geometry.js';
-import { visibilityToFogDensity, moonPhaseFraction, type WeatherNow } from './weather.js';
+import { visibilityToFogDensity, moonPhaseFraction, uvBand, type WeatherNow } from './weather.js';
+import { SOLAR_DEFAULTS, solarAim, solarRotation, solarPowerValue, SOLAR_DRAW_COLOR, SOLAR_GEN_COLOR } from './solar.js';
 import { skySnapshot, moonAltAz, capSampleAltAz, satAltAz } from './sky-astro.js';
 // flights.ts is deliberately zero-import (three-free) and shared by BOTH the app
 // graph and this lazy chunk — the avatars.ts precedent. Only the pure compression
@@ -2119,6 +2120,7 @@ export class ThreeDRenderer {
   private _poolGroup = new THREE.Group();          // pool/spa basins + water surfaces (build-time, _keyPool)
   private _sprinklerGroup = new THREE.Group();     // irrigation heads + spray clouds (build-time, _keySprinklers)
   private _flagpoleGroup = new THREE.Group();      // yard flagpoles + waving flags (build-time, _keyFlagpoles); rides `furniture` layer
+  private _solarGroup = new THREE.Group();         // sun-tracking solar panels (build-time, _keySolar); rides `sensors` layer
   // Persistent per-flagpole rigs (shared flag geometry ripples in place). The
   // hoist blend + wind yaw ease per-frame (appliance-door idiom) and SURVIVE
   // _keyFlagpoles rebuilds so a rebuild never pops the flag. Reset on floor switch.
@@ -2942,7 +2944,7 @@ export class ThreeDRenderer {
                     this._actionGroup,
                     this._bleGroup, this._alarmGroup, this._calendarGroup, this._thermoGroup, this._safetyGroup, this._alertGroup,
                     this._robotGroup, this._robotRigGroup, this._cameraGroup, this._projGroup, this._valveGroup, this._plugGroup, this._camAlertGroup, this._pzoneGroup,
-                    this._groundGroup, this._poolGroup, this._sprinklerGroup, this._flagpoleGroup, this._vacMapGroup, this._heatmapGroup,
+                    this._groundGroup, this._poolGroup, this._sprinklerGroup, this._flagpoleGroup, this._solarGroup, this._vacMapGroup, this._heatmapGroup,
                     this._lightGroup, this._switchGroup, this._targetGroup, this._ghostGroup,
                     this._neighborhoodGroup,
                     this._transitGroup,
@@ -3654,7 +3656,7 @@ export class ThreeDRenderer {
       this._floorGroup, this._doorGroup, this._modelGroup, this._zoneGroup, this._haloGroup,
       this._sensorGroup, this._motionGroup, this._infoGroup, this._actionGroup, this._bleGroup, this._alarmGroup, this._calendarGroup, this._thermoGroup,
       this._safetyGroup, this._alertGroup, this._robotGroup, this._robotRigGroup, this._cameraGroup, this._projGroup, this._valveGroup, this._plugGroup, this._camAlertGroup, this._pzoneGroup,
-      this._groundGroup, this._poolGroup, this._sprinklerGroup, this._flagpoleGroup, this._heatmapGroup,
+      this._groundGroup, this._poolGroup, this._sprinklerGroup, this._flagpoleGroup, this._solarGroup, this._heatmapGroup,
       this._lightGroup, this._switchGroup, this._targetGroup, this._ghostGroup,
       this._neighborhoodGroup,
       this._pulseGroup, this._nowPlayingGroup, this._bgTextGroup, this._compassGroup,
@@ -4926,6 +4928,157 @@ export class ThreeDRenderer {
     }
   }
 
+  // ── Sun-tracking solar panels ──────────────────────────────────────────────
+  // A pedestal post + a motorized PV array that AIMS ITSELF at the sun: the head
+  // yaws to the sun's plan-frame azimuth (composed with the fixture's base yaw)
+  // and tilts so the panel FACE normal sits at the sun's elevation. Sun below
+  // the horizon → parked near-horizontal at the base yaw.
+  //
+  // NO per-frame advance loop, by design: the sun moves <1°/4 min, and three-view
+  // buckets the azimuth/elevation to 3° in `_keySolar` — so this rebuilds roughly
+  // every ~12 minutes of sun travel and is otherwise completely static. Adding an
+  // ease/advance here would be a per-frame system for motion nobody can see.
+  //
+  // Local frame of the head group: the plate is built FLAT (normal = +Y), the
+  // head tilts about local X (normal tips toward local +Z) and then yaws about Y.
+  // Ry(a)·(0,0,1) = (sin a, 0, cos a) must equal the scene mapping of the plan
+  // direction (sin az, cos az) — which `_w` mirrors X into (−sin az, 0, cos az) —
+  // so a = −az, the same `rotation.y = −rot·π/180` idiom every other fixture uses.
+  //
+  // `uvIndex` tints the frame accent through the SAME WHO band ladder the weather
+  // chip's UV row uses (weather.ts uvBand); `powerEntity` watts drive an emissive
+  // generation glow, amber when NEGATIVE (grid draw on a signed monitor).
+  updateSolarPanels(
+    panels: SolarPanel[], stateProvider: StateProvider,
+    sunAzDeg: number | null, sunElevDeg: number | null, uvIndex: number | null,
+  ): void {
+    if (!this._scene) return;
+    this._clearGroup(this._solarGroup);
+    const band = (typeof uvIndex === 'number' && isFinite(uvIndex)) ? uvBand(Math.round(uvIndex)) : null;
+    const accent = band ? parseInt(band.color.slice(1), 16) : 0x8d99a6;
+    for (const sp of panels) {
+      if (sp.hidden) continue;
+      const aim = solarAim(sunAzDeg, sunElevDeg, solarRotation(sp));
+      const watts = sp.powerEntity ? solarPowerValue(stateProvider(sp.powerEntity)) : null;
+      const gen = watts != null && isFinite(watts) ? watts : null;
+      const glow = gen != null && Math.abs(gen) > 5 ? powerGlowScale(Math.abs(gen)) : 0;
+      const glowHex = parseInt(((gen != null && gen < 0) ? SOLAR_DRAW_COLOR : SOLAR_GEN_COLOR).slice(1), 16);
+      const ud = { fixtureId: sp.id };
+
+      const grp = new THREE.Group();
+      const base = this._w(sp.x, sp.y, 0);
+      // Free-standing yard fixture: plant the pedestal on the surroundings grade.
+      grp.position.set(base.x, this._itemGroundY(sp.x, sp.y), base.z);
+
+      const D = SOLAR_DEFAULTS;
+      // Pedestal: a footing pad + a post up to the tilt pivot.
+      const steel = this._mat({ color: 0x8d949c, metalness: 0.5, roughness: 0.5 });
+      const pad = new THREE.Mesh(new THREE.CylinderGeometry(D.postR * 2.6, D.postR * 2.9, 90, 16), steel);
+      pad.position.y = 45; pad.userData = ud;
+      grp.add(pad);
+      const post = new THREE.Mesh(new THREE.CylinderGeometry(D.postR, D.postR * 1.15, D.postH, 14), steel);
+      post.position.y = 90 + D.postH / 2; post.userData = ud;
+      grp.add(post);
+
+      // Head = yaw about Y, then tilt about X (YXZ so the two compose in that
+      // order). Its origin is the tilt pivot at the top of the post.
+      const head = new THREE.Group();
+      head.position.y = 90 + D.postH;
+      head.rotation.order = 'YXZ';
+      head.rotation.y = -(aim.yawDeg * Math.PI) / 180;
+      head.rotation.x = (aim.tiltDeg * Math.PI) / 180;
+      // Test hooks: the resolved aim, readable without re-deriving the matrices.
+      head.userData = { ...ud, solarHead: true, yawDeg: aim.yawDeg, tiltDeg: aim.tiltDeg, parked: aim.parked };
+      grp.add(head);
+
+      // Torque tube along the tilt axis (local X) — the thing the array bolts to.
+      const tube = new THREE.Mesh(
+        new THREE.CylinderGeometry(45, 45, D.panelW * 0.9, 10), steel);
+      tube.rotation.z = Math.PI / 2;
+      tube.userData = { ...ud, outlineSkip: true };
+      head.add(tube);
+
+      // PV laminate: built FLAT (normal +Y) so the head's tilt aims the face.
+      // The dark cell face is a flat unlit MeshBasicMaterial — a documented
+      // `_mat()` toon exemption (like the weather Points / info-card text): a
+      // 4-step toon band across a mirror-dark glass laminate reads as banding
+      // artifacts, not as a solar panel.
+      const laminate = new THREE.Mesh(
+        new THREE.BoxGeometry(D.panelW, D.panelT, D.panelH),
+        this._mat({ color: 0x1b3a5c, metalness: 0.4, roughness: 0.45 }));
+      laminate.userData = ud;
+      head.add(laminate);
+      const face = new THREE.Mesh(
+        new THREE.PlaneGeometry(D.panelW * 0.94, D.panelH * 0.94),
+        new THREE.MeshBasicMaterial({ color: 0x11294a }));
+      face.rotation.x = -Math.PI / 2;              // lie flat, normal +Y
+      face.position.y = D.panelT / 2 + 4;          // proud of the laminate (coincident-face gotcha)
+      face.userData = { ...ud, outlineSkip: true };
+      head.add(face);
+      // Cell grid: thin light strips ON the face (deterministic, no Math.random).
+      const gridMat = new THREE.MeshBasicMaterial({ color: 0x2e5f96 });
+      for (let i = 1; i <= 3; i++) {
+        const gx = new THREE.Mesh(
+          new THREE.BoxGeometry(12, 4, D.panelH * 0.94),
+          gridMat);
+        gx.position.set((i / 4 - 0.5) * D.panelW * 0.94, D.panelT / 2 + 7, 0);
+        gx.userData = { ...ud, outlineSkip: true };
+        head.add(gx);
+      }
+      const gz = new THREE.Mesh(new THREE.BoxGeometry(D.panelW * 0.94, 4, 12), gridMat);
+      gz.position.set(0, D.panelT / 2 + 7, 0);
+      gz.userData = { ...ud, outlineSkip: true };
+      head.add(gz);
+
+      // UV-band frame accent: four emissive rails around the laminate edge. No
+      // live UV → a neutral grey frame with no emissive.
+      const frameMat = this._mat({
+        color: accent,
+        emissive: band ? accent : 0x000000,
+        emissiveIntensity: band ? 0.55 : 0,
+      });
+      const railT = 46;
+      // `solarUvColor` is the authored accent (the WHO band hex, or null with no
+      // live UV) — a test hook, because `_mat()` pushes saturation through
+      // `_simsColor` so the built material color is deliberately NOT the input.
+      const railUd = { ...ud, outlineSkip: true, solarUvColor: band ? band.color : null };
+      for (const sx of [-1, 1]) {
+        const r = new THREE.Mesh(new THREE.BoxGeometry(railT, D.panelT + 8, D.panelH + railT), frameMat);
+        r.position.set(sx * (D.panelW / 2 + railT / 2 - 8), 0, 0);
+        r.userData = railUd;
+        head.add(r);
+      }
+      for (const sz of [-1, 1]) {
+        const r = new THREE.Mesh(new THREE.BoxGeometry(D.panelW, D.panelT + 8, railT), frameMat);
+        r.position.set(0, 0, sz * (D.panelH / 2 + railT / 2 - 8));
+        r.userData = railUd;
+        head.add(r);
+      }
+
+      // Generation indicator on the post: a bead that glows with |watts|,
+      // green generating / amber on a negative (draw) reading.
+      const led = new THREE.Mesh(
+        new THREE.SphereGeometry(55, 10, 8),
+        this._mat({
+          color: glow > 0 ? glowHex : 0x455a64,
+          emissive: glow > 0 ? glowHex : 0x000000,
+          emissiveIntensity: glow > 0 ? 0.95 * glow : 0,
+        }));
+      led.position.set(0, 90 + D.postH * 0.72, -(D.postR + 30));
+      // `solarPowerColor` is the authored bead hex (null when dark) — same
+      // _simsColor test-hook reasoning as the frame rails above.
+      led.userData = {
+        ...ud, outlineSkip: true, solarBead: true,
+        solarPowerColor: glow > 0 ? ((gen != null && gen < 0) ? SOLAR_DRAW_COLOR : SOLAR_GEN_COLOR) : null,
+      };
+      grp.add(led);
+
+      this._addOutlines(grp, 6, 120);
+      grp.add(this._blobShadow(D.panelW * 0.5, D.panelH * 0.5));
+      this._solarGroup.add(grp);
+    }
+  }
+
   private _groundTexCache: Partial<Record<GroundKind, THREE.Texture>> = {};
   private _groundTexture(kind: GroundKind): THREE.Texture {
     const cached = this._groundTexCache[kind];
@@ -5710,6 +5863,7 @@ export class ThreeDRenderer {
     this._poolGroup.visible = v.ground !== false;         // pools ride the ground layer
     this._sprinklerGroup.visible = v.ground !== false;   // sprinklers ride the ground layer
     this._flagpoleGroup.visible = v.furniture !== false; // flagpoles are yard decor → furniture layer
+    this._solarGroup.visible = v.sensors !== false;      // solar panels ride the sensors layer
     // Valetudo room-map overlay rides its OWN layer, DEFAULT OFF (diagnostic).
     this._vacMapGroup.visible = v.vacuumMap === true;
     // Per-room temperature heat-map rides its OWN layer, DEFAULT OFF (opt-in).
@@ -24675,7 +24829,7 @@ export class ThreeDRenderer {
       this._floorGroup, this._doorGroup, this._modelGroup, this._zoneGroup, this._haloGroup,
       this._sensorGroup, this._motionGroup, this._envGroup, this._infoGroup, this._actionGroup, this._bleGroup,
       this._alarmGroup, this._calendarGroup, this._thermoGroup, this._safetyGroup, this._alertGroup, this._robotGroup, this._robotRigGroup,
-      this._cameraGroup, this._projGroup, this._valveGroup, this._plugGroup, this._camAlertGroup, this._pzoneGroup, this._groundGroup, this._poolGroup, this._sprinklerGroup, this._flagpoleGroup, this._heatmapGroup,
+      this._cameraGroup, this._projGroup, this._valveGroup, this._plugGroup, this._camAlertGroup, this._pzoneGroup, this._groundGroup, this._poolGroup, this._sprinklerGroup, this._flagpoleGroup, this._solarGroup, this._heatmapGroup,
       this._lightGroup, this._switchGroup, this._targetGroup, this._gpsGroup, this._compassGroup, this._weatherGroup,
       this._skyGroup, this._flightsGroup, this._flightVizGroup, this._issGroup,
       this._bgTextGroup, this._pulseGroup, this._nowPlayingGroup, this._neighborhoodGroup,

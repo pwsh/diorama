@@ -1195,6 +1195,29 @@ export interface FlagpoleFixture {
   hidden?: boolean;             // per-fixture hide (plus the whole furniture layer toggle)
 }
 
+// Motorized ground-mounted solar panel. A pedestal post + a tilting PV array
+// that TRACKS THE SUN: its yaw follows the sun's plan-frame azimuth and its
+// tilt is set so the panel FACE normal sits at the sun's elevation (clamped to
+// the tracker's mechanical range, SOLAR_TILT_MIN..MAX). Sun below the horizon →
+// the array PARKS near-horizontal at the base yaw. Sun resolution is shared
+// with the W3 `sunPosition` scene-light effect (src/solar.ts resolveSunPlan:
+// `sun.sun` azimuth/elevation mapped through the fitted geo θ, else a
+// deterministic local-clock arc). The frame accent is tinted by the WHO UV band
+// (weather.ts uvBand) and an optional `powerEntity` (sensor.* W) drives a
+// generation glow + a W readout — NEGATIVE readings (grid draw on a signed
+// whole-home monitor) read amber instead of green. Display-only: nothing to
+// toggle. Free placement, no wall snap. Rides the `sensors` layer.
+// Per-floor (Floor.solarPanels); repairFloor + defaultFloor backfill [].
+export interface SolarPanel {
+  id: string;
+  x: number; y: number;          // pedestal base position, world mm
+  rotation?: number;             // BASE yaw offset, deg screen-CW (0 = +Y world); tracking composes on top
+  label?: string;
+  powerEntity?: string | null;   // sensor.* watts (generation; negative = draw) — VISUAL only, LIVE-path
+  locked?: boolean;              // canvas move/delete disabled
+  hidden?: boolean;              // per-fixture hide (plus the whole sensors layer toggle)
+}
+
 export interface Floor {
   id: string;
   name: string;
@@ -1239,6 +1262,7 @@ export interface Floor {
   rulers?: Ruler[];        // measure-tool rulers (2D-only); repairFloor + defaultFloor backfill []
   dimensionMode?: DimensionMode;  // wall/structure dimension display (Feature B); absent = 'off'
   flagpoles?: FlagpoleFixture[];  // yard flagpole fixtures (waving flag); repairFloor backfills []
+  solarPanels?: SolarPanel[];  // sun-tracking solar panels; repairFloor + defaultFloor backfill []
   boundsLocked?: boolean;   // lock canvas-layout/floor-size editing (hides the edge handles)
   disabled?: boolean;       // hidden from the kiosk/view floor picker + glass-house stack + BLE
                             // floor solve; still editable in the sidebar — lets multiple test

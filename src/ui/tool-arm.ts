@@ -160,6 +160,7 @@ const CONTROL_TOOLS: { tool: Tool; label: string; glyph: string }[] = [
   { tool: 'camera', label: 'Camera', glyph: '📷' }, { tool: 'projector', label: 'Projector', glyph: '📽' },
   { tool: 'valve', label: 'Valve', glyph: '🚰' }, { tool: 'sprinkler', label: 'Sprinkler', glyph: '🚿' },
   { tool: 'plug', label: 'Plug', glyph: '🔌' }, { tool: 'switch', label: 'Switch', glyph: '🎛' },
+  { tool: 'solar', label: 'Solar panel', glyph: '☀️' },
 ];
 
 // Category glyph fallbacks per furniture cat (placeholder while the 3D thumb

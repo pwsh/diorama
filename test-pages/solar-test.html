@@ -1,0 +1,562 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>SOLAR …</title>
+<style>html,body{margin:0;background:#111;color:#cfd8dc;font:12px monospace}#c{width:1280px;height:880px}#log{padding:8px;white-space:pre-wrap}</style>
+<div id="c"></div>
+<div id="log"></div>
+<!-- Motorized sun-tracking solar panel fixture. Seams:
+       (1) pure sun/tracking math (solar.mod.js — ZERO imports, plain transpile):
+             npx esbuild src/solar.ts --format=esm --outfile=<H>/solar.mod.js
+       (2) storage repairFloor/defaultFloor backfill (storage.mod.js):
+             npx esbuild src/storage.ts --bundle --format=esm --outfile=<H>/storage.mod.js
+       (3) 2D draw (canvas-render.mod.js, pure/no-three) — no-throw + tilt foreshortening:
+             npx esbuild src/canvas-render.ts --bundle --format=esm --outfile=<H>/canvas-render.mod.js
+       (4) 3D build (pedestal / aim / UV tint / power glow / grade) via the built
+           three-renderer chunk (./assets/three-renderer.js).
+       (5) planner CRUD + translate/rotate + deleteSelection + LIVE-path powerEntity
+           via the REAL Planner (planner.mod.js, same fake-HaApi/fake-avatar-store
+           build as config-test):
+             T=$(mktemp -d); cp -r src/* "$T"/; cp test-pages/fake-avatar-store.ts "$T"/avatar-store.ts
+             npx esbuild "$T"/planner.ts --bundle --format=esm --outfile=<H>/planner.mod.js
+     Asserts machine-checkable in document.title. -->
+<script type="module">
+  const V = '?v=' + Date.now();
+  const sol   = await import('./solar.mod.js' + V);
+  const store = await import('./storage.mod.js' + V);
+  const cr    = await import('./canvas-render.mod.js' + V);
+  const mod   = await import('./assets/three-renderer.js' + V);
+  const { Planner } = await import('./planner.mod.js' + V);
+
+  const results = [];
+  const assert = (name, cond, detail = '') => results.push({ name, ok: !!cond, detail: String(detail) });
+  const near = (a, b, t = 1e-6) => Math.abs(a - b) <= t;
+  const {
+    compassToPlanDeg, sunAzimuthPlanDeg, sunElevationDeg, sunPlanFromClock, resolveSunPlan,
+    solarAim, solarRotation, solarPowerValue, solarPowerColor, solarPowerText,
+    SOLAR_CLOCK, SOLAR_DEFAULTS, SOLAR_TILT_MIN, SOLAR_TILT_MAX, SOLAR_PARK_TILT,
+    SOLAR_GEN_COLOR, SOLAR_DRAW_COLOR,
+  } = sol;
+  const stOf = (id, s, attrs) => ({ state: s, attributes: attrs || {}, entity_id: id });
+  // Local-time helper: build an epoch ms at a given LOCAL hour (the clock
+  // fallback reads local getHours, exactly like time-of-day.ts's fallback).
+  const atHour = (h, m = 0) => { const d = new Date(2026, 6, 15, 0, 0, 0, 0); d.setHours(h, m, 0, 0); return d.getTime(); };
+
+  // ── (1) compass → plan mapping (the SHARED sun-resolution seam) ──────────
+  // Golden re-implementation of the formula three-view's `_weatherFxState` used
+  // to inline: if these ever diverge, the scene's sun LIGHT and the panel would
+  // disagree about where the sun is. That site now calls sunAzimuthPlanDeg.
+  const goldenPlanDeg = (az, theta) => {
+    const a = az * Math.PI / 180, c = Math.cos(theta), s = Math.sin(theta);
+    const east = Math.sin(a), north = Math.cos(a);
+    return Math.atan2(c * east - s * north, s * east + c * north) * 180 / Math.PI;
+  };
+  {
+    let worst = 0;
+    for (const az of [0, 37, 90, 123.4, 180, 271, 359]) {
+      for (const th of [0, 0.3, -0.7, Math.PI / 2, Math.PI]) {
+        worst = Math.max(worst, Math.abs(compassToPlanDeg(az, th) - goldenPlanDeg(az, th)));
+      }
+    }
+    assert('compassToPlanDeg matches the three-view golden formula', worst < 1e-9, `maxΔ=${worst}`);
+  }
+  assert('θ=0: compass 0 → plan 0 (+Y is north)', near(compassToPlanDeg(0, 0), 0, 1e-9));
+  assert('θ=0: compass 90 → plan 90 (+X is east)', near(compassToPlanDeg(90, 0), 90, 1e-9));
+  assert('θ=0: compass 180 → plan 180', near(Math.abs(compassToPlanDeg(180, 0)), 180, 1e-9));
+  assert('θ=π/2 rotates the frame by −90°', near(compassToPlanDeg(0, Math.PI / 2), -90, 1e-9),
+    `${compassToPlanDeg(0, Math.PI / 2)}`);
+
+  assert('sunAzimuthPlanDeg parses a numeric attr', near(sunAzimuthPlanDeg('123.4', 0), 123.4, 1e-9));
+  assert('sunAzimuthPlanDeg(undefined) → null', sunAzimuthPlanDeg(undefined, 0) === null);
+  assert('sunAzimuthPlanDeg(garbage) → null', sunAzimuthPlanDeg('above', 0) === null);
+  assert('sunElevationDeg parses a numeric attr', sunElevationDeg('-3.5') === -3.5);
+  assert('sunElevationDeg(null) → null', sunElevationDeg(null) === null);
+  assert('elevation reader is INDEPENDENT of azimuth (half-populated entity)',
+    sunAzimuthPlanDeg(undefined, 0) === null && sunElevationDeg('12') === 12);
+
+  // ── (2) resolveSunPlan: entity wins, else the deterministic clock arc ─────
+  {
+    const withSun = resolveSunPlan(stOf('sun.sun', 'above_horizon', { azimuth: 200, elevation: 42 }), 0, atHour(3));
+    assert('entity sun → source entity', withSun.source === 'entity');
+    assert('entity sun az passes through θ', near(withSun.sun.azDeg, 200 - 360, 1e-9) || near(withSun.sun.azDeg, 200, 1e-9),
+      `${withSun.sun.azDeg}`);
+    assert('entity sun elevation passes through raw', withSun.sun.elevDeg === 42);
+    const rot = resolveSunPlan(stOf('sun.sun', 'x', { azimuth: 0, elevation: 10 }), Math.PI / 2, atHour(3));
+    assert('entity sun az is mapped through geo θ', near(rot.sun.azDeg, -90, 1e-9), `${rot.sun.azDeg}`);
+
+    assert('no sun entity → clock source', resolveSunPlan(null, 0, atHour(12)).source === 'clock');
+    assert('half-populated sun entity → clock source',
+      resolveSunPlan(stOf('sun.sun', 'x', { azimuth: 100 }), 0, atHour(12)).source === 'clock');
+    assert('unparseable attrs → clock source',
+      resolveSunPlan(stOf('sun.sun', 'x', { azimuth: 'up', elevation: 'high' }), 0, atHour(12)).source === 'clock');
+  }
+
+  // Clock arc: deterministic, peaks at solar noon, negative at night, sweeps E→W.
+  {
+    const a1 = sunPlanFromClock(atHour(9, 30), 0), a2 = sunPlanFromClock(atHour(9, 30), 0);
+    assert('clock arc is deterministic for the same nowMs',
+      a1.azDeg === a2.azDeg && a1.elevDeg === a2.elevDeg, `${a1.azDeg}/${a1.elevDeg}`);
+    const noon = sunPlanFromClock(atHour(12), 0);
+    assert('clock noon elevation = peak', near(noon.elevDeg, SOLAR_CLOCK.peakElevDeg, 1e-9), `${noon.elevDeg}`);
+    assert('clock noon azimuth = due south (180)', near(noon.azDeg, 180, 1e-9) || near(noon.azDeg, -180, 1e-9), `${noon.azDeg}`);
+    const rise = sunPlanFromClock(atHour(SOLAR_CLOCK.sunriseH), 0);
+    const set  = sunPlanFromClock(atHour(SOLAR_CLOCK.sunsetH), 0);
+    assert('clock sunrise elevation ≈ 0', Math.abs(rise.elevDeg) < 1e-9, `${rise.elevDeg}`);
+    assert('clock sunset elevation ≈ 0', Math.abs(set.elevDeg) < 1e-9, `${set.elevDeg}`);
+    assert('clock sunrise azimuth = east (90)', near(rise.azDeg, SOLAR_CLOCK.riseAzDeg, 1e-9), `${rise.azDeg}`);
+    assert('clock sunset azimuth = west (270 → plan −90)', near(set.azDeg, -90, 1e-9), `${set.azDeg}`);
+    assert('clock midnight elevation is negative (parks)', sunPlanFromClock(atHour(0), 0).elevDeg < 0);
+    assert('clock 22:00 elevation is negative', sunPlanFromClock(atHour(22), 0).elevDeg < 0);
+    // Elevation rises to noon then falls; azimuth sweeps monotonically E→W.
+    let elevUp = true, elevDown = true, azMono = true, prevAz = -Infinity;
+    for (let h = 6; h <= 12; h += 0.5) if (sunPlanFromClock(atHour(Math.floor(h), (h % 1) * 60), 0).elevDeg
+        < sunPlanFromClock(atHour(Math.floor(h - 0.5), ((h - 0.5) % 1) * 60), 0).elevDeg) elevUp = false;
+    for (let h = 12.5; h <= 18; h += 0.5) if (sunPlanFromClock(atHour(Math.floor(h), (h % 1) * 60), 0).elevDeg
+        > sunPlanFromClock(atHour(Math.floor(h - 0.5), ((h - 0.5) % 1) * 60), 0).elevDeg) elevDown = false;
+    for (let h = 6; h <= 18; h += 1) {
+      const az = sunPlanFromClock(atHour(h), 0).azDeg;
+      const unwrapped = az < 0 ? az + 360 : az;   // 180→270 crosses the atan2 seam
+      if (unwrapped < prevAz - 1e-9) azMono = false;
+      prevAz = unwrapped;
+    }
+    assert('clock elevation climbs to noon', elevUp);
+    assert('clock elevation falls after noon', elevDown);
+    assert('clock azimuth sweeps monotonically east→west', azMono);
+  }
+
+  // ── (3) tracking geometry: yaw composition + tilt clamp + night park ──────
+  {
+    const a = solarAim(90, 30, 0);
+    assert('aim yaw = sun azimuth (no base offset)', near(a.yawDeg, 90, 1e-9));
+    assert('aim tilt = 90 − elevation', near(a.tiltDeg, 60, 1e-9));
+    assert('aim not parked with the sun up', a.parked === false);
+    assert('face normal elevation == sun elevation', near(90 - a.tiltDeg, 30, 1e-9));
+
+    assert('base rotation composes onto the tracked yaw', near(solarAim(90, 30, 45).yawDeg, 135, 1e-9));
+    assert('yaw wraps past 360', near(solarAim(350, 30, 30).yawDeg, 20, 1e-9));
+    assert('negative base normalizes into 0..360', near(solarAim(10, 30, -30).yawDeg, 340, 1e-9));
+
+    assert(`high sun clamps tilt to SOLAR_TILT_MIN (${SOLAR_TILT_MIN})`, solarAim(180, 85, 0).tiltDeg === SOLAR_TILT_MIN);
+    assert(`low sun clamps tilt to SOLAR_TILT_MAX (${SOLAR_TILT_MAX})`, solarAim(180, 5, 0).tiltDeg === SOLAR_TILT_MAX);
+    assert('mid sun is inside the mechanical range',
+      solarAim(180, 45, 0).tiltDeg > SOLAR_TILT_MIN && solarAim(180, 45, 0).tiltDeg < SOLAR_TILT_MAX);
+
+    const night = solarAim(270, -8, 33);
+    assert('sun below horizon → parked', night.parked === true);
+    assert('parked tilt = SOLAR_PARK_TILT (near-horizontal)', night.tiltDeg === SOLAR_PARK_TILT);
+    assert('parked yaw = the BASE rotation', near(night.yawDeg, 33, 1e-9));
+    assert('elevation exactly 0 parks (horizon)', solarAim(180, 0, 0).parked === true);
+    assert('null sun parks', solarAim(null, null, 12).parked === true && solarAim(null, null, 12).yawDeg === 12);
+    assert('NaN sun parks', solarAim(NaN, NaN, 0).parked === true);
+    assert('non-finite base rotation falls back to 0', solarAim(90, 30, NaN).yawDeg === 90);
+
+    // Tracking is CONTINUOUS while the sun is UP: sweeping the clock arc gives a
+    // smooth tilt fall to noon and rise again, never a jump through the clamp.
+    let maxStep = 0, prev = null;
+    for (let h = 6.5; h <= 17.5; h += 0.25) {
+      const s = sunPlanFromClock(atHour(Math.floor(h), Math.round((h % 1) * 60)), 0);
+      const t = solarAim(s.azDeg, s.elevDeg, 0).tiltDeg;
+      if (prev != null) maxStep = Math.max(maxStep, Math.abs(t - prev));
+      prev = t;
+    }
+    assert('tilt is continuous while the sun is up', maxStep < 8, `maxStep=${maxStep.toFixed(2)}°`);
+    // The park itself IS a discontinuity — a stow move, not a tracking step:
+    // at the horizon the array snaps from its steepest tilt to flat.
+    const lastUp = solarAim(...(() => { const s = sunPlanFromClock(atHour(6, 15), 0); return [s.azDeg, s.elevDeg, 0]; })());
+    const stowed = solarAim(...(() => { const s = sunPlanFromClock(atHour(5, 45), 0); return [s.azDeg, s.elevDeg, 0]; })());
+    assert('just after sunrise the array is at its steepest tracking tilt',
+      lastUp.parked === false && lastUp.tiltDeg === SOLAR_TILT_MAX, `${lastUp.tiltDeg}`);
+    assert('just before sunrise the array is stowed flat',
+      stowed.parked === true && stowed.tiltDeg === SOLAR_PARK_TILT, `${stowed.tiltDeg}`);
+  }
+
+  assert('solarRotation defaults to 0', solarRotation({}) === 0);
+  assert('solarRotation reads the field', solarRotation({ rotation: 42 }) === 42);
+  assert('solarRotation rejects garbage', solarRotation({ rotation: NaN }) === 0);
+
+  // ── (4) power readouts (signed: negative = grid draw) ────────────────────
+  assert('solarPowerValue(null) → null', solarPowerValue(null) === null);
+  assert('solarPowerValue parses watts', solarPowerValue(stOf('sensor.pv', '812.5')) === 812.5);
+  assert('solarPowerValue keeps the sign', solarPowerValue(stOf('sensor.pv', '-300')) === -300);
+  assert('solarPowerValue(unavailable) → null', solarPowerValue(stOf('sensor.pv', 'unavailable')) === null);
+  assert('positive watts read GREEN', solarPowerColor(900) === SOLAR_GEN_COLOR);
+  assert('negative watts read AMBER (grid draw)', solarPowerColor(-40) === SOLAR_DRAW_COLOR);
+  assert('null watts fall back to the generating color', solarPowerColor(null) === SOLAR_GEN_COLOR);
+  assert('W text under 1 kW', solarPowerText(812.4) === '812 W');
+  assert('kW text at/over 1 kW', solarPowerText(3450) === '3.5 kW');
+  assert('negative W text keeps the sign', solarPowerText(-450) === '-450 W');
+  assert('null W text is empty', solarPowerText(null) === '');
+
+  // ── (5) storage backfill ─────────────────────────────────────────────────
+  {
+    const f = store.repairFloor({ id: 'z', name: 'Z', w: 4000, d: 4000 });
+    assert('repairFloor backfills solarPanels []', Array.isArray(f.solarPanels) && f.solarPanels.length === 0);
+  }
+
+  // ── (6) renderer: pedestal + aim + UV tint + power glow + grade + layer ──
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+  const scene3d = { preset: 'day', floorColor: '#8a7860', floorTex: 'none', wallColor: '#cfd2d6' };
+  const mkFloor = (extra) => Object.assign({
+    id: 'f1', name: 'T', w: 8000, d: 6000,
+    walls: [], furniture: [], lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], bg: null, model3d: null, look3d: null, rooms: [],
+  }, extra || {});
+  const countGeo = (g, ctor) => {
+    let n = 0;
+    g.traverse(o => { if (o.isMesh && o.geometry && o.geometry.type === ctor && !o.userData.outline) n++; });
+    return n;
+  };
+  const headOf = (idx = 0) => {
+    const grp = r._solarGroup.children[idx];
+    let h = null; grp.traverse(o => { if (o.userData && o.userData.solarHead) h = o; });
+    return { grp, head: h };
+  };
+  // Panel face normal in WORLD space = the head's local +Y basis vector (column 2
+  // of its world matrix) — the group carries no rotation or scale of its own.
+  const normalOf = (head) => {
+    head.updateWorldMatrix(true, false);
+    const e = head.matrixWorld.elements;
+    return { x: e[4], y: e[5], z: e[6] };
+  };
+
+  const spA = { id: 'sp1', x: 2000, y: 3000, label: 'Array A' };
+  r.updateFloor(mkFloor({ solarPanels: [spA] }), scene3d);
+  r.updateSolarPanels([spA], () => null, 120, 35, null);
+  assert('one solar rig built', r._solarGroup.children.length === 1, `n=${r._solarGroup.children.length}`);
+  {
+    const { grp, head } = headOf();
+    assert('pedestal = ≥2 cylinders (footing pad + post)', countGeo(grp, 'CylinderGeometry') >= 2);
+    assert('array has a head group tagged solarHead', !!head);
+    assert('head carries the resolved aim as a test hook',
+      head && near(head.userData.tiltDeg, 55, 1e-9) && near(head.userData.yawDeg, 120, 1e-9),
+      head && `${head.userData.yawDeg}/${head.userData.tiltDeg}`);
+    assert('array builds PV boxes + a flat face plane',
+      countGeo(grp, 'BoxGeometry') >= 5 && countGeo(grp, 'PlaneGeometry') >= 1);
+    // WORLD-geometry check: the face normal's elevation IS the sun's elevation,
+    // and its horizontal direction is the plan azimuth mapped into scene coords
+    // (_w mirrors X, so plan (sin az, cos az) → scene (−sin az, 0, cos az)).
+    const n = normalOf(head);
+    const elev = Math.asin(Math.max(-1, Math.min(1, n.y))) * 180 / Math.PI;
+    assert('face normal elevation == sun elevation (35°)', near(elev, 35, 1e-4), `elev=${elev.toFixed(4)}`);
+    const az = 120 * Math.PI / 180;
+    const hx = -Math.sin(az), hz = Math.cos(az);
+    const hlen = Math.hypot(n.x, n.z);
+    assert('face normal aims at the sun azimuth in scene coords',
+      near(n.x / hlen, hx, 1e-4) && near(n.z / hlen, hz, 1e-4),
+      `n=(${n.x.toFixed(3)},${n.z.toFixed(3)}) want=(${hx.toFixed(3)},${hz.toFixed(3)})`);
+    assert('array sits on the slab with no terrain', near(grp.position.y, 0, 1e-6), `y=${grp.position.y}`);
+  }
+
+  // Base rotation composes in the built mesh too.
+  {
+    const spR = { id: 'spR', x: 2000, y: 3000, rotation: 40 };
+    r.updateSolarPanels([spR], () => null, 120, 35, null);
+    const { head } = headOf();
+    assert('built head yaw includes the base rotation', near(head.userData.yawDeg, 160, 1e-9), `${head.userData.yawDeg}`);
+    const n = normalOf(head);
+    const az = 160 * Math.PI / 180;
+    const hlen = Math.hypot(n.x, n.z);
+    assert('rotated array normal follows the composed yaw',
+      near(n.x / hlen, -Math.sin(az), 1e-4) && near(n.z / hlen, Math.cos(az), 1e-4));
+  }
+
+  // Night: parked flat at the base yaw.
+  {
+    const spN = { id: 'spN', x: 2000, y: 3000, rotation: 25 };
+    r.updateSolarPanels([spN], () => null, 270, -6, null);
+    const { head } = headOf();
+    assert('night build is parked', head.userData.parked === true);
+    assert('night tilt = SOLAR_PARK_TILT', head.userData.tiltDeg === SOLAR_PARK_TILT);
+    assert('night yaw = the base rotation', near(head.userData.yawDeg, 25, 1e-9));
+    const n = normalOf(head);
+    const elev = Math.asin(Math.max(-1, Math.min(1, n.y))) * 180 / Math.PI;
+    assert('parked array is near-horizontal (normal near straight up)',
+      near(elev, 90 - SOLAR_PARK_TILT, 1e-4), `elev=${elev.toFixed(3)}`);
+  }
+
+  // UV band tint on the frame rails (same WHO ladder as the weather chip).
+  // The BUILT material color is intentionally not the authored hex (_mat pushes
+  // saturation through _simsColor), so the frame rails carry the authored band
+  // color as a userData test hook — same idiom as the projector beam's userData.dir.
+  const frameRails = (grp) => {
+    const out = [];
+    grp.traverse(o => {
+      if (o.isMesh && !o.userData.outline && o.userData.solarUvColor !== undefined) out.push(o);
+    });
+    return out;
+  };
+  const emissiveRails = (grp) => frameRails(grp).filter(o =>
+    o.material && o.material.emissive && o.material.emissive.getHex() !== 0 && o.material.emissiveIntensity > 0);
+  {
+    const sp = { id: 'spUV', x: 2000, y: 3000 };
+    r.updateSolarPanels([sp], () => null, 120, 35, null);
+    const rails = frameRails(r._solarGroup.children[0]);
+    assert('array builds 4 frame rails', rails.length === 4, `n=${rails.length}`);
+    assert('no live UV → neutral frame (no band color)', rails.every(o => o.userData.solarUvColor === null));
+    assert('no live UV → no emissive frame accent', emissiveRails(r._solarGroup.children[0]).length === 0);
+
+    r.updateSolarPanels([sp], () => null, 120, 35, 9);   // UV 9 = "very high" = red
+    const hi = frameRails(r._solarGroup.children[0]);
+    assert('UV 9 lights an emissive frame accent', emissiveRails(r._solarGroup.children[0]).length === 4);
+    const hex = hi[0].userData.solarUvColor;
+    assert('UV 9 frame is the WHO "very high" band red', hex === '#e53935', hex);
+
+    r.updateSolarPanels([sp], () => null, 120, 35, 1);   // UV 1 = "low" = green
+    const loHex = frameRails(r._solarGroup.children[0])[0].userData.solarUvColor;
+    assert('UV 1 frame is the WHO "low" band green', loHex === '#7cb342', loHex);
+    assert('a UV band change actually re-tints the frame', loHex !== hex);
+    // Same WHO ladder as the weather chip's UV row — spot-check the boundaries.
+    r.updateSolarPanels([sp], () => null, 120, 35, 5);
+    assert('UV 5 is still the moderate band', frameRails(r._solarGroup.children[0])[0].userData.solarUvColor === '#fdd835');
+    r.updateSolarPanels([sp], () => null, 120, 35, 12);
+    assert('UV 12 is the extreme band violet', frameRails(r._solarGroup.children[0])[0].userData.solarUvColor === '#8e24aa');
+  }
+
+  // Power glow: emissive bead scaled by |watts|, amber on a NEGATIVE reading.
+  const beadOf = (grp) => {
+    let bead = null;
+    grp.traverse(o => { if (o.isMesh && !o.userData.outline && o.userData.solarBead) bead = o; });
+    return bead;
+  };
+  {
+    const sp = { id: 'spP', x: 2000, y: 3000, powerEntity: 'sensor.pv' };
+    const states = {};
+    const prov = id => states[id] || null;
+    r.updateSolarPanels([sp], prov, 120, 35, null);
+    assert('unbound / no reading → bead is dark',
+      beadOf(r._solarGroup.children[0]).material.emissiveIntensity === 0
+      && beadOf(r._solarGroup.children[0]).userData.solarPowerColor === null);
+
+    states['sensor.pv'] = stOf('sensor.pv', '900');
+    r.updateSolarPanels([sp], prov, 120, 35, null);
+    const genBead = beadOf(r._solarGroup.children[0]);
+    assert('generating → bead glows', genBead.material.emissiveIntensity > 0, `${genBead.material.emissiveIntensity}`);
+    assert('generating bead is green', genBead.userData.solarPowerColor === SOLAR_GEN_COLOR, genBead.userData.solarPowerColor);
+    const gen900 = genBead.material.emissiveIntensity;
+
+    states['sensor.pv'] = stOf('sensor.pv', '80');
+    r.updateSolarPanels([sp], prov, 120, 35, null);
+    const gen80 = beadOf(r._solarGroup.children[0]).material.emissiveIntensity;
+    assert('glow scales with power (900 W brighter than 80 W)', gen900 > gen80, `${gen900} vs ${gen80}`);
+
+    states['sensor.pv'] = stOf('sensor.pv', '-450');
+    r.updateSolarPanels([sp], prov, 120, 35, null);
+    const drawBead = beadOf(r._solarGroup.children[0]);
+    assert('NEGATIVE reading still glows', drawBead.material.emissiveIntensity > 0);
+    assert('negative reading reads AMBER, not green',
+      drawBead.userData.solarPowerColor === SOLAR_DRAW_COLOR, drawBead.userData.solarPowerColor);
+  }
+
+  // Grade following: a raised terrace under the panel lifts the whole assembly.
+  {
+    const sp = { id: 'spT', x: 2000, y: 3000 };
+    const terrace = {
+      id: 'gt', kind: 'concrete', elevationMm: 800,
+      points: [{ x: 1000, y: 2000 }, { x: 3200, y: 2000 }, { x: 3200, y: 4200 }, { x: 1000, y: 4200 }],
+    };
+    r.updateFloor(mkFloor({ solarPanels: [sp], groundAreas: [terrace] }), scene3d);
+    r.updateSolarPanels([sp], () => null, 120, 35, null);
+    assert('panel on a terrace rides its elevation', near(r._solarGroup.children[0].position.y, 800, 1e-6),
+      `y=${r._solarGroup.children[0].position.y}`);
+    // A panel OUTSIDE the terrace stays on the slab.
+    const off = { id: 'spOff', x: 6500, y: 1000 };
+    r.updateSolarPanels([sp, off], () => null, 120, 35, null);
+    assert('panel off the terrace stays at grade', near(r._solarGroup.children[1].position.y, 0, 1e-6),
+      `y=${r._solarGroup.children[1].position.y}`);
+    r.updateFloor(mkFloor({ solarPanels: [sp] }), scene3d);   // reset terrain
+  }
+
+  // Hidden panels build nothing; the group rides the `sensors` layer.
+  {
+    r.updateSolarPanels([{ id: 'h1', x: 2000, y: 3000, hidden: true }], () => null, 120, 35, null);
+    assert('hidden panel builds no rig', r._solarGroup.children.length === 0, `n=${r._solarGroup.children.length}`);
+    r.updateSolarPanels([{ id: 'v1', x: 2000, y: 3000 }], () => null, 120, 35, null);
+    r.setLayerVisibility({ sensors: false });
+    assert('sensors layer OFF hides the solar group', r._solarGroup.visible === false);
+    r.setLayerVisibility({ sensors: true });
+    assert('sensors layer ON shows the solar group', r._solarGroup.visible === true);
+    r.setLayerVisibility({});
+    assert('absent sensors flag = layer on', r._solarGroup.visible === true);
+  }
+
+  // Determinism: no Math.random in the builder — two identical builds match.
+  {
+    const sp = { id: 'spD', x: 2500, y: 2500, rotation: 15, powerEntity: 'sensor.pv' };
+    const states = { 'sensor.pv': stOf('sensor.pv', '640') };
+    const sig = () => {
+      const out = [];
+      r._solarGroup.traverse(o => {
+        if (o.isMesh) out.push(`${o.geometry.type}@${o.position.x.toFixed(3)},${o.position.y.toFixed(3)},${o.position.z.toFixed(3)}`);
+      });
+      return out.join('|');
+    };
+    r.updateSolarPanels([sp], id => states[id] || null, 120, 35, 6);
+    const s1 = sig();
+    r.updateSolarPanels([sp], id => states[id] || null, 120, 35, 6);
+    const s2 = sig();
+    assert('rebuild is byte-identical (no Math.random in the builder)', s1 === s2 && s1.length > 0, `len=${s1.length}`);
+  }
+
+  // ── (7) real Planner: CRUD, delete, translate/rotate, LIVE-path power ────
+  class FakeHa {
+    constructor() { this.states = {}; this._s = []; this._c = []; }
+    connect() { for (const c of this._c) c('connected'); for (const s of this._s) s(this.states, undefined); }
+    onState(f) { this._s.push(f); } onConn(f) { this._c.push(f); }
+    callService() { return Promise.resolve(); }
+    async getHistory() { return {}; } async getWeatherForecasts() { return null; }
+    async getDevices() { return []; } async getEntityRegistry() { return []; }
+    async updateEntityRegistry() { return true; }
+    async getUserData() { return null; } async setUserData() { return true; }
+    async refreshStates() {}
+  }
+  localStorage.removeItem('diorama:store:v1'); localStorage.removeItem('diorama:configs');
+  const p = new Planner();
+  p.connectWith(new FakeHa());
+  const sleep = ms => new Promise(res => setTimeout(res, ms));
+  for (let i = 0; i < 300 && !p.floor(); i++) await sleep(4);
+  assert('defaultFloor backfills solarPanels []', Array.isArray(p.floor().solarPanels));
+
+  p.uiMode = 'edit';
+  const f0 = p.floor();
+  f0.solarPanels = [{ id: 'sp1', x: 1000, y: 2000, rotation: 30, powerEntity: 'sensor.pv_now' }];
+
+  // powerEntity is LIVE-path (chatty) — it must NOT be config-path.
+  assert('solar powerEntity is NOT config-path (LIVE)', p._isSlowEntity('sensor.pv_now') === false);
+  assert('an unrelated entity is not config-path either', p._isSlowEntity('sensor.random_thing') === false);
+
+  // translateFloorContent moves the pedestal.
+  p.translateFloorContent(300, -150);
+  assert('translateFloorContent moves solar panels',
+    p.floor().solarPanels[0].x === 1300 && p.floor().solarPanels[0].y === 1850,
+    `${p.floor().solarPanels[0].x},${p.floor().solarPanels[0].y}`);
+
+  // rotateFloorContent rotates the point AND bumps the base yaw by φ.
+  {
+    const f = p.floor();
+    f.solarPanels[0].x = f.w / 2 + 1000; f.solarPanels[0].y = f.d / 2; f.solarPanels[0].rotation = 30;
+    p.rotateFloorContent(90);
+    const sp = p.floor().solarPanels[0];
+    assert('rotateFloorContent bumps the base yaw by φ', near(sp.rotation, 120, 1e-9), `${sp.rotation}`);
+    // Screen-CW 90° about the floor centre: (+1000, 0) → (0, −1000).
+    assert('rotateFloorContent rotates the position about the floor centre',
+      near(sp.x - f.w / 2, 0, 1e-6) && near(sp.y - f.d / 2, -1000, 1e-6),
+      `${(sp.x - f.w / 2).toFixed(3)},${(sp.y - f.d / 2).toFixed(3)}`);
+  }
+
+  // deleteSelection: locked refuses, unlocked removes + clears the selection.
+  {
+    p.floor().solarPanels[0].locked = true;
+    p.activeSolarId = 'sp1';
+    assert('deleteSelection refuses a LOCKED solar panel',
+      p.deleteSelection() === false && (p.floor().solarPanels || []).length === 1);
+    p.floor().solarPanels[0].locked = false;
+    p.activeSolarId = 'sp1';
+    assert('deleteSelection removes the active solar panel',
+      p.deleteSelection() === true && (p.floor().solarPanels || []).length === 0);
+    assert('deleteSelection clears activeSolarId', p.activeSolarId === null);
+  }
+
+  // setActiveSolar toggles like every other fixture selector.
+  {
+    p.floor().solarPanels = [{ id: 'spX', x: 1000, y: 1000 }];
+    p.setActiveSolar('spX');
+    assert('setActiveSolar selects', p.activeSolarId === 'spX');
+    p.setActiveSolar('spX');
+    assert('setActiveSolar toggles off on a repeat', p.activeSolarId === null);
+  }
+
+  // Alt+click identify resolves the fixture (kind → collection + label + anchor).
+  {
+    p.floor().solarPanels = [{ id: 'spI', x: 1500, y: 2500, label: 'Roof array', locked: true }];
+    const okId = p.identifyItem('solar', 'spI');
+    assert('identifyItem resolves a solar panel', okId === true && p.identifyFx && p.identifyFx.kind === 'solar');
+    assert('identify label + lock + anchor are reported',
+      p.identifyFx.label === 'Roof array' && p.identifyFx.locked === true
+      && p.identifyFx.x === 1500 && p.identifyFx.y === 2500);
+    assert('identify selects the panel', p.activeSolarId === 'spI');
+    assert('identifyItem on a missing id fails soft', p.identifyItem('solar', 'nope') === false);
+  }
+
+  // ── (8) 2D: no-throw + tilt foreshortening ───────────────────────────────
+  // Drop the identify latch from section 7 — its callout plate is painted LAST,
+  // over everything, and would sit across the panel in the pixel measurements.
+  p.identifyFx = null; p.drag = null; p.activeSolarId = null;
+  const view = { ox: 60, oy: 400, scale: 0.05 };
+  const drawTo = (elevDeg) => {
+    p.hass.states['sun.sun'] = stOf('sun.sun', 'above_horizon', { azimuth: 0, elevation: elevDeg });
+    const cv = document.createElement('canvas'); cv.width = 640; cv.height = 480;
+    const ctx = cv.getContext('2d');
+    cr.drawAll(ctx, p, view, null);
+    return ctx.getImageData(0, 0, cv.width, cv.height);
+  };
+  // PV fill is rgba(24,52,84,0.95) over the floor — measure its painted bbox.
+  const pvBox = (img) => {
+    let minX = 1e9, maxX = -1e9, minY = 1e9, maxY = -1e9, n = 0;
+    for (let y = 0; y < img.height; y++) {
+      for (let x = 0; x < img.width; x++) {
+        const i = (y * img.width + x) * 4;
+        const R = img.data[i], G = img.data[i + 1], B = img.data[i + 2];
+        if (Math.abs(R - 24) < 12 && Math.abs(G - 51) < 14 && Math.abs(B - 81) < 16) {
+          n++;
+          if (x < minX) minX = x; if (x > maxX) maxX = x;
+          if (y < minY) minY = y; if (y > maxY) maxY = y;
+        }
+      }
+    }
+    return { n, w: maxX - minX + 1, h: maxY - minY + 1, minX, maxX, minY, maxY };
+  };
+  {
+    p.floor().solarPanels = [{ id: 'd1', x: 2000, y: 3000, label: 'Draw' }];
+    let threw = null;
+    let hi = null, lo = null, night = null;
+    try {
+      hi = pvBox(drawTo(80));     // high sun → tilt clamps to 10° → nearly full depth
+      lo = pvBox(drawTo(20));     // low sun  → tilt 70° → strongly foreshortened
+      night = pvBox(drawTo(-10)); // parked
+    } catch (e) { threw = e; }
+    assert('2D drawAll (with a solar panel) does not throw', threw === null, threw && threw.message);
+    assert('PV face is painted', hi && hi.n > 50, hi && `n=${hi.n}`);
+    // Sun azimuth 0 (θ=0) → plan az 0 → the array is axis-aligned, so width is
+    // the panel width and height is panelH·cos(tilt) — pure foreshortening.
+    assert('foreshortening: a low sun (steep tilt) shrinks the plan DEPTH',
+      hi && lo && lo.h < hi.h * 0.6, hi && lo && `hi=${hi.h} lo=${lo.h}`);
+    assert('foreshortening leaves the panel WIDTH unchanged',
+      hi && lo && Math.abs(hi.w - lo.w) <= 2, hi && lo && `hi=${hi.w} lo=${lo.w}`);
+    // Ratio matches cos(tilt) within a couple of px of rasterization slop.
+    const want = Math.cos(70 * Math.PI / 180) / Math.cos(10 * Math.PI / 180);
+    const got = lo && hi ? lo.h / hi.h : 0;
+    assert('depth ratio ≈ cos(tiltLow)/cos(tiltHigh)', Math.abs(got - want) < 0.12,
+      `got=${got.toFixed(3)} want=${want.toFixed(3)}`);
+    // The parked look: no sun arrow (there is nothing to aim at) + a dimmer face.
+    const arrowPx = (img) => {
+      let n = 0;
+      for (let i = 0; i < img.data.length; i += 4) {
+        if (img.data[i] > 150 && img.data[i + 1] > 110 && img.data[i + 2] < 120) n++;
+      }
+      return n;
+    };
+    const trackArrow = arrowPx(drawTo(80));
+    const parkArrow = arrowPx(drawTo(-10));
+    assert('a tracking panel draws the sun arrow', trackArrow > 4, `n=${trackArrow}`);
+    assert('a parked panel draws NO sun arrow', parkArrow === 0, `n=${parkArrow}`);
+    assert('the parked face is dimmed (different fill than tracking)', night && night.n === 0,
+      night && `n=${night.n}`);
+  }
+  // Hidden panels + the sensors layer gate the painter.
+  {
+    p.floor().solarPanels = [{ id: 'd2', x: 2000, y: 3000, hidden: true }];
+    assert('hidden panel paints nothing', pvBox(drawTo(80)).n === 0);
+    p.floor().solarPanels = [{ id: 'd3', x: 2000, y: 3000 }];
+    p.store.layers2d = { sensors: false };
+    assert('sensors layer OFF paints nothing', pvBox(drawTo(80)).n === 0);
+    p.store.layers2d = {};
+    assert('sensors layer back ON paints again', pvBox(drawTo(80)).n > 50);
+  }
+
+  // ── render ────────────────────────────────────────────────────────────────
+  const pass = results.filter(x => x.ok).length;
+  const total = results.length;
+  const fails = results.filter(x => !x.ok).map(x => x.name);
+  document.getElementById('log').textContent = results.map(t => `${t.ok ? 'PASS' : 'FAIL'} ${t.name} — ${t.detail}`).join('\n');
+  document.title = fails.length === 0 ? `SOLAR PASS ${pass}/${total}` : `SOLAR FAIL ${pass}/${total} [${fails.join(',')}]`;
+</script>

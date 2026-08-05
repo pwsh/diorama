@@ -135,6 +135,8 @@
       ok('A8: switch card in Controls tab', cat(model,'controls').cards.some(c => c.tool === 'switch'), '');
       // ruler is in Structure
       ok('A9: ruler card in Structure tab', cat(model,'structure').cards.some(c => c.tool === 'ruler'), '');
+      // the sun-tracking solar panel is a bindable device → Controls & Sensors
+      ok('A10: solar panel card in Controls tab', cat(model,'controls').cards.some(c => c.tool === 'solar'), '');
     }
 
     // ═══ B. arming parity (card.arm → planner state) ═══

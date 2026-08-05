@@ -198,6 +198,15 @@
       // presence-zone whole delete (no vertex selected)
       p.activePZoneId = 'pz1';
       ok('h: presence zone deleted', p.deleteSelection() && p.floor().presenceZones.length === 0, '');
+      // Sun-tracking solar panel: locked refuses, unlocked deletes + clears.
+      p.floor().solarPanels = [{ id: 'sol1', x: 4, y: 4, locked: true }];
+      p.activeSolarId = 'sol1';
+      ok('h: LOCKED solar panel refuses deletion',
+         p.deleteSelection() === false && p.floor().solarPanels.length === 1, '');
+      p.floor().solarPanels[0].locked = false;
+      p.activeSolarId = 'sol1';
+      ok('h: solar panel deleted', p.deleteSelection() && p.floor().solarPanels.length === 0, '');
+      ok('h: activeSolarId cleared', p.activeSolarId === null, String(p.activeSolarId));
       ok('h: nothing selected → no-op', p.deleteSelection() === false, '');
     }
 

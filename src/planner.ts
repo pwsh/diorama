@@ -251,7 +251,7 @@ export type IdentifyKind =
   | 'wall' | 'furniture' | 'light' | 'switch' | 'sensor' | 'motion' | 'env'
   | 'info' | 'action' | 'ble' | 'alarm' | 'calendar' | 'thermostat' | 'safety'
   | 'alert' | 'robot' | 'camera' | 'projector' | 'valve' | 'plug' | 'sprinkler'
-  | 'flagpole' | 'door' | 'window' | 'ruler' | 'pzone' | 'ground' | 'pool'
+  | 'flagpole' | 'solar' | 'door' | 'window' | 'ruler' | 'pzone' | 'ground' | 'pool'
   | 'void' | 'room' | 'landmark';
 
 // The runtime identify latch. `at` is a performance.now() stamp — the canvas
@@ -295,6 +295,7 @@ export type Drag =
   | { kind: 'valve'; id: string; startMm: Vec2; start: Vec2 }
   | { kind: 'sprinkler'; id: string; startMm: Vec2; start: Vec2 }
   | { kind: 'flagpole'; id: string; startMm: Vec2; start: Vec2 }
+  | { kind: 'solar'; id: string; startMm: Vec2; start: Vec2 }
   | { kind: 'plug'; id: string; startMm: Vec2; start: Vec2 }
   | { kind: 'info'; id: string; startMm: Vec2; start: Vec2 }
   | { kind: 'action'; id: string; startMm: Vec2; start: Vec2 }
@@ -340,7 +341,7 @@ export interface EditZone {
   mousePos: Vec2 | null;
 }
 
-export type Tool = 'select' | 'wall' | 'sensor' | 'motion' | 'env' | 'infocard' | 'action' | 'bleproxy' | 'alarm' | 'calendar' | 'thermostat' | 'safety' | 'alertbeacon' | 'robot' | 'camera' | 'projector' | 'valve' | 'sprinkler' | 'flagpole' | 'plug' | 'pzone' | 'ground' | 'path' | 'pool' | 'void' | 'nbhd_excl' | 'ruler' | 'furniture' | 'light' | 'switch' | 'door' | 'window' | 'delete';
+export type Tool = 'select' | 'wall' | 'sensor' | 'motion' | 'env' | 'infocard' | 'action' | 'bleproxy' | 'alarm' | 'calendar' | 'thermostat' | 'safety' | 'alertbeacon' | 'robot' | 'camera' | 'projector' | 'valve' | 'sprinkler' | 'flagpole' | 'solar' | 'plug' | 'pzone' | 'ground' | 'path' | 'pool' | 'void' | 'nbhd_excl' | 'ruler' | 'furniture' | 'light' | 'switch' | 'door' | 'window' | 'delete';
 
 // Live robot state (runtime-only). `x/y/heading/phase/activity/led` are the
 // DISPLAY fields both canvases read; the rest are the movement controller's
@@ -635,6 +636,9 @@ export class Planner extends EventTarget {
 
   // Active flagpole fixture (sidebar selection / canvas highlight)
   activeFlagpoleId: string | null = null;
+
+  // Active solar panel fixture (sidebar selection / canvas highlight)
+  activeSolarId: string | null = null;
 
   // Active smart plug fixture (sidebar selection / canvas highlight)
   activePlugId: string | null = null;
@@ -1337,7 +1341,7 @@ export class Planner extends EventTarget {
     this.activeThermoId = null; this.activeSafetyId = null; this.activeAlertBeaconId = null;
     this.activeRobotId = null; this.activeCameraId = null; this.activeProjectorId = null;
     this.activeValveId = null; this.activePlugId = null; this.activeInfoId = null;
-    this.activeSprinklerId = null; this.activeFlagpoleId = null;
+    this.activeSprinklerId = null; this.activeFlagpoleId = null; this.activeSolarId = null;
     this.activeActionId = null; this.activePZoneId = null; this.activeGroundAreaId = null;
     this.activePoolId = null;
     this.activeVoidAreaId = null; this.activeFurnitureId = null; this.activePersonId = null;
@@ -1445,6 +1449,9 @@ export class Planner extends EventTarget {
       E(this.activeFlagpoleId, f.flagpoles,
         id => { f.flagpoles = (f.flagpoles ?? []).filter(x => x.id !== id); },
         () => { this.activeFlagpoleId = null; }),
+      E(this.activeSolarId, f.solarPanels,
+        id => { f.solarPanels = (f.solarPanels ?? []).filter(x => x.id !== id); },
+        () => { this.activeSolarId = null; }),
       E(this.activeGroundAreaId, f.groundAreas,
         id => { f.groundAreas = (f.groundAreas ?? []).filter(x => x.id !== id); },
         () => { this.activeGroundAreaId = null; }),
@@ -3386,6 +3393,12 @@ export class Planner extends EventTarget {
         locked = !!fp.locked; at = { x: fp.x, y: fp.y }; this.activeFlagpoleId = fp.id;
         break;
       }
+      case 'solar': {
+        const sp = find(f.solarPanels); if (!sp) return false;
+        label = sp.label?.trim() || 'Solar panel';
+        locked = !!sp.locked; at = { x: sp.x, y: sp.y }; this.activeSolarId = sp.id;
+        break;
+      }
       case 'door': {
         const d = find(f.doors); if (!d) return false;
         label = d.label?.trim() || 'Door';
@@ -3804,6 +3817,12 @@ export class Planner extends EventTarget {
   setActiveFlagpole(id: string | null): void {
     this.markSelectionHot();
     this.activeFlagpoleId = (this.activeFlagpoleId === id) ? null : id;
+    this.emitConfig();
+  }
+
+  setActiveSolar(id: string | null): void {
+    this.markSelectionHot();
+    this.activeSolarId = (this.activeSolarId === id) ? null : id;
     this.emitConfig();
   }
 
@@ -7183,6 +7202,7 @@ export class Planner extends EventTarget {
     for (const it of f.valves ?? []) { it.x += dx; it.y += dy; }
     for (const it of f.sprinklerZones ?? []) { it.x += dx; it.y += dy; }
     for (const it of f.flagpoles ?? []) { it.x += dx; it.y += dy; }
+    for (const it of f.solarPanels ?? []) { it.x += dx; it.y += dy; }
     for (const it of f.plugs ?? []) { it.x += dx; it.y += dy; }
     for (const it of f.infoCards ?? []) { it.x += dx; it.y += dy; }
     for (const it of f.actionButtons ?? []) { it.x += dx; it.y += dy; }
@@ -7294,6 +7314,7 @@ export class Planner extends EventTarget {
     for (const it of f.valves ?? []) { rot(it); bump(it); }
     for (const it of f.sprinklerZones ?? []) { rot(it); bump(it); }
     for (const it of f.flagpoles ?? []) rot(it);        // symmetric pole, no heading
+    for (const it of f.solarPanels ?? []) { rot(it); bump(it); }   // base yaw is a repo-convention heading
     for (const it of f.plugs ?? []) { rot(it); bump(it); }
     for (const it of f.infoCards ?? []) { rot(it); bump(it); }
     for (const it of f.actionButtons ?? []) { rot(it); bump(it); }
@@ -7367,6 +7388,7 @@ export class Planner extends EventTarget {
     this.activeValveId = null;
     this.activeSprinklerId = null;
     this.activeFlagpoleId = null;
+    this.activeSolarId = null;
     this.activePlugId = null;
     this.activeInfoId = null;
     this.activeActionId = null;

@@ -11,7 +11,7 @@ import {
   hitBgBody, hitBgCorner, bgEditable,
   hitMotionSensor, hitMotionRotateHandle, hitEnvSensor, hitEnvResizeHandle,
   hitBleProxy, hitAlarmPanel, hitCalendarPanel, hitThermostat, hitSafetySensor, hitAlertBeacon, hitRobot,
-  hitCamera, hitCameraRotateHandle, hitProjector, hitValve, hitSprinklerZone, hitFlagpole, hitPlug, hitInfoCard, hitActionButton, hitPresenceZone, hitPresenceZoneVertex,
+  hitCamera, hitCameraRotateHandle, hitProjector, hitValve, hitSprinklerZone, hitFlagpole, hitSolarPanel, hitPlug, hitInfoCard, hitActionButton, hitPresenceZone, hitPresenceZoneVertex,
   hitGroundArea, hitGroundAreaVertex, hitPathVertex,
   hitPool, hitPoolVertex,
   hitVacuumSegment, hitFlight,
@@ -70,7 +70,8 @@ function buildAlignPool(p: Planner, drag: Drag): { xs: number[]; ys: number[] } 
   addAll(f.envSensors); addAll(f.bleProxies); addAll(f.alarmPanels); addAll(f.calendarPanels);
   addAll(f.thermostats); addAll(f.safetySensors); addAll(f.alertBeacons); addAll(f.robots);
   addAll(f.cameras); addAll(f.projectors); addAll(f.valves); addAll(f.plugs);
-  addAll(f.sprinklerZones); addAll(f.flagpoles); addAll(f.infoCards); addAll(f.actionButtons);
+  addAll(f.sprinklerZones); addAll(f.flagpoles); addAll(f.solarPanels);
+  addAll(f.infoCards); addAll(f.actionButtons);
   addAll(f.furniture);
   // Other shapes' vertices — only while editing a shape (a fixture drag aligns
   // to corners and centres, not to every terrace vertex on the floor).
@@ -666,6 +667,8 @@ export function identifyAt(p: Planner, view: View, mm: Vec2): boolean {
   if (sprH) return go('sprinkler', sprH.id);
   const flagH = hitFlagpole(p, view, mm);
   if (flagH) return go('flagpole', flagH.id);
+  const solH = hitSolarPanel(p, view, mm);
+  if (solH) return go('solar', solH.id);
   if (dimsInteractive(p)) {
     const rbH = hitRulerBody(p, view, mm);
     if (rbH) return go('ruler', rbH.id);
@@ -1129,6 +1132,12 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
     p.drag = { kind: 'flagpole', id: flagH.id, startMm: mm, start: { x: flagH.x, y: flagH.y } };
     canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
   }
+  const solH = hitSolarPanel(p, view, mm);
+  if (solH) {
+    if (p.activeSolarId !== solH.id) p.activeSolarId = solH.id; p.markSelectionHot();
+    p.drag = { kind: 'solar', id: solH.id, startMm: mm, start: { x: solH.x, y: solH.y } };
+    canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
+  }
   // Ruler body — select it (no whole-ruler drag; move via endpoint handles).
   // Low priority (after fixtures/furniture) so a thin line never swallows their
   // clicks. Only when the dimensions layer is on.
@@ -1450,6 +1459,14 @@ export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: V
         if (fpz && !fpz.locked) {
           fpz.x = Math.max(0, Math.min(f.w, drag.start.x + mm.x - drag.startMm.x));
           fpz.y = Math.max(0, Math.min(f.d, drag.start.y + mm.y - drag.startMm.y));
+        }
+        break;
+      }
+      case 'solar': {
+        const spz = (f.solarPanels ?? []).find(x => x.id === drag.id);
+        if (spz && !spz.locked) {
+          spz.x = Math.max(0, Math.min(f.w, drag.start.x + mm.x - drag.startMm.x));
+          spz.y = Math.max(0, Math.min(f.d, drag.start.y + mm.y - drag.startMm.y));
         }
         break;
       }
@@ -1848,6 +1865,7 @@ export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: V
     else if (hitValve(p, view, mm)) canvas.style.cursor = 'grab';
     else if (hitSprinklerZone(p, view, mm)) canvas.style.cursor = 'grab';
     else if (hitFlagpole(p, view, mm)) canvas.style.cursor = 'grab';
+    else if (hitSolarPanel(p, view, mm)) canvas.style.cursor = 'grab';
     else if (hitPlug(p, view, mm)) canvas.style.cursor = 'grab';
     else if (zonesInteractive(p) && hitPresenceZoneVertex(p, view, mm)) canvas.style.cursor = 'grab';
     else if (groundInteractive(p) && hitGroundAreaVertex(p, view, mm)) canvas.style.cursor = 'grab';
@@ -2123,6 +2141,10 @@ export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement, e?: Mouse
     // base (free placement, no wall snap).
     const fpz = (f.flagpoles ?? []).find(x => x.id === drag.id);
     if (fpz) { fpz.x = snap(fpz.x, 10); fpz.y = snap(fpz.y, 10); p.save(); }
+  } else if (drag.kind === 'solar') {
+    // Display-only too (the array aims itself at the sun — nothing to toggle).
+    const spz = (f.solarPanels ?? []).find(x => x.id === drag.id);
+    if (spz) { spz.x = snap(spz.x, 10); spz.y = snap(spz.y, 10); p.save(); }
   } else if (drag.kind === 'pzoneVert') {
     const z = (f.presenceZones ?? []).find(x => x.id === drag.id);
     if (z && z.points[drag.idx]) z.points[drag.idx] = { x: snap(z.points[drag.idx].x, 10), y: snap(z.points[drag.idx].y, 10) };
@@ -2779,6 +2801,22 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
     p.emitConfig();
     return;
   }
+  if (p.tool === 'solar') {
+    if (!f.solarPanels) f.solarPanels = [];
+    const id = newId('sol');
+    // Free placement — the click point is the pedestal base (a yard fixture).
+    f.solarPanels.push({
+      id,
+      x: snap(Math.max(0, Math.min(f.w, mm.x)), 10),
+      y: snap(Math.max(0, Math.min(f.d, mm.y)), 10),
+      label: `Solar panel ${f.solarPanels.length + 1}`,
+    });
+    p.activeSolarId = id; p.markNewlyPlaced("solar", id);
+    p.save();
+    p.setTool('select');
+    p.emitConfig();
+    return;
+  }
   if (p.tool === 'plug') {
     if (!f.plugs) f.plugs = [];
     const id = newId('pg');
@@ -3082,6 +3120,13 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
       if (flagDel.locked) return;
       f.flagpoles = (f.flagpoles ?? []).filter(x => x.id !== flagDel.id);
       if (p.activeFlagpoleId === flagDel.id) p.activeFlagpoleId = null;
+      p.save(); p.emitConfig(); return;
+    }
+    const solDel = hitSolarPanel(p, view, mm);
+    if (solDel) {
+      if (solDel.locked) return;
+      f.solarPanels = (f.solarPanels ?? []).filter(x => x.id !== solDel.id);
+      if (p.activeSolarId === solDel.id) p.activeSolarId = null;
       p.save(); p.emitConfig(); return;
     }
     if (zonesInteractive(p)) {

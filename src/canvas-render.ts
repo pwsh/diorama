@@ -42,7 +42,11 @@ import {
 import { compass8, fmtDistanceM, fmtAccuracyM } from './geo.js';
 import { resolveNorth, northMarkerPos, markerScaleOf } from './compass.js';
 import { calendarLines, weatherCardLines, resolveScreenContent, CAL_HEADER_COLOR, type ScreenMode } from './surfaces.js';
-import { CONDITION_GLYPH } from './weather.js';
+import { CONDITION_GLYPH, uvBand } from './weather.js';
+import {
+  SOLAR_DEFAULTS, resolveSunPlan, solarAim, solarRotation,
+  solarPowerValue, solarPowerColor, solarPowerText,
+} from './solar.js';
 import { ALERT_BEACON_DEFAULTS, alertBeaconState, alertBeaconColor, alertBeaconAlarming, isAlertDomain } from './alerts.js';
 import { flagDominant } from './flags.js';
 import { vehicleRecipe } from './vehicles.js';
@@ -436,6 +440,7 @@ export function drawAll(ctx: CanvasRenderingContext2D, p: Planner, view: View,
   if (on(L.sensors)) drawValves(ctx, p, view);       // water valves ride the sensors layer
   if (on(L.ground)) drawSprinklerZones(ctx, p, view); // irrigation heads ride the ground layer
   if (on(L.furniture)) drawFlagpoles(ctx, p, view);   // yard flagpoles are decor → furniture layer
+  if (on(L.sensors)) drawSolarPanels(ctx, p, view);   // sun-tracking solar panels ride the sensors layer
   if (on(L.switches)) drawPlugs(ctx, p, view);        // smart plugs ride the switches layer
   // LD2450 inclusion / filter polygons + object halos draw per the zones
   // layer. The Motion toggle only hides motion-sensor cones (drawMotionSensors
@@ -479,7 +484,7 @@ const IDENTIFY_GLYPH: Record<string, string> = {
   wall: '▭', furniture: '🛋', light: '💡', switch: '⏻', sensor: '📡', motion: '👣',
   env: '🌡', info: '🔢', action: '🔘', ble: '📶', alarm: '🚨', calendar: '📅',
   thermostat: '🌡', safety: '⚠️', alert: '🔔', robot: '🤖', camera: '📷',
-  projector: '📽', valve: '🚰', plug: '🔌', sprinkler: '🚿', flagpole: '🚩',
+  projector: '📽', valve: '🚰', plug: '🔌', sprinkler: '🚿', flagpole: '🚩', solar: '☀️',
   door: '🚪', window: '🪟', ruler: '📏', pzone: '⬟', ground: '🟩', pool: '🏊',
   void: '⬛', room: '🏠', landmark: '📍',
 };
@@ -3087,6 +3092,111 @@ function drawFlagpoles(ctx: CanvasRenderingContext2D, p: Planner, view: View): v
       ctx.fillStyle = '#ddd'; ctx.font = `${10 * dpr}px sans-serif`;
       ctx.textAlign = 'center'; ctx.textBaseline = 'top';
       ctx.fillText(nm, c.x, c.y + 6 * dpr);
+    }
+  }
+}
+
+// Sun-tracking solar panels (sensors layer): the array drawn from above,
+// FORESHORTENED by its live tilt (an along-slope length L reads L·cos(tilt) in
+// plan) and rotated to the tracked sun azimuth composed with the fixture's base
+// yaw. The frame stroke carries the WHO UV band color (weather.ts uvBand — the
+// same ladder the weather chip's UV row uses); a bound power sensor adds a
+// wattage chip (amber when NEGATIVE = grid draw on a signed monitor). Parked
+// (sun down) panels dim and lose the sun arrow.
+function drawSolarPanels(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
+  const f = p.floor();
+  const list = f.solarPanels ?? [];
+  if (!list.length) return;
+  const names = objectLabelsOn(p);
+  const dpr = window.devicePixelRatio || 1;
+  const states = p.hass?.states ?? {};
+  // Same sun as the 3D array + the scene's sun light (solar.ts is the one home
+  // for that resolution); θ maps the compass bearing into the plan frame.
+  const fit = p.geoFit();
+  const theta = fit && fit.transform.quality !== 'none' ? fit.transform.thetaRad : 0;
+  const { sun } = resolveSunPlan(states['sun.sun'] ?? null, theta, Date.now());
+  const uvRaw = p.weatherNow?.uvIndex;
+  const uv = (typeof uvRaw === 'number' && isFinite(uvRaw)) ? uvBand(Math.round(uvRaw)) : null;
+  for (const sp of list) {
+    if (sp.hidden) continue;
+    const c = mmToPx(view, sp.x, sp.y);
+    const sel = p.activeSolarId === sp.id;
+    const aim = solarAim(sun.azDeg, sun.elevDeg, solarRotation(sp));
+    const tiltRad = aim.tiltDeg * Math.PI / 180;
+    const halfW = Math.max(6, SOLAR_DEFAULTS.panelW * 0.5 * view.scale);
+    const halfD = Math.max(2.5, SOLAR_DEFAULTS.panelH * 0.5 * view.scale * Math.cos(tiltRad));
+    const watts = sp.powerEntity ? solarPowerValue(states[sp.powerEntity] ?? null) : null;
+    const glow = (watts != null && watts > 5) ? powerGlowScale(watts) : 0;
+    const frame = uv ? uv.color : '#78909c';
+    ctx.save();
+    ctx.translate(c.x, c.y);
+    ctx.rotate(aim.yawDeg * Math.PI / 180);   // local -Y now points along the plan azimuth
+    ctx.globalAlpha = aim.parked ? 0.55 : 1;
+    // Generation halo behind the array.
+    if (glow > 0) {
+      ctx.save();
+      ctx.shadowColor = solarPowerColor(watts);
+      ctx.shadowBlur = 14 * glow;
+      ctx.fillStyle = hexToRgba(solarPowerColor(watts), 0.16 * glow);
+      ctx.beginPath();
+      ctx.ellipse(0, 0, halfW * 1.25, Math.max(halfD * 1.6, halfW * 0.5), 0, 0, 2 * Math.PI);
+      ctx.fill();
+      ctx.restore();
+    }
+    // PV face.
+    ctx.beginPath();
+    ctx.rect(-halfW, -halfD, halfW * 2, halfD * 2);
+    ctx.fillStyle = aim.parked ? 'rgba(20,32,46,0.9)' : 'rgba(24,52,84,0.95)';
+    ctx.fill();
+    ctx.lineWidth = sel ? 2.5 : 1.5;
+    ctx.strokeStyle = sel ? '#fff' : frame;
+    ctx.stroke();
+    // Cell grid lines (along the slope), skipped when the array is edge-on.
+    if (halfD > 3) {
+      ctx.strokeStyle = 'rgba(140,180,220,0.35)';
+      ctx.lineWidth = Math.max(0.6, dpr * 0.6);
+      ctx.beginPath();
+      for (const k of [-0.5, 0, 0.5]) {
+        ctx.moveTo(k * halfW, -halfD);
+        ctx.lineTo(k * halfW, halfD);
+      }
+      ctx.moveTo(-halfW, 0); ctx.lineTo(halfW, 0);
+      ctx.stroke();
+    }
+    // HIGH edge bar (up-slope, local +Y) — the visual cue for which way it leans.
+    ctx.fillStyle = frame;
+    ctx.fillRect(-halfW, halfD - Math.max(1.2, dpr), halfW * 2, Math.max(1.2, dpr) * 2);
+    // Sun arrow out the FACE (local -Y = the tracked azimuth) while tracking.
+    if (!aim.parked) {
+      const aLen = halfD + 10 * dpr;
+      ctx.strokeStyle = hexToRgba('#ffd54f', 0.9);
+      ctx.lineWidth = Math.max(1.2, dpr);
+      ctx.beginPath();
+      ctx.moveTo(0, -halfD); ctx.lineTo(0, -aLen);
+      ctx.moveTo(-3 * dpr, -aLen + 4 * dpr); ctx.lineTo(0, -aLen);
+      ctx.lineTo(3 * dpr, -aLen + 4 * dpr);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+    ctx.restore();
+    // Pedestal base dot (screen space).
+    ctx.fillStyle = '#90a4ae';
+    ctx.beginPath(); ctx.arc(c.x, c.y, Math.max(2.5, 3 * dpr), 0, 2 * Math.PI); ctx.fill();
+    // Label + tilt badge + optional W chip (screen space, unrotated).
+    const label = sp.label?.trim() || 'Solar panel';
+    const badge = aim.parked ? 'parked' : `${Math.round(aim.tiltDeg)}° tilt`;
+    let txt = fixtureCaption(names, label, badge);
+    const wt = solarPowerText(watts);
+    if (wt) txt += `${txt ? ' · ' : ''}${wt}`;
+    if (txt) {
+      ctx.font = `${10 * dpr}px sans-serif`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+      const tw = ctx.measureText(txt).width + 8 * dpr;
+      const by = c.y + Math.max(halfD, halfW * 0.4) + 6 * dpr;
+      ctx.fillStyle = 'rgba(0,0,0,0.7)';
+      ctx.fillRect(c.x - tw / 2, by, tw, 13 * dpr);
+      ctx.fillStyle = watts != null ? solarPowerColor(watts) : (aim.parked ? '#90a4ae' : '#cfd8dc');
+      ctx.fillText(txt, c.x, by + 1 * dpr);
     }
   }
 }

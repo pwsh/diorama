@@ -9,7 +9,7 @@ import type {
   Sensor, Zone, ObjectHalo, BgImage, MotionSensor, EnvSensor, EnvKind, Light, SwitchFixture, LightIconKind,
   Furniture, FurnitureKind, Door, Window as WindowType, WindowKind, WindowCurtainStyle, Layers2D, Floor, Room,
   ObjectRecipe, RecipePrimitive, RecipeShape, ActivityKind, AvatarKind,
-  BleProxy, AlarmPanel, CalendarPanel, ThermostatFixture, SafetySensor, AlertBeacon, RobotFixture, CameraFixture, ProjectorFixture, ValveFixture, SprinklerZone, SprinklerHeadKind, FlagpoleFixture, PlugFixture, PresenceZone, GroundArea, GroundKind, Pool, VoidArea, DioramaPerson, Roamer, GeoLandmark,
+  BleProxy, AlarmPanel, CalendarPanel, ThermostatFixture, SafetySensor, AlertBeacon, RobotFixture, CameraFixture, ProjectorFixture, ValveFixture, SprinklerZone, SprinklerHeadKind, FlagpoleFixture, SolarPanel, PlugFixture, PresenceZone, GroundArea, GroundKind, Pool, VoidArea, DioramaPerson, Roamer, GeoLandmark,
   FloorTexKind, OutdoorArea,
 } from '../types.js';
 import type { BermudaDevice } from '../planner.js';
@@ -49,6 +49,9 @@ import {
   floorsDisplayOrder,
 } from '../geometry.js';
 import { solveHomography, homographyResidualsMm } from '../homography.js';
+import {
+  resolveSunPlan, solarAim, solarRotation, solarPowerValue, solarPowerText,
+} from '../solar.js';
 import { CLOCK_PRESETS, DATE_PRESETS, type ValueRule, type RuleOp } from '../value-rules.js';
 import type { Vec2, InfoCard, InfoCardMount, InfoCardDisplayMode, ActionButton, ActionKind, Ruler, DimensionMode, NeighborhoodConfig, DoorKind } from '../types.js';
 import { resolveRulerEnds } from '../geometry.js';
@@ -135,6 +138,7 @@ const TOOLS: { id: Tool; label: string }[] = [
   { id: 'valve', label: '🚰 Valve' },
   { id: 'sprinkler', label: '🚿 Sprinkler' },
   { id: 'flagpole', label: '🚩 Flagpole' },
+  { id: 'solar', label: '☀️ Solar panel' },
   { id: 'plug', label: '🔌 Plug' },
   { id: 'pzone', label: '▱ Presence zone' },
   { id: 'ground', label: '▨ Ground area' },
@@ -161,7 +165,7 @@ const TOOL_GROUPS: { label: string; tools: Tool[] }[] = [
   { label: 'Devices & sensors', tools: [
     'sensor', 'motion', 'env', 'bleproxy', 'camera', 'safety', 'alarm', 'thermostat',
     'valve', 'plug', 'projector', 'sprinkler', 'robot', 'alertbeacon', 'calendar',
-    'action', 'infocard',
+    'action', 'infocard', 'solar',
   ] },
   { label: 'Furniture & decor', tools: ['furniture', 'light', 'switch', 'flagpole'] },
 ];
@@ -174,7 +178,7 @@ const SECTION_SLUGS: string[] = [
   'floortools', 'layers', 'dimensions', 'rulers', 'tools',
   'sensors', 'motion', 'env', 'info', 'actions', 'ble', 'alarm', 'calendar',
   'thermostats', 'safety', 'alertbeacons', 'robots', 'cameras', 'projectors',
-  'valves', 'sprinklers', 'flagpoles', 'plugs', 'pzones', 'ground', 'pools',
+  'valves', 'sprinklers', 'flagpoles', 'solar', 'plugs', 'pzones', 'ground', 'pools',
   'voids', 'people', 'roamers', 'doors', 'windows', 'furniture', 'custom',
   'rooms', 'fixtures', 'geo', 'neighborhood', 'model3d', 'bg',
 ];
@@ -189,7 +193,7 @@ const IDENTIFY_SECTION: Record<string, string> = {
   ble: 'ble', alarm: 'alarm', calendar: 'calendar', thermostat: 'thermostats',
   safety: 'safety', alert: 'alertbeacons', robot: 'robots', camera: 'cameras',
   projector: 'projectors', valve: 'valves', plug: 'plugs', sprinkler: 'sprinklers',
-  flagpole: 'flagpoles', door: 'doors', window: 'windows', ruler: 'rulers',
+  flagpole: 'flagpoles', solar: 'solar', door: 'doors', window: 'windows', ruler: 'rulers',
   pzone: 'pzones', ground: 'ground', pool: 'pools', void: 'voids', room: 'rooms',
   landmark: 'geo',
 };
@@ -199,7 +203,7 @@ const IDENTIFY_SECTION: Record<string, string> = {
 const IDENTIFY_GROUPED_SECTIONS = new Set([
   'actions', 'alarm', 'alertbeacons', 'ble', 'calendar', 'cameras', 'doors', 'env',
   'fixtures', 'flagpoles', 'furniture', 'info', 'motion', 'plugs', 'projectors',
-  'robots', 'safety', 'sensors', 'sprinklers', 'thermostats', 'valves', 'windows',
+  'robots', 'safety', 'sensors', 'solar', 'sprinklers', 'thermostats', 'valves', 'windows',
 ]);
 
 @customElement('diorama-sidebar')
@@ -572,6 +576,7 @@ export class Sidebar extends LitElement {
         ${this._valvesSection()}
         ${this._sprinklersSection()}
         ${this._flagpolesSection()}
+        ${this._solarSection()}
         ${this._plugsSection()}
         ${this._presenceZonesSection()}
         ${this._groundSection()}
@@ -1037,6 +1042,7 @@ export class Sidebar extends LitElement {
       case 'valve': return 'Click to drop a water valve on a floor pipe. Bind a valve.* (open/close) or switch.* (irrigation zone) entity; clicking it opens/closes it. Water flows while open.';
       case 'sprinkler': return 'Click to drop an irrigation sprinkler head on the lawn. Bind a switch.*/valve.* zone entity; it sprays a fan/arc while that entity is on. Set the arc, throw, and heading in the sidebar.';
       case 'flagpole': return 'Click to plant a flagpole in the yard. Pick a flag design, height, and (optionally) bind a percent/cover entity to raise/lower it (half-mast toggle otherwise). The flag waves in 3D.';
+      case 'solar': return 'Click to plant a motorized solar panel in the yard. It tracks the sun all day (yaw + tilt) and parks flat at night; set a base rotation to orient the pedestal and bind a power sensor (W) to show generation. The frame is tinted by the current UV index.';
       case 'plug': return 'Click to drop a smart plug / outlet (snaps to a wall). Bind a switch.*/light.* load + an optional power sensor; clicking it toggles the outlet.';
       case 'pzone': return 'Click to add polygon vertices; double-click (or Enter) to finish (≥3 pts). Bind a binary_sensor (FP2 zone / occupancy) — the zone glows when occupied. ESC cancels.';
       case 'path': return 'Click to add centerline points; double-click (or Enter) to finish (2+ pts). Builds a constant-width path/driveway ribbon (kind defaults to concrete). Edit the width + drag the centerline handles afterward; "Detach shape" converts it to a plain polygon. ESC cancels.';
@@ -3601,6 +3607,117 @@ export class Sidebar extends LitElement {
       detail: {
         domain: ['sensor', 'number', 'cover', 'input_number'],
         onPick: (id: string) => { fp.entityId = id; this.planner.save(); this.planner.emitConfig(); },
+      },
+    }));
+  }
+
+  // ── Solar panels section ──────────────────────────────────────────────
+  // The panel is DISPLAY-ONLY (a tracker aims itself; there is nothing to
+  // toggle), so the editor is label / base rotation / power bind / lock / delete
+  // plus a live "aimed at" readout — which also says when the aim is running on
+  // the local-clock fallback because no `sun.sun` entity was found.
+  private _solarSection() {
+    const list = this.planner.floor().solarPanels ?? [];
+    if (list.length === 0) return nothing;
+    return this._section('solar', 'Solar panels', () =>
+      this._groupedList('solar', list, sp => this._solarItem(sp)));
+  }
+
+  // Live sun as resolved for the 3D array (solar.ts is the single home for it).
+  private _solarSun() {
+    const p = this.planner;
+    const fit = p.geoFit();
+    const theta = fit && fit.transform.quality !== 'none' ? fit.transform.thetaRad : 0;
+    return resolveSunPlan(p.hass?.states?.['sun.sun'] ?? null, theta, Date.now());
+  }
+
+  private _solarItem(sp: SolarPanel) {
+    const p = this.planner;
+    const sel = p.activeSolarId === sp.id;
+    const { sun } = this._solarSun();
+    const aim = solarAim(sun.azDeg, sun.elevDeg, solarRotation(sp));
+    const watts = sp.powerEntity ? solarPowerValue(p.hass?.states?.[sp.powerEntity] ?? null) : null;
+    const wt = solarPowerText(watts);
+    const nm = sp.label?.trim() || 'Solar panel';
+    return html`
+      <div data-item-row=${sp.id} style="border-bottom:1px solid var(--border)">
+        <div class="sensor-item ${sel ? 'sel' : ''}" @click=${() => p.setActiveSolar(sp.id)}>
+          <div class="dot" style="background:${aim.parked ? '#546e7a' : '#ffd54f'}"></div>
+          <div class="nm">${nm}</div>
+          <div class="badge" style="color:${aim.parked ? '#90a4ae' : '#9ccc65'}">
+            ${wt || (aim.parked ? 'parked' : `${Math.round(aim.tiltDeg)}°`)}
+          </div>
+        </div>
+        ${sel ? this._solarEditor(sp) : nothing}
+      </div>
+    `;
+  }
+
+  private _solarEditor(sp: SolarPanel) {
+    const p = this.planner;
+    const upd = (mut: () => void) => { mut(); p.save(); p.emitConfig(); };
+    const { sun, source } = this._solarSun();
+    const aim = solarAim(sun.azDeg, sun.elevDeg, solarRotation(sp));
+    const watts = sp.powerEntity ? solarPowerValue(p.hass?.states?.[sp.powerEntity] ?? null) : null;
+    return html`
+      <div style="background:rgba(0,0,0,0.25);border-radius:4px;padding:6px;margin:4px 0">
+        <div class="row"><label>Label</label>
+          <input type="text" data-label-for=${sp.id} .value=${sp.label ?? ''} placeholder="Solar panel"
+                 @input=${(e: Event) => upd(() => { sp.label = (e.target as HTMLInputElement).value; })}>
+        </div>
+        <div class="row"><label>Base rotation (°)</label>
+          <input type="number" step="5" .value=${String(solarRotation(sp))}
+                 @input=${(e: Event) => upd(() => {
+                   const v = parseFloat((e.target as HTMLInputElement).value);
+                   sp.rotation = isFinite(v) ? v : 0;
+                 })}>
+        </div>
+        <div class="row"><label>Aimed at</label>
+          <span style="font-size:11px;color:var(--text);flex:1">
+            ${aim.parked
+              ? html`<span style="color:var(--text-dim)">parked (sun below the horizon)</span>`
+              : html`${Math.round(aim.yawDeg)}° az · ${Math.round(aim.tiltDeg)}° tilt`}
+          </span>
+        </div>
+        <div class="row"><label>Power entity</label>
+          <span style="font-size:11px;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+            ${sp.powerEntity || '— unbound —'}${watts != null ? ` · ${solarPowerText(watts)}` : ''}
+          </span>
+        </div>
+        <div style="display:flex;gap:4px;margin-top:4px">
+          <button class="btn" style="flex:1;font-size:11px" @click=${() => this._pickSolarPowerEntity(sp)}>
+            ${sp.powerEntity ? 'Rebind' : 'Bind'}…
+          </button>
+          ${sp.powerEntity ? html`
+            <button class="btn" style="font-size:11px"
+                    @click=${() => upd(() => { sp.powerEntity = null; })}>✕</button>
+          ` : nothing}
+        </div>
+        ${this._lockRow(sp)}
+        <div style="font-size:10px;color:var(--text-dim);margin-top:4px;line-height:1.3">
+          The array tracks the sun's azimuth + elevation all day and parks flat at
+          night. Base rotation offsets the whole assembly. A bound power sensor (W)
+          drives the generation glow — a NEGATIVE reading (grid draw on a signed
+          monitor) reads amber. The frame is tinted by the current UV index.
+          ${source === 'clock' ? html`<br><span style="color:#ffb74d">No
+          <code>sun.sun</code> entity — aiming from the local clock (approximate).</span>` : nothing}
+        </div>
+        <button class="btn danger" style="width:100%;margin-top:6px" @click=${() => {
+          const f = p.floor();
+          f.solarPanels = (f.solarPanels ?? []).filter(x => x.id !== sp.id);
+          p.activeSolarId = null;
+          p.save(); p.emitConfig();
+        }}>Delete</button>
+      </div>
+    `;
+  }
+
+  private _pickSolarPowerEntity(sp: SolarPanel): void {
+    this.dispatchEvent(new CustomEvent('open-entity-picker', {
+      bubbles: true, composed: true,
+      detail: {
+        domain: 'sensor',
+        onPick: (id: string) => { sp.powerEntity = id; this.planner.save(); this.planner.emitConfig(); },
       },
     }));
   }
