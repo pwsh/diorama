@@ -455,7 +455,22 @@ rebuild-on-change lives in one place; `_flightArchetypeMetrics` is the single so
 fuselage dims + attachment points; military → olive tint), ~2× the original scale with the
 identifier (callsign else reg else hex) painted on BOTH fuselage flanks via the two-FrontSide-plane
 technique (`_buildFlightIdPlanes`, un-mirrored glyphs, one shared map, dedup-freed); an archetype/
-military/privacy change REBUILDS that hex's rig in place without losing motion state. Piston
+military/privacy/**skin** change REBUILDS that hex's rig in place without losing motion state.
+**Military skins (V3, 2026-08-04 — vehicle-library arc)**: `FlightsConfig.militarySkins?`
+(absent = ON; `setFlights` exactly-true → undefined; "Military aircraft skins" checkbox) swaps
+the generic body for BG_CRAFTS geometry via the PURE `militarySkinFor(fp, archetype?)`
+(flights.ts, zero-import — hence archetype as a plain optional string): exact typeCode
+`F16/F22/A10/B2/B52/AH64` → that craft (NO military-flag gate — the TYPE-code `B2` never
+collides with the CATEGORY `B2` balloon, the table only reads typeCode), else `category==='A6'`
+→ f16, else resolved-archetype heli + military dbFlag → apache (archetype absent → `A7`
+fallback). The skin scales to the bucket's `fusLen` inside an INNER group — label/beacon/banner/
+viz attachments keep reading `_flightArchetypeMetrics` and land identically to a generic rig
+(test-pinned); skins keep their SIGNATURE paint (no olive repaint), skip fuselage livery text
+(identity stays on the label plate), and set the per-rig `FlightRig.aftZ` from their own scaled
+bbox (see tail-exit anchoring). The flight path calls `_buildBannerCraft(craft, col, dim=false)`
+DIRECTLY (trailing param only — the banner call sites pass 2 args, byte-identical, golden-pinned)
+so banner + flight share ONE geometry source. TYPE_ARCHETYPE untouched (an F16 still buckets
+bizjet; only the drawn shape changes). 2D dart glyph deliberately unchanged. Piston
 archetypes (ga-high/ga-low) + callsign tow the REAL banner (`_buildBanner` +
 `_makeBgTextTexture('banner')`), everything else gets a camera-facing sprite label plate rendering
 `sanitizeLabelFields(flights.labelFields)` (absent = callsign + **real altitude ft** — honest where
@@ -506,7 +521,7 @@ returns `changed` — call sites own the single `emitConfig`. A low overflight a
 **Settings ▸ Integrations "Flight tracking"** block (status line w/ aircraft count + poll age,
 source radios w/ the airplanes.live privacy disclosure + CORS/mixed-content hints, radius 5–100 nm default 15,
 poll, min/max alt filters, "Callsign labels" + a 9-checkbox "Label fields" grid (canonical order,
-gated behind "Callsign labels") + "Status beacons" + "Dim privacy-flagged aircraft" + "Track the
+gated behind "Callsign labels") + "Status beacons" + "Military aircraft skins" + "Dim privacy-flagged aircraft" + "Track the
 ISS", alerts sub-group — the watch-list normalizes in `setFlights` (trim/uppercase), and
 `setFlights` sanitizes `labelFields`, not the UI, so imports get the same shape).
 **Speed visualization + vertical scale (2026-07-31, user-requested, research-backed).**
@@ -523,11 +538,16 @@ of DISPLAY positions sampled every 0.15 s AFTER the ease (kink-free — NOT by s
 construction — test-pinned max segment angle <30° under a forced correction). **Tail-exit
 anchoring (2026-07-31 bisection fix, user-reported)**: EVERY spine sample — ring-buffer writes
 AND the live head — goes through `_flightTailAnchor` = the eased display position pushed aft
-by `(metrics.aftZ + FLIGHT_TAIL_GAP_MM 140) × rigScale` along the SAME eased yaw+pitch the
+by `(rig.aftZ + FLIGHT_TAIL_GAP_MM 140) × rigScale` along the SAME eased yaw+pitch the
 assembly rotates with (pushed-offset, NOT live-head-only — sub-airframe per-sample travel
-would leave old samples inside the model); **`aftZ`** on `_flightArchetypeMetrics` = the
-rear-most DRAWN extent per archetype (the heli's tail rotor ≫ fusLen/2), which also rebases
-the band-3 motion lines, the burner nozzle standoff (pod-length aware) and the ghost lags;
+would leave old samples inside the model); **`aftZ`** = the rear-most DRAWN extent — sourced
+from `_flightArchetypeMetrics` per archetype (the heli's tail rotor ≫ fusLen/2) but carried
+**per-rig as `FlightRig.aftZ` since V3 (military skins)**: a skinned rig measures its own
+scaled bbox at build (`Box3` on the detached assembly — f16-in-bizjet measures 1178 vs the
+bucket's 1060, so the bucket value would sit INSIDE the model, negative-controlled); ALL four
+consumers (tail anchor, band-3 motion lines, burner nozzle standoff (pod-length aware), ghost
+lags) read `rig.aftZ` — the helpers no longer take an aftZ param so nobody can read the wrong
+one;
 negative-controlled in flights-render §26l/26m (offset forced to 0 fails exactly the 8
 invariant pins); attributes
 sized once, `setDrawRange` + in-place refills, zero per-frame alloc; band changes rebuild only
@@ -606,15 +626,15 @@ new dirty-key input. 2D `drawFlights` calls the same pair (`solid`+colorB = two 
 call `resolveFlightGlow`, never re-derive locally. Settings ▸ Flight tracking "Glow rules"
 editor (collapsed summary rows, ✎ expand, ▲▼ reorder — order materially changes behaviour).
 **Attribution**: "Flight data © airplanes.live" joins the fixed bottom-left chip (stacked with the
-OSM line) whenever cloud + enabled + data. Tests: `flights-test.html` (`FLIGHTS PASS 686/686` —
+OSM line) whenever cloud + enabled + data. Tests: `flights-test.html` (`FLIGHTS PASS 716/716` —
 fixture = a REAL 94-aircraft airplanes.live LAX capture; incl. the live-path emit matrix, the
 archetype golden matrix, the emergency-alert lifecycle, the shell-rescale golden/property suite,
 and §6e's draw-radius clamp matrix + similarity law — the pre-existing derivation goldens run
-through an `FB` wrapper that pins `shellMm` to FLIGHT_SHELL_BASE_MM and stay byte-identical), `flights-render-test.html` (`FLIGHTSRENDER PASS 513/513` — heading/pitch signs asserted
+through an `FB` wrapper that pins `shellMm` to FLIGHT_SHELL_BASE_MM and stay byte-identical), `flights-render-test.html` (`FLIGHTSRENDER PASS 555/555` — heading/pitch signs asserted
 via `getWorldDirection`; archetype geometry, livery text layout, beacon priority/gating, privacy
 dim, in-place rebuild, distance scale, fog exemption, flight raycast, §4d's non-default-shell
 position/scale/frustum parity), `flights-ui-test.html`
-(`FLIGHTSUI 303/303` — settings round-trips, flight modal matrix, 2D hit routing; alert-center
+(`FLIGHTSUI 313/313` — settings round-trips, flight modal matrix, 2D hit routing; alert-center
 67/67 stays green).
 
 ### Geo reference & GPS device pins (World Outside, Feature G)
@@ -725,7 +745,7 @@ integration) drives the moon phase.
 ### Playful background text (skywriting / banner plane / grass / TRAIN — multi-entry; the news CHOPPER is now an AIRCRAFT option, not a mode)
 `Store.bgTexts?: BgTextEntry[]` (cap 6) — `{id, mode: 'sky'|'banner'|'grass'|'train'|'chopper',
 text?, entityId?, format?, maxCars?}` — decorative messages written INTO the 3D world.
-Store-level, in `_loadFromHa`'s explicit list. **`_migrateBgTexts` is a WHOLE-ENTRY passthrough (2026-08-01 fix, user-reported "ground writing resets to auto rotate/fit on reload")**: it used to rebuild each row from a hard-coded field whitelist, silently dropping every field added after it was written (10 confirmed: aircraft/scale/grassAreaId/faceCamera/rotationDeg + the 5 colors) — now `{...e}` shallow-copy with only `id`+`mode` validated; NEVER re-introduce a field list there (regression-pinned, 13 assertions negative-controlled). **Per-entry vehicle/banner COLORS (2026-08-01, user-requested)**: `colorMain`/`colorDetail`/`bannerBg`/`bannerText`/`bannerFrame` (optional hex; absent = byte-identical shipped colors, golden-pinned; renderer-side `bgHex` validation — garbage falls back, never NaN) on modes banner/train/chopper ONLY (`bgTextsResolved` emits them just for those; sky glow + grass surface-ink untouched, their key terms byte-identical): main = fuselage+fin / cabin / engine+car bodies; detail = wing+tail / NEWS stripes+boom+fin (fin gated so absent-detail is identical) / trim+last car; bannerBg/Text = cloth + lettering (train: flank plate panel + lettering); bannerFrame = the EXISTING trim stripes in both painters (no new stroke). Archetype tow planes: `_buildAircraftModel` gained a trailing optional `tint {body?, accent?}` — the livery expressions factored through `mkBody`/`mkAccent`, no-tint literally the old expressions (FLIGHTSRENDER 513/513 pins the live fleet); shared `dark`/`glass` never tinted; heli has no accent slot. Five color rows w/ ✕ clear in Settings ▸ Display bg-text (banner/train/chopper rows only). `_keyBgText` gained the five per-entry terms (still NO configRev); `_bgTextPhase` resume across a recolor rebuild pinned to 1e-6. **Legacy `Store.bgText` (single) migrates once**
+Store-level, in `_loadFromHa`'s explicit list. **`_migrateBgTexts` is a WHOLE-ENTRY passthrough (2026-08-01 fix, user-reported "ground writing resets to auto rotate/fit on reload")**: it used to rebuild each row from a hard-coded field whitelist, silently dropping every field added after it was written (10 confirmed: aircraft/scale/grassAreaId/faceCamera/rotationDeg + the 5 colors) — now `{...e}` shallow-copy with only `id`+`mode` validated; NEVER re-introduce a field list there (regression-pinned, 13 assertions negative-controlled). **Per-entry vehicle/banner COLORS (2026-08-01, user-requested)**: `colorMain`/`colorDetail`/`bannerBg`/`bannerText`/`bannerFrame` (optional hex; absent = byte-identical shipped colors, golden-pinned; renderer-side `bgHex` validation — garbage falls back, never NaN) on modes banner/train/chopper ONLY (`bgTextsResolved` emits them just for those; sky glow + grass surface-ink untouched, their key terms byte-identical): main = fuselage+fin / cabin / engine+car bodies; detail = wing+tail / NEWS stripes+boom+fin (fin gated so absent-detail is identical) / trim+last car; bannerBg/Text = cloth + lettering (train: flank plate panel + lettering); bannerFrame = the EXISTING trim stripes in both painters (no new stroke). Archetype tow planes: `_buildAircraftModel` gained a trailing optional `tint {body?, accent?}` — the livery expressions factored through `mkBody`/`mkAccent`, no-tint literally the old expressions (FLIGHTSRENDER pins the live fleet); shared `dark`/`glass` never tinted; heli has no accent slot. Five color rows w/ ✕ clear in Settings ▸ Display bg-text (banner/train/chopper rows only). `_keyBgText` gained the five per-entry terms (still NO configRev); `_bgTextPhase` resume across a recolor rebuild pinned to 1e-6. **Legacy `Store.bgText` (single) migrates once**
 in `_normalizeStore` (`_migrateBgTexts`, idempotent; the old field is read for migration only,
 never written). `Planner.bgTextsResolved()` resolves per entry (bound entity's
 `formatEntityValue` state wins over static `text`, capped **PER MODE — grass 160, all other
@@ -767,7 +787,9 @@ Train vehicles are ×1.8 scale (spacing 1480, wheelR 162).
 **Tow-aircraft model** (`BgTextEntry.aircraft`, banner mode only): one of the eight FLIGHT
 archetypes (`src/aircraft-types.ts`, via the SAME `_buildAircraftModel` the ADS-B rigs use —
 civil paint, no beacons/livery) **OR one of the 19 `BG_CRAFTS` banner craft (2026-08-01,
-user-requested; `_buildBannerCraft(craft, col)` in three-renderer — ENTIRELY separate from the
+user-requested; `_buildBannerCraft(craft, col, dim = false)` in three-renderer — geometry now
+ALSO consumed by the live-ADS-B military skins (V3; banner call sites pass 2 args =
+byte-identical), otherwise separate from the
 archetype path, TYPE_ARCHETYPE untouched)**: 7 military/NASA (`f16 a10 f22 b2 b52 apache
 shuttle`) + 11 fiction homages (`airwolf batwing trimaxion einstein_rocket enterprise
 enterprise_c xwing falcon slave1 naboo serenity`) + **`news_chopper`** (the retired

@@ -1450,6 +1450,12 @@ export class SettingsDrawer extends LitElement {
               <span style="flex:1">Status beacons</span>
             </label>
             <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text)"
+                   title="Aircraft that really are an F-16, F-22, A-10, B-2, B-52 or Apache (by type designator, fighter category or a military rotorcraft flag) are drawn with that silhouette instead of the generic model, scaled to the same size. Off keeps every aircraft on the generic body.">
+              <input type="checkbox" .checked=${cfg.militarySkins !== false}
+                     @change=${(e: Event) => set(f => { f.militarySkins = (e.target as HTMLInputElement).checked; })}>
+              <span style="flex:1">Military aircraft skins</span>
+            </label>
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text)"
                    title="Speed reads at a glance: a hovering machine shows a rotor blur and no trail, faster aircraft grow a comet tail, then a contrail, and the fastest add an afterburner glow with ghost multiples. Off builds none of it.">
               <input type="checkbox" .checked=${cfg.speedViz !== false}
                      @change=${(e: Event) => set(f => { f.speedViz = (e.target as HTMLInputElement).checked; })}>

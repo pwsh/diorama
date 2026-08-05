@@ -2741,6 +2741,107 @@
                  F.flightShellMm(1000), 2));
       }
     }
+
+    // ── §28 Military skins (vehicle library V3) ──────────────────────────────
+    // `militarySkinFor` decides which named BG_CRAFTS silhouette a live aircraft
+    // wears. Pure resolution only — the ENVELOPE (archetype metrics) is the
+    // renderer's business and is pinned in flights-render-test §26.
+    {
+      const MFP = o => ({
+        hex: 'mil001', callsign: null, lat: 40, lon: -75, altFt: 20000,
+        gsKt: 400, trackDeg: 90, vertRateFpm: 0, category: null, seenPosS: 1,
+        military: false, reg: null, typeCode: null, typeDesc: null, operator: null,
+        emergency: null, squawk: null, interesting: false, pia: false, ladd: false,
+        ...o,
+      });
+
+      // 1. Exact type-designator matches — the six already-built silhouettes.
+      const EXACT = [['F16', 'f16'], ['F22', 'f22'], ['A10', 'a10'],
+                     ['B2', 'b2'], ['B52', 'b52'], ['AH64', 'apache']];
+      for (const [t, want] of EXACT) {
+        ok(`28: typeCode ${t} → ${want}`,
+          F.militarySkinFor(MFP({ typeCode: t })) === want,
+          String(F.militarySkinFor(MFP({ typeCode: t }))));
+      }
+      ok('28: the six skins are exactly FLIGHT_MILITARY_SKINS',
+        F.FLIGHT_MILITARY_SKINS.slice().sort().join(',')
+          === EXACT.map(e => e[1]).sort().join(','),
+        F.FLIGHT_MILITARY_SKINS.join(','));
+      ok('28: exact match needs NO military dbFlag (a typed F-16 IS one)',
+        F.militarySkinFor(MFP({ typeCode: 'F16', military: false })) === 'f16');
+      ok('28: exact match is case/whitespace insensitive',
+        F.militarySkinFor(MFP({ typeCode: '  f16 ' })) === 'f16');
+      ok('28: exact match beats the A6 category fallback',
+        F.militarySkinFor(MFP({ typeCode: 'A10', category: 'A6' })) === 'a10');
+      ok('28: exact match beats the military-heli rule',
+        F.militarySkinFor(MFP({ typeCode: 'B2', category: 'A7', military: true }),
+                          'heli') === 'b2');
+
+      // 2. Category A6 (high-performance / fighter) → f16.
+      ok('28: category A6 → f16', F.militarySkinFor(MFP({ category: 'A6' })) === 'f16');
+      ok('28: category A6 needs no military flag',
+        F.militarySkinFor(MFP({ category: 'A6', military: false })) === 'f16');
+      ok('28: category A6 lowercase/padded still resolves',
+        F.militarySkinFor(MFP({ category: ' a6 ' })) === 'f16');
+
+      // 3. Military rotorcraft → apache, from the RESOLVED archetype.
+      ok('28: military heli (archetype) → apache',
+        F.militarySkinFor(MFP({ typeCode: 'UH60', military: true }), 'heli') === 'apache');
+      ok('28: CIVIL heli keeps the generic body',
+        F.militarySkinFor(MFP({ typeCode: 'EC35', military: false }), 'heli') === null);
+      ok('28: military NON-heli archetype gets no skin',
+        F.militarySkinFor(MFP({ typeCode: 'C130', military: true }), 'turboprop') === null);
+      ok('28: with no archetype passed, category A7 carries the heli rule',
+        F.militarySkinFor(MFP({ category: 'A7', military: true })) === 'apache');
+      ok('28: an archetype ARGUMENT wins over the category heli guess',
+        F.militarySkinFor(MFP({ category: 'A7', military: true }), 'narrowbody') === null);
+
+      // 4. Civil traffic — the overwhelming majority — is untouched.
+      const CIVIL = [
+        { typeCode: 'B738', category: 'A3' }, { typeCode: 'A320', category: 'A3' },
+        { typeCode: 'C172', category: 'A1' }, { typeCode: 'SR22', category: 'A1' },
+        { typeCode: 'GLF6', category: 'A2' }, { typeCode: 'B77W', category: 'A5' },
+        { typeCode: null, category: null },
+      ];
+      ok('28: civil traffic resolves to no skin',
+        CIVIL.every(o => F.militarySkinFor(MFP(o)) === null),
+        CIVIL.map(o => String(F.militarySkinFor(MFP(o)))).join(','));
+      ok('28: a military AIRLINER (tanker/transport) still has no skin of its own',
+        F.militarySkinFor(MFP({ typeCode: 'KC35', category: 'A5', military: true }),
+                          'widebody') === null);
+
+      // 5. The `B2` axis collision, named in the resolver: emitter category B2
+      //    is a BALLOON, type designator B2 is a Northrop bomber.
+      ok('28: category B2 (lighter-than-air) is NOT painted as a B-2',
+        F.militarySkinFor(MFP({ category: 'B2', typeCode: null })) === null);
+      ok('28: category B2 with a real balloon-ish type stays generic',
+        F.militarySkinFor(MFP({ category: 'B2', typeCode: 'BALL' })) === null);
+
+      // 6. Never throws.
+      ok('28: garbage input resolves to null, never throws', (() => {
+        try {
+          return F.militarySkinFor(null) === null
+            && F.militarySkinFor(MFP({ typeCode: 42, category: {} })) === null
+            && F.militarySkinFor(MFP({ typeCode: '' }), '') === null;
+        } catch { return false; }
+      })());
+
+      // 7. Toggle semantics — ABSENT = ON (the beacons/privacyDim idiom).
+      ok('28: militarySkinsEnabled(undefined) = ON', F.militarySkinsEnabled(undefined) === true);
+      ok('28: militarySkinsEnabled(true) = ON', F.militarySkinsEnabled(true) === true);
+      ok('28: militarySkinsEnabled(false) = OFF', F.militarySkinsEnabled(false) === false);
+      ok('28: militarySkinsEnabled(null) = ON (stale config)',
+        F.militarySkinsEnabled(null) === true);
+
+      // 8. The skin table is a TYPE-designator table only — it never leaks into
+      //    the archetype classification (aircraft-types.ts stays the authority).
+      ok('28: MILITARY_SKIN_TYPE_CODES keys are uppercase designators',
+        Object.keys(F.MILITARY_SKIN_TYPE_CODES).every(k => k === k.toUpperCase()),
+        Object.keys(F.MILITARY_SKIN_TYPE_CODES).join(','));
+      ok('28: every table value is a known skin',
+        Object.values(F.MILITARY_SKIN_TYPE_CODES)
+          .every(v => F.FLIGHT_MILITARY_SKINS.includes(v)));
+    }
   } catch (err) {
     ok('HARNESS threw', false, String(err && err.stack || err));
   }

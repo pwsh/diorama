@@ -2506,6 +2506,269 @@
     upd([]); step(1, 3);
   }
 
+  // ── 28. Military skins (vehicle library V3, research §4.4) ─────────────────
+  // A live aircraft that really IS one of the six already-built BG_CRAFTS
+  // military silhouettes wears that shape instead of the generic archetype body.
+  // The pinned contract: the ENVELOPE (archetype metrics — label, beacon, id
+  // planes, viz terms) is unchanged, only `aftZ` becomes the skin's own measured
+  // rear extent, and the banner tow path is untouched.
+  {
+    upd([]); step(1, 3);
+    const MFP = (hex, extra = {}) => FP({
+      hex, lat: OLAT + 0.12, lon: OLON + 0.12, altFt: 21000,
+      gsKt: 300, trackDeg: 90, ...extra });
+    // Z extent in the ASSEMBLY's OWN frame. The page never imports THREE, so the
+    // rig is parked at the origin with identity rotation/scale first (world ==
+    // model frame) and the 8 geometry-bbox corners are pushed through each
+    // mesh's matrixWorld by hand. Rigs are torn down at the end of the section.
+    const zExtent = (asm) => {
+      asm.position.set(0, 0, 0); asm.rotation.set(0, 0, 0); asm.scale.setScalar(1);
+      asm.updateMatrixWorld(true);
+      // matrixWorld composes the PARENT (_flightsGroup sits at the home anchor),
+      // so measure relative to the assembly's own world origin — with an identity
+      // local transform that is exactly the group offset.
+      const base = asm.matrixWorld.elements[14];
+      let min = Infinity, max = -Infinity;
+      asm.traverse(o => {
+        if (!o.isMesh || !o.geometry) return;
+        if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
+        const bb = o.geometry.boundingBox; if (!bb) return;
+        const e = o.matrixWorld.elements;
+        for (const x of [bb.min.x, bb.max.x])
+          for (const y of [bb.min.y, bb.max.y])
+            for (const z of [bb.min.z, bb.max.z]) {
+              const wz = e[2] * x + e[6] * y + e[10] * z + e[14] - base;
+              if (wz < min) min = wz;
+              if (wz > max) max = wz;
+            }
+      });
+      return { min, max, len: max - min };
+    };
+    // Mesh signature: geometry type + rounded parameters + local position, as a
+    // sorted multiset — enough to catch any change to a build's shape. Outline
+    // SHELLS are excluded: they share their host's geometry, so they add nothing
+    // the hosts don't already say, and a translucent (privacy) build legitimately
+    // has none.
+    const meshSig = (root) => {
+      const out = [];
+      root.traverse(o => {
+        if (!o.isMesh || !o.geometry || o.userData.outline) return;
+        const p = o.geometry.parameters || {};
+        const nums = Object.keys(p).sort().map(k =>
+          typeof p[k] === 'number' ? `${k}:${p[k].toFixed(2)}` : `${k}:${p[k]}`);
+        out.push(`${o.geometry.type}|${nums.join(',')}|` +
+          `${o.position.x.toFixed(1)},${o.position.y.toFixed(1)},${o.position.z.toFixed(1)}`);
+      });
+      return out.sort().join('\n');
+    };
+
+    // (a) The three resolution paths each land a skin on a live rig.
+    upd([MFP('sk16', { category: 'A6', callsign: 'VIPER1' })]);
+    {
+      const g = rig('sk16');
+      ok('28: an A6 (fighter) aircraft wears the f16 skin',
+         g.skin === 'f16', `skin=${g.skin}`);
+      ok('28: …while its ARCHETYPE bucket is unchanged (bizjet)',
+         g.archetype === 'bizjet', g.archetype);
+      ok('28: the f16 skin builds its signature cropped delta wing',
+         withUD(g.asm, 'wing', 'delta').length === 1);
+    }
+    upd([MFP('skb2', { typeCode: 'B2', callsign: 'SPIRIT' })]);
+    ok('28: typeCode B2 wears the b2 flying-wing skin',
+       rig('skb2').skin === 'b2'
+       && withUD(rig('skb2').asm, 'wing', 'flyingwing').length === 2,   // one panel per side
+       `${rig('skb2').skin}/${withUD(rig('skb2').asm, 'wing', 'flyingwing').length}`);
+    upd([MFP('skah', { typeCode: 'UH60', military: true, gsKt: 120 })]);
+    {
+      const g = rig('skah');
+      ok('28: a MILITARY rotorcraft wears the apache skin',
+         g.skin === 'apache' && g.archetype === 'heli', `${g.skin}/${g.archetype}`);
+      ok('28: the apache skin keeps a spinning main rotor + tail rotor',
+         g.props.length >= 1 && g.tailRotor !== null && g.propRate > 0,
+         `props=${g.props.length} rate=${g.propRate}`);
+    }
+    upd([MFP('skciv', { typeCode: 'EC35', military: false, gsKt: 120 })]);
+    ok('28: a CIVIL helicopter keeps the generic body',
+       rig('skciv').skin === null);
+
+    // (b) Envelope: the skin is scaled by bucket fusLen / craft len, and reads
+    //     the same SIZE as the generic body it replaces (§4.1's contract).
+    upd([]); step(1, 3);
+    upd([MFP('envS', { category: 'A6' }), MFP('envG', { typeCode: 'GLF6', lon: OLON + 0.13 })]);
+    {
+      const s = rig('envS'), gen = rig('envG');
+      ok('28: both rigs are the same archetype bucket',
+         s.archetype === 'bizjet' && gen.archetype === 'bizjet');
+      const inner = s.asm.children.find(c => !c.isMesh && !c.isSprite && c.children.length > 2);
+      const M = r._flightArchetypeMetrics('bizjet');
+      ok('28: the skin hangs in a scaled inner group', !!inner, String(!!inner));
+      near('28: the inner scale is exactly bucket fusLen / craft len',
+           inner ? inner.scale.x : 0, M.fusLen / 2000, 1e-9);
+      const es = zExtent(s.asm), eg = zExtent(gen.asm);
+      ok('28: the skinned body reads within ±30 % of the generic body it replaces',
+         Math.abs(es.len - eg.len) / eg.len <= 0.30,
+         `skin=${es.len.toFixed(0)} generic=${eg.len.toFixed(0)}`);
+      ok('28: …and within ±60 % of the bucket fusLen (the authored envelope)',
+         Math.abs(es.len - M.fusLen) / M.fusLen <= 0.60,
+         `len=${es.len.toFixed(0)} fusLen=${M.fusLen}`);
+    }
+
+    // (c) aftZ OVERRIDE — the one metric a skin owns, because the trail anchor
+    //     must never start inside the model.
+    {
+      const s = rig('envS'), gen = rig('envG');
+      const es = zExtent(s.asm);
+      ok('28: the skinned rig carries its OWN aftZ (not the bucket value)',
+         s.aftZ !== r._flightArchetypeMetrics('bizjet').aftZ,
+         `skin=${s.aftZ.toFixed(0)} bucket=${r._flightArchetypeMetrics('bizjet').aftZ}`);
+      ok('28: the override is ≥ the skin\'s scaled rear extent',
+         s.aftZ >= es.max - 0.5, `aftZ=${s.aftZ.toFixed(1)} rear=${es.max.toFixed(1)}`);
+      ok('28: a GENERIC rig still carries the bucket aftZ exactly',
+         gen.aftZ === r._flightArchetypeMetrics('bizjet').aftZ, String(gen.aftZ));
+      // Negative control: the bucket's own aftZ is NOT a safe anchor for this
+      // silhouette — which is precisely why the override exists.
+      ok('28: (control) the skin really does reach past the bucket aftZ',
+         es.max > r._flightArchetypeMetrics('bizjet').aftZ,
+         `rear=${es.max.toFixed(0)} bucket=${r._flightArchetypeMetrics('bizjet').aftZ}`);
+    }
+    upd([]); step(1, 3);
+
+    // (d) The trailing effects all anchor off the rig's aftZ, so nothing emits
+    //     from inside a borrowed silhouette.
+    {
+      const fly = (hex, extra) => {
+        const at = t => MFP(hex, { gsKt: 560, lat: OLAT + 0.10,
+          lon: OLON + 0.10 + t * 0.004, ...extra });
+        upd([at(0)]);
+        for (let i = 0; i < 14; i++) { upd([at(i)]); step(0.15); }
+        return rig(hex);
+      };
+      const g = fly('skvz', { category: 'A6' });
+      ok('28: the skinned rig reaches band 5 (contrail + burners + ghosts)',
+         g.speedBand === 5 && g.ghosts.length === 2, `band=${g.speedBand}`);
+      ok('28: the ghost multiples lag from the SKIN\'s tail, not the bucket\'s',
+         g.ghosts.every(x => x.position.z >= g.aftZ),
+         `${g.ghosts.map(x => x.position.z.toFixed(0)).join(',')} vs ${g.aftZ.toFixed(0)}`);
+      const sc = r._flightRigScale(g);
+      const head = r._flightTailAnchor(g, g.asm.position.clone());
+      near('28: the trail head sits exactly at the SKIN\'s tail exit',
+           Math.hypot(head.x - g.curX, head.z - g.curZ), (g.aftZ + 140) * sc, 2);
+    }
+    upd([]); step(1, 3);
+
+    // (e) Attachments are envelope-owned and land EXACTLY where they do on a
+    //     generic rig of the same bucket — except the fuselage lettering, which
+    //     a fighter does not carry.
+    upd([MFP('atS', { category: 'A6', callsign: 'VIPER2', military: true,
+                      operator: 'USAF' }),
+         MFP('atG', { typeCode: 'GLF6', callsign: 'GULF11', military: true,
+                      operator: 'USAF', lon: OLON + 0.13 })]);
+    {
+      const s = rig('atS'), gen = rig('atG');
+      const M = r._flightArchetypeMetrics('bizjet');
+      ok('28: the skinned rig has a label plate at the bucket labelY',
+         !!s.label && Math.abs(s.label.position.y - M.labelY) < 1e-9);
+      ok('28: label height matches the generic rig exactly',
+         !!gen.label && s.label.position.y === gen.label.position.y);
+      const bead = h => withUD(rig(h).asm, 'beacon').find(o => o.isMesh);
+      ok('28: the status beacon builds at the bucket beacon point',
+         !!bead('atS') && bead('atS').position.z === M.beaconZ
+         && bead('atS').position.y === M.beaconY);
+      ok('28: beacon position matches the generic rig exactly',
+         !!bead('atG') && bead('atS').position.equals(bead('atG').position));
+      ok('28: a skinned rig carries NO fuselage lettering (no operator titles)',
+         s.idPlanes === null, String(!!s.idPlanes));
+      ok('28: (control) the generic rig DOES carry fuselage lettering',
+         gen.idPlanes !== null);
+    }
+    upd([]); step(1, 3);
+
+    // (f) Privacy dimming composes on a skin exactly as on a generic body.
+    upd([MFP('skpia', { category: 'A6', callsign: 'N9PIA', pia: true })]);
+    {
+      const g = rig('skpia');
+      const mats = [];
+      g.asm.traverse(o => { if (o.isMesh && o.material && !o.userData.outline) mats.push(o.material); });
+      ok('28: a PIA fighter still wears the skin', g.skin === 'f16' && g.dim === true);
+      ok('28: every skin material builds translucent',
+         mats.length > 3 && mats.every(m => m.transparent === true && m.opacity <= 0.45),
+         `n=${mats.length}`);
+      ok('28: …so the privacy build gets no outline shells',
+         withUD(g.asm, 'outline').length === 0);
+    }
+    upd([]); step(1, 3);
+
+    // (g) The master toggle. OFF is the pre-batch build, mesh-for-mesh.
+    upd([MFP('tgl', { category: 'A6', callsign: 'VIPER3', military: true })],
+        { opts: { militarySkins: false } });
+    const offSig = meshSig(rig('tgl').asm);
+    const offShells = withUD(rig('tgl').asm, 'outline').length;
+    ok('28: militarySkins:false keeps the generic archetype body',
+       rig('tgl').skin === null && withUD(rig('tgl').asm, 'wing', 'delta').length === 0);
+    ok('28: …and carries the bucket aftZ',
+       rig('tgl').aftZ === r._flightArchetypeMetrics('bizjet').aftZ);
+    {
+      // The golden: a toggled-off A6 is the SAME build as any other military
+      // bizjet — i.e. exactly what shipped before this batch.
+      upd([]); step(1, 3);
+      upd([MFP('tglref', { typeCode: 'GLF6', callsign: 'VIPER3', military: true })]);
+      ok('28: toggle-off mesh multiset is identical to the shipped generic body',
+         meshSig(rig('tglref').asm) === offSig);
+      ok('28: …including its outline shells',
+         withUD(rig('tglref').asm, 'outline').length === offShells, `n=${offShells}`);
+    }
+    upd([]); step(1, 3);
+    ok('28: an ABSENT militarySkins opt means ON (stale three-view safe)',
+       (() => { upd([MFP('dflt', { category: 'A6' })]); return rig('dflt').skin === 'f16'; })());
+
+    // (h) Re-skin IN PLACE: the type designator arrives on a LATER poll, and the
+    //     toggle can flip under a live rig — neither may lose motion state.
+    upd([]); step(1, 3);
+    upd([MFP('late', { typeCode: null, category: 'A3' })]);
+    {
+      const before = rig('late');
+      const asm0 = before.asm, x0 = before.curX;
+      ok('28: the first poll (no type) builds a generic narrowbody',
+         before.skin === null && before.archetype === 'narrowbody');
+      upd([MFP('late', { typeCode: 'F22', category: 'A3' })]);
+      const after = rig('late');
+      ok('28: a later type designator re-skins the SAME rig in place',
+         after === before && after.asm !== asm0 && after.skin === 'f22',
+         `skin=${after.skin}`);
+      ok('28: …keeping its display position (motion state survives)',
+         after.curX === x0);
+      ok('28: …and adopting the new silhouette + its aftZ',
+         withUD(after.asm, 'wing', 'diamond').length === 1
+         && after.aftZ !== r._flightArchetypeMetrics(after.archetype).aftZ);
+      upd([MFP('late', { typeCode: 'F22', category: 'A3' })], { opts: { militarySkins: false } });
+      ok('28: turning skins OFF drops a live rig back to the generic body',
+         rig('late') === before && rig('late').skin === null
+         && rig('late').aftZ === r._flightArchetypeMetrics(rig('late').archetype).aftZ);
+    }
+    upd([]); step(1, 3);
+
+    // (i) The BANNER path is untouched by the shared geometry: an untinted craft
+    //     builds opaque, with its outline shells, exactly as it always has —
+    //     the `dim` parameter is trailing and defaults off. (The full banner
+    //     golden lives in bgtext-multi-test / vehicle-craft-test.)
+    {
+      const plain = r._buildBannerCraft('f16', {});
+      const dimmed = r._buildBannerCraft('f16', {}, true);
+      const opaque = [];
+      plain.asm.traverse(o => { if (o.isMesh && o.material && !o.userData.outline) opaque.push(o.material); });
+      ok('28: the 2-arg banner build is fully opaque (unchanged)',
+         opaque.length > 3 && opaque.filter(m => m.transparent).length <= 1,
+         `n=${opaque.length}`);
+      ok('28: the banner build still gets its inverted-hull outline shells',
+         withUD(plain.asm, 'outline').length > 0);
+      ok('28: the dim build is translucent and shell-free',
+         withUD(dimmed.asm, 'outline').length === 0);
+      ok('28: both builds share the same mesh signature (geometry is one source)',
+         meshSig(plain.asm) === meshSig(dimmed.asm));
+      r._clearGroup(plain.asm); r._clearGroup(dimmed.asm);
+    }
+  }
+
   // ── report ─────────────────────────────────────────────────────────────────
   const pass = tests.filter(t => t.ok).length;
   const fail = tests.length - pass;

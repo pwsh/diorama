@@ -1448,6 +1448,15 @@ export interface FlightsConfig {
   // plate, ['callsign','alt'] — the field is purely additive.
   labelFields?: string[];
   beacons?: boolean;                      // status beacons (emergency/military/…); absent = ON
+  // Named MILITARY SKINS on the live display (vehicle library batch V3,
+  // docs/research/vehicle-model-library.md §4.4): an aircraft whose type
+  // designator (or A6 fighter category / military rotorcraft flag) resolves to
+  // one of the six already-built BG_CRAFTS military silhouettes is drawn with
+  // that shape, scaled into its archetype's envelope — see `militarySkinFor` in
+  // src/flights.ts, which owns the whole resolution. ABSENT = ON; false keeps
+  // every aircraft on the generic archetype body. `setFlights` normalizes
+  // exactly-true back to undefined (the minimal-config idiom).
+  militarySkins?: boolean;
   // User-authored glow rules (docs/research/flight-glow-rules.md): an ordered,
   // FIRST-MATCH-WINS list assigning a colour + animation pattern to matching
   // aircraft. Layered ON TOP of the default beacon ladder — an emergency

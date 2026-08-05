@@ -6061,6 +6061,13 @@ export class Planner extends EventTarget {
       const n = flightVerticalScale(vs);
       this.store.flights.verticalScale = n === FLIGHT_VSCALE_DEFAULT ? undefined : n;
     }
+    // Military skins (vehicle library V3): absent = ON, so storing an explicit
+    // `true` is redundant — normalize it away and keep the stored config minimal
+    // (the modelScale / shellRadiusM "exactly the default clears" idiom, applied
+    // to a boolean). `false` is meaningful and stays.
+    if (this.store.flights.militarySkins === true) {
+      this.store.flights.militarySkins = undefined;
+    }
     // Same discipline for the user glow rules (docs/research/flight-glow-rules.md
     // §6.3): unknown patterns / unusable colours drop the rule, numeric criteria
     // clamp and swap-if-inverted, ids de-duplicate, the cap is enforced, and —

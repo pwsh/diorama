@@ -403,6 +403,14 @@
       p.setFlights(f => { f.beacons = true; f.privacyDim = true; f.labelFields = undefined; });
       eq('beacons back on', p.store.flights.beacons, true);
       eq('labelFields cleared', p.store.flights.labelFields, undefined);
+      // Military skins (vehicle library V3): opt-OUT, and setFlights normalizes
+      // an explicit `true` away so the stored config stays minimal.
+      eq('militarySkins absent by default', p.store.flights.militarySkins, undefined);
+      p.setFlights(f => { f.militarySkins = false; });
+      eq('militarySkins:false round-trips', p.store.flights.militarySkins, false);
+      p.setFlights(f => { f.militarySkins = true; });
+      eq('militarySkins:true normalizes back to undefined (= ON)',
+        p.store.flights.militarySkins, undefined);
       // Tow banners (wave 3): opt-OUT, so absent must read as ON everywhere.
       eq('banners absent by default', p.store.flights.banners, undefined);
       p.setFlights(f => { f.banners = false; });
@@ -997,6 +1005,30 @@
       ok('turning beacons off leaves speed effects on',
         p2.store.flights.beacons === false && p2.store.flights.speedViz === true);
       await flip(cbFor('Status beacons'), true);
+
+      // Military skins (vehicle library V3) — an opt-OUT checkbox beside the
+      // beacons. Re-checking clears the field rather than storing `true`
+      // (setFlights's exactly-the-default normalization), so the checkbox has to
+      // read the ABSENT state as ON to stay consistent.
+      const skinCb = cbFor('Military aircraft skins');
+      ok('“Military aircraft skins” checkbox rendered', !!skinCb);
+      ok('military skins default to ON (absent = on)',
+        skinCb.checked === true && p2.store.flights.militarySkins === undefined);
+      await flip(skinCb, false);
+      eq('unchecking writes militarySkins false', p2.store.flights.militarySkins, false);
+      ok('…and the checkbox reflects it',
+        cbFor('Military aircraft skins').checked === false);
+      await flip(cbFor('Military aircraft skins'), true);
+      eq('re-checking clears the field back to the default',
+        p2.store.flights.militarySkins, undefined);
+      ok('…and the checkbox reads the absent state as ON',
+        cbFor('Military aircraft skins').checked === true);
+      // Independent of every neighbouring toggle.
+      await flip(cbFor('Military aircraft skins'), false);
+      ok('turning skins off leaves beacons + speed effects alone',
+        p2.store.flights.beacons === true && p2.store.flights.speedViz === true,
+        `${p2.store.flights.beacons}/${p2.store.flights.speedViz}`);
+      await flip(cbFor('Military aircraft skins'), true);
 
       // ── 12a. Glow rules editor (flight-glow-rules.md §6.4) ─────────────────
       // Collapsed summary rows + an ✎-expanded criteria form, every write going

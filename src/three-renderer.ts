@@ -111,8 +111,9 @@ import {
   flightFieldText, flightLabelLines, flightIdentifier,
   flightIdentitySuppressed, flightPrivacyDimmed,
   flightPointSpeedBand, flightVerticalScale,
+  militarySkinFor, militarySkinsEnabled,
   type FlightPoint, type IssNow, type FlightGlowPattern, type FlightGlowRule,
-  type FlightSpeedBand,
+  type FlightSpeedBand, type BgCraftMilitarySkin,
 } from './flights.js';
 // aircraft-types.ts is likewise pure/zero-import (the same shared-chunk
 // discipline as flights.ts + avatars.ts) — the 8-archetype silhouette table.
@@ -775,9 +776,16 @@ function bgArchetype(v: unknown): AircraftArchetype | null {
 // ── Banner tow-craft roster (BgTextEntry.aircraft, second family) ────────────
 // The 18 hand-built silhouettes that are NOT flight archetypes, plus the news
 // helicopter. Deliberately SEPARATE from aircraft-types.ts: these are message
-// props, so nothing here may ever leak into TYPE_ARCHETYPE / the live ADS-B
-// fleet (an F-16 must never be what a 'F16' ICAO designator resolves to on the
-// traffic shell — that is a data question, this is a toy box).
+// props, so nothing here may ever leak into TYPE_ARCHETYPE — an `F16`
+// designator still resolves to the `bizjet` ARCHETYPE on the traffic shell,
+// because that is a data question and this is a toy box.
+//
+// One deliberate crossing, added in vehicle-library batch V3 (research §4.4):
+// the six MILITARY entries below (f16 / f22 / a10 / b2 / b52 / apache) may be
+// borrowed by the live ADS-B display as a SKIN — the shape drawn inside the
+// archetype's envelope — when `militarySkinFor` (flights.ts) resolves one. The
+// classification stays in aircraft-types.ts; only geometry is shared, and the
+// banner path is untouched by it.
 //
 // Each entry carries only what the ORBIT needs; the geometry lives in
 // _buildBannerCraft. `len` is the hull length used by the banner standoff
@@ -868,6 +876,19 @@ interface FlightRig {
   archetype: AircraftArchetype;     // the 8-way silhouette family actually built
   military: boolean;
   dim: boolean;                     // privacy-dimmed build (PIA/LADD, research §4.2)
+  // Named military SKIN currently built (vehicle library V3), or null = the
+  // generic archetype body. Part of the rebuild signature: a skin can resolve
+  // polls after the first position (the type designator arrives late), exactly
+  // like the archetype itself.
+  skin: BgCraftMilitarySkin | null;
+  // The REAR-MOST drawn extent of THIS rig's body in model +Z — the bucket's
+  // `_flightArchetypeMetrics().aftZ` for a generic body, or the skin's own
+  // measured (post-scale) rear extent when one is built. Every trailing effect
+  // (trail/contrail spine anchor, motion lines, burner fallback, ghost lags)
+  // reads it from HERE rather than from the archetype metrics, so a borrowed
+  // silhouette that ends somewhere else can never emit its trail from inside
+  // its own fuselage.
+  aftZ: number;
   prop: THREE.Object3D | null;      // FIRST prop disc (spins about local Z) / main rotor (about Y)
   props: THREE.Object3D[];          // every prop disc (twins carry two)
   tailRotor: THREE.Object3D | null; // heli only (spins about X)
@@ -2315,6 +2336,9 @@ export class ThreeDRenderer {
   // FlightsConfig.speedViz (absent = ON). False builds no band effects at all
   // and makes _advanceFlightViz a single early-return.
   private _flightsSpeedViz = true;
+  // FlightsConfig.militarySkins (absent = ON, vehicle library V3). False keeps
+  // every live aircraft on its generic archetype body.
+  private _flightsMilitarySkins = true;
   private _flightBlurTex: THREE.CanvasTexture | null = null;    // shared; freed in destroy()
   private _flightBurnerTex: THREE.CanvasTexture | null = null;  // shared; freed in destroy()
   private _beaconGlowTex: THREE.CanvasTexture | null = null;   // shared; freed in destroy()
@@ -14101,24 +14125,34 @@ export class ThreeDRenderer {
   //   • no Math.random anywhere (the builder re-runs on every _keyBgText change);
   //   • signature paint per craft, overridable by the entry's `main`/`accent`
   //     tint through the mkBody/mkAccent idiom — absent = the signature colours.
-  private _buildBannerCraft(craft: BgCraftId, col: BgColors): {
+  //
+  // `dim` (OPTIONAL, trailing — the banner path never passes it, so its build is
+  // byte-identical) is the PIA/LADD privacy courtesy the live flight display
+  // applies when it borrows one of these silhouettes as a military skin (V3):
+  // every material builds translucent, which also makes _addOutlines skip the
+  // whole airframe — exactly what _buildAircraftModel's own `dim` does.
+  private _buildBannerCraft(craft: BgCraftId, col: BgColors, dim = false): {
     asm: THREE.Group; props: THREE.Object3D[]; tailRotor: THREE.Object3D | null;
   } {
     const asm = new THREE.Group();
     const props: THREE.Object3D[] = [];
     let tailRotor: THREE.Object3D | null = null;
-    const mk = (color: number) => this._mat({ color, fog: false });
+    const trans = dim
+      ? { transparent: true, opacity: FLIGHT_PRIVACY_OPACITY }
+      : {};
+    const mk = (color: number) => this._mat({ color, fog: false, ...trans });
     // The two named livery slots. With no tint these are EXACTLY the signature
     // hues each branch inlines, so an untinted craft is stable across edits.
     const mkBody = (c: number) => mk(col.main ?? c);
     const mkAccent = (c: number) => mk(col.detail ?? c);
     const dark = mk(0x2f3237);
-    const glass = this._mat({ color: 0x2a3946, fog: false, transparent: true, opacity: 0.85 });
+    const glass = this._mat({ color: 0x2a3946, fog: false, transparent: true,
+      opacity: dim ? FLIGHT_PRIVACY_OPACITY * 0.8 : 0.85 });
     // A self-lit engine / thruster glow. Emissive rather than transparent so the
     // outline pass still skips it explicitly (outlineSkip) but the toon bands do
     // not swallow it. Static — there is no per-frame system for these by design.
     const glow = (c: number) => this._mat({
-      color: c, emissive: c, emissiveIntensity: 0.9, fog: false,
+      color: c, emissive: c, emissiveIntensity: 0.9, fog: false, ...trans,
     });
 
     const box = (w: number, h: number, d: number, m: THREE.Material,
@@ -15502,7 +15536,8 @@ export class ThreeDRenderer {
                 opts?: { labelFields?: string[]; beacons?: boolean; privacyDim?: boolean;
                          banners?: boolean; modelScale?: number;
                          glowRules?: FlightGlowRule[]; shellMm?: number;
-                         verticalScale?: number; speedViz?: boolean }): void {
+                         verticalScale?: number; speedViz?: boolean;
+                         militarySkins?: boolean }): void {
     this._flightsOrigin = origin;
     this._flightsTheta = isFinite(thetaRad) ? thetaRad : 0;
     this._flightsRadius = isFinite(radiusNm) && radiusNm > 0 ? radiusNm : FLIGHTS_DEFAULT_RADIUS_NM;
@@ -15533,6 +15568,11 @@ export class ThreeDRenderer {
     // jump cut (the poll-correction discipline, reused for free).
     this._flightVerticalScale = flightVerticalScale(opts?.verticalScale);
     this._flightsSpeedViz = opts?.speedViz !== false;
+    // Named military skins (V3). Absent (a stale three-view) = ON, the shared
+    // resolution in flights.ts. Config-path, so configRev — already in
+    // _keyFlights — covers an edit; a live rig re-skins IN PLACE on the next
+    // poll through the _applyFlightFix rebuild signature.
+    this._flightsMilitarySkins = militarySkinsEnabled(opts?.militarySkins);
     // Anchor Y = the EFFECTIVE ground level, not the slab: the display shell
     // (including the FLIGHT_SHELL.clearMm property-clearance floor) is measured
     // from the GROUND, so an aircraft keeps a constant height above grade and
@@ -15592,8 +15632,15 @@ export class ThreeDRenderer {
     // the three rebuilds this hex's model IN PLACE, keeping its motion state.
     const wantArch = aircraftArchetype(fp.typeCode, fp.category);
     const wantDim = this._flightPrivacyDimmed(fp);
-    if (rig.archetype !== wantArch || rig.military !== fp.military || rig.dim !== wantDim) {
-      this._rebuildFlightModel(rig, wantArch, fp.military, wantDim);
+    // The military SKIN joins the same signature (V3): it too resolves off the
+    // late-arriving type designator, and the user's master toggle reaches it
+    // through `_flightsMilitarySkins` (config-path → configRev → _keyFlights →
+    // this very call), so a toggle flip re-skins the live fleet in place with no
+    // new dirty-key input.
+    const wantSkin = this._flightSkin(fp, wantArch);
+    if (rig.archetype !== wantArch || rig.military !== fp.military
+        || rig.dim !== wantDim || rig.skin !== wantSkin) {
+      this._rebuildFlightModel(rig, wantArch, fp.military, wantDim, wantSkin);
     }
     // ── Feed-latency guard (user-reported: "the plane body also moves
     // backwards", and with it the folded, flapping contrail) ────────────────
@@ -15937,8 +15984,8 @@ export class ThreeDRenderer {
   // tailplane. Each carries its OWN material so the pair can flicker out of
   // phase — the whole point of the effect is that it reads as hand-drawn.
   private _buildFlightMotionLines(rig: FlightRig,
-                                  M: { fusHalfW: number; fusLen: number; idY: number;
-                                       aftZ: number }): void {
+                                  M: { fusHalfW: number; fusLen: number;
+                                       idY: number }): void {
     // The strip's FRONT edge clears the tail exit (aftZ + gap), so the streak
     // flicks past the tail instead of overlapping the aft fuselage — the old
     // fusLen·0.62 centre put its leading edge at fusLen·0.41, level with the
@@ -15954,7 +16001,7 @@ export class ThreeDRenderer {
         blending: THREE.AdditiveBlending, depthWrite: false, fog: false,
       }));
       m.position.set(sx * (M.fusHalfW + 230), M.idY + 60,
-                     M.aftZ + FLIGHT_TAIL_GAP_MM + len / 2);
+                     rig.aftZ + FLIGHT_TAIL_GAP_MM + len / 2);
       m.renderOrder = FLIGHT_VIZ_RENDER_ORDER;
       m.userData.outlineSkip = true;
       m.userData.motionLine = true;
@@ -15969,8 +16016,8 @@ export class ThreeDRenderer {
   // into the geometry (rotateX / rotateZ), so each is a plain identity-rotation
   // mesh and the per-frame flicker is a single opacity write.
   private _buildFlightBurners(rig: FlightRig,
-                              M: { fusHalfW: number; fusLen: number; idY: number;
-                                   aftZ: number }): void {
+                              M: { fusHalfW: number; fusLen: number;
+                                   idY: number }): void {
     const pods: THREE.Object3D[] = [];
     rig.asm.traverse(o => { if (o.userData?.nacelle) pods.push(o); });
     // A plume starts at the NOZZLE — the pod's own rear face (its length is
@@ -15982,7 +16029,7 @@ export class ThreeDRenderer {
         x: p.position.x, y: p.position.y,
         z: p.position.z + ((p.userData?.podLen as number ?? 0) / 2) + 60,
       }))
-      : [{ x: 0, y: M.idY, z: M.aftZ }];
+      : [{ x: 0, y: M.idY, z: rig.aftZ }];
     const len = M.fusLen * 0.5, w = M.fusHalfW * 1.2;
     for (const s of spots) {
       for (const roll of [0, Math.PI / 2]) {
@@ -16011,7 +16058,7 @@ export class ThreeDRenderer {
   // aircraft's own turn rate, and being attached costs no per-frame transform.
   // Band 5 is rare in a real feed, so the two extra draws are bounded by design.
   private _buildFlightGhosts(rig: FlightRig,
-                             M: { fusHalfW: number; fusLen: number; aftZ: number }): void {
+                             M: { fusHalfW: number; fusLen: number }): void {
     const op = [0.26, 0.14], sc = [0.94, 0.84];
     // Lags measured from the TAIL EXIT, so the FIRST ghost's front face clears
     // the airframe by FLIGHT_GHOST_GAP_MM on EVERY archetype. The old flat
@@ -16027,7 +16074,7 @@ export class ThreeDRenderer {
           color: 0xb8c6d8, transparent: true, opacity: op[i],
           depthWrite: false, fog: false,
         }));
-      g.position.set(0, 0, M.aftZ + FLIGHT_GHOST_GAP_MM + step[i] + halfD);
+      g.position.set(0, 0, rig.aftZ + FLIGHT_GHOST_GAP_MM + step[i] + halfD);
       g.scale.setScalar(sc[i]);
       g.renderOrder = FLIGHT_VIZ_RENDER_ORDER;
       g.userData.outlineSkip = true;
@@ -16128,8 +16175,11 @@ export class ThreeDRenderer {
   // (sin yaw·cos p, −sin p, cos yaw·cos p); nose-up pitch drops the tail, which is
   // the sign the assembly draws. Zero allocation (module scratch, like _fvzP).
   private _flightTailAnchor(rig: FlightRig, out: THREE.Vector3): THREE.Vector3 {
-    const off = (this._flightArchetypeMetrics(rig.archetype).aftZ + FLIGHT_TAIL_GAP_MM)
-      * this._flightRigScale(rig);
+    // `rig.aftZ` (not the archetype metrics') — a borrowed military skin ends
+    // where ITS geometry ends, and this offset is the whole reason the trail
+    // never runs through the fuselage. Reading the rig field also drops the
+    // per-frame metrics object this used to allocate.
+    const off = (rig.aftZ + FLIGHT_TAIL_GAP_MM) * this._flightRigScale(rig);
     const p = rig.asm.rotation.x, cp = Math.cos(p);
     return out.set(
       rig.curX + Math.sin(rig.yaw) * cp * off,
@@ -16345,7 +16395,13 @@ export class ThreeDRenderer {
     const wantLabel = this._flightsShowLabels && !wantBanner;
 
     // Fuselage lettering — painted onto the model itself, real-livery style.
-    const { flank, top } = this._flightFuselageText(rig.archetype, fp, ident, suppress);
+    // A rig wearing a MILITARY SKIN (V3) carries none: a fighter has no operator
+    // titles down its flank, and the bucket's flank/spine boxes are measured off
+    // the GENERIC body, so pasting them onto a borrowed silhouette would float
+    // them in space. The identifier still reads on the label plate.
+    const { flank, top } = rig.skin
+      ? { flank: '', top: '' }
+      : this._flightFuselageText(rig.archetype, fp, ident, suppress);
     const idKey = `${flank}|${top}`;
     if (rig.idKey !== idKey) {
       this._removeFlightIdPlanes(rig);
@@ -16558,10 +16614,67 @@ export class ThreeDRenderer {
     asm.userData.fixtureId = hex;
   }
 
+  // Which named military silhouette this aircraft should wear, honoring the
+  // user's master toggle. ONE resolution site for the whole renderer.
+  private _flightSkin(fp: FlightPoint,
+                      archetype: AircraftArchetype): BgCraftMilitarySkin | null {
+    return this._flightsMilitarySkins ? militarySkinFor(fp, archetype) : null;
+  }
+
+  // The rig's BODY: either the generic archetype model, or — vehicle library V3,
+  // research §4.4 — one of the six already-built BG_CRAFTS military silhouettes
+  // borrowed as a skin.
+  //
+  // The §4.1 ENVELOPE CONTRACT is what makes the borrow free: the skin is scaled
+  // by `bucket fusLen / craft len` and hung inside a plain outer group, so the
+  // assembly the caller gets back is still the archetype's own frame. Every
+  // attachment the bucket owns — label height, beacon bead, id planes, banner
+  // rigging, the viz builders' fusLen/fusHalfW terms — keeps reading
+  // `_flightArchetypeMetrics` and lands exactly where it does on a generic body.
+  //
+  // The ONE exception is `aftZ`: the tail-exit anchor is a correctness fix (a
+  // trail may never start inside the model), so a skin measures its OWN
+  // post-scale rear extent and the rig carries that instead of the bucket's.
+  //
+  // A skin keeps its SIGNATURE PAINT — that is the point of the feature — so it
+  // deliberately skips the generic olive military repaint. Privacy dimming still
+  // composes (the trailing `dim` on _buildBannerCraft).
+  private _buildFlightBody(archetype: AircraftArchetype, military: boolean,
+                           dim: boolean, skin: BgCraftMilitarySkin | null): {
+    asm: THREE.Group; props: THREE.Object3D[];
+    tailRotor: THREE.Object3D | null; propRate: number; aftZ: number;
+  } {
+    const M = this._flightArchetypeMetrics(archetype);
+    if (!skin) {
+      const built = this._buildAircraftModel(archetype, military, dim);
+      return { ...built, aftZ: M.aftZ };
+    }
+    const spec = BG_CRAFTS[skin];
+    const built = this._buildBannerCraft(skin, {}, dim);
+    const inner = built.asm;
+    inner.scale.setScalar(spec.len > 0 ? M.fusLen / spec.len : 1);
+    const asm = new THREE.Group();
+    asm.add(inner);
+    // Measure the SCALED silhouette. Detached from the scene graph with an
+    // identity root, so world == the assembly's own frame — which is the frame
+    // `aftZ` is expressed in.
+    asm.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(inner);
+    const aftZ = isFinite(box.max.z) ? box.max.z : M.aftZ;
+    return {
+      asm, props: built.props, tailRotor: built.tailRotor,
+      // BG_CRAFTS owns each craft's spin rate (0 = a jet, nothing turns); the
+      // generic bodies' default of 22 rad/s is the fallback, as in the bg path.
+      propRate: spec.propRate ?? 22,
+      aftZ,
+    };
+  }
+
   private _buildFlightRig(fp: FlightPoint): FlightRig {
     const archetype = aircraftArchetype(fp.typeCode, fp.category);
     const dim = this._flightPrivacyDimmed(fp);
-    const built = this._buildAircraftModel(archetype, fp.military, dim);
+    const skin = this._flightSkin(fp, archetype);
+    const built = this._buildFlightBody(archetype, fp.military, dim, skin);
     // YXZ: yaw outermost, pitch applied in the YAWED frame (the humanoid-root
     // convention) — with XYZ a climbing aircraft would bank as it turned.
     built.asm.rotation.order = 'YXZ';
@@ -16575,7 +16688,7 @@ export class ThreeDRenderer {
     this._flightVizGroup.add(viz);
     const rig: FlightRig = {
       hex: fp.hex, asm: built.asm, kind: legacyModelKind(archetype), archetype,
-      military: fp.military, dim,
+      military: fp.military, dim, skin, aftZ: built.aftZ,
       prop: built.props[0] ?? null, props: built.props,
       tailRotor: built.tailRotor, propRate: built.propRate,
       label: null, banner: null, labelKey: '', bannerKey: '',
@@ -16611,7 +16724,8 @@ export class ThreeDRenderer {
   // are dropped with their keys cleared so the next _syncFlight* rebuilds them
   // onto the new assembly (with archetype-correct metrics).
   private _rebuildFlightModel(rig: FlightRig, archetype: AircraftArchetype,
-                              military: boolean, dim: boolean): void {
+                              military: boolean, dim: boolean,
+                              skin: BgCraftMilitarySkin | null = null): void {
     this._removeFlightLabel(rig);
     this._removeFlightBanner(rig);
     this._removeFlightIdPlanes(rig);
@@ -16627,7 +16741,7 @@ export class ThreeDRenderer {
     this._clearGroup(rig.asm);
     this._flightsGroup.remove(rig.asm);
 
-    const built = this._buildAircraftModel(archetype, military, dim);
+    const built = this._buildFlightBody(archetype, military, dim, skin);
     built.asm.rotation.order = 'YXZ';
     this._tagFlightAsm(built.asm, rig.hex);
     built.asm.position.set(rig.curX, rig.curY, rig.curZ);
@@ -16638,6 +16752,7 @@ export class ThreeDRenderer {
     rig.asm = built.asm;
     rig.archetype = archetype; rig.kind = legacyModelKind(archetype);
     rig.military = military; rig.dim = dim;
+    rig.skin = skin; rig.aftZ = built.aftZ;
     rig.props = built.props; rig.prop = built.props[0] ?? null;
     rig.tailRotor = built.tailRotor; rig.propRate = built.propRate;
     rig.labelKey = ''; rig.bannerKey = ''; rig.idKey = '';

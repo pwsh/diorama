@@ -341,6 +341,27 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Vehicle model library V3 — live-ADS-B military skins** (2026-08-04;
+  batch 3 of 3, the arc is COMPLETE; unreleased — on main past v0.54.0).
+  Pure `militarySkinFor(fp, archetype?)` in flights.ts (zero-import):
+  exact typeCode F16/F22/A10/B2/B52/AH64 → that BG_CRAFTS craft (type
+  vs category B2 collision handled by construction — the table only
+  reads typeCode), category A6 → f16, resolved-heli + military dbFlag
+  → apache. `FlightsConfig.militarySkins?` (absent = ON; Settings
+  checkbox). Skins scale to the bucket fusLen inside an inner group —
+  labels/beacons/viz land identically to generic rigs; signature paint
+  kept (no olive repaint); fuselage livery text skipped; per-rig
+  `FlightRig.aftZ` from the scaled bbox (f16-in-bizjet 1178 vs bucket
+  1060 — the bucket value would sit inside the model,
+  negative-controlled) with all four aftZ consumers routed through the
+  rig field. `_buildBannerCraft(craft, col, dim=false)` shared
+  directly — banner path 2-arg = byte-identical, golden-pinned.
+  Rebuild signature gains the skin; toggle rides configRev. Tests:
+  flights 716/716 (+30), flights-render 555/555 (+42), flights-ui
+  313/313, vehicle-craft 483/483 + bgtext-multi 373/373 + alert-center
+  67/67 unchanged. Noted deferral: towed banners not suppressed on
+  skinned rigs (only piston archetypes tow; an A-10 typed onto a
+  ga-low bucket is vanishingly rare feed garbage).
 - **Vehicle model library V2 — 34 aircraft/space models + banner-tow
   wiring** (2026-08-04; batch 2 of 3, unreleased — on main past v0.54.0).
   Five lazy packs: military-historical 10 (Spitfire→Fokker triplane),

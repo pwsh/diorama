@@ -2024,6 +2024,13 @@ export class ThreeView extends LitElement {
                           // cadence, never per frame.
                           verticalScale: flCfg?.verticalScale,
                           speedViz: flCfg?.speedViz,
+                          // Named military skins (vehicle library V3): the
+                          // renderer borrows its own banner tow-craft geometry
+                          // for aircraft that really are an F-16 / F-22 / A-10 /
+                          // B-2 / B-52 / Apache. Config-path like the rest, so
+                          // configRev — already in _keyFlights — covers an edit,
+                          // and a live rig re-skins in place on the next poll.
+                          militarySkins: flCfg?.militarySkins,
                           // User glow rules (docs/research/flight-glow-rules.md).
                           // Config-path like every other opt here, so configRev
                           // — already in the key — covers an edit; no new

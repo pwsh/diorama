@@ -692,6 +692,79 @@ export function aircraftModelKind(fp: FlightPoint): 'prop' | 'jet' | 'heli' {
   return 'jet';
 }
 
+// ── Military SKINS for the live display (vehicle library, batch V3) ─────────
+// docs/research/vehicle-model-library.md §4.4–4.5's "cheapest win in this whole
+// doc": six military silhouettes ALREADY EXIST in the renderer's banner tow-craft
+// roster (BG_CRAFTS), so a live ADS-B aircraft that really is one of them can be
+// drawn with that shape instead of the generic archetype body — no new geometry,
+// just a new consumption path.
+//
+// What this DOES NOT change (the §4.1 envelope contract): the aircraft's
+// ARCHETYPE. TYPE_ARCHETYPE (aircraft-types.ts) is untouched — an `F16` still
+// resolves to the `bizjet` bucket, and every attachment point the bucket owns
+// (label height, beacon position, fuselage-marking layout, wing/fuselage envelope)
+// still comes from `_flightArchetypeMetrics`. A skin changes the SHAPE DRAWN
+// INSIDE that envelope, never the envelope itself.
+export type BgCraftMilitarySkin = 'f16' | 'f22' | 'a10' | 'b2' | 'b52' | 'apache';
+
+export const FLIGHT_MILITARY_SKINS: readonly BgCraftMilitarySkin[] =
+  ['f16', 'f22', 'a10', 'b2', 'b52', 'apache'] as const;
+
+// ICAO TYPE DESIGNATOR → skin. Keys are uppercase `t` values (FlightPoint.typeCode
+// is already uppercased by the normalizer; the resolver re-normalizes anyway so a
+// hand-fed fixture cannot slip through).
+//
+// The `B2` trap, named because it looks like a bug: ADS-B also has an emitter
+// CATEGORY `B2` (lighter-than-air — a balloon). These are DIFFERENT AXES and this
+// table is only ever consulted with `typeCode`, never `category`, so a balloon can
+// never be painted as a Northrop B-2. Only `A6` / `A7` are read off `category`.
+export const MILITARY_SKIN_TYPE_CODES: Readonly<Record<string, BgCraftMilitarySkin>> = {
+  F16: 'f16', F22: 'f22', A10: 'a10', B2: 'b2', B52: 'b52', AH64: 'apache',
+};
+
+// `FlightsConfig.militarySkins` resolution — ABSENT = ON (the beacons/privacyDim
+// idiom). One home so the renderer, the settings drawer and the tests agree.
+export function militarySkinsEnabled(v: boolean | null | undefined): boolean {
+  return v !== false;
+}
+
+// Which named military silhouette (if any) an aircraft should be drawn with.
+// PURE, never throws, null = "use the generic archetype body" (today's shipped
+// behavior for everything).
+//
+// Priority — first match wins:
+//   1. EXACT type-designator match (the six BG_CRAFTS military builds). No
+//      military-dbFlag gate: an `F16` designator IS an F-16 whatever the feed's
+//      flags say, and a hobbyist source that labels the type but not the flag
+//      should still get the fighter.
+//   2. `category === 'A6'` (high-performance / fighter, §3.6's ladder) → f16.
+//      That bucket renders as a generic BIZJET today, which is the shape this
+//      case exists to improve.
+//   3. A MILITARY ROTORCRAFT → apache. Rotorcraft-ness is the caller's resolved
+//      ARCHETYPE when it has one (a `UH60` carries no category but IS a heli via
+//      TYPE_ARCHETYPE); with no archetype passed — a stale caller — it falls back
+//      to `category === 'A7'`, the only heli signal this zero-import module has.
+//      The `military` dbFlag IS required here: civil helicopters are the common
+//      case and must keep the civil body.
+//
+// `archetype` is a trailing OPTIONAL string rather than an `AircraftArchetype`
+// import because flights.ts stays genuinely ZERO-import (the shared-chunk rule);
+// the renderer already has the resolved archetype in hand and passes it.
+export function militarySkinFor(fp: FlightPoint,
+                                archetype?: string | null): BgCraftMilitarySkin | null {
+  if (!fp) return null;
+  const t = typeof fp.typeCode === 'string' ? fp.typeCode.trim().toUpperCase() : '';
+  if (t) {
+    const exact = MILITARY_SKIN_TYPE_CODES[t];
+    if (exact) return exact;
+  }
+  const c = typeof fp.category === 'string' ? fp.category.trim().toUpperCase() : '';
+  if (c === 'A6') return 'f16';
+  const heli = archetype != null && archetype !== '' ? archetype === 'heli' : c === 'A7';
+  if (heli && fp.military === true) return 'apache';
+  return null;
+}
+
 // ── Display shell geometry ─────────────────────────────────────────────────
 // The shell EXCEEDS the 30,000 mm sky dome by design (see the header): the dome
 // is camera-centered + depthWrite:false + renderOrder −10, so it can never

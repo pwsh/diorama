@@ -572,6 +572,11 @@ export function flightBeaconColor(fp: FlightPoint, on: boolean,
 // Cleared by drawAll every frame, so hiding the layer empties it too.
 export const flightHitPx = new Map<string, { x: number; y: number; rPx: number }>();
 
+// NB the 2D glyph is deliberately ABSTRACT — one dart for every aircraft. The
+// named military skins (FlightsConfig.militarySkins, vehicle library V3) are a
+// 3D-only silhouette swap: at plan scale a fighter and an airliner are the same
+// few pixels, so there is nothing to express here, and the label/beacon/privacy
+// treatment below is shared with the 3D rig exactly as before.
 function drawFlights(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
   const cfg = p.store.flights;
   if (!cfg?.enabled) return;
