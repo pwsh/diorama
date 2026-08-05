@@ -40,8 +40,20 @@ export interface VehiclePrimitive {
   // A livery SLOT ('body'/'accent' resolve from the model def; 'glass'/'dark'
   // are fixed house tones) or a literal '#rrggbb'.
   color?: string | 'body' | 'accent' | 'glass' | 'dark';
-  emissive?: boolean;                // V2 (aircraft beacons); ignored by the ground path
-  spin?: 'prop' | 'rotor' | 'wheel'; // V2 animation hook; ignored by the ground path
+  // Self-lit engine / thruster glow (rocket bells, spacecraft drives). Emissive
+  // rather than transparent, exactly like the BG_CRAFTS spacecraft: STATIC, no
+  // per-frame system. Ignored by the ground path.
+  emissive?: boolean;
+  // Animation hook for the SKY surfaces. Prims sharing a `spin` kind AND an
+  // identical `pos` are collected into ONE spinning group centred on that pos:
+  //   'prop'  — spins about local Z (the flight axis): propeller blades
+  //   'rotor' — spins about local Y (the vertical axis): a rotorcraft main disc
+  //             (a craft carrying any of these flies with rig.rotorY set, so a
+  //             model must never mix 'prop' and 'rotor')
+  //   'tail'  — spins about local X: a helicopter tail rotor
+  //   'wheel' — ground-vehicle road wheel; no sky surface animates it (yet)
+  // Ignored entirely by the ground path.
+  spin?: 'prop' | 'rotor' | 'tail' | 'wheel';
   segments?: number;                 // V2 radial tessellation hint; ignored by the ground path
 }
 
@@ -54,6 +66,17 @@ export interface VehicleModelDef {
   era?: string;
   lenMm: number;                     // real-world length (banner standoff anchor, V2)
   dims: [number, number, number];    // ground footprint W (across) × D (along) × H, mm
+  // VERTICAL-LAUNCH craft (Saturn V / Falcon 9). The model is authored NOSE-UP
+  // along +Y (engines down) instead of nose-forward along −Z, so it flies
+  // upright on the banner orbit — the research's "vertical-launch novelty"
+  // framing, and the only pose in which a rocket towing a side banner reads.
+  // The orbit's yaw math is unchanged (it only ever writes rotation.y, which
+  // spins an upright rocket about its own axis — no pitch is ever applied);
+  // the ONE thing the flag changes is which extent the banner standoff uses:
+  // `dims[1]` (hull DIAMETER along local Z) instead of `lenMm`, so a 110 m
+  // rocket does not trail its message a hundred metres astern. See
+  // `bannerCraftHullZMm`.
+  vertical?: boolean;
   body?: string;                     // default 'body' slot color (#rrggbb)
   accent?: string;                   // default 'accent' slot color (#rrggbb)
   prims: VehiclePrimitive[];
@@ -94,10 +117,20 @@ let _defCache: Map<VehicleId, VehicleModelDef> | null = null;
 // whenever the registry or the config changes.
 const _recipeCache = new Map<VehicleId, ObjectRecipe | null>();
 
+// Monotonic registry revision — bumped on EVERY register / unregister / config
+// change. Consumers whose dirty key deliberately carries no `configRev` fold
+// this in instead: `_keyBgText` (three-view) must rebuild a banner rig when the
+// vehicle pack behind its tow craft is deactivated/unloaded, but the whole point
+// of that key is that unrelated entity churn leaves the rigs alone — so it takes
+// this narrow revision rather than reintroducing configRev.
+let _rev = 0;
+export function vehicleRegistryRev(): number { return _rev; }
+
 function _invalidate(): void {
   _activeCache = null;
   _defCache = null;
   _recipeCache.clear();
+  _rev++;
 }
 
 export function registerVehiclePack(def: VehiclePackDef, source: 'builtin' | 'user' = 'builtin'): void {
@@ -205,6 +238,61 @@ export function resolveVehicleDef(id: VehicleId | null | undefined): VehicleMode
   if (!id) return null;
   if (!_activeSet().has(id)) return null;
   return _defMap().get(id) ?? null;
+}
+
+// ── Banner tow surface (V2) ─────────────────────────────────────────────────
+//
+// Resolve an id for the BANNER slot: an active model that declares the surface.
+// A ground-only model chosen by a hand-edited config resolves to null and the
+// caller falls back to the classic toy tow plane — the same soft-fail an
+// unloaded pack takes (a saved entry must never break into an error).
+export function bannerVehicleDef(id: VehicleId | null | undefined): VehicleModelDef | null {
+  const def = resolveVehicleDef(id);
+  return def && def.surfaces.includes('banner') ? def : null;
+}
+
+// Pack models are authored at REAL mm scale (a Spitfire is 9120 mm long); the
+// banner world is TOY scale — the shipped hand-built BG_CRAFTS hulls run 1600
+// (news chopper) to 3400 mm (B-52) regardless of the real airframe. So a pack
+// craft is scaled by a factor derived from its real length, DELIBERATELY not to
+// scale (the same honesty posture `compressRadiusMm` documents for the live
+// flight shell): 0.18× real, clamped into the shipped band.
+//
+// The clamp ends are anchored on the shipped roster: the floor sits just under
+// the smallest BG_CRAFT (news chopper 1600) so a Piper Cub still reads as a
+// model rather than a speck, and the ceiling holds the biggest pack craft at
+// ~1.5× the shipped B-52 — which is what the REAL length ratio is too (747-8
+// 76.25 m vs B-52 49.0 m = 1.56×), so the roster stays internally consistent
+// instead of a 747 dwarfing everything at its true 13.7 m of display length.
+export const BANNER_CRAFT_SCALE_FACTOR = 0.18;
+export const BANNER_CRAFT_MIN_MM = 1400;
+export const BANNER_CRAFT_MAX_MM = 5200;
+
+function _lenOr(lenMm: number): number {
+  return isFinite(lenMm) && lenMm > 0 ? lenMm : 10000;
+}
+
+/** Displayed hull length (mm) for a real-world length. Pure, clamped, never NaN. */
+export function bannerCraftDisplayLenMm(lenMm: number): number {
+  const L = _lenOr(lenMm);
+  return Math.min(BANNER_CRAFT_MAX_MM,
+                  Math.max(BANNER_CRAFT_MIN_MM, L * BANNER_CRAFT_SCALE_FACTOR));
+}
+
+/** Uniform scale factor applied to a pack craft's model group in the sky. */
+export function bannerCraftScale(lenMm: number): number {
+  const L = _lenOr(lenMm);
+  return bannerCraftDisplayLenMm(L) / L;
+}
+
+/**
+ * The model's UNSCALED extent along local Z — what the banner standoff
+ * (`hullZ/2 + 500 + halfBannerLen`) measures against. Nose-forward craft trail
+ * the banner clear of their tail (= the hull length); a VERTICAL rocket's Z
+ * extent is its DIAMETER, so its banner rides just off the flank.
+ */
+export function bannerCraftHullZMm(def: VehicleModelDef): number {
+  return def.vertical ? _lenOr(def.dims[1]) : _lenOr(def.lenMm);
 }
 
 // ── Model → ObjectRecipe conversion ─────────────────────────────────────────

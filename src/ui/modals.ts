@@ -11,6 +11,7 @@ import { AVATAR_PACK_MANIFEST } from '../avatar-packs/manifest.js';
 import { vehiclePackList, vehiclePackEffectiveState } from '../vehicles.js';
 import type { VehicleModelDef, VehiclePackDef } from '../vehicles.js';
 import { VEHICLE_PACK_MANIFEST } from '../vehicle-packs/manifest.js';
+import { listActiveVehiclePacks, resolveVehicleDef } from '../vehicles.js';
 import type { Planner } from '../planner.js';
 import type { Floor, HassState, WeatherConfig, WeatherEffectKey, ScenePreset, FloorTexKind, MqttBridgeConfig, BgTextEntry, BgTextEntryMode, HeatmapConfig, CompassConfig } from '../types.js';
 import { resolveNorth } from '../compass.js';
@@ -2391,6 +2392,17 @@ export class SettingsDrawer extends LitElement {
         ['news_chopper', 'News helicopter'],
       ]],
     ];
+    // …plus one optgroup per LOADED + ACTIVE vehicle pack that carries
+    // banner-surface models (Settings ▸ Vehicles decides which). Registry-driven
+    // on purpose: a new pack shows up here with no edit to this file, and a pack
+    // the user switches off simply stops being offered (a stored id then falls
+    // back to the classic tow plane in the renderer, never an error).
+    for (const { def, models } of listActiveVehiclePacks()) {
+      const banner = models.filter(m => m.surfaces.includes('banner'));
+      if (!banner.length) continue;
+      AIRCRAFT_GROUPS.push([def.path.join(' ▸ '),
+                            banner.map(m => [m.id, m.label] as [string, string])]);
+    }
     // Resolved strings (per entry, in list order) for the live preview.
     const resolved = new Map(p.bgTextsResolved().map(r => [r.id, r.text]));
     // ── Per-entry colour rows (banner / train / chopper) ──────────────────
@@ -2430,7 +2442,14 @@ export class SettingsDrawer extends LitElement {
       // the tow plane's cream/red — the swatch is only ever a starting value
       // (never written to the store), and this keeps it honest.
       const isChopper = e.mode === 'chopper' || e.aircraft === 'news_chopper';
-      const d = COLOR_DEFAULTS[isChopper ? 'chopper' : e.mode];
+      const base = COLOR_DEFAULTS[isChopper ? 'chopper' : e.mode];
+      // A vehicle-pack craft carries its OWN livery, so the swatches must open
+      // on that rather than the toy plane's cream/red.
+      const veh = e.mode === 'banner' && e.aircraft ? resolveVehicleDef(e.aircraft) : null;
+      const d = veh
+        ? { ...base, colorMain: veh.body ?? base.colorMain,
+                     colorDetail: veh.accent ?? base.colorDetail }
+        : base;
       const isTrain = e.mode === 'train';
       const surface = isTrain ? 'car-side sign' : 'towed banner';
       return html`

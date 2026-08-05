@@ -614,7 +614,7 @@ through an `FB` wrapper that pins `shellMm` to FLIGHT_SHELL_BASE_MM and stay byt
 via `getWorldDirection`; archetype geometry, livery text layout, beacon priority/gating, privacy
 dim, in-place rebuild, distance scale, fog exemption, flight raycast, §4d's non-default-shell
 position/scale/frustum parity), `flights-ui-test.html`
-(`FLIGHTSUI 299/299` — settings round-trips, flight modal matrix, 2D hit routing; alert-center
+(`FLIGHTSUI 303/303` — settings round-trips, flight modal matrix, 2D hit routing; alert-center
 67/67 stays green).
 
 ### Geo reference & GPS device pins (World Outside, Feature G)
@@ -785,8 +785,10 @@ craft); apache/airwolf/`heli` fly the ordinary orbit. **`mode:'chopper'` is DEPR
 (idempotent, whole-entry passthrough preserved, existing `aircraft` wins); the type keeps the
 member for stale stores; the renderer tolerates a raw chopper row (builds news_chopper,
 ignoring its `aircraft` — a pre-roster value could only be an archetype). Settings: the Mode
-dropdown is 4 modes; the Aircraft dropdown has 4 optgroups (Toy plane & airliners 9 · Military
-& NASA 7 · Fiction 11 · News 1 = 28); color swatch defaults are craft-aware.
+dropdown is 4 modes; the Aircraft dropdown has 4 hard-coded optgroups (Toy plane & airliners 9
+· Military & NASA 7 · Fiction 11 · News 1 = 28) **plus registry-driven optgroups appended after
+(vehicle-pack aircraft/space members, loaded+active + 'banner' surface — see "Vehicle model
+packs" batch V2)**; color swatch defaults are craft-aware (vehicle crafts from def body/accent).
 **Per-entry model size** (`BgTextEntry.scale`, 0.5–5 default 1, pure `bgModelScale`): a
 group-level BUILD-time multiplier on the whole rig — plane/chopper asm, sky sprite, grass decal
 (deliberately spills past the fitted rect at >1), and the train's ×1.8 base WITH spacing/wheelR
@@ -1931,11 +1933,50 @@ arming runtime `Planner.pendingVehicleModelId` (mutually exclusive with
 pendingCustomObjectId/plain kinds at every arming site; thumbs keyed
 `veh:<id>:<packVersion>`); sidebar furniture editor shows model label + pack
 (dim) instead of the kind dropdown for vehicle pieces. Tests:
-`vehicle-pack-test.html` (`VEHICLEPACK PASS 341/341` — NB its `veh.mod.js` is
+`vehicle-pack-test.html` (`VEHICLEPACK PASS 839/839` — NB its `veh.mod.js` is
 ONE bundle carrying vehicles.ts + geometry.ts so the registry instance is
-shared) + `vehicle-build-test.html` (`VEHICLEBUILD PASS 302/302` — builds
-every member). V2 (aircraft packs + banner-tow wiring) and V3 (live-ADS-B
-military skins) build on these shapes.
+shared) + `vehicle-build-test.html` (`VEHICLEBUILD PASS 346/346` — builds
+every GROUND member; sky craft assert no-ground-surface and are gated by
+vehicle-craft-test instead — centred-vertically aircraft would sink through
+the floor as furniture).
+**Batch V2 — aircraft/space packs + the banner-tow surface (2026-08-04)**:
+five more lazy packs — `base-aircraft-military-historical` (10: Spitfire →
+Fokker Dr.I triplane), `base-aircraft-military-modern` (9 — §3.1 rows 11–24
+minus the five shipped BG_CRAFTS dupes), `base-aircraft-civil` (8 incl. a
+floatplane Beaver + "Modern narrowbody jet"), `base-space-real` (3: Saturn V
+/ Apollo LM / Falcon 9 — the research's "4" counted the shipped shuttle),
+`franchise-space-fiction` (4, default UNLOADED, descriptive-generic labels;
+the blue call-box row is EXCLUDED pending a product-owner call). All
+`surfaces:['banner']`, REAL-mm prims. **Renderer** `_buildVehicleCraft(def,
+col)` — the generic sky interpreter: `_mat({fog:false})`, slots via
+mkBody/mkAccent (BgColors colorMain/colorDetail override), `emissive:true`
+prims static-glow, spin prims collect by kind+position — `'prop'`/`'rotor'`
+→ `BgRig.props`, **`'tail'` (V2 spin-union extension, spins about local X)**
+→ `BgRig.tailRotor` (Huey/Black Hawk/Chinook); rotorY derived from any
+`'rotor'` prim; no model mixes prop+rotor (test-pinned); fog-free outline
+clone, no blob shadows. **Display scale**: pure `bannerCraftScale(lenMm)` in
+vehicles.ts — `displayLen = clamp(lenMm × 0.18, 1400, 5200)` (747 → 5200 vs
+the shipped b52's 3400 = 1.53×, matching the 1.56× real ratio; floor just
+under the news chopper's 1600). Scale applies to an INNER model group so the
+banner never shrinks with it; the standoff feeds the SCALED length through
+the existing `len/2 + 500 + halfBannerLen`. **Vertical rockets**:
+`VehicleModelDef.vertical?` — authored upright (+Y up); the orbit yaw only
+writes rotation.y (spins the rocket about its own axis, no pitch anywhere),
+and the pure `bannerCraftHullZMm(def)` = `vertical ? dims[1] : lenMm` feeds
+the standoff its DIAMETER (a 110 m stack must not tow its message 110 m
+astern). **Resolution order** (updateBgTexts): archetype ids → BG_CRAFTS →
+vehicle registry (loaded+active + 'banner' surface) → toy plane (also the
+unloaded-pack fallback — saved entries never error). BG_CRAFTS is NOT
+registered as a pack (deferred — stays hard-coded + always available).
+`_keyBgText` folds a monotonic `vehicleRegistryRev` (bumped on
+register/config change) so pack deactivation rebuilds WITHOUT configRev
+(the key's no-configRev property is preserved). **Dropdown** (modals.ts
+bg-text rows): the 4 hard-coded optgroups stay byte-identical; registry
+optgroups append after (grouped by pack path; swatch defaults from def
+body/accent). Tests: `vehicle-craft-test.html` (`VEHICLECRAFT PASS 483/483`
+— every banner member builds, fog exemption, clamp band via built bbox,
+spin advance deltas, tint override, BG_CRAFTS/archetype golden multisets
+pre/post hydration). V3 (live-ADS-B military skins) is the remaining batch.
 
 ### Animated humanoid targets (3D)
 Target positions come from `Planner.stepLerp` — a critically damped spring (ω = 9 rad/s) with velocity state on each `LerpSlot` (`vx`/`vy`), so on-screen motion stays velocity-continuous between HA's few-Hz coordinate pushes. (A plain exponential ease surged after every push and stalled before the next; the walk cycle inherited the lurch — don't regress to one.) The integrator **substeps so ω·h ≤ ~0.36** — a single semi-implicit Euler step at the 0.1 s dt clamp (10 fps device) makes the spring *diverge*, not just ring. `stepLerp` is driven by the 2D canvas RAF, which keeps running (hidden) while the 3D view is up.

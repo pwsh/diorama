@@ -1,0 +1,334 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>vehicle craft test</title>
+<style>html,body{margin:0;background:#111;color:#ddd;font:11px monospace}#c{width:640px;height:480px}pre{white-space:pre-wrap}</style>
+<div id="c"></div>
+<pre id="out">running…</pre>
+<script type="module">
+ // BANNER-TOW GATE for the aircraft / space vehicle packs (batch V2). For EVERY
+ // banner-surface member of every manifest pack, build a background-text banner
+ // entry towing that craft through the REAL renderer and assert the whole
+ // contract: geometry exists, every material is fog-free (a sky object sits past
+ // the FogExp2 falloff), the display length lands inside the compression clamp
+ // band, prop/rotor/tail prims are registered AND actually advanced, the entry
+ // tint recolours body-slot prims, emissive prims are self-lit, and an id whose
+ // pack is unloaded degrades to the classic toy plane rather than erroring.
+ //
+ // Plus the golden: BG_CRAFTS ids and ADS-B archetype ids must build a
+ // BYTE-IDENTICAL mesh multiset before and after the vehicle registry is
+ // hydrated — the new family must be strictly additive.
+ //
+ // Harness setup (alongside `cp -r dist/* test-pages/`):
+ //   npx esbuild src/vehicle-packs/manifest.ts --format=esm --outfile=<h>/vmanifest.mod.js
+ //   npx esbuild src/vehicles.ts --bundle --format=esm --outfile=<h>/veh2.mod.js
+ // Pack BODIES come from the built chunks at ./assets/<packId>.js, and the
+ // registry is reached through ThreeDRenderer's static passthroughs so the test
+ // configures the SAME vehicles.ts instance the renderer resolves against.
+ // veh2.mod.js is only used for its PURE scale helpers (its own registry copy is
+ // irrelevant and deliberately never configured).
+ try {
+  const V = '?v=' + Date.now();
+  const mod = await import('./assets/three-renderer.js' + V);
+  const { VEHICLE_PACK_MANIFEST } = await import('./vmanifest.mod.js' + V);
+  const PURE = await import('./veh2.mod.js' + V);
+  const R = mod.ThreeDRenderer;
+  const r = new R(document.getElementById('c'));
+  await r.load();
+
+  const checks = [];
+  const ok = (name, cond, extra = '') => checks.push({ name, pass: !!cond, extra });
+  const eq = (name, a, b, extra = '') => ok(name, a === b, `${extra} got=${JSON.stringify(a)} want=${JSON.stringify(b)}`);
+  const near = (name, a, b, tol, extra = '') =>
+    ok(name, Math.abs(a - b) <= tol, `${extra} got=${a} want=${b}±${tol}`);
+
+  const DAY = { preset: 'day', floorColor: '#8a7860', floorTex: 'none', wallColor: '#cfd2d6', wallCutaway: false };
+  const floor = () => ({
+    id: 'vc', name: 'V', w: 20000, d: 16000,
+    walls: [], furniture: [], lights: [], switches: [], sensors: [], motionSensors: [],
+    envSensors: [], doors: [], windows: [], rooms: [], groundAreas: [], presenceZones: [],
+  });
+  const meshes = (root) => { const o = []; root.traverse(m => { if (m.isMesh) o.push(m); }); return o; };
+  const isOutline = (m) => !!m.userData.outline;
+  const isText = (m) => !!m.userData.textPlane;
+  // The craft assembly's body meshes: everything except outline shells and the
+  // two banner text planes.
+  const bodyOf = (asm) => meshes(asm).filter(m => !isOutline(m) && !isText(m));
+
+  const banner = (aircraft, extra = {}) => ({
+    id: 'e1', mode: 'banner', text: 'HELLO', aircraft, ...extra,
+  });
+  // Build ONE banner entry and hand back the craft assembly (the rig's asm) +
+  // the renderer's rig record.
+  const build = (entry) => {
+    r.updateFloor(floor(), DAY);
+    r.updateBgTexts([entry], false, 0, 0);
+    const rig = r._bgRigs[0];
+    if (rig && rig.asm) rig.asm.updateMatrixWorld(true);
+    return rig;
+  };
+  // Everything below measures in the ASSEMBLY'S OWN frame, never world space:
+  // the renderer's rAF advance is live during this page, so a rig's world
+  // position and yaw drift between reads (that is exactly what it is meant to
+  // do). `asmLocal` returns each mesh's matrix relative to the rig root.
+  const asmLocal = (asm) => {
+    asm.updateMatrixWorld(true);
+    const inv = asm.matrixWorld.clone().invert();
+    return meshes(asm).map(m => {
+      m.updateMatrixWorld(true);
+      return { mesh: m, mat: m.matrixWorld.clone().premultiply(inv) };
+    });
+  };
+  // Stable structural signature of a built assembly: sorted "type|dims|localpos"
+  // rows. Used for the additive-golden comparison.
+  const signature = (asm) => {
+    const rows = [];
+    for (const { mesh: m, mat } of asmLocal(asm)) {
+      const g = m.geometry;
+      const p = g.parameters || {};
+      const nums = Object.keys(p).sort().map(k => `${k}=${p[k]}`).join(',');
+      const e = mat.elements;
+      // Normalize signed zero: an identity matrix yields 0, the inverse-matrix
+      // round-trip on a moved rig yields -0, and they format differently.
+      const f = (v) => (Math.abs(v) < 5e-3 ? 0 : v).toFixed(2);
+      rows.push(`${g.type}|${nums}|${f(e[12])},${f(e[13])},${f(e[14])}`);
+    }
+    rows.sort();
+    return rows.join('\n');
+  };
+  // Bounding extent of the body meshes along one asm-local axis.
+  const extentOn = (asm, axis) => {
+    let lo = Infinity, hi = -Infinity;
+    for (const { mesh: m, mat } of asmLocal(asm)) {
+      if (isOutline(m) || isText(m)) continue;
+      const g = m.geometry;
+      if (!g.boundingBox) g.computeBoundingBox();
+      const b = g.boundingBox.clone().applyMatrix4(mat);
+      lo = Math.min(lo, b.min[axis]); hi = Math.max(hi, b.max[axis]);
+    }
+    return hi - lo;
+  };
+
+  // ═══ 0. GOLDEN (pre-hydration): the shipped families before any pack loads ══
+  const goldF16 = signature(build(banner('f16')).asm);
+  const goldNb = signature(build(banner('narrowbody')).asm);
+  const goldToy = signature(build(banner('')).asm);
+  ok('0a: f16 builds before hydration', goldF16.length > 0);
+  ok('0b: narrowbody archetype builds before hydration', goldNb.length > 0);
+  // An id from a pack that is NOT yet registered must fall back to the toy plane.
+  const preUnknown = signature(build(banner('base-aircraft-civil/b747')).asm);
+  eq('0c: unregistered vehicle id === classic toy plane', preUnknown, goldToy);
+
+  // ═══ 1. Hydrate every manifest pack (franchise included) ═══════════════════
+  const packs = [];
+  for (const row of VEHICLE_PACK_MANIFEST) {
+    const m = await import(`./assets/${row.id}.js` + V);
+    const def = m.default ?? m.pack;
+    R.registerVehiclePack(def);
+    packs.push(def);
+    eq(`1a: ${row.id} count matches manifest`, def.models.length, row.count);
+  }
+  // Force EVERY pack loaded + active (the franchise ones default off).
+  const cfg = {};
+  for (const p of packs) cfg[p.id] = { loaded: true, active: true };
+  R.setVehiclePacksConfig(cfg);
+
+  const bannerModels = [];
+  for (const p of packs) for (const m of p.models) {
+    if (m.surfaces.includes('banner')) bannerModels.push({ pack: p, m });
+  }
+  ok('1b: banner-surface models exist', bannerModels.length >= 26, `n=${bannerModels.length}`);
+  // Aircraft/space packs declare banner; the V1 ground packs must NOT (they have
+  // no sky surface) — a regression there would silently flood the dropdown.
+  for (const p of packs) {
+    const anyBanner = p.models.some(m => m.surfaces.includes('banner'));
+    const isSky = p.path[0] === 'Aircraft' || p.path[0] === 'Space';
+    eq(`1c: ${p.id} banner-surface == sky pack`, anyBanner, isSky);
+  }
+
+  // ═══ 2. The additive golden: shipped families UNCHANGED after hydration ════
+  eq('2a: f16 signature unchanged after hydration', signature(build(banner('f16')).asm), goldF16);
+  eq('2b: narrowbody signature unchanged after hydration', signature(build(banner('narrowbody')).asm), goldNb);
+  eq('2c: toy plane signature unchanged after hydration', signature(build(banner('')).asm), goldToy);
+
+  // ═══ 3. Every banner-surface member: the full contract ════════════════════
+  let vertCount = 0, propCount = 0, rotorCount = 0, tailCount = 0, emisCount = 0;
+  for (const { m: model } of bannerModels) {
+    const id = model.id;
+    const rig = build(banner(id));
+    ok(`3a ${id}: rig built`, !!rig && !!rig.asm);
+    if (!rig || !rig.asm) continue;
+    const body = bodyOf(rig.asm);
+    ok(`3b ${id}: builds real geometry`, body.length >= 5, `meshes=${body.length}`);
+    eq(`3c ${id}: prim count matches def`, body.length, model.prims.length);
+
+    // Every material is fog-free — the aircraft rule.
+    const fogged = meshes(rig.asm).filter(x => x.material && x.material.fog !== false);
+    eq(`3d ${id}: no fogged materials`, fogged.length, 0);
+
+    // Blob shadows are a GROUND dressing; a sky craft carries none.
+    const blobs = meshes(rig.asm).filter(x =>
+      x.geometry && x.geometry.type === 'PlaneGeometry' && x.rotation.x < -1.5 && !isText(x));
+    eq(`3e ${id}: no blob shadow`, blobs.length, 0);
+
+    // Display size lands inside the clamp band. A VERTICAL rocket is measured on
+    // Y (it stands up); everything else along the flight axis Z.
+    const want = PURE.bannerCraftDisplayLenMm(model.lenMm);
+    const got = extentOn(rig.asm, model.vertical ? 'y' : 'z');
+    ok(`3f ${id}: display length in band`,
+       want >= PURE.BANNER_CRAFT_MIN_MM - 1e-6 && want <= PURE.BANNER_CRAFT_MAX_MM + 1e-6,
+       `want=${want}`);
+    // The built extent tracks the model's own authored extent × the scale, so it
+    // is only APPROXIMATELY the nominal length (wings/tails overhang) — assert it
+    // is the right order of magnitude, never zero, never runaway.
+    ok(`3g ${id}: built extent tracks the scaled model`,
+       got > want * 0.35 && got < want * 2.6, `got=${got} nominal=${want}`);
+    if (model.vertical) vertCount++;
+
+    // Spin channels: prims tagged 'prop'/'rotor' become rig.props, 'tail' becomes
+    // rig.tailRotor — and a model may never MIX prop and rotor (one rig-level axis).
+    const hasProp = model.prims.some(p => p.spin === 'prop');
+    const hasRotor = model.prims.some(p => p.spin === 'rotor');
+    const hasTail = model.prims.some(p => p.spin === 'tail');
+    ok(`3h ${id}: never mixes prop and rotor`, !(hasProp && hasRotor));
+    eq(`3i ${id}: rotorY matches the rotor prims`, rig.rotorY === true, hasRotor);
+    if (hasProp || hasRotor) {
+      ok(`3j ${id}: spin groups registered`, (rig.props || []).length > 0);
+      ok(`3k ${id}: propRate > 0`, (rig.propRate ?? 0) > 0, `rate=${rig.propRate}`);
+      // Advance and assert the discs actually turned on the RIGHT axis.
+      const disc = rig.props[0];
+      const before = { x: disc.rotation.x, y: disc.rotation.y, z: disc.rotation.z };
+      r._advanceBgText(0.5, 12.5);
+      const moved = hasRotor ? disc.rotation.y !== before.y : disc.rotation.z !== before.z;
+      ok(`3l ${id}: disc spins about the right axis`, moved,
+         `rotorY=${rig.rotorY} before=${JSON.stringify(before)} after=${JSON.stringify(disc.rotation.toArray())}`);
+      if (hasProp) propCount++; else rotorCount++;
+    } else {
+      eq(`3j ${id}: no spin groups`, (rig.props || []).length, 0);
+    }
+    if (hasTail) {
+      ok(`3m ${id}: tail rotor registered`, !!rig.tailRotor);
+      const t0 = rig.tailRotor.rotation.x;
+      r._advanceBgText(0.5, 30.5);
+      ok(`3n ${id}: tail rotor spins about X`, rig.tailRotor.rotation.x !== t0);
+      tailCount++;
+    }
+
+    // Emissive prims are genuinely self-lit.
+    const emisPrims = model.prims.filter(p => p.emissive === true);
+    if (emisPrims.length) {
+      const lit = body.filter(x => x.material && x.material.emissive
+        && (x.material.emissive.r + x.material.emissive.g + x.material.emissive.b) > 0);
+      ok(`3o ${id}: has self-lit prims`, lit.length >= 1, `lit=${lit.length} want>=${emisPrims.length ? 1 : 0}`);
+      emisCount++;
+    }
+
+    // The banner still exists and trails BEHIND the craft (+Z, aft).
+    ok(`3p ${id}: banner attached aft`, !!rig.banner && rig.banner.position.z > 0,
+       `z=${rig.banner && rig.banner.position.z}`);
+  }
+  ok('3q: vertical rockets exercised', vertCount >= 2, `n=${vertCount}`);
+  ok('3r: prop craft exercised', propCount >= 8, `n=${propCount}`);
+  ok('3s: rotorcraft exercised', rotorCount >= 3, `n=${rotorCount}`);
+  ok('3t: tail rotors exercised', tailCount >= 2, `n=${tailCount}`);
+  ok('3u: emissive craft exercised', emisCount >= 3, `n=${emisCount}`);
+
+  // ═══ 4. Tint override recolours the body slot ═════════════════════════════
+  {
+    const id = 'base-aircraft-civil/b747';
+    const plain = build(banner(id));
+    const def = bannerModels.find(x => x.m.id === id).m;
+    // _mat() pushes saturation through _simsColor, so an authored hex is NOT the
+    // material hex — run the reference colours through the SAME factory.
+    const push = (hex) => r._mat({ color: hex }).color.getHex();
+    const defaultBody = push(parseInt(def.body.slice(1), 16));
+    const plainHexes = new Set(bodyOf(plain.asm).map(m => m.material.color.getHex()));
+    const tinted = build(banner(id, { colorMain: '#ff00aa', colorDetail: '#00ff88' }));
+    const tintHexes = new Set(bodyOf(tinted.asm).map(m => m.material.color.getHex()));
+    ok('4a: default livery uses the def body colour',
+       [...plainHexes].some(h => h === defaultBody),
+       `have=${[...plainHexes].map(h => h.toString(16))} want=${defaultBody.toString(16)}`);
+    ok('4b: colorMain replaces the body slot',
+       [...tintHexes].some(h => h === push(0xff00aa)) && ![...tintHexes].some(h => h === defaultBody));
+    ok('4c: tinted set differs from the default set',
+       [...tintHexes].join() !== [...plainHexes].join());
+    // Fixed house slots (glass / dark) are NEVER tinted.
+    const hasGlass = def.prims.some(p => p.color === 'glass');
+    if (hasGlass) {
+      const glassHex = push(parseInt(PURE.VEHICLE_GLASS.slice(1), 16));
+      ok('4d: glass slot survives a tint', [...tintHexes].some(h => h === glassHex));
+    }
+  }
+
+  // ═══ 5. Unloaded / deactivated / ground-only ids degrade to the toy plane ══
+  {
+    const off = { ...cfg, 'base-space-real': { loaded: false, active: false } };
+    R.setVehiclePacksConfig(off);
+    eq('5a: deactivated pack id === toy plane',
+       signature(build(banner('base-space-real/saturn_v')).asm), goldToy);
+    R.setVehiclePacksConfig(cfg);
+    ok('5b: reactivating restores the craft',
+       signature(build(banner('base-space-real/saturn_v')).asm) !== goldToy);
+    eq('5c: a GROUND-only model is not a banner craft',
+       signature(build(banner('base-ground-civil/pickup')).asm), goldToy);
+    eq('5d: garbage id === toy plane',
+       signature(build(banner('not/a/real/craft')).asm), goldToy);
+  }
+
+  // ═══ 6. The pure scale helpers (clamp band + vertical standoff) ═══════════
+  {
+    const F = PURE.BANNER_CRAFT_SCALE_FACTOR, LO = PURE.BANNER_CRAFT_MIN_MM, HI = PURE.BANNER_CRAFT_MAX_MM;
+    eq('6a: factor is 0.18', F, 0.18);
+    eq('6b: min clamp', LO, 1400);
+    eq('6c: max clamp', HI, 5200);
+    near('6d: Spitfire 9.12 m → 0.18×', PURE.bannerCraftDisplayLenMm(9120), 9120 * F, 1e-6);
+    eq('6e: Piper Cub clamps up to the floor', PURE.bannerCraftDisplayLenMm(6830), LO);
+    eq('6f: 747 clamps down to the ceiling', PURE.bannerCraftDisplayLenMm(70600), HI);
+    eq('6g: Saturn V clamps down to the ceiling', PURE.bannerCraftDisplayLenMm(110600), HI);
+    near('6h: scale round-trips', PURE.bannerCraftScale(22800) * 22800,
+         PURE.bannerCraftDisplayLenMm(22800), 1e-6);
+    // Garbage never yields NaN / 0 / Infinity.
+    for (const bad of [0, -5, NaN, Infinity]) {
+      const v = PURE.bannerCraftDisplayLenMm(bad);
+      ok(`6i: ${bad} → finite in band`, isFinite(v) && v >= LO && v <= HI, `got=${v}`);
+      ok(`6j: scale(${bad}) finite`, isFinite(PURE.bannerCraftScale(bad)));
+    }
+    // Vertical craft measure their DIAMETER along Z, nose-forward craft their length.
+    const sat = bannerModels.find(x => x.m.id === 'base-space-real/saturn_v').m;
+    eq('6k: vertical hull-Z is the diameter', PURE.bannerCraftHullZMm(sat), sat.dims[1]);
+    const spit = bannerModels.find(x => x.m.id.endsWith('/spitfire')).m;
+    eq('6l: nose-forward hull-Z is the length', PURE.bannerCraftHullZMm(spit), spit.lenMm);
+    ok('6m: a vertical rocket trails a SHORT standoff',
+       PURE.bannerCraftHullZMm(sat) * PURE.bannerCraftScale(sat.lenMm) < 800);
+  }
+
+  // ═══ 7. Registry revision (the _keyBgText input) ══════════════════════════
+  {
+    const a = PURE.vehicleRegistryRev();
+    PURE.setVehiclePacksConfig({ x: { loaded: false } });
+    const b = PURE.vehicleRegistryRev();
+    ok('7a: config change bumps the revision', b > a, `${a} → ${b}`);
+    PURE.registerVehiclePack({ id: 'zz-test', version: 1, label: 'Z', path: ['Z'], models: [] });
+    ok('7b: register bumps the revision', PURE.vehicleRegistryRev() > b);
+    const c = PURE.vehicleRegistryRev();
+    PURE.unregisterVehiclePack('zz-test');
+    ok('7c: unregister bumps the revision', PURE.vehicleRegistryRev() > c);
+    // Monotonic, never resets.
+    ok('7d: revision is monotonic', PURE.vehicleRegistryRev() > a);
+  }
+
+  // ═══ 8. Teardown ═════════════════════════════════════════════════════════
+  let threw = '';
+  try { r.updateBgTexts([], false, 0, 0); r.destroy(); }
+  catch (e) { threw = (e && e.message) || String(e); }
+  ok('8a: teardown no-throw', !threw, threw);
+
+  const passN = checks.filter(c => c.pass).length, totalC = checks.length;
+  const fails = checks.filter(c => !c.pass);
+  document.getElementById('out').textContent =
+    `packs=${packs.length} bannerModels=${bannerModels.length}\n\n` +
+    fails.map(c => `FAIL ${c.name}  ${c.extra}`).join('\n') + `\n\n${passN}/${totalC}`;
+  document.title = `VEHICLECRAFT ${passN === totalC ? 'PASS' : 'FAIL'} ${passN}/${totalC}`;
+ } catch (e) {
+  document.title = 'VEHICLECRAFT ERR: ' + (e && e.stack ? e.stack.split('\n').slice(0, 4).join(' | ') : e);
+ }
+</script>

@@ -22,6 +22,7 @@ import {
 } from '../weather.js';
 import { roadCapForRadius } from '../neighborhood.js';
 import { FLIGHTS_DEFAULT_RADIUS_NM, flightShellMm } from '../flights.js';
+import { vehicleRegistryRev } from '../vehicles.js';
 import { loadModel } from '../model-store.js';
 import { newId } from '../storage.js';
 import type { Planner, IdentifyKind } from '../planner.js';
@@ -1929,8 +1930,17 @@ export class ThreeView extends LitElement {
       // for every other config — and still NO configRev, so unrelated churn keeps
       // leaving the rigs alone.
       const bgGroundKey = bgEntries.some(e => e.mode === 'grass') ? bgGroundInkKey(f) : '';
+      // A banner entry may tow a VEHICLE-PACK model, whose geometry lives behind
+      // the loaded/active pack config — so loading, unloading or deactivating a
+      // pack must rebuild the rig. `vehicleRegistryRev()` is the narrow monotonic
+      // counter for exactly that (bumped on every register / unregister / config
+      // change); folding it in keeps this key's defining property intact — it
+      // still carries NO configRev, so unrelated entity churn leaves the rigs
+      // alone. Only paid when an entry actually names a craft.
+      const bgVehRev = bgEntries.some(e => e.mode === 'banner' && e.aircraft)
+        ? vehicleRegistryRev() : 0;
       const keyBgText = `${f.id}|${f.w | 0}x${f.d | 0}|${bgStorm ? 's' : '-'}|${groundLevelMm}|${wallHash}|`
-        + `${bgTextOn ? 'v' : 'h'}|`
+        + `${bgTextOn ? 'v' : 'h'}|${bgVehRev}|`
         + bgEntries.map(e => {
             const ga = e.grassArea
               ? `${Math.round(e.grassArea.cx / 100)},${Math.round(e.grassArea.cy / 100)},`

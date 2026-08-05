@@ -47,7 +47,10 @@ import { ALERT_BEACON_DEFAULTS, alertBeaconState, alertBeaconColor, alertBeaconA
 import { northMarkerPos } from './compass.js';
 import {
   vehicleRecipe, registerVehiclePack, unregisterVehiclePack, setVehiclePacksConfig,
+  bannerVehicleDef, bannerCraftScale, bannerCraftHullZMm,
+  VEHICLE_GLASS, VEHICLE_DARK,
   type VehiclePackDef, type VehiclePacksConfig,
+  type VehicleModelDef, type VehiclePrimitive,
 } from './vehicles.js';
 import type { Door, DoorKind, Window as WindowType, WindowCurtainStyle, EnvSensor, BleProxy, AlarmPanel, CalendarPanel, ThermostatFixture, SafetySensor, AlertBeacon, RobotFixture, CameraFixture, ProjectorFixture, ValveFixture, SprinklerZone, FlagpoleFixture, PlugFixture, PresenceZone, InfoCard, ActionButton, ObjectRecipe, ActivityKind, Pool } from './types.js';
 import { flagEntry } from './flags.js';
@@ -13754,8 +13757,14 @@ export class ThreeDRenderer {
       const col = bgColors(e);
       let rig: BgRig | null = null;
       if (e.mode === 'sky')          rig = this._buildBgSky(text, i, n, diag, sc);
+      // Craft resolution order: ADS-B archetype id → BG_CRAFTS roster key →
+      // vehicle-pack model id (loaded + active + declares the 'banner' surface)
+      // → the classic toy tow plane. `bannerVehicleDef` returns null for an
+      // unknown id, a deactivated/unloaded pack and a ground-only model alike,
+      // so every one of those degrades to the toy plane instead of erroring.
       else if (e.mode === 'banner')  rig = this._buildBgAircraft(text, i, n, diag, sc,
-                                                                 bgArchetype(e.aircraft), bgCraft(e.aircraft), col);
+                                                                 bgArchetype(e.aircraft), bgCraft(e.aircraft), col,
+                                                                 bannerVehicleDef(e.aircraft));
       // STALE-STORE TOLERANCE: `chopper` stopped being a mode when the craft
       // roster landed (_migrateBgTexts rewrites it to banner + news_chopper on
       // every load / import / undo). A raw row that reaches the renderer before
@@ -13839,8 +13848,13 @@ export class ThreeDRenderer {
   //     privacy dim / livery lettering: a message prop, not live traffic).
   //   • `craft` — one of the hand-built BG_CRAFTS silhouettes (military / NASA
   //     / fiction homages), built by _buildBannerCraft.
-  //   • neither — the classic toy tow plane, byte-identical to the shipped
-  //     build, which is also where an unknown/garbage string lands.
+  //   • `vehicle` — a model from a LOADED + ACTIVE vehicle pack that declares
+  //     the 'banner' surface, built generically by _buildVehicleCraft. Authored
+  //     at real mm scale and compressed here by `bannerCraftScale`.
+  //   • none of the three — the classic toy tow plane, byte-identical to the
+  //     shipped build, which is also where an unknown/garbage string lands AND
+  //     where a saved entry whose vehicle pack has since been unloaded lands
+  //     (a stored id must degrade, never error).
   //
   // FLIGHT PROFILE keys off the craft id, NOT the entry mode (the news
   // helicopter used to be `mode: 'chopper'`): ONLY `news_chopper` gets the news
@@ -13859,11 +13873,14 @@ export class ThreeDRenderer {
                            i: number, n: number, diag: number, sc = 1,
                            archetype: AircraftArchetype | null = null,
                            craft: BgCraftId | null = null,
-                           col: BgColors = {}): BgRig {
-    // An entry names at most ONE family; an archetype wins if both somehow
-    // resolve (they cannot — the two id sets are disjoint).
+                           col: BgColors = {},
+                           vehicle: VehicleModelDef | null = null): BgRig {
+    // An entry names at most ONE family; an archetype wins if several somehow
+    // resolve (they cannot — archetype ids, BG_CRAFTS keys and namespaced
+    // '<pack>/<member>' vehicle ids are three disjoint id spaces).
     const useArch = archetype;
     const spec = !archetype && craft ? BG_CRAFTS[craft] : null;
+    const useVehicle = !archetype && !craft ? vehicle : null;
     const isChopper = spec?.chopper === true;
     let asm = new THREE.Group();
     const baseR = Math.max(6000, diag * 0.75);
@@ -13958,6 +13975,29 @@ export class ThreeDRenderer {
         asm.add(banner);
         radius = baseR * factor; alt = 6000 + 800 * i + this._yardGroundY(); dir = 1; bobAmp = 120;
       }
+    } else if (useVehicle) {
+      // A vehicle-pack model. Authored at REAL mm scale, so the MODEL group (and
+      // only the model group) takes the display-compression factor — the banner
+      // is added to the outer assembly at full size, exactly as in every other
+      // family, and the per-entry "Model size ×" knob still scales the lot at
+      // the end.
+      const built = this._buildVehicleCraft(useVehicle, col);
+      const s = bannerCraftScale(useVehicle.lenMm);
+      built.asm.scale.setScalar(s);
+      asm = new THREE.Group();
+      asm.add(built.asm);
+      props = built.props;
+      prop = built.props[0];
+      tailRotor = built.tailRotor ?? undefined;
+      rotorY = built.rotorY;
+      propRate = props.length === 0 ? 0 : rotorY ? 40 : 22;
+      // Trail the banner clear of the tail. A VERTICAL rocket measures its hull
+      // DIAMETER instead of its length (bannerCraftHullZMm), so a 110 m stack
+      // does not tow its message a hundred metres astern.
+      const hullZ = bannerCraftHullZMm(useVehicle) * s;
+      banner.position.set(0, 0, hullZ / 2 + 500 + (bh * aspect) / 2);
+      asm.add(banner);
+      radius = baseR * factor; alt = 6000 + 800 * i + this._yardGroundY(); dir = 1; bobAmp = 120;
     } else {
       const bodyMat = this._mat({ color: col.main ?? 0xdad7cf });   // fuselage + fin
       const accent = this._mat({ color: col.detail ?? 0xc94f3d });  // wing + tailplane
@@ -14526,6 +14566,127 @@ export class ThreeDRenderer {
     outlineMat.fog = false;
     this._addOutlines(asm, 10, 320, outlineMat);
     return { asm, props, tailRotor };
+  }
+
+  // ── Vehicle-pack tow craft ──────────────────────────────────────────────────
+  // The GENERIC sky builder for a `src/vehicles.ts` pack model — the THIRD craft
+  // family behind the eight ADS-B archetypes and the hand-built BG_CRAFTS
+  // roster. Where _buildBannerCraft is a hand-written switch of nineteen
+  // silhouettes, this interprets a model's declarative VehiclePrimitive list, so
+  // a new pack member needs no renderer change at all.
+  //
+  // It obeys exactly the same house-style rules the roster does:
+  //   • every material through this._mat({ fog: false }) — a sky object is
+  //     kilometres past the FogExp2 falloff;
+  //   • NO blob shadow (nothing on the ground below it);
+  //   • inverted-hull outlines from a fog-free CLONE of the shared
+  //     _outlineMaterial (never the shared one — _disposeSubtree would free it);
+  //   • no Math.random (the builder re-runs on every _keyBgText change);
+  //   • the model's own livery is the default and the entry's `main`/`detail`
+  //     tint overrides it through the mkBody/mkAccent idiom, so an untinted
+  //     craft is stable across edits.
+  //
+  // The model is authored at REAL mm scale; the CALLER applies
+  // `bannerCraftScale` to the returned group (the banner itself must not be
+  // scaled with it, so it is never a child of this group).
+  //
+  // `spin` prims sharing a kind AND an exact position are collected into one
+  // group centred there: 'prop'/'rotor' groups go into `props` (the rig's
+  // `rotorY` decides the axis for ALL of them, which is why a model may not mix
+  // the two — asserted below by taking rotorY from whether any 'rotor' exists),
+  // and a 'tail' group becomes the tail-rotor slot the advance spins about X.
+  private _buildVehicleCraft(def: VehicleModelDef, col: BgColors): {
+    asm: THREE.Group; props: THREE.Object3D[]; tailRotor: THREE.Object3D | null;
+    rotorY: boolean;
+  } {
+    const asm = new THREE.Group();
+    const props: THREE.Object3D[] = [];
+    let tailRotor: THREE.Object3D | null = null;
+    // The two named livery slots. With no tint these are EXACTLY the model's own
+    // authored hues, so a tint-free craft renders identically across edits.
+    const bodyHex = col.main ?? hexToInt(def.body ?? '#8a8f96');
+    const accentHex = col.detail ?? hexToInt(def.accent ?? '#c9ced4');
+    // One material per (colour × emissive) pair — a model's dozen prims usually
+    // resolve onto three or four slots, and the shared instances are disposed
+    // by the normal _clearGroup sweep on the next _keyBgText rebuild.
+    const matCache = new Map<string, THREE.Material>();
+    const matFor = (color: number, emissive: boolean, glassy: boolean): THREE.Material => {
+      const key = `${color}|${emissive ? 'e' : ''}${glassy ? 'g' : ''}`;
+      let m = matCache.get(key);
+      if (!m) {
+        m = emissive
+          // Self-lit engine / drive glow: emissive rather than transparent, the
+          // BG_CRAFTS spacecraft precedent. STATIC — no per-frame system.
+          ? this._mat({ color, emissive: color, emissiveIntensity: 0.9, fog: false })
+          : glassy
+            ? this._mat({ color, fog: false, transparent: true, opacity: 0.85 })
+            : this._mat({ color, fog: false });
+        matCache.set(key, m);
+      }
+      return m;
+    };
+    const slotColor = (c: VehiclePrimitive['color']): { hex: number; glassy: boolean } => {
+      switch (c) {
+        case 'accent': return { hex: accentHex, glassy: false };
+        case 'glass':  return { hex: hexToInt(VEHICLE_GLASS), glassy: true };
+        case 'dark':   return { hex: hexToInt(VEHICLE_DARK), glassy: false };
+        case undefined:
+        case 'body':   return { hex: bodyHex, glassy: false };
+        default:       return { hex: hexToInt(c), glassy: false };
+      }
+    };
+    // Spin groups, keyed by kind + exact authored position.
+    const spinGroups = new Map<string, THREE.Group>();
+    const d2r = (d: number) => d * Math.PI / 180;
+
+    for (const p of def.prims) {
+      const [a, b, c] = [p.size[0], p.size[1], p.size.length === 3 ? p.size[2] : 0];
+      const seg = p.segments && p.segments >= 3 ? Math.round(p.segments) : 14;
+      let geo: THREE.BufferGeometry;
+      switch (p.shape) {
+        case 'cylinder': geo = new THREE.CylinderGeometry(a, b, c, seg); break;
+        case 'sphere':   geo = new THREE.SphereGeometry(a, 16, 12); break;
+        case 'cone':     geo = new THREE.ConeGeometry(a, b, seg); break;
+        case 'box':
+        default:         geo = new THREE.BoxGeometry(a, b, c); break;
+      }
+      const { hex, glassy } = slotColor(p.color);
+      const mesh = new THREE.Mesh(geo, matFor(hex, p.emissive === true, glassy));
+      if (p.rot) mesh.rotation.set(d2r(p.rot[0]), d2r(p.rot[1]), d2r(p.rot[2]));
+      // A glow or a spinning blade never wears an inverted-hull shell (the
+      // roster's engine bells and rotor discs do the same).
+      if (p.emissive) mesh.userData.outlineSkip = true;
+      if (p.spin === 'prop' || p.spin === 'rotor' || p.spin === 'tail') {
+        const key = `${p.spin}|${p.pos[0]},${p.pos[1]},${p.pos[2]}`;
+        let g = spinGroups.get(key);
+        if (!g) {
+          g = new THREE.Group();
+          g.position.set(p.pos[0], p.pos[1], p.pos[2]);
+          g.userData.outlineSkip = true;
+          g.userData.spinKind = p.spin;
+          if (p.spin !== 'tail') g.userData.rotorDisc = true;
+          spinGroups.set(key, g);
+          asm.add(g);
+          if (p.spin === 'tail') tailRotor = g; else props.push(g);
+        }
+        mesh.position.set(0, 0, 0);          // the GROUP carries the position
+        mesh.userData.outlineSkip = true;
+        g.add(mesh);
+      } else {
+        mesh.position.set(p.pos[0], p.pos[1], p.pos[2]);
+        asm.add(mesh);
+      }
+    }
+    // A craft carrying any 'rotor' prim is a rotorcraft: the rig spins EVERY
+    // disc about the vertical axis. 'prop' craft spin about the flight axis.
+    const rotorY = def.prims.some(p => p.spin === 'rotor');
+
+    // Inverted-hull outlines with a fog-free CLONE (see _buildBannerCraft).
+    this._addOutlines(new THREE.Group(), 10, 320);      // ensure _outlineMaterial exists
+    const outlineMat = this._outlineMaterial!.clone();
+    outlineMat.fog = false;
+    this._addOutlines(asm, 10, 320, outlineMat);
+    return { asm, props, tailRotor, rotorY };
   }
 
   // Flat ground-writing decal. Two placements:

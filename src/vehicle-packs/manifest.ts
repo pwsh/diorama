@@ -22,6 +22,18 @@ export interface VehiclePackManifestRow {
 }
 
 export const VEHICLE_PACK_MANIFEST: VehiclePackManifestRow[] = [
+  { id: 'base-aircraft-military-historical', label: 'Historical (WWI–WWII)',
+    path: ['Aircraft', 'Military', 'Historical (WWI–WWII)'], count: 10,
+    load: () => import('./base-aircraft-military-historical.js') },
+  { id: 'base-aircraft-military-modern', label: 'Cold War & Modern',
+    path: ['Aircraft', 'Military', 'Cold War & Modern'], count: 9,
+    load: () => import('./base-aircraft-military-modern.js') },
+  { id: 'base-aircraft-civil', label: 'Civil', path: ['Aircraft', 'Civil'], count: 8,
+    load: () => import('./base-aircraft-civil.js') },
+  { id: 'base-space-real', label: 'Real', path: ['Space', 'Real'], count: 3,
+    load: () => import('./base-space-real.js') },
+  { id: 'franchise-space-fiction', label: 'Fiction', path: ['Space', 'Fiction'], count: 4,
+    franchise: true, load: () => import('./franchise-space-fiction.js') },
   { id: 'base-ground-civil', label: 'Civil', path: ['Ground Vehicles', 'Civil'], count: 9,
     load: () => import('./base-ground-civil.js') },
   { id: 'base-ground-military', label: 'Military & Historical',

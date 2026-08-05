@@ -73,13 +73,24 @@
   R.setVehiclePacksConfig(allOn);
 
   // ── Per-member structural build sweep ─────────────────────────────────────
-  let total = 0;
+  // GROUND-placeable members only. Aircraft / space packs declare the 'banner'
+  // surface instead: they are centred VERTICALLY on the origin (the BG_CRAFTS
+  // sky convention) and are never dropped as furniture, so placing one here
+  // would legitimately sink it through the floor. Their own gate is
+  // test-pages/vehicle-craft-test.html.
+  let total = 0, skipped = 0;
   const perPack = [];
   for (const pack of packs) {
     let packMin = 1e9;
     for (const m of pack.models) {
-      total++;
       const tag = m.id;
+      if (m.category !== 'ground') {
+        skipped++;
+        ok(`${tag}: sky craft correctly declares no ground surface`,
+           !m.surfaces.includes('ground'), JSON.stringify(m.surfaces));
+        continue;
+      }
+      total++;
 
       // The registry → recipe conversion must succeed for an active member.
       const rec = R.vehicleRecipe(m.id);
@@ -123,7 +134,8 @@
       // Nothing sinks below the floor plane the piece stands on.
       ok(`${tag}: sits on the floor (no sunken geometry)`, ext.minY > -60, String(Math.round(ext.minY)));
     }
-    perPack.push(`${pack.id}:${pack.models.length}(min${packMin === 1e9 ? '-' : packMin})`);
+    perPack.push(`${pack.id}:${pack.models.filter(m => m.category === 'ground').length}` +
+                 `(min${packMin === 1e9 ? '-' : packMin})`);
   }
   eq('sweep covered 23 models', total, 23);
 
@@ -215,7 +227,7 @@
   const passN = checks.filter(c => c.pass).length, totalC = checks.length;
   const fails = checks.filter(c => !c.pass);
   document.getElementById('out').textContent =
-    `packs=${packs.length} models=${total}\n` + perPack.join(' ') + '\n\n' +
+    `packs=${packs.length} groundModels=${total} skyModelsSkipped=${skipped}\n` + perPack.join(' ') + '\n\n' +
     fails.map(c => `FAIL ${c.name}  ${c.extra}`).join('\n') + `\n\n${passN}/${totalC}`;
   document.title = `VEHICLEBUILD ${passN === totalC ? 'PASS' : 'FAIL'} ${passN}/${totalC}`;
  } catch (e) {

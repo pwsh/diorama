@@ -341,6 +341,31 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Vehicle model library V2 — 34 aircraft/space models + banner-tow
+  wiring** (2026-08-04; batch 2 of 3, unreleased — on main past v0.54.0).
+  Five lazy packs: military-historical 10 (Spitfire→Fokker triplane),
+  military-modern 9 (BG_CRAFTS dupes excluded), civil 8 (747, DC-3,
+  Concorde, Cessna, Cub, float Beaver, Constellation, generic
+  narrowbody), space-real 3 (Saturn V/Apollo LM/Falcon 9 — the doc's
+  "4" counted the shipped shuttle), space-fiction 4 (UNLOADED,
+  descriptive-generic; call-box excluded pending product-owner call).
+  `_buildVehicleCraft` generic sky interpreter (fog:false, slot tints
+  via mkBody/mkAccent, emissive glow, spin prims → props/rotor +
+  NEW 'tail' spin kind → BgRig.tailRotor); pure `bannerCraftScale`
+  (clamp(len×0.18, 1400, 5200) — 747:B-52 display ratio 1.53× vs
+  1.56× real) on an INNER group so the banner never shrinks;
+  `vertical?` flag + `bannerCraftHullZMm` (rockets fly upright, the
+  standoff reads their DIAMETER); resolution archetype → BG_CRAFTS →
+  registry → toy fallback (unloaded packs never error a saved entry);
+  `vehicleRegistryRev` folded into `_keyBgText` (no-configRev property
+  preserved); dropdown appends registry optgroups after the 4
+  hard-coded ones (byte-identical). BG_CRAFTS deliberately NOT
+  registered as a pack (deferred). Tests: VEHICLECRAFT 483/483 new;
+  VEHICLEPACK 839/839 (was 341), VEHICLEBUILD 346/346 (ground-only,
+  sky gated by craft test), bgtext-multi 373/373, flights 686 /
+  render 513 / ui 303 (was 299), floorplans 425/425. Also fixed:
+  toolbar-test's harness recipe comment (was missing the lit
+  aliases/tsconfig/define — unbuildable as documented).
 - **Vehicle model library V1 — pack registry + 23 ground vehicles**
   (2026-08-04, user-requested "build the models and wire the interface
   in"; batch 1 of 3, unreleased — on main past v0.54.0). `src/vehicles.ts`

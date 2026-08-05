@@ -20,10 +20,15 @@
      custom element (edit-only render + collapse). Build recipe:
        npm run build
        H=/tmp/diorama-harness-toolbar; mkdir -p "$H"; cp -r dist/* test-pages/* "$H"/
-       T=$(mktemp -d); cp -r src/* "$T"/
+       T=$(mktemp -d); cp -r src/* "$T"/; cp tsconfig.json "$T"/
        cp test-pages/fake-avatar-store.ts "$T"/avatar-store.ts
        cp test-pages/toolbar-entry.ts    "$T"/ui/toolbar-entry.ts
-       npx esbuild "$T"/ui/toolbar-entry.ts --bundle --format=esm --outfile="$H"/toolbar.mod.js
+       npx esbuild "$T"/ui/toolbar-entry.ts --bundle --format=esm \
+         --tsconfig="$T"/tsconfig.json \
+         --alias:lit=$PWD/node_modules/lit/index.js \
+         --alias:lit/decorators.js=$PWD/node_modules/lit/decorators.js \
+         --define:__DIORAMA_VERSION__='"test"' \
+         --outfile="$H"/toolbar.mod.js
        cd "$H" && python3 -m http.server 8807
 -->
 <script type="module">

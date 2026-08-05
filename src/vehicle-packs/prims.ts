@@ -80,6 +80,106 @@ export function lamps(
   return [box(size, [-x, y, z], color), box(size, [x, y, z], color)];
 }
 
+// ── Aircraft / spacecraft helpers (V2) ──────────────────────────────────────
+// Same frame: −Z = nose, +Y = up. Aircraft models are centred VERTICALLY on the
+// origin too (they never touch a ground plane), which is the BG_CRAFTS
+// convention the banner-tow builder expects.
+
+/** A barrel along the FLIGHT axis (fuselage tube, engine pod, boom). */
+export function tube(
+  r: number, len: number, pos: [number, number, number], color: C,
+): VehiclePrimitive {
+  return { shape: 'cylinder', size: [r, r, len], pos, rot: [90, 0, 0], color };
+}
+
+/** A barrel along local X (spanwise: wing spars, cross-shafts). */
+export function tubeX(
+  r: number, len: number, pos: [number, number, number], color: C,
+): VehiclePrimitive {
+  return { shape: 'cylinder', size: [r, r, len], pos, rot: [0, 0, 90], color };
+}
+
+/** A cone whose APEX points FORWARD (−Z) — the standard nose / spinner pose. */
+export function noseCone(
+  r: number, len: number, pos: [number, number, number], color: C,
+): VehiclePrimitive {
+  return { shape: 'cone', size: [r, len, 0], pos, rot: [-90, 0, 0], color };
+}
+
+/** A cone whose apex points AFT (+Z) — tail cones, jet nozzles. */
+export function tailCone(
+  r: number, len: number, pos: [number, number, number], color: C,
+): VehiclePrimitive {
+  return { shape: 'cone', size: [r, len, 0], pos, rot: [90, 0, 0], color };
+}
+
+/** A rocket engine bell: apex UP, mouth down, self-lit. */
+export function engineBell(
+  r: number, len: number, pos: [number, number, number], color: C,
+): VehiclePrimitive {
+  return { shape: 'cone', size: [r, len, 0], pos, rot: [180, 0, 0], color, emissive: true };
+}
+
+/**
+ * Propeller blades: `n` boxes crossing in the XY plane at ONE position, tagged
+ * `spin:'prop'` so the sky builder collects them into a group spun about the
+ * flight axis. `n = 1` is deliberate on multi-engine models — a single blade
+ * sweeps the same disc and keeps a four-engine bomber inside the prim budget.
+ */
+export function propBlades(
+  pos: [number, number, number], span: number, n = 2, color: C = 'dark',
+  chord = 90, th = 14,
+): VehiclePrimitive[] {
+  const out: VehiclePrimitive[] = [];
+  for (let k = 0; k < n; k++) {
+    out.push({ shape: 'box', size: [chord, span, th], pos,
+               rot: [0, 0, (k * 180) / n], color, spin: 'prop' });
+  }
+  return out;
+}
+
+/** Rotorcraft MAIN rotor: `n` flat blades in the XZ plane, spun about +Y. */
+export function rotorBlades(
+  pos: [number, number, number], span: number, n = 2, color: C = 'dark',
+  chord = 120, th = 20,
+): VehiclePrimitive[] {
+  const out: VehiclePrimitive[] = [];
+  for (let k = 0; k < n; k++) {
+    out.push({ shape: 'box', size: [span, th, chord], pos,
+               rot: [0, (k * 180) / n, 0], color, spin: 'rotor' });
+  }
+  return out;
+}
+
+/** Helicopter TAIL rotor: `n` blades in the YZ plane, spun about local X. */
+export function tailRotorBlades(
+  pos: [number, number, number], span: number, n = 2, color: C = 'dark',
+): VehiclePrimitive[] {
+  const out: VehiclePrimitive[] = [];
+  for (let k = 0; k < n; k++) {
+    out.push({ shape: 'box', size: [16, span, 60], pos,
+               rot: [(k * 180) / n, 0, 0], color, spin: 'tail' });
+  }
+  return out;
+}
+
+/**
+ * Mirror a run of prims across the centreline: returns the originals PLUS
+ * X-negated copies (a rotation's Y and Z components flip with the handedness,
+ * X does not). Wings, tails, nacelles and legs are all authored once with this.
+ */
+export function mirrorX(prims: VehiclePrimitive[]): VehiclePrimitive[] {
+  const out: VehiclePrimitive[] = [...prims];
+  for (const p of prims) {
+    out.push({
+      ...p,
+      pos: [-p.pos[0], p.pos[1], p.pos[2]],
+      ...(p.rot ? { rot: [p.rot[0], -p.rot[1], -p.rot[2]] as [number, number, number] } : {}),
+    });
+  }
+  return out;
+}
+
 /** A continuous track unit (tank): a long slab + two rounded end drums. */
 export function trackUnit(
   x: number, len: number, r: number, w: number, zc = 0,

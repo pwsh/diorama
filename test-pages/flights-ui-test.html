@@ -1153,13 +1153,32 @@
       const acSel = labelled('Aircraft', 'select');
       ok('BG banner row offers an “Aircraft” picker', !!acSel);
       eq('the picker defaults to the classic tow plane', acSel && acSel.value, '');
-      // The roster grew: 9 airliner-family entries (classic plane + 8 archetypes)
-      // + 7 military/NASA + 11 fiction + the news helicopter, in four optgroups.
-      eq('the whole 28-craft roster is listed', acSel && acSel.options.length, 28);
-      eq('…grouped into four optgroups', acSel && acSel.querySelectorAll('optgroup').length, 4);
-      eq('optgroup labels name the four families',
-        acSel && [...acSel.querySelectorAll('optgroup')].map(g => g.label).join('|'),
+      // The HARD-CODED roster: 9 airliner-family entries (classic plane + 8
+      // archetypes) + 7 military/NASA + 11 fiction + the news helicopter, in the
+      // first four optgroups — pinned exactly.
+      const acGroups = acSel ? [...acSel.querySelectorAll('optgroup')] : [];
+      eq('the 28-craft hard-coded roster is listed first',
+        acGroups.slice(0, 4).reduce((n, g) => n + g.querySelectorAll('option').length, 0), 28);
+      eq('…grouped into four optgroups',
+        acGroups.slice(0, 4).map(g => g.label).join('|'),
         'Toy plane & airliners|Military & NASA|Fiction|News');
+      // Everything AFTER those four is registry-driven: one optgroup per loaded +
+      // active vehicle pack carrying banner-surface models, labelled by its
+      // Settings-tree path. The franchise space pack defaults UNLOADED, so it
+      // must NOT appear until the user opts in.
+      const vehGroups = acGroups.slice(4);
+      ok('vehicle packs append their own optgroups', vehGroups.length >= 4,
+        vehGroups.map(g => g.label).join('|'));
+      ok('…labelled by the pack path', vehGroups.every(g => g.label.includes(' ▸ ')),
+        vehGroups.map(g => g.label).join('|'));
+      ok('…and the opt-in franchise space pack is absent by default',
+        !vehGroups.some(g => g.label === 'Space ▸ Fiction'),
+        vehGroups.map(g => g.label).join('|'));
+      ok('…carrying namespaced vehicle ids',
+        vehGroups.every(g => [...g.querySelectorAll('option')].every(o => o.value.includes('/'))));
+      eq('every option is accounted for by the two families',
+        acSel && acSel.options.length,
+        28 + vehGroups.reduce((n, g) => n + g.querySelectorAll('option').length, 0));
       ok('the news helicopter is a CRAFT now, not a mode',
         !!acSel && [...acSel.options].some(o => o.value === 'news_chopper'));
       const modeSel = dw.querySelector('select');

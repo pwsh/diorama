@@ -10,9 +10,8 @@
  // Harness setup:
  //   npx esbuild test-pages/vehicle-pack-entry.ts --bundle --format=esm --outfile=<h>/veh.mod.js
  //   npx esbuild src/vehicle-packs/manifest.ts --format=esm --outfile=<h>/vmanifest.mod.js
- //   npx esbuild src/vehicle-packs/base-ground-civil.ts        --bundle --format=esm --outfile=<h>/vp-civil.mod.js
- //   npx esbuild src/vehicle-packs/base-ground-military.ts     --bundle --format=esm --outfile=<h>/vp-mil.mod.js
- //   npx esbuild src/vehicle-packs/franchise-ground-fiction.ts --bundle --format=esm --outfile=<h>/vp-fic.mod.js
+ //   for every id in VEHICLE_PACK_MANIFEST:
+ //     npx esbuild src/vehicle-packs/<id>.ts --bundle --format=esm --outfile=<h>/vp-<id>.mod.js
  //
  // veh.mod.js is ONE bundle carrying BOTH vehicles.ts and geometry.ts, so the
  // registry the config functions mutate is the SAME one resolveFurnitureDef
@@ -22,18 +21,26 @@
   const VEH = await import('./veh.mod.js' + V);
   const GEO = VEH;                                   // same bundle → same registry
   const { VEHICLE_PACK_MANIFEST } = await import('./vmanifest.mod.js' + V);
-  const civil = (await import('./vp-civil.mod.js' + V)).default;
-  const mil   = (await import('./vp-mil.mod.js'   + V)).default;
-  const fic   = (await import('./vp-fic.mod.js'   + V)).default;
+  // Every manifest pack body, loaded by id — a new pack needs no edit here.
+  const PACKS = [];
+  for (const row of VEHICLE_PACK_MANIFEST) {
+    PACKS.push((await import(`./vp-${row.id}.mod.js` + V)).default);
+  }
+  const byId = (id) => PACKS.find(p => p.id === id);
+  // The three GROUND packs stay named: section 4+ exercises registry mechanics
+  // against a known-size registry, so it registers exactly these.
+  const civil = byId('base-ground-civil');
+  const mil   = byId('base-ground-military');
+  const fic   = byId('franchise-ground-fiction');
+  const GROUND = [civil, mil, fic];
 
   const checks = [];
   const ok = (name, cond, extra = '') => checks.push({ name, pass: !!cond, extra });
   const eq = (name, a, b, extra = '') => ok(name, a === b, `${extra} got=${JSON.stringify(a)} want=${JSON.stringify(b)}`);
 
-  const PACKS = [civil, mil, fic];
-
   // ═══ 1. Manifest ↔ pack-body agreement ═══════════════════════════════════
-  eq('1a: manifest has 3 rows', VEHICLE_PACK_MANIFEST.length, 3);
+  // Pinned count: adding a pack is a deliberate change, so the test moves with it.
+  eq('1a: manifest has 8 rows', VEHICLE_PACK_MANIFEST.length, 8);
   for (const row of VEHICLE_PACK_MANIFEST) {
     const body = PACKS.find(p => p.id === row.id);
     ok(`1b: manifest row ${row.id} has a body`, !!body);
@@ -43,9 +50,15 @@
     eq(`1e: ${row.id} path matches`, body.path.join('/'), row.path.join('/'));
     eq(`1f: ${row.id} franchise flag matches`, !!body.franchise, !!row.franchise);
   }
-  eq('1g: exactly one franchise pack', VEHICLE_PACK_MANIFEST.filter(r => r.franchise).length, 1);
-  eq('1h: franchise pack is the fiction one',
-     VEHICLE_PACK_MANIFEST.find(r => r.franchise)?.id, 'franchise-ground-fiction');
+  eq('1g: exactly two franchise packs', VEHICLE_PACK_MANIFEST.filter(r => r.franchise).length, 2);
+  eq('1h: the franchise packs are the two fiction ones',
+     VEHICLE_PACK_MANIFEST.filter(r => r.franchise).map(r => r.id).sort().join(','),
+     'franchise-ground-fiction,franchise-space-fiction');
+  // Every pack id is unique and every path is distinct (the Settings tree keys off it).
+  eq('1i: pack ids unique', new Set(VEHICLE_PACK_MANIFEST.map(r => r.id)).size,
+     VEHICLE_PACK_MANIFEST.length);
+  eq('1j: pack paths unique', new Set(VEHICLE_PACK_MANIFEST.map(r => r.path.join('/'))).size,
+     VEHICLE_PACK_MANIFEST.length);
 
   // ═══ 2. Model data sanity (every member of every pack) ═══════════════════
   const seenIds = new Set();
@@ -58,28 +71,61 @@
       ok(`2b: ${tag} id unique`, !seenIds.has(m.id), m.id);
       seenIds.add(m.id);
       ok(`2c: ${tag} label non-empty`, typeof m.label === 'string' && m.label.trim().length > 0);
-      eq(`2d: ${tag} category ground`, m.category, 'ground');
-      ok(`2e: ${tag} surfaces includes ground`, Array.isArray(m.surfaces) && m.surfaces.includes('ground'));
+      ok(`2d: ${tag} category is a known one`,
+         ['ground', 'aircraft', 'space'].includes(m.category), m.category);
+      // Category ↔ surface contract: a ground vehicle is placeable, a sky craft
+      // tows banners. Neither may claim the other's surface.
+      const sky = m.category !== 'ground';
+      ok(`2e: ${tag} declares the surface its category implies`,
+         Array.isArray(m.surfaces)
+         && m.surfaces.includes(sky ? 'banner' : 'ground')
+         && !m.surfaces.includes(sky ? 'ground' : 'banner'),
+         JSON.stringify(m.surfaces));
+      ok(`2e2: ${tag} pack path matches its category`,
+         sky ? (pack.path[0] === 'Aircraft' || pack.path[0] === 'Space')
+             : pack.path[0] === 'Ground Vehicles', pack.path[0]);
       ok(`2f: ${tag} dims all positive finite`,
          m.dims.length === 3 && m.dims.every(v => Number.isFinite(v) && v > 0), JSON.stringify(m.dims));
       ok(`2g: ${tag} lenMm positive`, Number.isFinite(m.lenMm) && m.lenMm > 0, String(m.lenMm));
+      // Sky craft are budgeted 5..14 prims (they are message props read at
+      // distance); ground vehicles are placed furniture and may carry more.
       ok(`2h: ${tag} has >= 5 primitives`, m.prims.length >= 5, String(m.prims.length));
+      if (sky) ok(`2h2: ${tag} sky craft within the 14-prim budget`,
+                  m.prims.length <= 14, String(m.prims.length));
       const badPrim = m.prims.find(p =>
         !['box', 'cylinder', 'sphere', 'cone'].includes(p.shape)
         || !Array.isArray(p.size) || !p.size.every(Number.isFinite)
         || !Array.isArray(p.pos) || p.pos.length !== 3 || !p.pos.every(Number.isFinite)
         || (p.rot && (p.rot.length !== 3 || !p.rot.every(Number.isFinite))));
       ok(`2i: ${tag} all primitives well-formed`, !badPrim, JSON.stringify(badPrim ?? ''));
-      // Every part must sit at or above the ground plane (y = 0 is the contact
-      // plane) and inside a generous envelope of the declared footprint.
-      const below = m.prims.filter(p => p.pos[1] < -1);
-      ok(`2j: ${tag} nothing authored below ground`, below.length === 0, String(below.length));
-      const [W, D] = m.dims;
-      const out = m.prims.filter(p => Math.abs(p.pos[0]) > W || Math.abs(p.pos[2]) > D);
+      // A GROUND vehicle's origin is its footprint centre AT ground level, so
+      // nothing may be authored below y = 0. A sky craft is centred vertically
+      // instead (the BG_CRAFTS convention) and legitimately has parts below its
+      // origin — it is checked for vertical CENTREDNESS instead.
+      if (!sky) {
+        const below = m.prims.filter(p => p.pos[1] < -1);
+        ok(`2j: ${tag} nothing authored below ground`, below.length === 0, String(below.length));
+      } else {
+        const ys = m.prims.map(p => p.pos[1]);
+        const span = Math.max(...ys) - Math.min(...ys);
+        const mid = (Math.max(...ys) + Math.min(...ys)) / 2;
+        ok(`2j: ${tag} sky craft is centred vertically`,
+           span === 0 || Math.abs(mid) <= Math.max(span * 0.5, m.dims[2] * 0.5),
+           `mid=${mid} span=${span}`);
+      }
+      // Parts sit inside a generous envelope of the declared bounding box. A
+      // VERTICAL craft is measured against its own height on Y, not its
+      // (diameter-sized) depth.
+      const [W, D, H] = m.dims;
+      const out = m.prims.filter(p => Math.abs(p.pos[0]) > W
+        || Math.abs(p.pos[2]) > (m.vertical ? Math.max(D, H) : D)
+        || (sky && Math.abs(p.pos[1]) > Math.max(H, W)));
       ok(`2k: ${tag} parts inside the footprint envelope`, out.length === 0, String(out.length));
     }
   }
-  eq('2l: 23 models across the three packs', modelCount, 23);
+  eq('2l: 57 models across the eight packs', modelCount, 57);
+  eq('2m: 34 of them are sky craft',
+     PACKS.reduce((n, p) => n + p.models.filter(m => m.category !== 'ground').length, 0), 34);
 
   // ═══ 3. IP posture — fiction labels are descriptive-generic ══════════════
   // §5.3: no franchise / proper-noun term may appear in a SHIPPED string. This
@@ -87,18 +133,26 @@
   const BANNED = ['delorean', 'batman', 'batmobile', 'knight rider', 'kitt', 'general lee',
     'dukes of hazzard', 'ghostbuster', 'ecto', 'herbie', 'love bug', 'scooby',
     'mystery machine', 'a-team', 'bumblebee', 'transformer', 'flintstone',
-    'back to the future', 'star wars', 'x-wing', 'firefly', 'serenity'];
-  for (const m of fic.models) {
+    'back to the future', 'star wars', 'x-wing', 'firefly', 'serenity',
+    // Space fiction (batch V2).
+    'tardis', 'doctor who', 'police box', 'battlestar', 'galactica',
+    'space odyssey', 'discovery one', 'star trek', 'millennium falcon',
+    'space: 1999', 'space 1999'];
+  const franchisePacks = PACKS.filter(p => p.franchise);
+  eq('3z: both franchise packs present', franchisePacks.length, 2);
+  for (const fp of franchisePacks) for (const m of fp.models) {
     const hay = (m.label + ' ' + m.id).toLowerCase();
     const hit = BANNED.find(b => hay.includes(b));
     ok(`3a: fiction "${m.label}" carries no franchise term`, !hit, hit ?? '');
   }
-  ok('3b: fiction pack defaults UNLOADED', fic.franchise === true);
-  ok('3c: base packs are not franchise', !civil.franchise && !mil.franchise);
+  ok('3b: fiction packs default UNLOADED', franchisePacks.every(p => p.franchise === true));
+  ok('3c: base packs are not franchise', PACKS.filter(p => !p.franchise).length === 6
+     && !civil.franchise && !mil.franchise);
 
   // ═══ 4. Registry: register / resolve / gating ════════════════════════════
   VEH.setVehiclePacksConfig(undefined);
-  for (const p of PACKS) VEH.registerVehiclePack(p, 'builtin');
+  // Only the three GROUND packs — the count assertions below are exact.
+  for (const p of GROUND) VEH.registerVehiclePack(p, 'builtin');
 
   const CIVIL_ID = civil.models[0].id;
   const FIC_ID = fic.models[0].id;
