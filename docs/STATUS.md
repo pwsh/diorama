@@ -1,6 +1,6 @@
 # Project status & pick-up guide
 
-Last updated: 2026-08-05, at **v0.56.0**. This is the single document to
+Last updated: 2026-08-05, at **v0.57.0**. This is the single document to
 read (alongside `CLAUDE.md`) to resume work with full context.
 
 ## Where things stand
@@ -352,11 +352,19 @@ instance.
   still winning the umbrella; a network-rack appliance with an
   honest derived health LED; plus the roadmap marker-sync pass that
   restored the doc's accuracy).
+  → v0.57.0 chasing the sun (a motorized solar panel that aims at
+  the real sun — shared resolution with the scene light, clock
+  fallback, night parking — with UV-band frame tint and an
+  energy-monitor bead that goes amber on grid draw; 11
+  geometry-pinned vehicle corrections from user QA + the ex-police
+  sedan, Apollo Lunar Rover and Perseverance; the gallery grows a
+  62-craft flying-models page and re-captures all 26 ground
+  vehicles).
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
 - **Docs: vehicle gallery rebuild + flying-models page** (2026-08-05,
-  user-directed pre-release; unreleased — on main past v0.56.0).
+  user-directed pre-release; released in v0.57.0).
   Gallery 712→778 subjects / 14 pages: all 26 ground vehicles
   re-captured with --force (the gallery has NO version-keyed cache —
   skip = file-exists, now documented in GALLERY.md; spot-checks
@@ -377,7 +385,7 @@ instance.
   gallery entry (pre-existing fixture-scope boundary shared with
   valves/plugs/thermostats).
 - **Sun-tracking solar panel fixture** (2026-08-05, user-requested;
-  unreleased — on main past v0.56.0). `SolarPanel`/`Floor.solarPanels`
+  released in v0.57.0). `SolarPanel`/`Floor.solarPanels`
   + pure `src/solar.ts` (zero-import): the panel AIMS at the real sun
   — three-view's `_weatherFxState` sun read now DELEGATES to solar.ts
   (byte-equivalent, golden-pinned) so the scene sun light and the
@@ -395,8 +403,7 @@ instance.
   undo 47/47 (+3), toolbar 54/54 (+1), identify 57/57 (+12); terrain/
   align/sidebar-org/layers2d unchanged green.
 - **Vehicle model corrections + 3 additions** (2026-08-05, user visual
-  QA — 9 reported defects + 2 same-class finds; unreleased — on main
-  past v0.56.0). All measured via exact rotated-AABB passes, each with
+  QA — 9 reported defects + 2 same-class finds; released in v0.57.0). All measured via exact rotated-AABB passes, each with
   a §8 geometry pin so it can't revert: Willys spare tyre rotated
   face-parallel to the rear; time-machine gullwings CLOSED; hero-car
   engine cover lowered under the canopy; racing-compact stripes → 9
