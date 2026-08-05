@@ -45,6 +45,10 @@ import {
 } from './geometry.js';
 import { ALERT_BEACON_DEFAULTS, alertBeaconState, alertBeaconColor, alertBeaconAlarming, isAlertDomain } from './alerts.js';
 import { northMarkerPos } from './compass.js';
+import {
+  vehicleRecipe, registerVehiclePack, unregisterVehiclePack, setVehiclePacksConfig,
+  type VehiclePackDef, type VehiclePacksConfig,
+} from './vehicles.js';
 import type { Door, DoorKind, Window as WindowType, WindowCurtainStyle, EnvSensor, BleProxy, AlarmPanel, CalendarPanel, ThermostatFixture, SafetySensor, AlertBeacon, RobotFixture, CameraFixture, ProjectorFixture, ValveFixture, SprinklerZone, FlagpoleFixture, PlugFixture, PresenceZone, InfoCard, ActionButton, ObjectRecipe, ActivityKind, Pool } from './types.js';
 import { flagEntry } from './flags.js';
 
@@ -1950,6 +1954,15 @@ export class ThreeDRenderer {
                         list: AvatarKind[] | undefined): boolean {
     return avatarFromPool(want, list);
   }
+
+  // Vehicle-pack registry passthroughs — same reasoning as the avatar block
+  // above: the registry is a singleton in the shared `vehicles.ts` chunk, so a
+  // pack registered here is the SAME one `_buildFurniture` resolves against.
+  // Test-harness hook; the app registers via the planner.
+  static registerVehiclePack(def: VehiclePackDef): void { registerVehiclePack(def); }
+  static unregisterVehiclePack(id: string): void { unregisterVehiclePack(id); }
+  static setVehiclePacksConfig(cfg: VehiclePacksConfig | undefined): void { setVehiclePacksConfig(cfg); }
+  static vehicleRecipe(id: string): ObjectRecipe | null { return vehicleRecipe(id); }
 
   private _container: HTMLElement;
   private _scene: THREE.Scene | null = null;
@@ -6408,7 +6421,7 @@ export class ThreeDRenderer {
       // MeshBasic (a documented _mat exemption, like the TransientPulse rings),
       // outline-skipped, added AFTER _buildFurniture ran its outlines so no
       // inverted-hull shell wraps it, and no blob shadow.
-      if (fu.customKindId && selectedFurnitureId && fu.id === selectedFurnitureId) {
+      if ((fu.customKindId || fu.vehicleModelId) && selectedFurnitureId && fu.id === selectedFurnitureId) {
         grp.add(this._frontArrowDecal(fu.h));
       }
       this._floorGroup.add(grp);
@@ -8846,7 +8859,7 @@ export class ThreeDRenderer {
                                  kind?: import('./types.js').FurnitureKind;
                                  rotation?: number; elevation?: number;
                                  stairsOpen?: boolean;
-                                 color?: string; customKindId?: string },
+                                 color?: string; customKindId?: string; vehicleModelId?: string },
                           neighbors?: Furniture[],
                           customObjects?: ObjectRecipe[],
                           opts?: { applianceOn?: boolean; ledScale?: number;
@@ -8864,7 +8877,12 @@ export class ThreeDRenderer {
                                    climateAir?: import('./geometry.js').HvacAirflowKind;
                                    fanRps?: number; oscillate?: boolean;
                                    mech?: MechanicalRun }): THREE.Group {
-    const recipe = fu.customKindId ? customObjects?.find(o => o.id === fu.customKindId) : undefined;
+    // A vehicle-pack model resolves into the SAME ObjectRecipe shape a custom
+    // object does (vehicles.ts is pure + shared by both graphs, like avatars.ts),
+    // so the generic recipe builder below renders it with no new build path. An
+    // unloaded / deactivated pack yields null → the plain-kind fallback.
+    const recipe = fu.vehicleModelId ? (vehicleRecipe(fu.vehicleModelId) ?? undefined)
+      : fu.customKindId ? customObjects?.find(o => o.id === fu.customKindId) : undefined;
     const def = recipe ?? furnitureDef(fu);
     // Stairs-family pieces honour a per-piece RISE override (Furniture.ht) so a
     // flight/ramp can bridge a short level change; TREE kinds honour the same

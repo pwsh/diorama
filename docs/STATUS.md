@@ -341,6 +341,34 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Vehicle model library V1 — pack registry + 23 ground vehicles**
+  (2026-08-04, user-requested "build the models and wire the interface
+  in"; batch 1 of 3, unreleased — on main past v0.54.0). `src/vehicles.ts`
+  (pure avatars.ts twin: VehicleModelDef/VehiclePrimitive with color
+  SLOTS + V2-reserved spin/emissive; registry + memoized
+  `vehicleRecipe(id)` → ObjectRecipe) + `src/vehicle-packs/` (eager
+  manifest, lazy bodies + lazy prims.ts helpers): base-ground-civil (9)
+  + base-ground-military (7) loaded+active, franchise-ground-fiction
+  (7, UNLOADED, descriptive-generic labels). `Furniture.vehicleModelId`
+  resolves through resolveFurnitureDef + the two direct recipe
+  re-resolvers (three-renderer + canvas-render projection) so the whole
+  furniture pipeline (3D/2D/nav/physical/thumbs) just works; kind stays
+  'block' fallback. Store.vehiclePacks (in _loadFromHa), planner
+  hydration + setters, 4 renderer static passthroughs (shared-chunk
+  registry for tests). UI: Settings ▸ Vehicles pack manager tab (no
+  user JSON import v1 — deferred), conditional toolbar Vehicles tab
+  (pendingVehicleModelId), sidebar vehicle-piece editor. Tests:
+  VEHICLEPACK 341/341 + VEHICLEBUILD 302/302 new; toolbar 53/53,
+  vehicle-mail 57/57, furniture-polish 28/28, config 60/60,
+  sensor-focus 14/14, floorplans:build 425/425 green. Doc fixes
+  riding along: toolbar-test count 42→53, the floorplans
+  "byte-deterministic" claim scoped to within-a-day (build.mjs stamps
+  exportedAt). Noted product-owner flag: base-ground-military labels
+  ship REAL names incl. "Ford Model T"/"Volkswagen Beetle"/"Volkswagen
+  Microbus" — live commercial marks, unlike the government hardware
+  the §5.3 posture was argued from; flip to descriptive-generic if
+  preferred. V2 = aircraft packs + banner wiring; V3 = ADS-B military
+  skins.
 - **Mailbox rebuilt from reference photos** (2026-08-01, user-rejected
   the model twice — full review + ground-up rebuild, no patching;
   unreleased — on main past v0.54.0). The complete review found the

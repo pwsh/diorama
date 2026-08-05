@@ -6,6 +6,9 @@ import type { Vec2, Sensor, BgImage, LightIconKind, FurnitureKind, EnvKind, Wall
   Wall, Ruler, RulerEnd, DoorKind, WindowKind, FloorTexKind, OutdoorArea } from './types.js';
 import { formatEntityValue, formatClock, evalRules, ruleMatches, relTimeText,
   type HassStateLike, type ClockMode, type ValueRule } from './value-rules.js';
+// Vehicle model packs (pure, three-free). vehicles.ts imports NOTHING at runtime
+// — in particular it must never import geometry.ts back (that would be a cycle).
+import { vehicleRecipe } from './vehicles.js';
 
 export const MM_PER_IN = 25.4;
 export const IN_PER_FT = 12;
@@ -3226,6 +3229,13 @@ export function furnitureDef(f: { kind?: FurnitureKind }): FurnitureKindDef {
 // points to one, else the built-in kind def. A dangling customKindId (recipe
 // deleted) falls back to `block` so orphaned instances still render.
 export function resolveFurnitureDef(f: Furniture, customObjects?: ObjectRecipe[]): FurnitureKindDef {
+  // A vehicle-pack model resolves into the SAME ObjectRecipe shape (memoized in
+  // vehicles.ts). Null = the pack is unloaded / deactivated / the member is
+  // excluded → fall through to the plain-kind fallback (the avatar precedent).
+  if (f.vehicleModelId) {
+    const veh = vehicleRecipe(f.vehicleModelId);
+    if (veh) return veh;
+  }
   if (f.customKindId) {
     const rec = customObjects?.find(o => o.id === f.customKindId);
     return rec ?? FURNITURE_KINDS.block;

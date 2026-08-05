@@ -121,6 +121,11 @@ import {
 } from './avatars.js';
 import { AVATAR_PACK_MANIFEST } from './avatar-packs/manifest.js';
 import {
+  setVehiclePacksConfig, registerVehiclePack, getVehiclePack,
+  type VehiclePacksConfig, type VehiclePackConfig,
+} from './vehicles.js';
+import { VEHICLE_PACK_MANIFEST } from './vehicle-packs/manifest.js';
+import {
   loadAllPacks, savePackJson, deletePackJson, validatePackJson,
 } from './avatar-store.js';
 
@@ -1056,6 +1061,11 @@ export class Planner extends EventTarget {
   // object recipe (kind stays 'block' as the fallback). Runtime only.
   pendingCustomObjectId: string | null = null;
 
+  // When set, the next furniture drop creates an instance of this VEHICLE MODEL
+  // (Furniture.vehicleModelId; kind stays 'block' as the fallback). The
+  // pendingCustomObjectId twin — runtime only, never persisted.
+  pendingVehicleModelId: string | null = null;
+
   // Which wall kind the next drawn wall gets. Runtime only.
   pendingWallKind: import('./types.js').WallKind = 'full';
 
@@ -1167,6 +1177,7 @@ export class Planner extends EventTarget {
     // Seed the avatar-pack registry config from the (cached) store so the very
     // first render resolves pool/active membership correctly.
     setAvatarPacksConfig(this.store.avatarPacks);
+    setVehiclePacksConfig(this.store.vehiclePacks);
   }
 
   // ── Persistence ─────────────────────────────────────────────────────────
@@ -1294,7 +1305,9 @@ export class Planner extends EventTarget {
     try {
       this.store = this._normalizeStore(remote, this.store.currentFloorId);
       setAvatarPacksConfig(this.store.avatarPacks);
+      setVehiclePacksConfig(this.store.vehiclePacks);
       void this._hydrateAvatarPacks();
+      void this._hydrateVehiclePacks();
       this._clearTransientSelection();
       this.showDetails = this.store.showDetails === true;
       this.useRawTargets = this.store.useRawTargets === true;
@@ -1536,6 +1549,7 @@ export class Planner extends EventTarget {
     // Hydrate loaded avatar packs (dynamic-import bodies). _loadFromHa also
     // calls this once the authoritative config arrives; both are idempotent.
     void this._hydrateAvatarPacks();
+    void this._hydrateVehiclePacks();
     // Identity fusion re-runs on a light ~2 s cadence (between the ~0.1 Hz BLE
     // solves) so a radar target that walks toward / away from a settled BLE
     // person still fuses / releases promptly against the LERPED positions.
@@ -1673,6 +1687,71 @@ export class Planner extends EventTarget {
   // Set the active member subset (undefined = all members active).
   setPackMembers(id: string, members: string[] | undefined): void {
     this._mutatePackConfig(id, c => { c.members = members; });
+  }
+
+  // ── Vehicle model packs ───────────────────────────────────────────────────
+  // Exact mirror of the avatar-pack hydration above: dynamic-import + register
+  // every built-in vehicle pack whose effective config says loaded (respecting
+  // pack defaults — base packs loaded, franchise opt-in). Bodies are code-split;
+  // never static-import one. Emits config ONCE at the end so the toolbar tab /
+  // pack manager / dirty keys refresh. Idempotent.
+  private async _hydrateVehiclePacks(): Promise<void> {
+    const cfg = this.store.vehiclePacks;
+    let changed = false;
+    for (const row of VEHICLE_PACK_MANIFEST) {
+      const c = cfg?.[row.id];
+      const defaultLoaded = !row.franchise;
+      const loaded = c?.loaded ?? defaultLoaded;
+      if (!loaded || getVehiclePack(row.id)) continue;
+      try {
+        const mod = await row.load();
+        const def = mod.default ?? mod.pack;
+        if (def) { registerVehiclePack(def, 'builtin'); changed = true; }
+      } catch (err) {
+        console.warn(`vehicle pack "${row.id}" failed to load:`, err);
+      }
+    }
+    if (changed) this.emitConfig();
+  }
+
+  private async _loadVehiclePack(id: string): Promise<boolean> {
+    if (getVehiclePack(id)) return true;
+    const row = VEHICLE_PACK_MANIFEST.find(r => r.id === id);
+    if (!row) return false;
+    try {
+      const mod = await row.load();
+      const def = mod.default ?? mod.pack;
+      if (def) { registerVehiclePack(def, 'builtin'); return true; }
+    } catch (err) {
+      console.warn(`vehicle pack "${id}" failed to load:`, err);
+    }
+    return false;
+  }
+
+  private _mutateVehiclePackConfig(id: string, mut: (c: VehiclePackConfig) => void): void {
+    const packs: VehiclePacksConfig = { ...(this.store.vehiclePacks ?? {}) };
+    const c: VehiclePackConfig = { ...(packs[id] ?? {}) };
+    mut(c);
+    packs[id] = c;
+    this.store.vehiclePacks = packs;
+    setVehiclePacksConfig(packs);
+    this.save();
+    this.emitConfig();
+  }
+
+  // Load ↔ unload a vehicle pack (loading dynamic-imports + registers first).
+  async setVehiclePackLoaded(id: string, on: boolean): Promise<void> {
+    if (on) await this._loadVehiclePack(id);
+    this._mutateVehiclePackConfig(id, c => { c.loaded = on; });
+    if (!on && this.pendingVehicleModelId?.startsWith(id + '/')) this.pendingVehicleModelId = null;
+  }
+  setVehiclePackActive(id: string, on: boolean): void {
+    this._mutateVehiclePackConfig(id, c => { c.active = on; });
+    if (!on && this.pendingVehicleModelId?.startsWith(id + '/')) this.pendingVehicleModelId = null;
+  }
+  // Set the active member subset (undefined = all members active).
+  setVehiclePackMembers(id: string, members: string[] | undefined): void {
+    this._mutateVehiclePackConfig(id, c => { c.members = members; });
   }
 
   // Manual full state re-poll (also wired to a topbar button).
@@ -1939,7 +2018,9 @@ export class Planner extends EventTarget {
       // Reflect the authoritative pack config into the registry snapshot so
       // resolveAvatar / activeAvatarIds see it, then re-hydrate loaded packs.
       setAvatarPacksConfig(this.store.avatarPacks);
+      setVehiclePacksConfig(this.store.vehiclePacks);
       void this._hydrateAvatarPacks();
+      void this._hydrateVehiclePacks();
       // Reset transient view state to match the loaded store.
       this.activeMotionId = null;
       this.activeRoamerId = null;
@@ -2063,6 +2144,7 @@ export class Planner extends EventTarget {
       neighborhood:   remote.neighborhood   ?? undefined,
       flights:        remote.flights        ?? undefined,
       avatarPacks:    remote.avatarPacks    ?? undefined,
+      vehiclePacks:   remote.vehiclePacks   ?? undefined,
       notes:          remote.notes          ?? undefined,
       avatarInteractions: remote.avatarInteractions ?? undefined,
       avatarCostumes: remote.avatarCostumes ?? undefined,

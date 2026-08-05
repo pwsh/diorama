@@ -156,6 +156,11 @@ export interface Furniture {
                               // entity_id is set (effectiveState prefers the bound entity); kept
                               // so unbinding returns to the last local state. See Planner.effectiveState.
   customKindId?: string;      // ObjectRecipe reference (Store.customObjects); `kind` stays as fallback
+  vehicleModelId?: string;    // vehicle-pack model reference ('<packId>/<member>', src/vehicles.ts).
+                              // Resolves through vehicleRecipe() into the SAME ObjectRecipe shape a
+                              // custom object uses, so the whole furniture pipeline renders it. `kind`
+                              // stays 'block' as the fallback for an unloaded/deactivated pack.
+                              // Item-level → no repairFloor change.
   doorEntity?: string | null; // fridge only: binary_sensor, 'on' = door open (drives the swung-open 3D door
                               // panel + a 2D open-door wedge). Item-level optional; shown in the UI only for
                               // fridge kinds. Separate from entity_id (which is the appliance's on/off binding).
@@ -319,6 +324,13 @@ export type AvatarKind = string;
 // planner can pass store.avatarPacks straight into setAvatarPacksConfig without
 // types.ts importing avatars.ts — avoids the import cycle).
 export interface AvatarPackConfig { loaded?: boolean; active?: boolean; members?: string[] }
+
+// Persisted per-vehicle-pack config (keyed by pack id in Store.vehiclePacks).
+// Structurally IDENTICAL to AvatarPackConfig / vehicles.ts `VehiclePackConfig`
+// (kept that way so the planner can hand store.vehiclePacks straight to
+// setVehiclePacksConfig without types.ts importing vehicles.ts). Absent entry ⇒
+// pack defaults (builtin base packs loaded+active, franchise packs loaded:false).
+export interface VehiclePackConfig { loaded?: boolean; active?: boolean; members?: string[] }
 
 // A person (or pet) in the household. The shared identity concept for the
 // "World Outside" arc: BLE trilateration and GPS both resolve to a person;
@@ -1514,6 +1526,7 @@ export interface Store {
   flights?: FlightsConfig;           // live aircraft (ADS-B) + ISS sky overlay (roadmap P4)
 
   avatarPacks?: Record<string, AvatarPackConfig>;   // per-pack loaded/active/members (avatar packs)
+  vehiclePacks?: Record<string, VehiclePackConfig>; // per-pack loaded/active/members (vehicle model packs)
   notes?: string;                    // free-text description of this configuration; shown in Settings ▸ Data; rides export/import
   avatarInteractions?: boolean;      // synthetic avatars (ai/roam) walk up to UNBOUND interactive devices and flip them (session-only); absent/true = on, false = off
   avatarCostumes?: boolean;          // situational costume/outfit swaps on avatar rigs (sleep/exercise/cooking); absent/true = on, false = off

@@ -1,0 +1,224 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>vehicle build test</title>
+<style>html,body{margin:0;background:#111;color:#ddd;font:11px monospace}#c{width:640px;height:480px}pre{white-space:pre-wrap}</style>
+<div id="c"></div>
+<pre id="out">running…</pre>
+<script type="module">
+ // CONTENT GATE for the vehicle-model packs (avatar-content-test idiom): for
+ // EVERY member of EVERY manifest pack, place it as ordinary furniture through
+ // the REAL renderer and assert it builds real geometry, gets the standard Sims
+ // dressing (blob shadow), matches its declared footprint, and stays PLAIN
+ // furniture (no fixture click tag). Plus the unloaded-pack fallback.
+ //
+ // Harness setup (alongside `cp -r dist/* test-pages/*`):
+ //   npx esbuild src/vehicle-packs/manifest.ts --format=esm --outfile=<h>/vmanifest.mod.js
+ // Pack BODIES come from the built chunks at ./assets/<packId>.js, and the
+ // registry is reached through ThreeDRenderer's static passthroughs so the test
+ // configures the SAME vehicles.ts instance _buildFurniture resolves against.
+ try {
+  const V = '?v=' + Date.now();
+  const mod = await import('./assets/three-renderer.js' + V);
+  const { VEHICLE_PACK_MANIFEST } = await import('./vmanifest.mod.js' + V);
+  const R = mod.ThreeDRenderer;
+  const r = new R(document.getElementById('c'));
+  await r.load();
+
+  const checks = [];
+  const ok = (name, cond, extra = '') => checks.push({ name, pass: !!cond, extra });
+  const eq = (name, a, b, extra = '') => ok(name, a === b, `${extra} got=${JSON.stringify(a)} want=${JSON.stringify(b)}`);
+
+  const DAY = { preset: 'day', floorColor: '#8a7860', floorTex: 'none', wallColor: '#cfd2d6', wallCutaway: false };
+  const nullState = () => null;
+  const baseFloor = (w = 40000, d = 40000) => ({
+    id: 'vt', name: 'V', w, d,
+    walls: [], furniture: [], lights: [], switches: [], sensors: [], motionSensors: [],
+    envSensors: [], doors: [], windows: [], rooms: [], groundAreas: [], presenceZones: [],
+  });
+  const meshes = (root) => { const o = []; root.traverse(m => { if (m.isMesh) o.push(m); }); return o; };
+  const isOutline = (m) => !!m.userData.outline;
+  const isBlob = (m) => m.geometry && m.geometry.type === 'PlaneGeometry' && m.rotation.x < -1.5;
+  const bodyMeshes = (root) => meshes(root).filter(m => !isOutline(m) && !isBlob(m));
+
+  // Build ONE piece on an empty floor and hand back its group. A plain furniture
+  // piece carries no userData tag (only device-bindable kinds get one), so the
+  // piece is located structurally: with no walls / doors / lights, the ONLY
+  // Group directly under _floorGroup is the furniture group _buildFurniture made.
+  function buildPiece(piece) {
+    const f = baseFloor();
+    f.furniture = [{ id: 'it', x: f.w / 2, y: f.d / 2, rotation: 0, ...piece }];
+    r.updateFloor(f, DAY, undefined, undefined, nullState);
+    const groups = r._floorGroup.children.filter(o => o.isGroup);
+    return groups.length === 1 ? groups[0] : null;
+  }
+
+  // ── Register every manifest pack from its built chunk ──────────────────────
+  const packs = [];
+  for (const row of VEHICLE_PACK_MANIFEST) {
+    let pack = null, err = '';
+    try {
+      const pm = await import(`./assets/${row.id}.js` + V);
+      pack = pm.default ?? pm.pack;
+    } catch (e) { err = (e && e.message) || String(e); }
+    ok(`pack ${row.id} import`, !!pack, err);
+    if (!pack) continue;
+    eq(`pack ${row.id} member count`, pack.models.length, row.count);
+    R.registerVehiclePack(pack);
+    packs.push(pack);
+  }
+  // Everything loaded + active for the build sweep (franchise packs are opt-in
+  // at runtime, but the CONTENT gate must cover them).
+  const allOn = {};
+  for (const p of packs) allOn[p.id] = { loaded: true, active: true };
+  R.setVehiclePacksConfig(allOn);
+
+  // ── Per-member structural build sweep ─────────────────────────────────────
+  let total = 0;
+  const perPack = [];
+  for (const pack of packs) {
+    let packMin = 1e9;
+    for (const m of pack.models) {
+      total++;
+      const tag = m.id;
+
+      // The registry → recipe conversion must succeed for an active member.
+      const rec = R.vehicleRecipe(m.id);
+      ok(`${tag}: recipe resolves`, !!rec);
+      if (!rec) continue;
+
+      let grp = null, threw = '';
+      try {
+        grp = buildPiece({ w: rec.w, h: rec.h, kind: 'block', vehicleModelId: m.id });
+      } catch (e) { threw = (e && e.message) || String(e); }
+      ok(`${tag}: builds no-throw`, !threw, threw);
+      if (!grp) { ok(`${tag}: group found in the floor group`, false); continue; }
+
+      const body = bodyMeshes(grp);
+      packMin = Math.min(packMin, body.length);
+      // A recipe piece builds exactly one mesh per primitive (the generic
+      // recipe builder) — never the 1-box `block` fallback.
+      eq(`${tag}: one mesh per primitive`, body.length, m.prims.length);
+      ok(`${tag}: >= 5 body meshes`, body.length >= 5, String(body.length));
+
+      // Standard Sims dressing: a blob-shadow decal (vehicles sit on the floor).
+      ok(`${tag}: has a blob shadow`, meshes(grp).some(isBlob));
+      // Outline shells: the toon look. Recipe boxes are big enough to qualify.
+      ok(`${tag}: has cartoon outline shells`, meshes(grp).some(isOutline));
+
+      // PLAIN furniture: no fixture click tag (a vehicle is decor, not a device).
+      ok(`${tag}: no fixture click kind (decor, not a device)`, grp.userData.kind === undefined,
+         String(grp.userData.kind));
+
+      // Footprint: the built geometry must live inside a generous envelope of
+      // the DECLARED dims and actually fill most of it (a silhouette, not a nub).
+      // Footprint check via the group's own world bounding box (the piece is
+      // placed axis-aligned at rotation 0, so world X/Z == model X/Z).
+      const ext = groupExtent(grp, body);
+      ok(`${tag}: width within envelope of dims[0]`,
+         ext.dx > rec.w * 0.5 && ext.dx < rec.w * 1.35, `${Math.round(ext.dx)} vs ${rec.w}`);
+      ok(`${tag}: depth within envelope of dims[1]`,
+         ext.dz > rec.h * 0.5 && ext.dz < rec.h * 1.35, `${Math.round(ext.dz)} vs ${rec.h}`);
+      ok(`${tag}: height within envelope of dims[2]`,
+         ext.dy > rec.ht * 0.4 && ext.dy < rec.ht * 1.4, `${Math.round(ext.dy)} vs ${rec.ht}`);
+      // Nothing sinks below the floor plane the piece stands on.
+      ok(`${tag}: sits on the floor (no sunken geometry)`, ext.minY > -60, String(Math.round(ext.minY)));
+    }
+    perPack.push(`${pack.id}:${pack.models.length}(min${packMin === 1e9 ? '-' : packMin})`);
+  }
+  eq('sweep covered 23 models', total, 23);
+
+  // ── Wheels: 4-wheeled road vehicles carry >= 4 rolled cylinders ───────────
+  // A wheel is authored as a cylinder rolled 90° about Z (axis onto local X) —
+  // a structural signature the recipe builder preserves verbatim.
+  const FOUR_WHEELED = [
+    'base-ground-civil/pickup', 'base-ground-civil/suv', 'base-ground-civil/police_cruiser',
+    'base-ground-military/model_t', 'base-ground-military/beetle',
+    'base-ground-military/microbus', 'base-ground-military/jeep_willys',
+    'base-ground-military/humvee',
+    'franchise-ground-fiction/time_machine_car', 'franchise-ground-fiction/mystery_van',
+  ];
+  for (const id of FOUR_WHEELED) {
+    const rec = R.vehicleRecipe(id);
+    ok(`${id}: known model`, !!rec);
+    if (!rec) continue;
+    const grp = buildPiece({ w: rec.w, h: rec.h, kind: 'block', vehicleModelId: id });
+    const rolled = bodyMeshes(grp).filter(m =>
+      m.geometry.type === 'CylinderGeometry' && Math.abs(Math.abs(m.rotation.z) - Math.PI / 2) < 0.02);
+    ok(`${id}: >= 4 rolled wheel cylinders`, rolled.length >= 4, String(rolled.length));
+    const onGround = rolled.every(m => m.position.y > 0 && m.position.y < 700);
+    ok(`${id}: wheels sit at hub height`, onGround);
+  }
+  // Both tank models ride TRACK units (rolled drums + a slab), not road wheels.
+  for (const id of ['base-ground-military/sherman', 'base-ground-military/abrams']) {
+    const rec = R.vehicleRecipe(id);
+    const grp = buildPiece({ w: rec.w, h: rec.h, kind: 'block', vehicleModelId: id });
+    const drums = bodyMeshes(grp).filter(m =>
+      m.geometry.type === 'CylinderGeometry' && Math.abs(Math.abs(m.rotation.z) - Math.PI / 2) < 0.02);
+    ok(`${id}: has track end drums`, drums.length >= 4, String(drums.length));
+  }
+
+  // ── Unloaded / deactivated pack → plain-block fallback ────────────────────
+  const FIC = 'franchise-ground-fiction/time_machine_car';
+  const ficRec = R.vehicleRecipe(FIC);
+  const ficMeshes = bodyMeshes(buildPiece({ w: ficRec.w, h: ficRec.h, kind: 'block', vehicleModelId: FIC })).length;
+  R.setVehiclePacksConfig({ ...allOn, 'franchise-ground-fiction': { loaded: false } });
+  ok('unloaded pack: recipe is null', R.vehicleRecipe(FIC) === null);
+  const fallback = buildPiece({ w: 4270, h: 1140, kind: 'block', vehicleModelId: FIC });
+  const fbCount = bodyMeshes(fallback).length;
+  ok('unloaded pack: piece falls back to a 1-box block', fbCount === 1, `${fbCount} (loaded=${ficMeshes})`);
+  ok('unloaded pack: fallback still gets a blob shadow', meshes(fallback).some(isBlob));
+
+  R.setVehiclePacksConfig({ ...allOn, 'franchise-ground-fiction': { loaded: true, active: false } });
+  ok('deactivated pack: recipe is null', R.vehicleRecipe(FIC) === null);
+  eq('deactivated pack: piece falls back to a block',
+     bodyMeshes(buildPiece({ w: 4270, h: 1140, kind: 'block', vehicleModelId: FIC })).length, 1);
+
+  R.setVehiclePacksConfig(allOn);
+  eq('re-enabled pack: full geometry returns',
+     bodyMeshes(buildPiece({ w: ficRec.w, h: ficRec.h, kind: 'block', vehicleModelId: FIC })).length, ficMeshes);
+
+  // A member EXCLUDED by a `members` subset behaves like an unloaded pack.
+  const civilPack = packs.find(p => p.id === 'base-ground-civil');
+  R.setVehiclePacksConfig({ ...allOn,
+    'base-ground-civil': { loaded: true, active: true, members: [civilPack.models[0].id] } });
+  ok('member subset: included member still resolves', !!R.vehicleRecipe(civilPack.models[0].id));
+  ok('member subset: excluded member → null', R.vehicleRecipe(civilPack.models[1].id) === null);
+  R.setVehiclePacksConfig(allOn);
+
+  // ── An ordinary furniture kind is completely unaffected ──────────────────
+  const chair = buildPiece({ w: 500, h: 500, kind: 'chair' });
+  ok('regression: a plain chair still builds', bodyMeshes(chair).length >= 4);
+
+  // ── Teardown ─────────────────────────────────────────────────────────────
+  let teardownThrew = '';
+  try { r.clearTransientGroups(); r.destroy(); }
+  catch (e) { teardownThrew = (e && e.message) || String(e); }
+  ok('teardown no-throw', !teardownThrew, teardownThrew);
+
+  function groupExtent(grp, body) {
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, minZ = Infinity, maxZ = -Infinity;
+    grp.updateMatrixWorld(true);
+    const e = grp.matrixWorld.elements;
+    const gx = e[12], gy = e[13], gz = e[14];
+    for (const m of body) {
+      const g = m.geometry;
+      if (!g.boundingBox) g.computeBoundingBox();
+      m.updateMatrixWorld(true);
+      const b = g.boundingBox.clone().applyMatrix4(m.matrixWorld);
+      minX = Math.min(minX, b.min.x - gx); maxX = Math.max(maxX, b.max.x - gx);
+      minY = Math.min(minY, b.min.y - gy); maxY = Math.max(maxY, b.max.y - gy);
+      minZ = Math.min(minZ, b.min.z - gz); maxZ = Math.max(maxZ, b.max.z - gz);
+    }
+    return { dx: maxX - minX, dy: maxY - minY, dz: maxZ - minZ, minY };
+  }
+
+  const passN = checks.filter(c => c.pass).length, totalC = checks.length;
+  const fails = checks.filter(c => !c.pass);
+  document.getElementById('out').textContent =
+    `packs=${packs.length} models=${total}\n` + perPack.join(' ') + '\n\n' +
+    fails.map(c => `FAIL ${c.name}  ${c.extra}`).join('\n') + `\n\n${passN}/${totalC}`;
+  document.title = `VEHICLEBUILD ${passN === totalC ? 'PASS' : 'FAIL'} ${passN}/${totalC}`;
+ } catch (e) {
+  document.title = 'VEHICLEBUILD ERR: ' + (e && e.stack ? e.stack.split('\n').slice(0, 4).join(' | ') : e);
+ }
+</script>

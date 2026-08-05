@@ -8,6 +8,9 @@ import { listPacks, getPack, packEffectiveState, resolveDef } from '../avatars.j
 import { OFFLINE_FLAG_KEY } from '../ha-local.js';
 import type { AvatarDef, AvatarPackDef } from '../avatars.js';
 import { AVATAR_PACK_MANIFEST } from '../avatar-packs/manifest.js';
+import { vehiclePackList, vehiclePackEffectiveState } from '../vehicles.js';
+import type { VehicleModelDef, VehiclePackDef } from '../vehicles.js';
+import { VEHICLE_PACK_MANIFEST } from '../vehicle-packs/manifest.js';
 import type { Planner } from '../planner.js';
 import type { Floor, HassState, WeatherConfig, WeatherEffectKey, ScenePreset, FloorTexKind, MqttBridgeConfig, BgTextEntry, BgTextEntryMode, HeatmapConfig, CompassConfig } from '../types.js';
 import { resolveNorth } from '../compass.js';
@@ -1110,7 +1113,7 @@ export function summarizeGlowCriteria(c: FlightGlowCriteria | undefined): string
 // only its user-facing LABEL is "Floor Plan" — the tab now owns floor
 // lifecycle (add / rename / resize / delete) as well as the configuration
 // registry, so "Data" undersold it.
-type SettingsTab = 'connection' | 'display' | 'weather' | 'avatars' | 'integrations' | 'data';
+type SettingsTab = 'connection' | 'display' | 'weather' | 'avatars' | 'vehicles' | 'integrations' | 'data';
 
 @customElement('diorama-settings-drawer')
 export class SettingsDrawer extends LitElement {
@@ -1126,6 +1129,9 @@ export class SettingsDrawer extends LitElement {
   @state() private _sh3dBusy = false;
   // Which pack rows have their member list expanded (runtime-only).
   private _packExpanded = new Set<string>();
+  // Same, for the Vehicles tab's pack rows (separate set — the two trees can
+  // legitimately share a pack id namespace).
+  private _vehPackExpanded = new Set<string>();
   // Which flight glow rule is expanded into its full criteria form. A glow rule
   // carries ~15 fields, so the list is collapsed summary lines by default (the
   // sidebar's collapsible-section idiom) rather than value-rules' always-open
@@ -1159,7 +1165,8 @@ export class SettingsDrawer extends LitElement {
     // Kiosk/view: only the Connection tab is available.
     const tabs: Array<[SettingsTab, string]> = edit
       ? [['connection', 'Connection'], ['display', 'Display'], ['weather', 'Weather'],
-         ['avatars', 'Avatars'], ['integrations', 'Integrations'], ['data', 'Floor Plan']]
+         ['avatars', 'Avatars'], ['vehicles', 'Vehicles'],
+         ['integrations', 'Integrations'], ['data', 'Floor Plan']]
       : [['connection', 'Connection']];
     const tab: SettingsTab = tabs.some(t => t[0] === this._tab) ? this._tab : 'connection';
     return html`
@@ -1183,6 +1190,7 @@ export class SettingsDrawer extends LitElement {
           ${tab === 'display' ? this._displayTab() : nothing}
           ${tab === 'weather' ? this._weatherTab() : nothing}
           ${tab === 'avatars' ? this._avatarsTab() : nothing}
+          ${tab === 'vehicles' ? this._vehiclesTab() : nothing}
           ${tab === 'integrations' ? this._integrationsTab() : nothing}
           ${tab === 'data' ? this._dataTab() : nothing}
         </div>
@@ -3133,6 +3141,138 @@ export class SettingsDrawer extends LitElement {
   }
 
   // ── Avatars tab (NEW pack manager) ──────────────────────────────────────
+  // ── Vehicles tab (vehicle model pack manager) ───────────────────────────
+  // Mirrors the avatar pack manager: a path-grouped tree with per-pack Loaded /
+  // Active toggles and an expandable per-member subset list. V1 ships no user
+  // JSON import/export (built-in packs only) — the avatar tab's Import/Export/
+  // Remove controls are deliberately absent.
+  private _vehiclesTab() {
+    const cfg = this.planner.store.vehiclePacks;
+    const registered = vehiclePackList();
+    const regIds = new Set(registered.map(e => e.def.id));
+
+    interface VRow {
+      id: string; label: string; path: string[];
+      def: VehiclePackDef | null; count: number; registered: boolean; franchise: boolean;
+    }
+    const rows: VRow[] = registered.map(e => ({
+      id: e.def.id, label: e.def.label, path: e.def.path, def: e.def,
+      count: e.def.models.length, registered: true, franchise: !!e.def.franchise,
+    }));
+    // Merge manifest rows for packs not yet registered (unloaded) so they stay
+    // visible and loadable from the manager.
+    for (const m of VEHICLE_PACK_MANIFEST) {
+      if (regIds.has(m.id)) continue;
+      rows.push({ id: m.id, label: m.label, path: m.path, def: null,
+        count: m.count, registered: false, franchise: !!m.franchise });
+    }
+    rows.sort((a, b) =>
+      a.path.join('/').localeCompare(b.path.join('/')) || a.label.localeCompare(b.label));
+
+    let prevPath: string[] = [];
+    return html`
+      <div style="font-size:11px;color:var(--text-dim);line-height:1.4;margin-bottom:10px">
+        Vehicle models are placeable objects (driveway, garage, yard). Loaded +
+        active packs appear in the placement toolbar's <b>Vehicles</b> tab.
+      </div>
+      <div style="display:flex;flex-direction:column;gap:2px">
+        ${rows.map(row => {
+          const headers: unknown[] = [];
+          let i = 0;
+          while (i < row.path.length && i < prevPath.length && row.path[i] === prevPath[i]) i++;
+          for (let j = i; j < row.path.length; j++) {
+            headers.push(html`
+              <div style="font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.06em;
+                          margin:6px 0 2px;padding-left:${j * 12}px">${row.path[j]}</div>`);
+          }
+          prevPath = row.path;
+          return html`${headers}${this._vehPackRow(row, cfg)}`;
+        })}
+      </div>
+      <div style="font-size:10px;color:var(--text-dim);line-height:1.3;margin-top:12px;
+                  border-top:1px solid var(--border);padding-top:8px">
+        A placed vehicle whose pack is unloaded or deactivated falls back to a
+        plain block until the pack is switched back on — nothing is lost.
+      </div>
+    `;
+  }
+
+  private _vehPackRow(
+    row: { id: string; label: string; path: string[]; def: VehiclePackDef | null;
+           count: number; registered: boolean; franchise: boolean },
+    cfg: Record<string, { loaded?: boolean; active?: boolean; members?: string[] }> | undefined,
+  ) {
+    const p = this.planner;
+    const st = row.registered && row.def
+      ? vehiclePackEffectiveState(row.def, cfg)
+      : { loaded: false, active: false };
+    const expanded = this._vehPackExpanded.has(row.id);
+    const indent = row.path.length * 12;
+    const models = row.def?.models ?? [];
+    const subset = cfg?.[row.id]?.members;
+
+    return html`
+      <div style="border:1px solid var(--border);border-radius:5px;padding:6px 8px;margin-left:${indent}px">
+        <div style="display:flex;align-items:center;gap:6px">
+          ${row.def && models.length ? html`
+            <button style="background:none;border:none;color:var(--text-dim);cursor:pointer;font-size:11px;
+                           transform:rotate(${expanded ? 90 : 0}deg);transition:transform 0.1s"
+                    @click=${() => { if (expanded) this._vehPackExpanded.delete(row.id); else this._vehPackExpanded.add(row.id); this.requestUpdate(); }}>▸</button>
+          ` : html`<span style="width:12px;display:inline-block"></span>`}
+          <div style="flex:1;min-width:0">
+            <div style="font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+              ${row.label}
+              <span style="color:var(--text-dim);font-size:10px"> · ${row.count}</span>
+            </div>
+            <div style="font-size:9px;color:var(--text-dim)">
+              ${row.franchise ? 'novelty pack — opt in' : 'built-in'}
+            </div>
+          </div>
+          <label style="display:flex;align-items:center;gap:3px;font-size:10px;color:var(--text-dim)" title="Loaded">
+            <input type="checkbox" .checked=${st.loaded}
+                   @change=${(e: Event) => { void p.setVehiclePackLoaded(row.id, (e.target as HTMLInputElement).checked); }}>
+            load
+          </label>
+          <label style="display:flex;align-items:center;gap:3px;font-size:10px;color:var(--text-dim)" title="Active">
+            <input type="checkbox" .checked=${st.active} ?disabled=${!st.loaded}
+                   @change=${(e: Event) => p.setVehiclePackActive(row.id, (e.target as HTMLInputElement).checked)}>
+            active
+          </label>
+        </div>
+        ${expanded && models.length ? html`
+          <div style="margin:6px 0 2px;padding-left:18px;display:flex;flex-direction:column;gap:2px">
+            ${models.map(m => this._vehMemberRow(row.id, m, models, subset))}
+          </div>
+        ` : nothing}
+      </div>
+    `;
+  }
+
+  private _vehMemberRow(
+    packId: string, m: VehicleModelDef, all: VehicleModelDef[], subset: string[] | undefined,
+  ) {
+    const p = this.planner;
+    const checked = !subset || subset.includes(m.id);
+    const swatch = m.body ?? '#8a8f96';
+    const lenM = (m.lenMm / 1000).toFixed(1);
+    return html`
+      <label style="display:flex;align-items:center;gap:6px;font-size:11px;cursor:pointer">
+        <input type="checkbox" .checked=${checked}
+               @change=${(e: Event) => {
+                 const on = (e.target as HTMLInputElement).checked;
+                 const cur = new Set(subset ?? all.map(x => x.id));
+                 if (on) cur.add(m.id); else cur.delete(m.id);
+                 // All checked → undefined (no subset); else the explicit list.
+                 const next = cur.size >= all.length ? undefined : all.filter(x => cur.has(x.id)).map(x => x.id);
+                 p.setVehiclePackMembers(packId, next);
+               }}>
+        <span style="width:12px;height:12px;border-radius:3px;border:1px solid var(--border);
+                     background:${swatch}"></span>
+        <span style="flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${m.label}</span>
+        <span style="color:var(--text-dim);font-size:9px">${lenM} m</span>
+      </label>`;
+  }
+
   private _avatarsTab() {
     const p = this.planner;
     const cfg = p.store.avatarPacks;

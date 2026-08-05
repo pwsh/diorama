@@ -1,0 +1,263 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>vehicle pack test</title>
+<style>html,body{margin:0;background:#111;color:#ddd;font:11px monospace}pre{white-space:pre-wrap}</style>
+<pre id="out">running…</pre>
+<script type="module">
+ // PURE gate for the vehicle-model registry (src/vehicles.ts) + its geometry.ts
+ // resolution hook. No three.js, no DOM canvas.
+ //
+ // Harness setup:
+ //   npx esbuild test-pages/vehicle-pack-entry.ts --bundle --format=esm --outfile=<h>/veh.mod.js
+ //   npx esbuild src/vehicle-packs/manifest.ts --format=esm --outfile=<h>/vmanifest.mod.js
+ //   npx esbuild src/vehicle-packs/base-ground-civil.ts        --bundle --format=esm --outfile=<h>/vp-civil.mod.js
+ //   npx esbuild src/vehicle-packs/base-ground-military.ts     --bundle --format=esm --outfile=<h>/vp-mil.mod.js
+ //   npx esbuild src/vehicle-packs/franchise-ground-fiction.ts --bundle --format=esm --outfile=<h>/vp-fic.mod.js
+ //
+ // veh.mod.js is ONE bundle carrying BOTH vehicles.ts and geometry.ts, so the
+ // registry the config functions mutate is the SAME one resolveFurnitureDef
+ // reads (geometry imports vehicles — two bundles would each get a copy).
+ try {
+  const V = '?v=' + Date.now();
+  const VEH = await import('./veh.mod.js' + V);
+  const GEO = VEH;                                   // same bundle → same registry
+  const { VEHICLE_PACK_MANIFEST } = await import('./vmanifest.mod.js' + V);
+  const civil = (await import('./vp-civil.mod.js' + V)).default;
+  const mil   = (await import('./vp-mil.mod.js'   + V)).default;
+  const fic   = (await import('./vp-fic.mod.js'   + V)).default;
+
+  const checks = [];
+  const ok = (name, cond, extra = '') => checks.push({ name, pass: !!cond, extra });
+  const eq = (name, a, b, extra = '') => ok(name, a === b, `${extra} got=${JSON.stringify(a)} want=${JSON.stringify(b)}`);
+
+  const PACKS = [civil, mil, fic];
+
+  // ═══ 1. Manifest ↔ pack-body agreement ═══════════════════════════════════
+  eq('1a: manifest has 3 rows', VEHICLE_PACK_MANIFEST.length, 3);
+  for (const row of VEHICLE_PACK_MANIFEST) {
+    const body = PACKS.find(p => p.id === row.id);
+    ok(`1b: manifest row ${row.id} has a body`, !!body);
+    if (!body) continue;
+    eq(`1c: ${row.id} count matches`, body.models.length, row.count);
+    eq(`1d: ${row.id} label matches`, body.label, row.label);
+    eq(`1e: ${row.id} path matches`, body.path.join('/'), row.path.join('/'));
+    eq(`1f: ${row.id} franchise flag matches`, !!body.franchise, !!row.franchise);
+  }
+  eq('1g: exactly one franchise pack', VEHICLE_PACK_MANIFEST.filter(r => r.franchise).length, 1);
+  eq('1h: franchise pack is the fiction one',
+     VEHICLE_PACK_MANIFEST.find(r => r.franchise)?.id, 'franchise-ground-fiction');
+
+  // ═══ 2. Model data sanity (every member of every pack) ═══════════════════
+  const seenIds = new Set();
+  let modelCount = 0;
+  for (const pack of PACKS) {
+    for (const m of pack.models) {
+      modelCount++;
+      const tag = m.id;
+      ok(`2a: ${tag} id namespaced under its pack`, m.id.startsWith(pack.id + '/'), m.id);
+      ok(`2b: ${tag} id unique`, !seenIds.has(m.id), m.id);
+      seenIds.add(m.id);
+      ok(`2c: ${tag} label non-empty`, typeof m.label === 'string' && m.label.trim().length > 0);
+      eq(`2d: ${tag} category ground`, m.category, 'ground');
+      ok(`2e: ${tag} surfaces includes ground`, Array.isArray(m.surfaces) && m.surfaces.includes('ground'));
+      ok(`2f: ${tag} dims all positive finite`,
+         m.dims.length === 3 && m.dims.every(v => Number.isFinite(v) && v > 0), JSON.stringify(m.dims));
+      ok(`2g: ${tag} lenMm positive`, Number.isFinite(m.lenMm) && m.lenMm > 0, String(m.lenMm));
+      ok(`2h: ${tag} has >= 5 primitives`, m.prims.length >= 5, String(m.prims.length));
+      const badPrim = m.prims.find(p =>
+        !['box', 'cylinder', 'sphere', 'cone'].includes(p.shape)
+        || !Array.isArray(p.size) || !p.size.every(Number.isFinite)
+        || !Array.isArray(p.pos) || p.pos.length !== 3 || !p.pos.every(Number.isFinite)
+        || (p.rot && (p.rot.length !== 3 || !p.rot.every(Number.isFinite))));
+      ok(`2i: ${tag} all primitives well-formed`, !badPrim, JSON.stringify(badPrim ?? ''));
+      // Every part must sit at or above the ground plane (y = 0 is the contact
+      // plane) and inside a generous envelope of the declared footprint.
+      const below = m.prims.filter(p => p.pos[1] < -1);
+      ok(`2j: ${tag} nothing authored below ground`, below.length === 0, String(below.length));
+      const [W, D] = m.dims;
+      const out = m.prims.filter(p => Math.abs(p.pos[0]) > W || Math.abs(p.pos[2]) > D);
+      ok(`2k: ${tag} parts inside the footprint envelope`, out.length === 0, String(out.length));
+    }
+  }
+  eq('2l: 23 models across the three packs', modelCount, 23);
+
+  // ═══ 3. IP posture — fiction labels are descriptive-generic ══════════════
+  // §5.3: no franchise / proper-noun term may appear in a SHIPPED string. This
+  // is a hard gate, not a style note (the shipped BG_CRAFTS roster slipped twice).
+  const BANNED = ['delorean', 'batman', 'batmobile', 'knight rider', 'kitt', 'general lee',
+    'dukes of hazzard', 'ghostbuster', 'ecto', 'herbie', 'love bug', 'scooby',
+    'mystery machine', 'a-team', 'bumblebee', 'transformer', 'flintstone',
+    'back to the future', 'star wars', 'x-wing', 'firefly', 'serenity'];
+  for (const m of fic.models) {
+    const hay = (m.label + ' ' + m.id).toLowerCase();
+    const hit = BANNED.find(b => hay.includes(b));
+    ok(`3a: fiction "${m.label}" carries no franchise term`, !hit, hit ?? '');
+  }
+  ok('3b: fiction pack defaults UNLOADED', fic.franchise === true);
+  ok('3c: base packs are not franchise', !civil.franchise && !mil.franchise);
+
+  // ═══ 4. Registry: register / resolve / gating ════════════════════════════
+  VEH.setVehiclePacksConfig(undefined);
+  for (const p of PACKS) VEH.registerVehiclePack(p, 'builtin');
+
+  const CIVIL_ID = civil.models[0].id;
+  const FIC_ID = fic.models[0].id;
+
+  ok('4a: base-pack model resolves by default', !!VEH.resolveVehicleDef(CIVIL_ID));
+  eq('4b: resolved def is the authored one', VEH.resolveVehicleDef(CIVIL_ID)?.label, civil.models[0].label);
+  ok('4c: franchise model does NOT resolve by default (opt-in)', VEH.resolveVehicleDef(FIC_ID) === null);
+  ok('4d: unknown id → null', VEH.resolveVehicleDef('nope/nope') === null);
+  ok('4e: null/undefined id → null',
+     VEH.resolveVehicleDef(null) === null && VEH.resolveVehicleDef(undefined) === null);
+
+  VEH.setVehiclePacksConfig({ 'franchise-ground-fiction': { loaded: true } });
+  ok('4f: franchise resolves once loaded', !!VEH.resolveVehicleDef(FIC_ID));
+  VEH.setVehiclePacksConfig({ 'franchise-ground-fiction': { loaded: true, active: false } });
+  ok('4g: loaded-but-inactive → null', VEH.resolveVehicleDef(FIC_ID) === null);
+
+  VEH.setVehiclePacksConfig({ 'base-ground-civil': { loaded: false } });
+  ok('4h: explicitly unloaded base pack → null', VEH.resolveVehicleDef(CIVIL_ID) === null);
+
+  const subset = [civil.models[0].id, civil.models[1].id];
+  VEH.setVehiclePacksConfig({ 'base-ground-civil': { members: subset } });
+  ok('4i: member in subset resolves', !!VEH.resolveVehicleDef(subset[0]));
+  ok('4j: member EXCLUDED by subset → null', VEH.resolveVehicleDef(civil.models[2].id) === null);
+  eq('4k: activeVehicleIds honours the subset', VEH.activeVehicleIds().length,
+     subset.length + mil.models.length);
+
+  VEH.setVehiclePacksConfig(undefined);
+  eq('4l: default active ids = both base packs', VEH.activeVehicleIds().length,
+     civil.models.length + mil.models.length);
+  const listed = VEH.listActiveVehiclePacks();
+  eq('4m: listActiveVehiclePacks omits the franchise pack', listed.length, 2);
+  ok('4n: vehiclePackList sees all three registered packs', VEH.vehiclePackList().length === 3);
+  eq('4o: vehiclePackOf maps a member to its pack', VEH.vehiclePackOf(CIVIL_ID)?.id, 'base-ground-civil');
+  ok('4p: vehiclePackOf(unknown) → null', VEH.vehiclePackOf('nope/nope') === null);
+
+  // Effective-state defaults.
+  eq('4q: base pack effective loaded', VEH.vehiclePackEffectiveState(civil).loaded, true);
+  eq('4r: base pack effective active', VEH.vehiclePackEffectiveState(civil).active, true);
+  eq('4s: franchise pack effective loaded=false', VEH.vehiclePackEffectiveState(fic).loaded, false);
+  eq('4t: franchise inactive while unloaded', VEH.vehiclePackEffectiveState(fic).active, false);
+
+  // Idempotent re-register at the same version is a no-op; a bump replaces.
+  VEH.registerVehiclePack(civil, 'builtin');
+  eq('4u: re-register same version keeps one entry', VEH.vehiclePackList().length, 3);
+  VEH.unregisterVehiclePack('base-ground-military');
+  eq('4v: unregister drops the pack', VEH.vehiclePackList().length, 2);
+  ok('4w: unregistered pack members stop resolving',
+     VEH.resolveVehicleDef(mil.models[0].id) === null);
+  VEH.registerVehiclePack(mil, 'builtin');
+  ok('4x: re-register restores resolution', !!VEH.resolveVehicleDef(mil.models[0].id));
+
+  // ═══ 5. vehicleRecipe conversion ════════════════════════════════════════
+  const src = civil.models.find(m => m.id.endsWith('/pickup'));
+  const rec = VEH.vehicleRecipe(src.id);
+  ok('5a: recipe built for an active model', !!rec);
+  eq('5b: recipe id == model id', rec.id, src.id);
+  eq('5c: recipe label == model label', rec.label, src.label);
+  eq('5d: recipe w == dims[0]', rec.w, src.dims[0]);
+  eq('5e: recipe h == dims[1] (plan depth)', rec.h, src.dims[1]);
+  eq('5f: recipe ht == dims[2]', rec.ht, src.dims[2]);
+  eq('5g: recipe color is the body hex as an int', rec.color, parseInt(src.body.slice(1), 16));
+  eq('5h: recipe cat is vehicle', rec.cat, 'vehicle');
+  eq('5i: frontArrow true (vehicles have a functional front)', rec.frontArrow, true);
+  eq('5j: primitive count preserved', rec.primitives.length, src.prims.length);
+  const allHex = rec.primitives.every(p => /^#[0-9a-f]{6}$/i.test(p.color));
+  ok('5k: every slot resolved to a concrete hex', allHex,
+     JSON.stringify(rec.primitives.filter(p => !/^#[0-9a-f]{6}$/i.test(p.color)).map(p => p.color)));
+  const all3 = rec.primitives.every(p => Array.isArray(p.size) && p.size.length === 3);
+  ok('5l: every size normalised to a 3-tuple', all3);
+  const noExtras = rec.primitives.every(p =>
+    !('spin' in p) && !('emissive' in p) && !('segments' in p));
+  ok('5m: spin / emissive / segments dropped', noExtras);
+
+  // Slot resolution against a synthetic model (exercises all four slots).
+  VEH.registerVehiclePack({
+    id: 'probe', version: 1, label: 'P', path: ['P'], builtin: true,
+    models: [{
+      id: 'probe/slots', label: 'Slots', category: 'ground', lenMm: 1000,
+      dims: [1000, 2000, 900], body: '#112233', accent: '#445566', surfaces: ['ground'],
+      prims: [
+        { shape: 'box', size: [10, 10, 10], pos: [0, 0, 0], color: 'body' },
+        { shape: 'box', size: [10, 10, 10], pos: [0, 0, 0], color: 'accent' },
+        { shape: 'box', size: [10, 10, 10], pos: [0, 0, 0], color: 'glass' },
+        { shape: 'box', size: [10, 10, 10], pos: [0, 0, 0], color: 'dark' },
+        { shape: 'box', size: [10, 10, 10], pos: [0, 0, 0], color: '#abcdef' },
+        { shape: 'box', size: [10, 10, 10], pos: [0, 0, 0] },
+        { shape: 'cone', size: [5, 9], pos: [0, 0, 0], color: 'body', spin: 'prop', emissive: true, segments: 3 },
+      ],
+    }],
+  });
+  const pr = VEH.vehicleRecipe('probe/slots');
+  eq('5n: body slot', pr.primitives[0].color, '#112233');
+  eq('5o: accent slot', pr.primitives[1].color, '#445566');
+  eq('5p: glass slot', pr.primitives[2].color, VEH.VEHICLE_GLASS);
+  eq('5q: dark slot', pr.primitives[3].color, VEH.VEHICLE_DARK);
+  eq('5r: literal hex passes through', pr.primitives[4].color, '#abcdef');
+  eq('5s: absent color falls back to body', pr.primitives[5].color, '#112233');
+  eq('5t: 2-tuple cone size padded to 3', pr.primitives[6].size.length, 3);
+  ok('5u: recipe memoized (same object identity)', VEH.vehicleRecipe('probe/slots') === pr);
+  VEH.setVehiclePacksConfig({ probe: { active: false } });
+  ok('5v: memo invalidated by a config change', VEH.vehicleRecipe('probe/slots') === null);
+  VEH.setVehiclePacksConfig(undefined);
+  ok('5w: recipe returns after re-enabling', !!VEH.vehicleRecipe('probe/slots'));
+  ok('5x: unknown id → null recipe', VEH.vehicleRecipe('nope/nope') === null);
+  VEH.unregisterVehiclePack('probe');
+
+  // ═══ 6. geometry.resolveFurnitureDef hook ═══════════════════════════════
+  // Same bundle as the registry above, so the packs registered in §4 are live.
+  {
+    GEO.setVehiclePacksConfig(undefined);
+    GEO.registerVehiclePack(fic, 'builtin');
+    ok('6a: fiction pack registered but unloaded', GEO.resolveVehicleDef(FIC_ID) === null);
+    const pieceV = { id: 'f1', x: 0, y: 0, w: 1, h: 1, kind: 'block', vehicleModelId: CIVIL_ID };
+    const d = GEO.resolveFurnitureDef(pieceV, []);
+    eq('6b: vehicle piece resolves to the model recipe', d.label, civil.models[0].label);
+    eq('6c: resolved def carries the model footprint', d.w, civil.models[0].dims[0]);
+    ok('6d: resolved def carries primitives', Array.isArray(d.primitives) && d.primitives.length > 0);
+
+    const pieceF = { id: 'f2', x: 0, y: 0, w: 1, h: 1, kind: 'block', vehicleModelId: FIC_ID };
+    const df = GEO.resolveFurnitureDef(pieceF, []);
+    eq('6e: unloaded-pack vehicle falls back to block', df.label, 'Block');
+
+    // A vehicle reference WINS over a custom recipe on the same piece.
+    const custom = { id: 'rec1', label: 'CustomThing', w: 10, h: 10, ht: 10, color: 1, primitives: [] };
+    const both = { id: 'f3', x: 0, y: 0, w: 1, h: 1, kind: 'block',
+                   vehicleModelId: CIVIL_ID, customKindId: 'rec1' };
+    eq('6f: vehicleModelId wins over customKindId',
+       GEO.resolveFurnitureDef(both, [custom]).label, civil.models[0].label);
+    // …but a DEAD vehicle ref still lets the custom recipe through.
+    const dead = { id: 'f4', x: 0, y: 0, w: 1, h: 1, kind: 'block',
+                   vehicleModelId: FIC_ID, customKindId: 'rec1' };
+    eq('6g: dead vehicle ref falls through to the custom recipe',
+       GEO.resolveFurnitureDef(dead, [custom]).label, 'CustomThing');
+    // No vehicle field → byte-identical legacy behaviour.
+    const plain = { id: 'f5', x: 0, y: 0, w: 1, h: 1, kind: 'chair' };
+    eq('6h: plain kinds unaffected', GEO.resolveFurnitureDef(plain, []).label, 'Chair');
+    eq('6i: custom-only piece unaffected',
+       GEO.resolveFurnitureDef({ id: 'f6', x: 0, y: 0, w: 1, h: 1, kind: 'block', customKindId: 'rec1' }, [custom]).label,
+       'CustomThing');
+  }
+
+  // ═══ 7. Persisted config SHAPE (Store.vehiclePacks) ══════════════════════
+  // The planner hands store.vehiclePacks straight to setVehiclePacksConfig, so
+  // the shape must stay structurally identical to AvatarPackConfig.
+  const cfgRoundTrip = { 'base-ground-civil': { loaded: true, active: true, members: [CIVIL_ID] } };
+  VEH.setVehiclePacksConfig(cfgRoundTrip);
+  ok('7a: config round-trips by identity', VEH.getVehiclePacksConfig() === cfgRoundTrip);
+  eq('7b: subset of one → one active id from that pack',
+     VEH.activeVehicleIds().filter(id => id.startsWith('base-ground-civil/')).length, 1);
+  VEH.setVehiclePacksConfig(undefined);
+  ok('7c: undefined config restores pack defaults', !!VEH.resolveVehicleDef(CIVIL_ID));
+
+  const passN = checks.filter(c => c.pass).length, total = checks.length;
+  const fails = checks.filter(c => !c.pass);
+  document.getElementById('out').textContent =
+    `packs=${PACKS.length} models=${modelCount}\n\n` +
+    fails.map(c => `FAIL ${c.name}  ${c.extra}`).join('\n') + `\n\n${passN}/${total}`;
+  document.title = `VEHICLEPACK ${passN === total ? 'PASS' : 'FAIL'} ${passN}/${total}`;
+ } catch (e) {
+  document.title = 'VEHICLEPACK ERR: ' + (e && e.stack ? e.stack.split('\n').slice(0, 4).join(' | ') : e);
+ }
+</script>

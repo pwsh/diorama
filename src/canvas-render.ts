@@ -44,6 +44,7 @@ import { calendarLines, weatherCardLines, resolveScreenContent, CAL_HEADER_COLOR
 import { CONDITION_GLYPH } from './weather.js';
 import { ALERT_BEACON_DEFAULTS, alertBeaconState, alertBeaconColor, alertBeaconAlarming, isAlertDomain } from './alerts.js';
 import { flagDominant } from './flags.js';
+import { vehicleRecipe } from './vehicles.js';
 import { vacMapAffine, vacSegColor, type ParsedVacMap, type VacSegment } from './valetudo-map.js';
 import {
   flightDisplayPos, flightShellMm, sanitizeLabelFields,
@@ -5402,8 +5403,12 @@ export function drawFurniturePrimitiveLocal(
   // primitive's own Y-rotation spins its own footprint in place. Parts paint
   // bottom-up (by vertical center) so taller / upper parts draw over lower
   // ones. Falls back to the labeled rect when the recipe carries no primitives.
-  if (piece.customKindId) {
-    const rec = customObjects?.find(o => o.id === piece.customKindId);
+  if (piece.customKindId || piece.vehicleModelId) {
+    // A vehicle-pack model converts into the SAME ObjectRecipe shape (memoized);
+    // an unloaded / deactivated pack yields null → the plain labeled-rect fallback.
+    const rec = piece.vehicleModelId
+      ? vehicleRecipe(piece.vehicleModelId)
+      : customObjects?.find(o => o.id === piece.customKindId);
     const defHex = piece.color ?? ('#' + ((rec?.color ?? 0x8a8a8a) & 0xffffff).toString(16).padStart(6, '0'));
     const prims = rec?.primitives;
     if (!prims || prims.length === 0) {

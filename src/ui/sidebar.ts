@@ -16,6 +16,7 @@ import type { BermudaDevice } from '../planner.js';
 import { alertBeaconState, alertBeaconColor, isAlertDomain } from '../alerts.js';
 
 import { listActivePacks } from '../avatars.js';
+import { resolveVehicleDef, vehiclePackOf, vehicleRecipe } from '../vehicles.js';
 import {
   fmtLen,
   motionColor, motionIntensity, sensorColor, lightIconKind, MOTION_DEFAULTS,
@@ -880,6 +881,9 @@ export class Sidebar extends LitElement {
             <select .value=${p.pendingCustomObjectId ? 'custom:' + p.pendingCustomObjectId : p.pendingFurnitureKind}
                     @change=${(e: Event) => {
                       const v = (e.target as HTMLSelectElement).value;
+                      // Either branch drops a pending VEHICLE model — the
+                      // three pending* latches are mutually exclusive.
+                      p.pendingVehicleModelId = null;
                       if (v.startsWith('custom:')) p.pendingCustomObjectId = v.slice(7);
                       else { p.pendingFurnitureKind = v as FurnitureKind; p.pendingCustomObjectId = null; }
                       this.requestUpdate();
@@ -958,15 +962,17 @@ export class Sidebar extends LitElement {
     const p = this.planner;
     switch (tool) {
       case 'furniture': {
-        const rec = p.pendingCustomObjectId
+        const veh = p.pendingVehicleModelId ? vehicleRecipe(p.pendingVehicleModelId) : null;
+        const rec = veh ?? (p.pendingCustomObjectId
           ? (p.store.customObjects ?? []).find(o => o.id === p.pendingCustomObjectId) ?? null
-          : null;
+          : null);
         const def = rec ?? FURNITURE_KINDS[p.pendingFurnitureKind];
-        const name = rec ? (rec.label?.trim() || 'Custom object')
+        const name = rec ? (rec.label?.trim() || (veh ? 'Vehicle' : 'Custom object'))
                          : (def?.label ?? p.pendingFurnitureKind);
         const dims = def ? ` (${Math.round(def.w)} × ${Math.round(def.h)} mm footprint)` : '';
+        const suffix = veh ? ' — vehicle model' : rec ? ' — custom object' : '';
         return this._armedHint(
-          html`<strong style="color:var(--text)">${name}</strong>${dims}${rec ? ' — custom object' : ''}`,
+          html`<strong style="color:var(--text)">${name}</strong>${dims}${suffix}`,
           html`To place something else, open the <strong style="color:var(--text)">visual picker</strong>
                in the bar along the bottom of the screen: pick a category tab
                (Seating, Tables, Appliances, Outdoor, …), then click a card — every
@@ -5407,6 +5413,30 @@ export class Sidebar extends LitElement {
     this.planner.emitConfig();
   }
 
+  // A vehicle-pack piece shows its MODEL identity in place of the kind dropdown
+  // (the shape comes from the pack, not from FURNITURE_KINDS — offering the kind
+  // list here would silently orphan the reference). Everything else in the
+  // editor (label / size / lock / delete) is the ordinary furniture flow.
+  private _vehicleModelRow(piece: Furniture) {
+    const id = piece.vehicleModelId ?? '';
+    const def = resolveVehicleDef(id);
+    const pack = vehiclePackOf(id);
+    const packName = pack ? [...pack.path, pack.label].filter(Boolean).join(' ▸ ') : null;
+    return html`
+      <div class="row"><label title="Model from a vehicle pack (Settings ▸ Vehicles)">Model</label>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+            ${def ? def.label : id}
+          </div>
+          <div style="font-size:9px;color:var(--text-dim)">
+            ${def
+              ? (packName ?? 'vehicle pack')
+              : 'pack not loaded — renders as a plain block (Settings ▸ Vehicles)'}
+          </div>
+        </div>
+      </div>`;
+  }
+
   private _furnitureEditor(piece: Furniture) {
     const p = this.planner;
     const upd = (mut: () => void) => { mut(); p.save(); p.emitConfig(); };
@@ -5421,6 +5451,7 @@ export class Sidebar extends LitElement {
                  })}>
         </div>
         ${this._lockRow(piece)}
+        ${piece.vehicleModelId ? this._vehicleModelRow(piece) : html`
         <div class="row"><label>Type</label>
           <select .value=${piece.customKindId ? 'custom:' + piece.customKindId : curKind}
                   @change=${(e: Event) => upd(() => {
@@ -5447,7 +5478,7 @@ export class Sidebar extends LitElement {
                   })}>
             ${this._kindOptions(piece.customKindId ? 'custom:' + piece.customKindId : curKind)}
           </select>
-        </div>
+        </div>`}
         ${this._furnitureBindRow(piece, upd)}
         ${(curKind === 'tv' || curKind === 'wall_tv') ? this._screenContentRow(piece, upd) : nothing}
         ${(curKind === 'tv' || curKind === 'wall_tv') ? this._biasLightRow(piece, upd) : nothing}

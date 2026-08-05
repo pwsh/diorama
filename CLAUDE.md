@@ -82,7 +82,7 @@ on-drop behavior: chairs rotate to face their host edge + tuck, wall-colliding
 pieces nudge out along the normal. That pass fixed ~150 wall-sunk pieces and
 ~50 backwards chairs — **the plans had been authored "+Y = front" while the
 renderer's SitSpot normal, 2D chevron and humanoid facing are all local −Z**.
-Build output is byte-deterministic (re-run + diff).
+Build output is byte-deterministic WITHIN a day (build.mjs stamps `exportedAt` with today's date — a re-run on a later day rewrites that one field in all 18 JSONs; revert date-only diffs when nothing else changed).
 
 ## Layout
 
@@ -908,7 +908,8 @@ The floor rect (`0..w × 0..d` mm) is editable by dragging its four boundary edg
 `<diorama-toolbar>` (`src/ui/toolbar.ts`; design `docs/DESIGN-toolbar.md`) —
 edit-mode-only bottom dock, a flex-column LAYOUT SIBLING below the canvas (the
 canvas shrinks; the weather chip + 2D reset button clear it for free).
-Category tabs (11: furniture cats via `furnitureCat` + Lights + Controls &
+Category tabs (11 + a conditional 12th "Vehicles" tab when any vehicle pack
+is loaded+active — see "Vehicle model packs"; furniture cats via `furnitureCat` + Lights + Controls &
 Sensors + Structure + Ground + Custom) → scrollable ~72 px item cards →
 variant CHIP row (door/window/wall/ground kinds). Model + arming live in the
 pure `src/ui/tool-arm.ts` (`buildToolbarModel(planner)`; arm fns call the SAME
@@ -924,7 +925,7 @@ objects; localStorage-persisted). Collapse persists in
 RUNTIME-ONLY planner fields (`pendingLightKind`/`pendingWindowKind`/
 `pendingDoorKind`/`pendingGroundKind` — defaults reproduce classic drops;
 never persisted, invisible to undo/config). Armed card ring tracks external
-tool changes via the config channel. Test `toolbar-test.html` (42/42).
+tool changes via the config channel. Test `toolbar-test.html` (53/53).
 
 ### Collapsible sidebar sections
 Every collapsible section renders through `Sidebar._section(slug, title, bodyThunk, opts?)` (light-DOM wrapper: clickable `<h3 class="collapsible-header">` + `▸`/rotated arrow; the body thunk is only invoked while expanded) — **EXCEPT the floor picker (2026-07-30 sidebar reorg, user-directed)**: a deliberate NON-collapsible plain `.section` at the very top — COMPACT display-ordered click-to-switch rows (name + W×D + dim `(peek)`/`(disabled)` suffix, ZERO buttons) + "+ Add floor". **Layout order**: Floors (pinned) → **`floortools`** (NEW section — ALL per-floor controls: ✎ size/name modal, Order ▲/▼ (`moveFloor` on the CURRENT floor), Visibility cycle (👁/peek/🙈), elevation, HA-floor bind, Rotate/Move plan, imperial, lock, "This floor's 3D look" incl. yard fill) → a **Collapse all / Expand all** row (writes/clears the module-level `SECTION_SLUGS` — 39 top-level slugs ONLY, room-group `<slug>/<roomId>` sub-keys untouched, the pinned floor picker exempt) → Layers → **Rooms (moved up 2026-08-01, user-directed — per-room flooring made it a top-of-list concern)** → Dimensions → Rulers → **Tools (GROUPED via `TOOL_GROUPS`/`_toolGroups()`** — Select & edit / Structure (wall+kind picker+wall-editing prefs+lock-all) / Areas & ground / Devices & sensors / Furniture & decor; uncategorized ids land in a trailing "Other" safety-net group, so ADD NEW TOOLS TO `TOOL_GROUPS` too) → the rest in prior relative order. Collapsed keys persist **device-local** in `localStorage['diorama:sidebar:collapsed']` (JSON array, try/catch-guarded — NOT the HA store); absent from the set = expanded (default). Section keys are stable slugs — the former `floors` slug is stale-harmless; `floortools` joined the set. The former `scene3d` / `weather` / `data` sidebar sections MOVED into the tabbed settings drawer (Display / Weather / Data tabs — see "Settings drawer & avatar packs"); the per-floor `look3d` overrides live in Floor tools. Test `sidebar-org-test.html` (`SIDEBARORG PASS 153/153`). **2026-07-30 polish wave**: the
@@ -1884,6 +1885,57 @@ Defaults (footprint, height, seat height, back size, tint) live in `FURNITURE_KI
 
 ### Custom objects (recipes)
 User-authored objects live in `Store.customObjects: ObjectRecipe[]` (`ObjectRecipe extends FurnitureKindDef` + `id` + `primitives: RecipePrimitive[]`). Each primitive is a `box`/`cylinder`/`sphere`/`cone` with `size`/`pos`/`rot?`/`color?` in local mm (origin = piece center at floor level, **+Z = front**). A `Furniture` instance references one via `customKindId` (its `kind` stays as a `block` fallback). `resolveFurnitureDef(fu, customObjects)` returns the recipe def or `FURNITURE_KINDS[kind]`. 3D: a generic recipe builder in `_buildFurniture` walks `primitives`; 2D: a top-down primitive projection (each primitive's footprint — box → rotated rect, cylinder/cone/sphere → circle — at its local x/z, painted by vertical center so upper parts win; labeled rect only when the recipe has no primitives). **3D front-arrow indicator**: when a custom-recipe piece is the SELECTED furniture, `updateFloor` (5th–6th params: `stateProvider`, `selectedFurnitureId`) drops a flat accent chevron (`_frontArrowDecal(fu.h)`) on the floor just outside the piece's functional front (local −Z, matching the 2D chevron convention). It's a flat `MeshBasicMaterial` (documented `_mat` exemption, like the TransientPulse rings — an unlit ground decal), `outlineSkip`, added AFTER `_buildFurniture` ran its outlines so no inverted-hull shell wraps it, no blob shadow. Selection (`activeFurnitureId`) is runtime-only and does NOT bump `configRev`, so three-view folds the selected custom piece's id into `_keyFloor` explicitly (scoped to custom pieces so selecting an ordinary piece never churns the rebuild). `_frontArrowMat` is shared, disposed only in `destroy()`. The sidebar "Custom Objects" section is the **form editor** (label, w/h/ht, surface/mountable checkboxes, activity dropdown, seat, and a parts list with numeric fields) — a new object is auto-placed at the view center so the live scene is the preview. Recipes sync in the store like everything else. **Adding a `Store` field reminder**: `customObjects`, `people`, `bleShowUnknown`, `bermudaEnabled` (and per-floor `Floor.rooms` / `Floor.bleProxies`) must be in `Planner._loadFromHa`'s explicit field list / `repairFloor` + `defaultFloor` or they reset on load.
+
+### Vehicle model packs (batch V1 — ground vehicles; research `docs/research/vehicle-model-library.md`)
+Selectable vehicle models organized as PACKS mirroring avatar packs.
+**`src/vehicles.ts`** (pure, ZERO three.js — the avatars.ts twin, imported by
+geometry.ts so it's in the startup graph AND node-safe for the floorplans
+validator): `VehicleModelDef {id '<packId>/<member>', label, category
+'aircraft'|'space'|'ground', era?, lenMm (real length — the V2 banner-standoff
+anchor), dims [W×D×H mm], body?/accent? hex slot defaults, prims:
+VehiclePrimitive[], surfaces: ('ground'|'banner'|'adsb')[]}`;
+`VehiclePrimitive` = the RecipePrimitive vocabulary + `color` SLOTS
+(`'body'|'accent'|'glass'|'dark'` or hex) + V2-reserved `emissive?`/`spin?:
+'prop'|'rotor'|'wheel'` (dropped by the V1 ground path). Registry singleton +
+`resolveVehicleDef(id)` (null when pack unloaded/inactive/subset-excluded →
+callers fall back) + **`vehicleRecipe(id): ObjectRecipe | null`** (MEMOIZED —
+resolveFurnitureDef runs per piece per 2D frame; cleared on registry
+invalidation): converts a def into the EXISTING Custom-Objects recipe shape
+(slots→hex, spin/emissive dropped, dims→w/h/ht, `cat:'vehicle'`,
+`frontArrow:true`) so the WHOLE furniture pipeline (3D build, 2D projection,
+nav blocking, physical checks, thumbnails) renders vehicles through proven
+machinery. Model-local: front = −Z, y=0 = ground, REAL mm scale.
+**Resolution**: `Furniture.vehicleModelId?` (item-level; `kind` stays
+`'block'` as the unloaded-pack fallback, the avatar-adult precedent) —
+`resolveFurnitureDef` branches on it FIRST, and the TWO builders that
+re-resolve recipes directly (three-renderer `_buildFurniture`'s customKindId
+lookup + canvas-render's projection branch) are widened alongside, plus the
+3D front-arrow gate + three-view's `selCustomId` `_keyFloor` term. Placed
+vehicles are PLAIN furniture (no `userData.kind` — decor, not a device).
+**Packs** (`src/vehicle-packs/` — manifest.ts eager index, bodies LAZY
+dynamic-import-only chunks + a lazy-only `prims.ts` helper module; the
+avatar-packs chunk discipline): `base-ground-civil` (9: pickup/suv/school_bus/
+transit_bus/semi_truck/fire_engine/ambulance/police_cruiser/motorcycle) +
+`base-ground-military` (7: model_t/beetle/microbus/jeep_willys/humvee/
+sherman/abrams) default loaded+active; `franchise-ground-fiction` (7,
+**default UNLOADED** — labels are DESCRIPTIVE-GENERIC per the IP posture,
+never franchise names). `Store.vehiclePacks?: Record<packId, {loaded?,
+active?, members?}>` (in `_loadFromHa`'s list); Planner
+`_hydrateVehiclePacks` + `setVehiclePackLoaded/Active/Members` (avatar
+idiom); 4 static passthroughs on ThreeDRenderer (register/unregister/
+setConfig/vehicleRecipe) so tests configure the SAME shared-chunk registry.
+**UI**: Settings ▸ **Vehicles** tab (after Avatars; path tree, Loaded/Active,
+member subsets w/ body-color swatches; NO user JSON import v1 — deferred);
+toolbar conditional **Vehicles** tab (hidden when no pack loaded+active)
+arming runtime `Planner.pendingVehicleModelId` (mutually exclusive with
+pendingCustomObjectId/plain kinds at every arming site; thumbs keyed
+`veh:<id>:<packVersion>`); sidebar furniture editor shows model label + pack
+(dim) instead of the kind dropdown for vehicle pieces. Tests:
+`vehicle-pack-test.html` (`VEHICLEPACK PASS 341/341` — NB its `veh.mod.js` is
+ONE bundle carrying vehicles.ts + geometry.ts so the registry instance is
+shared) + `vehicle-build-test.html` (`VEHICLEBUILD PASS 302/302` — builds
+every member). V2 (aircraft packs + banner-tow wiring) and V3 (live-ADS-B
+military skins) build on these shapes.
 
 ### Animated humanoid targets (3D)
 Target positions come from `Planner.stepLerp` — a critically damped spring (ω = 9 rad/s) with velocity state on each `LerpSlot` (`vx`/`vy`), so on-screen motion stays velocity-continuous between HA's few-Hz coordinate pushes. (A plain exponential ease surged after every push and stalled before the next; the walk cycle inherited the lurch — don't regress to one.) The integrator **substeps so ω·h ≤ ~0.36** — a single semi-implicit Euler step at the 0.1 s dt clamp (10 fps device) makes the spring *diverge*, not just ring. `stepLerp` is driven by the 2D canvas RAF, which keeps running (hidden) while the 3D view is up.

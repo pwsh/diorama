@@ -11,6 +11,7 @@ import type {
   FurnitureKind, LightIconKind, WallKind, WindowKind, GroundKind, ObjectRecipe,
 } from '../types.js';
 import { FURNITURE_KINDS, furnitureCat, type FurnitureCat, GROUND_KINDS } from '../geometry.js';
+import { listActiveVehiclePacks } from '../vehicles.js';
 
 type DoorKind = 'swing' | 'garage' | 'gate'
   | 'sliding' | 'pocket' | 'double' | 'french' | 'sliding_glass';
@@ -20,6 +21,7 @@ export type ThumbDesc =
   | { type: 'furniture'; kind: FurnitureKind }
   | { type: 'light'; kind: LightIconKind }
   | { type: 'custom'; id: string; hash: string }
+  | { type: 'vehicle'; id: string; ver: string }
   | { type: 'glyph'; glyph: string };
 
 export interface VariantChip {
@@ -55,10 +57,19 @@ export function armTool(p: Planner, t: Tool): void {
 export function armFurniture(p: Planner, kind: FurnitureKind): void {
   p.pendingFurnitureKind = kind;
   p.pendingCustomObjectId = null;
+  p.pendingVehicleModelId = null;
   armTool(p, 'furniture');
 }
 export function armCustom(p: Planner, id: string): void {
   p.pendingCustomObjectId = id;
+  p.pendingVehicleModelId = null;
+  armTool(p, 'furniture');
+}
+// Arm a vehicle-pack model. Mirrors armCustom exactly — the drop path resolves
+// the model into the same ObjectRecipe shape a custom object uses.
+export function armVehicle(p: Planner, id: string): void {
+  p.pendingVehicleModelId = id;
+  p.pendingCustomObjectId = null;
   armTool(p, 'furniture');
 }
 export function armLight(p: Planner, kind: LightIconKind): void {
@@ -178,7 +189,8 @@ function furnitureCards(cat: FurnitureCat): ToolCard[] {
     tool: 'furniture' as Tool,
     arm: (p: Planner) => armFurniture(p, kind),
     isArmed: (p: Planner) =>
-      p.tool === 'furniture' && p.pendingCustomObjectId == null && p.pendingFurnitureKind === kind,
+      p.tool === 'furniture' && p.pendingCustomObjectId == null
+      && p.pendingVehicleModelId == null && p.pendingFurnitureKind === kind,
   }));
 }
 
@@ -294,12 +306,36 @@ function customCards(p: Planner): ToolCard[] {
     thumb: { type: 'custom', id: o.id, hash: hashRecipe(o) } as ThumbDesc,
     tool: 'furniture' as Tool,
     arm: (pl: Planner) => armCustom(pl, o.id),
-    isArmed: (pl: Planner) => pl.tool === 'furniture' && pl.pendingCustomObjectId === o.id,
+    isArmed: (pl: Planner) =>
+      pl.tool === 'furniture' && pl.pendingVehicleModelId == null && pl.pendingCustomObjectId === o.id,
   }));
+}
+
+// Ground-vehicle models from every LOADED + ACTIVE vehicle pack (src/vehicles.ts).
+// Aircraft / space models are excluded here — they have no ground placement
+// surface in V1. Empty when every pack is off, which hides the whole tab.
+function vehicleCards(): ToolCard[] {
+  const out: ToolCard[] = [];
+  for (const { def, models } of listActiveVehiclePacks()) {
+    for (const m of models) {
+      if (m.category !== 'ground') continue;
+      out.push({
+        key: `veh:${m.id}`,
+        label: m.label,
+        glyph: '🚙',
+        thumb: { type: 'vehicle', id: m.id, ver: String(def.version) } as ThumbDesc,
+        tool: 'furniture' as Tool,
+        arm: (pl: Planner) => armVehicle(pl, m.id),
+        isArmed: (pl: Planner) => pl.tool === 'furniture' && pl.pendingVehicleModelId === m.id,
+      });
+    }
+  }
+  return out;
 }
 
 // ── The model ──────────────────────────────────────────────────────────────────
 export function buildToolbarModel(p: Planner): ToolCategory[] {
+  const vehModels = vehicleCards();
   return [
     { id: 'furniture', label: 'Furniture', glyph: '🛋', cards: furnitureCards('furniture') },
     { id: 'appliance', label: 'Appliances', glyph: '🔌', cards: furnitureCards('appliance') },
@@ -311,6 +347,10 @@ export function buildToolbarModel(p: Planner): ToolCategory[] {
       cards: [...furnitureCards('outdoor'), controlCardLike('tool:flagpole', 'Flagpole', '🚩', 'flagpole')],
     },
     { id: 'vehicle', label: 'Vehicle', glyph: '🚗', cards: furnitureCards('vehicle') },
+    // Vehicle MODEL packs — hidden entirely when every pack is unloaded/inactive.
+    ...(vehModels.length
+      ? [{ id: 'vehicles', label: 'Vehicles', glyph: '🚙', cards: vehModels }]
+      : []),
     { id: 'lights', label: 'Lights', glyph: '💡', cards: lightCards() },
     { id: 'controls', label: 'Controls & Sensors', glyph: '🎛', cards: CONTROL_TOOLS.map(controlCard) },
     { id: 'structure', label: 'Structure', glyph: '🧱', cards: structureCards() },

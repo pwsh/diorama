@@ -23,6 +23,9 @@ export function thumbCacheKey(d: ThumbDesc): string {
     case 'furniture': return `f:${d.kind}`;
     case 'light': return `l:${d.kind}`;
     case 'custom': return `c:${d.id}:${d.hash}`;
+    // Vehicle-pack model — keyed by pack VERSION (a pack bump re-authors the
+    // geometry), the recipe-hash idiom without hashing a whole recipe.
+    case 'vehicle': return `veh:${d.id}:${d.ver}`;
     case 'glyph': return `g:${d.glyph}`;
   }
 }

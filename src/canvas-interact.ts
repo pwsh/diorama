@@ -1,3 +1,4 @@
+import { vehicleRecipe } from './vehicles.js';
 import { snap, snapVertex15, distMM, worldToLocal, localToWorld, FURNITURE_KINDS, furnitureCorners, furnitureLocalToWorld, furnitureWorldToLocal, resolveFurnitureDef, resolveFurnitureWallCollision, resolveSeatTableCollision, seatBelongsToTable, snapStepLightToSurface, snapFireplaceToWall, snapFloodlightToWall, snapExhaustToWall, snapSwitchToWall, snapAlarmToWall, snapCalendarToWall, snapThermostatToWall, snapPlugToWall, snapInfoCardToWall, snapActionButtonToWall, isBinKind, isWetBathKind, defaultFurnitureElevation, nearestAlign, bestAlignShift, ALIGN_DRAG_KINDS, ALIGN_POLY_DRAG_KINDS, envScale, ENV_SCALE_MIN, ENV_SCALE_MAX, GRID_MM, floorContentBbox, resolveFloorEdgeDrag, DOOR_DEFAULT_W, doorDefaultWidth, windowDefaultWidth } from './geometry.js';
 import { newId } from './storage.js';
 import {
@@ -2876,11 +2877,16 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
     return;
   }
   if (p.tool === 'furniture') {
-    // A pending custom object drops a recipe instance (kind stays 'block' as a
-    // fallback); otherwise the built-in pending kind.
-    const rec = p.pendingCustomObjectId
+    // A pending VEHICLE MODEL drops a pack-model instance; else a pending custom
+    // object drops a recipe instance (both keep kind 'block' as the fallback);
+    // else the built-in pending kind. A vehicle whose pack went unloaded between
+    // arming and dropping resolves null and falls through, never placing a
+    // dangling reference.
+    const vehId = p.pendingVehicleModelId;
+    const vehRec = vehId ? vehicleRecipe(vehId) : null;
+    const rec = vehRec ?? (p.pendingCustomObjectId
       ? p.store.customObjects?.find(o => o.id === p.pendingCustomObjectId)
-      : undefined;
+      : undefined);
     const kind = p.pendingFurnitureKind;
     const def = rec ?? FURNITURE_KINDS[kind];
     const elev0 = rec ? 0 : defaultFurnitureElevation(kind);
@@ -2888,7 +2894,8 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
       id: newId('fu'),
       x: snap(mm.x, 10), y: snap(mm.y, 10),
       w: def.w, h: def.h, label: '', kind: rec ? 'block' : kind,
-      ...(rec ? { customKindId: rec.id } : {}),
+      ...(vehRec && vehId ? { vehicleModelId: vehId }
+        : rec ? { customKindId: rec.id } : {}),
       ...(elev0 ? { elevation: elev0 } : {}),
     };
     f.furniture.push(piece);

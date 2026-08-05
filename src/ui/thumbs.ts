@@ -12,6 +12,7 @@ import type { ThreeDRenderer } from '../three-renderer.js';   // type-only (eras
 import type { ThumbDesc } from './tool-arm.js';
 import type { Floor, Scene3D, ObjectRecipe } from '../types.js';
 import { FURNITURE_KINDS } from '../geometry.js';
+import { vehicleRecipe } from '../vehicles.js';
 import {
   glyphDataURL, thumbCacheKey, loadThumbCache, saveThumbCache,
 } from './thumbs-cache.js';
@@ -138,7 +139,8 @@ class ThumbService {
   private _fallback(desc: ThumbDesc): string {
     const g = desc.type === 'furniture' ? (FURNITURE_KINDS[desc.kind]?.label ? '🪑' : '▦')
       : desc.type === 'light' ? '💡'
-      : desc.type === 'custom' ? '🧩' : '▦';
+      : desc.type === 'custom' ? '🧩'
+      : desc.type === 'vehicle' ? '🚙' : '▦';
     return glyphDataURL(g, PX);
   }
 
@@ -149,6 +151,13 @@ class ThumbService {
     if (desc.type === 'light') return this._captureLight(desc.kind);
     if (desc.type === 'custom') {
       const recipe = (ctx?.customObjects ?? []).find(o => o.id === desc.id);
+      if (!recipe) return '';
+      return this._captureCustom(recipe);
+    }
+    // Vehicle-pack models convert into the SAME ObjectRecipe shape, so they ride
+    // the custom-object capture path verbatim (no renderer-side special case).
+    if (desc.type === 'vehicle') {
+      const recipe = vehicleRecipe(desc.id);
       if (!recipe) return '';
       return this._captureCustom(recipe);
     }

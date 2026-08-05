@@ -1310,7 +1310,7 @@ export class ThreeView extends LitElement {
       // equivalent) so selecting an ordinary furniture piece never churns the
       // floor rebuild.
       const selFu = f.furniture.find(x => x.id === p.activeFurnitureId);
-      const selCustomId = (selFu && selFu.customKindId) ? selFu.id : '';
+      const selCustomId = (selFu && (selFu.customKindId || selFu.vehicleModelId)) ? selFu.id : '';
       // effGroundMm is folded in explicitly: updateFloor is what parks the
       // backdrop grid + _neighborhoodGroup at the grade and stores _groundLevel
       // for _groundYAt / the flights anchor. configRev already covers every path
