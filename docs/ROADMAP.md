@@ -25,24 +25,24 @@ codebase so this doc stays honest as items land.
 
 ## Tier 2 — strong spatial fits on existing machinery
 
-- **Covers** (`cover` domain, per device_class): garage door = segmented
+- ✅ **Covers** — SHIPPED 2026-07 batch F+ (8 door kinds incl. garage/gate, `Window.coverEntity` blinds/shades, curtains; railing gates 2026-08-01). Original brief: (`cover` domain, per device_class): garage door = segmented
   overhead panel rolling up with `current_position` (M/4); blinds/shades/
   curtains = position-driven sashes inside the existing per-kind window
   builder, tilt slats for blinds (S–M/3); gate = exterior door-like panel
   (M/3, wants a fence/property concept). Reuses the door/window pipelines.
-- **Water leak sensors** (`binary_sensor.moisture`): blue puddle decal
+- ✅ **Water leak sensors** — SHIPPED 2026-07 batch E (SafetySensor kind `leak`: floor puck + growing puddle). Original brief: (`binary_sensor.moisture`): blue puddle decal
   spreading at the sensor — the W3 puddle texture/fade machinery already
   exists; this is now S effort, high payoff (4).
 - **Sirens** (`siren`): pulsing beacon — shares the smoke/CO beacon
   component (S/4).
-- **Doorbells** (`event` domain — Ring/Nest; UniFi Protect also has real
+- ✅ **Doorbells** — SHIPPED 2026-07 batch F (`Door.doorbellEntity` + the TransientPulse primitive + bubble tier; event/button/binary_sensor all accepted). Original brief: (`event` domain — Ring/Nest; UniFi Protect also has real
   sustained binary_sensors): needs a small **transient-pulse system**
   (flash-then-decay on an event timestamp, distinct from state-bound
   rendering — the one genuinely new rendering primitive in this tier);
   ring ripple at the door + optional event snapshot popover (M/4). The
   2027.4 `DoorbellEventType.RING` standardization simplifies matching.
   Support all three shapes (event / button / legacy binary_sensor).
-- **Cameras**: wall/ceiling fixture with a translucent FOV frustum +
+- ✅ **Cameras** — SHIPPED 2026-07 batch G (+ alert snapshot popups; Frigate homography batch M-B). Original brief: wall/ceiling fixture with a translucent FOV frustum +
   periodically refreshed `camera.snapshot` thumbnail badge (M/4);
   live HLS/WebRTC in-scene is L — defer.
 - ✅ **Climate / per-room temperature shading** (SHIPPED 2026-07-17 —
@@ -54,22 +54,22 @@ codebase so this doc stays honest as items land.
   incl. ecobee remote SmartSensors which are plain sensors); a bound
   `climate` entity contributes `hvac_action` (heating/cooling/idle — NOT
   hvac_mode) as a vent-glow/airflow cue on a thermostat fixture (M/3).
-- **Fans**: `percentage` drives existing fan-blade spin rate; `direction`
+- ✅ **Fans** — SHIPPED 2026-07 (percentage-proportional spin + reverse + eased ramp, `_advanceFanSpin`). Original brief: `percentage` drives existing fan-blade spin rate; `direction`
   is forward/reverse only — no compass data exists, don't fake airflow
   direction (S/2).
-- **Energy / power**: per-device power glow on bound appliances
+- ✅ **Energy / power** — SHIPPED 2026-07 batch E (`Furniture.powerEntity` glow, 50 W-bucketed). Original brief: per-device power glow on bound appliances
   (device_class `power` sensor, intensity ∝ W) — pairs with the shipped
   in-use LED (S/3). Whole-home meter is a chip, not spatial.
-- **Battery badges**: one horizontal "Battery" layer — HA's own frontend
+- ✅ **Battery badges** — SHIPPED 2026-07 batch E (`Layers2D.battery` + `scanBatteryRegistry` sibling resolution). Original brief: one horizontal "Battery" layer — HA's own frontend
   convention is a sibling `sensor` with device_class `battery` on the same
   HA device; mirror that resolution and badge any bound fixture when low
   (S/3). The `battery_level` attribute on tracker entities is deprecated
   (removal 2027.7) — never read it.
-- **Media now-playing**: `media_player` `entity_picture` (album art via
+- ✅ **Media now-playing** — SHIPPED 2026-07 batch H (art cards over any bound media furniture; speaker-group link lines NOT built). Original brief: `media_player` `entity_picture` (album art via
   `/api/media_player_proxy/...`) + `media_title` floated over speaker/TV
   fixtures; `group_members[0]` is the group leader for speaker-group link
   lines (M/4).
-- **Vehicle model library (aircraft + ground)** — research:
+- ✅ **Vehicle model library (aircraft + ground)** — CORE SHIPPED v0.55.0 in 3 batches (pack registry + 23 ground vehicles; 34 aircraft/space + banner-tow wiring; live-ADS-B military skins). REMAINING follow-ups: user JSON pack imports, registering the 19 legacy BG_CRAFTS as a manageable pack, civil per-archetype flight skins. Research:
   `docs/research/vehicle-model-library.md` (2026-08-04; 83 newly ranked
   models + the 19 shipped BG_CRAFTS = 102 candidates, first waves marked).
   Generalizes the BG_CRAFTS banner-tow roster into an avatar-pack-style
@@ -88,7 +88,7 @@ codebase so this doc stays honest as items land.
 
 ## Tier 3 — cheap EnvKind / fixture extensions
 
-- New `EnvKind`s (map extensions in `ENV_KINDS`, S each): `radon`
+- ✅ New `EnvKind`s — SHIPPED 2026-07 batch E (radon/sound/no2/o3/aqi). Original brief (map extensions in `ENV_KINDS`, S each): `radon`
   (Bq/m³ — Airthings; WHO/EPA thresholds), `sound_pressure` (dB noise
   puck, optional loudness ripple), `no2`/`o3`/`aqi` (confirmed sensor
   device_classes; the legacy `air_quality` domain is deprecated — never
@@ -96,15 +96,15 @@ codebase so this doc stays honest as items land.
 - **UV index**: `weather.*` carries `uv_index` natively and Open-Meteo's
   API (already wired) exposes `uv_index`/`uv_index_max` — fold into
   WeatherNow (field already exists) + a chip readout / parasol flourish (S/2).
-- **Garage-bay vehicle presence**: pure DIY pattern (ultrasonic/ToF →
+- ✅ **Garage-bay vehicle presence** — SHIPPED 2026-07 batch 1b (`car` kind + presence ghost/solid). Original brief: pure DIY pattern (ultrasonic/ToF →
   presence binary_sensor) — a car-silhouette furniture kind bound to a
   binary_sensor covers it with zero new mechanism (S/2).
-- **Moon phase** (8-state sensor): night-sky prop per phase; no position
+- ✅ **Moon phase** — SHIPPED 2026-07 (moon disc + `WeatherConfig.moonEntity` phase painting; real-ephemeris position + the Death Star option later). Original brief: (8-state sensor): night-sky prop per phase; no position
   data — recolor/swap only (S/2, needs the integration installed).
 
 ## Tier 4 — niche / deferred / dead ends
 
-- **EV charger fixture**: only Wallbox + Peblar are core; OCPP +
+- ✅ **EV charger fixture** — SHIPPED 2026-07 batch 1b (vendor-agnostic `evStatusOf` + port LED + car charge indicator). Original brief: only Wallbox + Peblar are core; OCPP +
   ChargePoint are HACS. If built, design around a common shape
   (plugged-in, charging state, power, current limit) — never one vendor's
   entity ids (M/3). Vehicle BLE presence via Bermuda: frame as coarse
@@ -120,15 +120,15 @@ codebase so this doc stays honest as items land.
   `research/pool-spa.md` (sunken basin via the terrace-skirt builder,
   shimmer water, heater/pump/light bindings). Deferred: equipment-pad
   furniture kinds, spa bubble particles (CLAUDE.md T4 section).
-- **Plants**: legacy `plant.*` domain is orphaned; modern pattern is a
+- ✅ **Plants** — SHIPPED 2026-07 (moisture-driven thirsty droop on plant kinds). Original brief: legacy `plant.*` domain is orphaned; modern pattern is a
   device with moisture/light/battery sensors (FYTA). A thirsty-plant
   droop on the existing plant furniture kind is charming (M/3).
-- **Weather alerts** (DWD/MeteoAlarm/Env-Canada; NWS core has NO alert
+- ✅ **Weather alerts** — SHIPPED 2026-07 DC-D (region-agnostic parser + chip badge/panel + 3D beacon; standalone HUD banner deferred). Original brief: (DWD/MeteoAlarm/Env-Canada; NWS core has NO alert
   entity): attribute-rich but zero coordinates — generic severity banner
   only (S/3).
-- **Mail/packages** (HACS Mail-and-Packages): count badge at the front
+- ✅ **Mail/packages** — SHIPPED 2026-07 batch 1b; mailbox model rebuilt from reference photos v0.55.0 (count badge + click-or-sensor flag). Original brief: (HACS Mail-and-Packages): count badge at the front
   door + mailbox-lid binary_sensor as a door-like fixture (S–M/2).
-- **Printers**: OctoPrint (3D printing progress/temps) is rich; ink
+- ✅ **Printers** — PARTIAL: `printer_3d` progress/gantry SHIPPED 2026-07 (mechanical batch); 2D-printer ink levels not built (skip-worthy). Original brief: OctoPrint (3D printing progress/temps) is rich; ink
   printers are IPP-generic (S/2, low spatial value).
 - **NAS/server/network**: dashboards, not spatial — skip except maybe a
   rack fixture with health LED (1–2). UniFi does NOT expose per-client AP
@@ -141,13 +141,13 @@ codebase so this doc stays honest as items land.
 
 ## Architectural prerequisites worth building once
 
-1. **Transient-pulse rendering path** — event/button domains have no
+1. ✅ **Transient-pulse rendering path** — SHIPPED 2026-07 batch F (TransientPulse: doorbell rings; reused since). — event/button domains have no
    persistent state; a "flash on timestamp, decay over N s" primitive
    unlocks doorbells, buttons, and event-typed detections.
-2. **Direct-MQTT bridge (opt-in)** — the gate to Frigate boxes and
+2. ✅ **Direct-MQTT bridge (opt-in)** — SHIPPED 2026-07 Phase 5 M-A (mqtt-ws codec + bridge, ha-relay + direct paths; Frigate M-B + Valetudo M-C ride it). — the gate to Frigate boxes and
    Valetudo maps; a deliberate break from the pure-HA-WS model, isolate
    like `weather.ts` isolates fetch.
-3. **Device-siblings resolution** — resolve related entities (battery,
+3. ✅ **Device-siblings resolution** — SHIPPED 2026-07 batch E (`scanBatteryRegistry` registry caches + `batteryFor`). — resolve related entities (battery,
    power, door) from the HA device registry instead of one-binding-per-
    datum; enables battery badges + richer appliance cards with less UI.
 4. ✅ **Yard/terrain concept** — SHIPPED 2026-07-18 as the terrain
@@ -391,29 +391,29 @@ Do not treat any note here as a decided approach.
   voids (`Floor.voidAreas`, nav-blocked, stairs bridge) + stair links +
   BLE cross-floor transits + glass-house transit puppet. Design record:
   `docs/research/avatar-nav-stairs.md`.
-- **Event-focused thought bubbles**: when something *happens* — a
+- ✅ **Event-focused thought bubbles** — SHIPPED 2026-07 Phase 2a (BUBBLE_POOL_EVENT: appliance-done/rain/severe tiers + householdEvents). Original brief: when something *happens* — a
   dishwasher / washer / dryer finishes, severe weather arrives, rain
   starts, lightning strikes — let a thought of that event take focus
   (higher-priority, event-triggered bubble tier).
 
 ### Weather display
-- **Forecast entity support**: consume a future/forecast weather entity per
+- ✅ **Forecast entity support** — SHIPPED 2026-07 DC-C (`getWeatherForecasts` + chip forecast strips). Original brief: consume a future/forecast weather entity per
   `weather.get_forecasts` (https://www.home-assistant.io/actions/weather.get_forecasts/).
-- **Movable chip**: reposition the weather display to a predefined anchor
+- ✅ **Movable chip** — SHIPPED 2026-07 DC-C (`chipAnchor` 6 anchors + custom x/y). Original brief: reposition the weather display to a predefined anchor
   (top-left / top-middle / top-right / bottom-right / bottom-middle /
   bottom-left) or a custom location.
-- **Customizable content**: show any combination of current weather +
+- ✅ **Customizable content** — SHIPPED 2026-07 DC-C (`chipContent` rows + hourly/daily strips). Original brief: show any combination of current weather +
   future weather (by hours or by days).
-- **Current weather alerts**: as its OWN customization — could use something
+- ✅ **Current weather alerts** — SHIPPED 2026-07 DC-D (region-agnostic `parseWeatherAlerts` — no per-region source needed). Original brief: as its OWN customization — could use something
   like NWS Alerts (https://github.com/finity69x2/nws_alerts); other regions
   may need their own alert source.
 
 ### Time / entity-value display object (maybe merged with EnvSensors)
-- A placeable object that displays the value of ANY selected entity with
+- ✅ (the whole object SHIPPED 2026-07 DC-A as `InfoCard` — billboard or fixed plane, wall/surface/floor mounts.) A placeable object that displays the value of ANY selected entity with
   customizable formatting, size, color, etc.
 - Can stay flat on a wall, sit on a table, etc.; does NOT need to pivot to
   face the camera, but has that option.
-- **Logical formatting**: text format + color changes by value — e.g.
+- ✅ **Logical formatting** — SHIPPED 2026-07 DC-A/B (value-rules engine: InfoCard rules + logical lights). Original brief: text format + color changes by value — e.g.
   <32 °F blue, 68–74 white, 75+ red — via ranges OR a gradient.
 
 ### HVAC controls
@@ -443,9 +443,7 @@ Approximated with conventions in the shipped packs; see
 - ✅ Fabric prints / decals / text — SHIPPED 2026-07-17 (style decision:
   canvas-painted DECAL PLANES proud of the torso — text/glyph/print —
   never body texture maps; `HumanoidFields.decals`).
-- Animated appendages: tail sway, wing flap, ear posing; hop / knuckle-walk
-  gait cycles; per-tentacle idle channels; independent secondary props
-  (orbiting drones).
+- ✅ Animated appendages — SHIPPED 2026-07 Phase 4b (`AvatarPrimitive.animate` sway/flap/orbit/spin, hop/knuckle gaits, quad `earAnimate`); per-tentacle idle channels + orbiting secondary props still approximated.
 - Extra eye styles (compound, T-visor, sleepy, luminous-bulbous, eye color
   overrides) and quad eye customization.
 - Additional anchors: wrist/cuff, ankle/foot, limb-midpoint (knee/elbow pads).
@@ -463,10 +461,10 @@ Approximated with conventions in the shipped packs; see
 ### Research items (do not action)
 - ✅ **Log events & alerting** — SHIPPED 2026-07-17 (alert center bell/
   drawer: persistent_notification + Repairs; placeable alert beacons).
-- **Background text messages (fun)**: research writing text into the
+- ✅ **Background text messages (fun)** — SHIPPED 2026-07 (bgTexts: sky/banner/ground/train + the aircraft fleet). Original brief: research writing text into the
   backdrop — embedded in the sky, written on the grass, a plane towing a
   banner, or skywriting — to present messages playfully.
-- **Weather as background animation**: research rendering current weather as
+- ✅ **Weather as background animation** — SHIPPED 2026-07 W2/W3 (precip/fog/lightning/sky + upwind storm-brewing approach). Original brief: research rendering current weather as
   the background animation, with weather-coming-soon shown approaching from
   the distance.
 - ✅ **Calendar / news surfaces** — SHIPPED 2026-07-17 (wall calendar
