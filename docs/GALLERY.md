@@ -121,6 +121,7 @@ builders the live panel uses — never a reimplementation:
 | mmWave / motion | body + coverage/cone + a live radar/AI target moving through |
 | env | chip value ramp crossing warn/danger bands |
 | safety | smoke/co/gas idle→alarm rings; leak puddle grow |
+| solar | fixed camera; the sun sweeps sunrise→noon→sunset through `updateSolarPanels` and the head yaws/tilts to track it, parked flat at both ends |
 | bins | lid flip empty↔full (state folded into the floor build) |
 | mailbox flag | flag sensor off→on→off (floor rebuilt per frame, eased arm) + count badge |
 | vehicle | 360° turntable of the pack model at its real size |
