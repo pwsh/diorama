@@ -1188,6 +1188,133 @@ const RAMP_OPEN_SLAB_MM = 80;
 const GROUND_STANDING_LIGHT_KINDS = new Set<string>(
   ['lamp', 'inground', 'ground_spot', 'firepit_round', 'firepit_square']);
 
+// ── Ground-area depth layering (z-fight fix) ────────────────────────────────
+// Every GroundArea patch builds at `elevationMm + 4` (+ grade), so ANY two
+// areas at the SAME elevation that overlap are EXACTLY coplanar — the classic
+// z-fight, and it is not a precision shortfall we can separate our way out of:
+// the depth difference is literally zero. Real plans lean on this hard (a base
+// lawn with paddocks/paths/pads painted on top: docs/floorplans/zoo.json is one
+// 18×14 m grass rect with 18 areas layered over it), which is why the hatching
+// shows up on "some scenes" and not others.
+//
+// The fix is the polygonOffset decal idiom already used for the outline shells
+// (_addOutlines), NOT a y-stagger: polygonOffset biases depth in DEPTH-BUFFER
+// terms, so it scales itself to whatever precision the current frustum has —
+// including the neighborhood / flights widened frustum (far up to CAM_FAR_CEIL),
+// where a fixed sub-millimetre world-space nudge would simply vanish. It also
+// leaves every documented height (patch y = elev + 4, skirt base, the yardFill
+// y=2 / blob-shadow y=8 stack) byte-identical, so nothing downstream — nav,
+// terrain registration, blob shadows, the 2D plan — has to move with it.
+//
+// Direction: NEGATIVE offset pulls a fragment toward the camera, so a patch
+// that must cover another needs the LARGER magnitude — matching canvas-render's
+// drawGroundAreas, which paints the array in order so later areas cover earlier
+// ones. Level 0 gets no offset at all, so a single-area floor (and every
+// terrain / path-pool / yardlife / yard fixture) builds byte-identically.
+//
+// Magnitude MUST stay small. One depth-buffer LSB is NOT a negligible world
+// distance here: at the stock frustum (near 10 / far 150000) and a ~24 m
+// camera distance it is `2^-24·(f−n)·z²/(f·n)` ≈ 3 mm — the same order as the
+// whole 2 / 4 / 8 mm ground stack. So the level is the polygon NESTING DEPTH,
+// not the array index: only areas that can actually tie (same elevation AND
+// overlapping bounds) push each other up a level. Across the whole committed
+// plan library the deepest level is 3 (zoo.json's 19 areas top out at 2,
+// garden-center's 10 at 3) — an index-based ladder would have reached 18.
+// GROUND_DEPTH_LEVELS is a backstop for a pathological chain: clamped areas can
+// tie with each other again, which is still strictly better than every area
+// tying with every other.
+const GROUND_DEPTH_LEVELS = 8;
+
+// Nesting depth per area, in array order: level[i] = 1 + max(level[j]) over
+// earlier areas j that are COPLANAR with i (same authored elevationMm — areas
+// at different elevations are already separated in y) and whose bounds overlap.
+// Bounds are compared STRICTLY, so edge-to-edge neighbours (the common "two
+// paths meeting at a seam" authoring) stay on the same level. Bounding boxes
+// are a conservative proxy for real polygon overlap: a false positive costs one
+// depth level, never correctness.
+function groundDepthLevels(areas: GroundArea[]): number[] {
+  const n = areas.length;
+  const lv = new Array<number>(n).fill(0);
+  const box: (readonly [number, number, number, number] | null)[] = areas.map(a => {
+    if (a.hidden || a.points.length < 3) return null;
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const p of a.points) {
+      if (p.x < x0) x0 = p.x;
+      if (p.x > x1) x1 = p.x;
+      if (p.y < y0) y0 = p.y;
+      if (p.y > y1) y1 = p.y;
+    }
+    return [x0, y0, x1, y1] as const;
+  });
+  for (let i = 0; i < n; i++) {
+    const bi = box[i];
+    if (!bi) continue;
+    const ei = areas[i].elevationMm ?? 0;
+    let best = 0;
+    for (let j = 0; j < i; j++) {
+      const bj = box[j];
+      if (!bj) continue;
+      if ((areas[j].elevationMm ?? 0) !== ei) continue;
+      if (bi[0] >= bj[2] || bj[0] >= bi[2] || bi[1] >= bj[3] || bj[1] >= bi[3]) continue;
+      if (lv[j] + 1 > best) best = lv[j] + 1;
+    }
+    lv[i] = best;
+  }
+  return lv;
+}
+
+function groundDepthOffset(level: number): {
+  polygonOffset: boolean; polygonOffsetFactor: number; polygonOffsetUnits: number;
+} {
+  const n = -Math.min(Math.max(level, 0), GROUND_DEPTH_LEVELS);
+  // BOTH terms. A units-only offset was tried and MEASURABLY failed (the zoo
+  // paddock re-hatched along the base lawn's triangulation diagonal): the
+  // implementation-defined "smallest resolvable difference" is not reliably
+  // enough to beat the rasteriser's own interpolation error between two
+  // differently-triangulated coplanar quads. The slope-scaled factor supplies
+  // the separation that actually holds; units keeps it non-zero head-on.
+  return { polygonOffset: n !== 0, polygonOffsetFactor: n, polygonOffsetUnits: n };
+}
+
+// Height of the coverage-visualisation floor decals (mmWave wedge, motion cone
+// footprint). They must clear BOTH the floor slab (y=0) and user ground paint
+// (GroundArea patches at elevation + 4) — a decal sitting exactly ON the slab
+// z-fights it, which is what the mmWave wedge's original "few mm up" literal
+// was already avoiding and what the motion cone (built at y=0) was not. The
+// camera FOV wedge sits 2 mm higher still so the two never tie. Coverage is a
+// diagnostic overlay drawn OVER ground paint in 2D, so clearing the paint here
+// matches the plan view as well as fixing the hatching.
+const COVERAGE_DECAL_Y = 12;
+
+// Height of a light's GROUND POOL above the surface it washes. It used to be 3,
+// i.e. 1 mm BELOW a GroundArea patch at elevation + 4 (and the ground_spot's
+// raking ellipse sat at exactly 4, dead coplanar). One mm is far under a single
+// depth-buffer LSB at plan viewing distances, so the pool and the paint traded
+// pixels — the hatching the "lighting layer" half of the banding report was
+// pointing at. A pool is light landing ON the walking surface, and painted
+// ground IS that surface, so the pool belongs ABOVE the paint — which is also
+// what the 2D plan already does (drawAll paints ground first, lights later).
+// 7 clears ground paint (4), the heat-map (5) and the vacuum-map / ground-text
+// decals (6) while staying under the blob shadows at 8, so a figure standing in
+// the pool still casts into it. Pool materials are all depthWrite:false, so
+// raising them can never occlude anything that writes depth.
+const LIGHT_POOL_Y = 7;
+
+// …and the height alone is not enough. 7 vs 4 is ~3 mm, which is still only
+// about ONE depth LSB at plan viewing distances (see the GROUND_DEPTH_LEVELS
+// note), so the pool/paint boundary keeps trading pixels. Bias the pool toward
+// the camera in depth-buffer terms the same way the patches are biased, with a
+// magnitude past GROUND_DEPTH_LEVELS so a pool clears the deepest paint layer.
+// Safe by construction: every pool material is transparent + depthWrite:false,
+// so the bias changes only which of the two the DEPTH TEST keeps — it can never
+// occlude opaque geometry, and blob shadows (also depthWrite:false) still sort
+// against the opaque depth exactly as before.
+const LIGHT_POOL_DEPTH_BIAS = {
+  polygonOffset: true,
+  polygonOffsetFactor: -(GROUND_DEPTH_LEVELS + 2),
+  polygonOffsetUnits: -(GROUND_DEPTH_LEVELS + 2),
+} as const;
+
 // Build context for a declarative primitive (shared by the initial-rig
 // accessory build AND a runtime prop-equip via _buildPrimitiveMesh). Carries the
 // LIVE anchor groups + shared material refs + per-rig metrics.
@@ -5314,8 +5441,14 @@ export class ThreeDRenderer {
       this._groundGroup.add(yMesh);
     }
 
-    for (const a of areas) {
+    // Depth layer per area: overlapping same-elevation areas are EXACTLY
+    // coplanar, so the later (painted-over) one must win the depth test.
+    // See groundDepthLevels / groundDepthOffset — level 0 = no offset.
+    const depthLevels = groundDepthLevels(areas);
+    for (let ai = 0; ai < areas.length; ai++) {
+      const a = areas[ai];
       if (a.hidden || a.points.length < 3) continue;
+      const depth = groundDepthOffset(depthLevels[ai]);
       const kd = GROUND_KINDS[a.kind] ?? GROUND_KINDS.grass;
       const isWater = a.kind === 'water';
       // Water gets a per-patch clone (shimmer drift); the shared skirt below
@@ -5337,6 +5470,7 @@ export class ThreeDRenderer {
       const mat = this._mat({
         color: hexToInt(kd.color), map: tex, side: THREE.DoubleSide,
         roughness: 0.95, metalness: 0,
+        ...depth,
         ...groundGlass(isWater, kd.opacity ?? 0.85),
       });
       const patch = new THREE.Mesh(new THREE.ShapeGeometry(shape), mat);
@@ -5391,6 +5525,9 @@ export class ThreeDRenderer {
         const skirt = new THREE.Mesh(geo, this._mat({
           color: hexToInt(kd.color), map: tex, side: THREE.DoubleSide,
           roughness: 0.95, metalness: 0,
+          // Same depth layer as its own top: a skirt ring can be coplanar with
+          // a sibling tier's skirt (nested terraces sharing a base elevation).
+          ...depth,
           ...groundGlass(isWater, kd.opacity ?? 0.85),
         }));
         skirt.receiveShadow = true;
@@ -11874,7 +12011,7 @@ export class ThreeDRenderer {
       const fp = this._w(s.x, s.y, 0);
       for (const o of [wedge, rim]) {
         o.rotation.x = -Math.PI / 2;          // lay the XY shape flat on the floor
-        o.position.set(fp.x, 12, fp.z);       // few mm up to avoid z-fighting the floor
+        o.position.set(fp.x, COVERAGE_DECAL_Y, fp.z);   // clear of the slab AND ground paint
         this._sensorGroup.add(o);
       }
     }
@@ -11935,7 +12072,11 @@ export class ThreeDRenderer {
       // Lay extrude shape flat on floor: extrude pulls along +Z. Rotate -PI/2
       // about X so depth points up (+Y world).
       cone.rotation.x = -Math.PI / 2;
-      const p = this._w(m.x, m.y, 0);
+      // Lift off the slab: the extrude's BOTTOM CAP sits at the group's y, so
+      // building at 0 made it exactly coplanar with the floor slab (and buried
+      // under ground paint at y=4) — visible as faint hatching wherever the
+      // cone crossed the floor. Same decal height as the mmWave coverage wedge.
+      const p = this._w(m.x, m.y, COVERAGE_DECAL_Y);
       cone.position.set(p.x, p.y, p.z);
       this._motionGroup.add(cone);
     }
@@ -19861,6 +20002,7 @@ export class ThreeDRenderer {
                   color: color.getHex(), transparent: true,
                   opacity: Math.min(0.55, 0.3 * intensity * flickerMul),
                   side: THREE.DoubleSide, depthWrite: false,
+                  ...LIGHT_POOL_DEPTH_BIAS,
                 }));
               ring.rotation.x = -Math.PI / 2;
               ring.position.y = -2;
@@ -19942,11 +20084,15 @@ export class ThreeDRenderer {
                   color: color.getHex(), transparent: true,
                   opacity: Math.min(0.4, (0.14 + 0.16 * (bri / 255)) * intensity * flickerMul),
                   side: THREE.DoubleSide, depthWrite: false,
+                  ...LIGHT_POOL_DEPTH_BIAS,
                 }));
               pool.rotation.x = -Math.PI / 2;
               // Local offset along -Z by throwD (composes with body yaw → world
               // azimuth); elongate along the throw for a raking-beam ellipse.
-              pool.position.set(0, 4 - bodyY, -throwD);
+              // LIGHT_POOL_Y in WORLD terms (the group already sits at bodyY):
+              // this ellipse used to land at exactly 4, dead coplanar with a
+              // GroundArea patch.
+              pool.position.set(0, LIGHT_POOL_Y - bodyY, -throwD);
               pool.scale.set(1, 1.9, 1);              // pre-rotation: y-scale = local +Z (the throw axis)
               pool.userData.outlineSkip = true;
               pool.userData.groundPool = true;
@@ -20072,6 +20218,7 @@ export class ThreeDRenderer {
               color: color.getHex(), transparent: true,
               opacity: Math.min(1, (0.18 + 0.22 * (bri / 255)) * intensity * flickerMul),
               side: THREE.DoubleSide, depthWrite: false,
+              ...LIGHT_POOL_DEPTH_BIAS,
             }));
           disc.rotation.x = -Math.PI / 2;
           // Elliptical feel for the flood pool (stretched along the local x/z).
@@ -20079,8 +20226,10 @@ export class ThreeDRenderer {
           // The pool represents light hitting the walking surface. For a light
           // sunk below the floor (negative height — a step light on a sunken
           // stair shaft) the surface it washes is lower too, so draw the pool
-          // at its own level; ceiling lights (height ≫ 3) still pool at y≈3.
-          const dp2 = this._w(l.x, l.y, Math.min(3, lightHeight(l) + 3) + lightGY);
+          // at its own level; anything mounted at or above LIGHT_POOL_Y pools
+          // at LIGHT_POOL_Y, which clears user ground paint (see the constant).
+          const dp2 = this._w(l.x, l.y,
+            Math.min(LIGHT_POOL_Y, lightHeight(l) + LIGHT_POOL_Y) + lightGY);
           disc.position.set(dp2.x, dp2.y, dp2.z);
           // Floor pool is also a click target — much bigger than the body, so
           // a bird's-eye click anywhere in the lit area toggles the light.

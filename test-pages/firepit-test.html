@@ -131,8 +131,13 @@
     ok(`B2 ${kind} ON builds an ember bed`, on.embers.length === 1, on.embers.length);
     ok(`B3 ${kind} ON casts a point light`, on.pointLights.length === 1, on.pointLights.length);
     ok(`B4 ${kind} ON draws a floor pool disc`, on.pools.length === 1, on.pools.length);
-    // The pool must be the light-pool disc at the walking surface, not the ember.
-    ok(`B5 ${kind} floor pool sits at the surface (y≈3)`, near(on.pools[0]?.position.y, 3), on.pools[0]?.position.y);
+    // The pool must be the light-pool disc at the walking surface, not the ember
+    // (y=66). LIGHT_POOL_Y is 7, not the original 3: a pool at 3 sat 1 mm UNDER
+    // a GroundArea patch (elevation + 4), which is far below one depth-buffer
+    // LSB at plan viewing distances, so pool and paint traded pixels — the
+    // "lighting layer" half of the ground-banding report. See the LIGHT_POOL_Y
+    // note in three-renderer.ts.
+    ok(`B5 ${kind} floor pool sits at the surface (y≈7)`, near(on.pools[0]?.position.y, 7), on.pools[0]?.position.y);
     ok(`B6 ${kind} flames are transparent (no inverted-hull shells on fire)`,
        on.flames.every(f => f.material.transparent && f.children.length === 0));
 

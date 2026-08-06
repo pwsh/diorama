@@ -508,8 +508,12 @@
       const lo = read(LOW), zero = read(0);
       // (A floor lamp's body group origin sits at the floor — the pole rises
       // from it — so the invariant is the DELTA, not an absolute height.)
+      // (Pool height is LIGHT_POOL_Y = 7, not the original 3: a pool at 3 sat
+      // 1 mm UNDER a GroundArea patch at elevation + 4, well below one depth
+      // LSB at plan distances, so the two traded pixels. The GRADE invariant
+      // this test is really about — the delta — is unchanged.)
       ok('H7 outdoor ground-standing lamp + its floor pool ride the grade',
-         near(zero.pool, 3) && near(lo.pool - zero.pool, LOW) &&
+         near(zero.pool, 7) && near(lo.pool - zero.pool, LOW) &&
          near(lo.lamp - zero.lamp, LOW) && zero.lamp != null,
          `lamp=${zero.lamp}/${lo.lamp} pool=${zero.pool}/${lo.pool}`);
       // H7b: fire pits are ground features too (GROUND_STANDING_LIGHT_KINDS) —
@@ -531,7 +535,7 @@
           const lo = readPit(kind, LOW), zero = readPit(kind, 0);
           ok(`H7b outdoor ${kind} + its floor pool ride the grade`,
              near(zero.body, 0) && near(lo.body - zero.body, LOW) &&
-             near(zero.pool, 3) && near(lo.pool - zero.pool, LOW),
+             near(zero.pool, 7) && near(lo.pool - zero.pool, LOW),   // LIGHT_POOL_Y (was 3)
              `body=${zero.body}/${lo.body} pool=${zero.pool}/${lo.pool}`);
         }
       }

@@ -379,6 +379,32 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Ground-stack depth-hatching fix ("banding")** (2026-08-06,
+  user-reported with a zoo-grounds screenshot; unreleased — on main
+  past v0.59.0). Reproduced headlessly via CDP on the real app;
+  layer-toggle isolation proved the dominant artifact lived in the
+  GROUND layer (the user's motion/lighting hypothesis was mostly
+  wrong but not baseless — both layers held real minor co-fighters,
+  fixed): areas painted over areas at the same elevation all built
+  at exactly y=4 — ZERO depth separation, rasteriser-interleaved
+  per pixel (zoo layers 19 areas; one depth LSB at stock frustum ≈
+  3 mm at 24 m, same order as the whole 2/4/6/8 stack, so y-nudges
+  can't fix it). Fix: `groundDepthLevels`/`groundDepthOffset` —
+  negative polygonOffset (factor+units; units-only measurably
+  failed) by same-elevation bbox-nesting level on patches + skirts,
+  level 0 byte-identical; motion cone base y0→`COVERAGE_DECAL_Y`
+  12; light pools y3→`LIGHT_POOL_Y` 7 + depth bias (pools now wash
+  OVER painted ground — matches 2D paint order; flagged as an
+  intended behavior change). Verified clean at stock AND
+  ceiling-widened frustums; before/after captures on zoo/
+  garden-center/bungalow; indoor plan pixel-diff below rerun noise.
+  Latent sibling deferred (no repro): yardFill y=2 is coplanar with
+  the neighborhood overlay water layer. Moved pins: firepit B5 +
+  terrain H7/H7b (pool-y constant only). Suites: TERRAIN 119/119,
+  FIREPIT 52/52, NBHDRENDER 95/95, PATHPOOL 62, YARDLIFE 59,
+  GLASSSEE 26, GHOSTALIGN 22, CUTAWAY 32, BGTEXTMULTI 373, SOLAR
+  144, NAVPARITY 70 all green.
+
 - **Airline identification on live aircraft** (2026-08-05,
   user-supplied reference table → `docs/research/airline-reference.md`;
   v0.59.0). New pure zero-import
