@@ -1077,6 +1077,111 @@
     r.updateFloor(mkFloor([]), scene);
   }
 
+  // ── M: TEMPORAL stability of the ground stack (the "flashing while the
+  // camera moves" pin). The static checks above only prove that ONE frame
+  // resolves the coplanar stack correctly; they cannot see a depth tie that
+  // resolves DIFFERENTLY from frame to frame, which is what an orbiting camera
+  // exposes and what a still capture can never catch.
+  //
+  // The probe: render the SAME scene at two camera azimuths 0.02° apart. That
+  // is a sub-pixel reprojection at plan framing, so a stable render must be
+  // essentially the same image; every pixel that changes is the depth test
+  // picking a different surface. Rasterisation is deterministic for a fixed
+  // pose, so a two-pose comparison is the headless stand-in for an orbit.
+  //
+  // NEGATIVE CONTROL is mandatory here — a pixel test that cannot fail is
+  // worthless. M3 strips the polygonOffset the builder assigned (i.e. restores
+  // the pre-v0.60.0 state) on the SAME geometry and asserts the change count
+  // explodes. If M3 ever stops failing, this probe has gone blind.
+  {
+    const gl = r._renderer && r._renderer.getContext();
+    const W = 18000, D = 14000;
+    // A base lawn with four same-elevation pads painted over it, two of which
+    // overlap each other — nesting levels 0/1/2, the real-plan shape.
+    const rect = (x0, y0, x1, y1) => [{ x: x0, y: y0 }, { x: x1, y: y0 }, { x: x1, y: y1 }, { x: x0, y: y1 }];
+    const stack = [
+      { id: 'base', kind: 'grass', points: rect(0, 0, W, D) },
+      { id: 'p1', kind: 'concrete', points: rect(1500, 1500, 11000, 9000) },
+      { id: 'p2', kind: 'blacktop', points: rect(6000, 4000, 16000, 12000) },
+      { id: 'p3', kind: 'mulch', points: rect(3000, 5000, 9000, 11000) },
+      { id: 'p4', kind: 'sand', points: rect(8000, 2000, 14000, 6500) },
+    ];
+    const tFloor = mkFloor(stack, { w: W, d: D });
+    r.updateFloor(tFloor, scene);
+    r.updateGroundAreas(stack);
+
+    const camAt = (azDeg) => {
+      const dist = Math.max(W, D) * 1.15, el = 30 * Math.PI / 180, a = azDeg * Math.PI / 180;
+      const rr = dist * Math.cos(el), h = dist * Math.sin(el);
+      return [[-rr * Math.sin(a), 600 + h, -rr * Math.cos(a)], [0, 600, 0]];
+    };
+    // Render + read back in ONE task: the drawing buffer is only cleared at
+    // composite time, so readPixels straight after an explicit render is valid
+    // whether or not preserveDrawingBuffer is set.
+    const frameAt = (azDeg) => {
+      const [pos, tgt] = camAt(azDeg);
+      r.setCameraView(pos, tgt);
+      r._renderer.render(r._scene, r._camera);
+      const w = gl.drawingBufferWidth, h = gl.drawingBufferHeight;
+      const buf = new Uint8Array(w * h * 4);
+      gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, buf);
+      return { buf, w, h };
+    };
+    // Changed fraction, restricted to pixels that are spatially FLAT in A: a
+    // sub-pixel move genuinely cannot alter a flat interior, so an edge-pixel
+    // difference is honest reprojection and only interior flips are the bug.
+    const changedFrac = (A, B) => {
+      const lum = (b, i) => 0.2126 * b[i] + 0.7152 * b[i + 1] + 0.0722 * b[i + 2];
+      let flat = 0, ch = 0;
+      for (let y = 1; y < A.h - 1; y++) {
+        for (let x = 1; x < A.w - 1; x++) {
+          const i = (y * A.w + x) * 4;
+          const c = lum(A.buf, i);
+          const g = Math.abs(lum(A.buf, i + 4) - lum(A.buf, i - 4))
+                  + Math.abs(lum(A.buf, i + A.w * 4) - lum(A.buf, i - A.w * 4));
+          if (g > 6) continue;
+          flat++;
+          if (Math.abs(lum(B.buf, i) - c) > 10) ch++;
+        }
+      }
+      return flat ? ch / flat : 1;
+    };
+    const stripOffsets = () => {
+      let n = 0;
+      r._groundGroup.traverse((o) => {
+        const ms = o.material ? (Array.isArray(o.material) ? o.material : [o.material]) : [];
+        for (const m of ms) if (m.polygonOffset) { m.polygonOffset = false; m.polygonOffsetFactor = 0; m.polygonOffsetUnits = 0; n++; }
+      });
+      return n;
+    };
+
+    if (!gl) {
+      ok('M0 WebGL context available for the temporal probe', false, 'no gl');
+    } else {
+      // M1: identical pose twice — the rasteriser is deterministic, so this is
+      // the zero of the metric. Without it a "small" number in M2 proves nothing.
+      const a0 = frameAt(20), a0b = frameAt(20);
+      const zero = changedFrac(a0, a0b);
+      ok('M1 an identical pose renders identically (metric zero)', zero === 0, `changed=${zero}`);
+
+      const A = frameAt(20), B = frameAt(20.02);
+      const moved = changedFrac(A, B);
+      ok('M2 a sub-pixel camera move leaves the ground stack stable',
+         moved < 0.002, `changed=${(moved * 100).toFixed(4)}% of flat pixels`);
+
+      const stripped = stripOffsets();
+      const A2 = frameAt(20), B2 = frameAt(20.02);
+      const movedNo = changedFrac(A2, B2);
+      ok('M3 NEGATIVE CONTROL: stripping the depth offsets makes it flicker',
+         stripped > 0 && movedNo > moved * 5 && movedNo > 0.005,
+         `stripped=${stripped} changed=${(movedNo * 100).toFixed(4)}% (vs ${(moved * 100).toFixed(4)}%)`);
+
+      // Rebuild so the offsets are back for anything that runs after this.
+      r.updateGroundAreas(stack);
+    }
+    r.updateFloor(mkFloor([]), scene);
+  }
+
   let pass = 0; const fails = [];
   for (const t of tests) { if (t.ok) pass++; else fails.push(t.name); }
   const total = tests.length, allPass = pass === total;

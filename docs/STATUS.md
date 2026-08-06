@@ -391,6 +391,31 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Moving-camera "flashing" investigation (temporal flicker
+  harness; depth fix EXONERATED)** (2026-08-06, user-reported "the
+  hashing appears worse now when moving the camera"; unreleased —
+  on main past v0.61.0; test-page-only change). Built an orbit
+  frame-pair flicker metric (0.02° pose pairs ≈ 0.25 px
+  reprojection; per-frame easings frozen after the metric's
+  zero-delta control exposed 2.35% contamination from wall-cutaway/
+  water/cloud advances). Verdict: v0.60.0's ground-depth fix
+  IMPROVED moving-camera stability 9.6×–79× (mean 47×) and holds at
+  the widened frustum where the PRE-fix state was ~2.5× worse — the
+  user's observed flashing is the WALL-CUTAWAY cross-fade (their
+  scene3d: cinematicOrbit + autoFollow + glassHouse + wallCutaway —
+  walls cross the foreground predicate continuously; masks show
+  every flipping pixel on walls, none on ground; wallCutaway:false
+  cuts their-plan churn 73×, glassHouse:false makes it 4× WORSE).
+  Alternatives re-measured and recorded (renderOrder cannot fix a
+  depth-TEST failure; units-only −8 works at el 35 but not grazing/
+  widened frustum). NEW terrain-test §M temporal pin (122/122, was
+  119): two-pose ground agreement 0.028% vs 7.2% stripped,
+  negative-controlled. REAL BUG found, fix queued: the cutaway ease
+  is per-FRAME (retention 0.9/frame) — frame-rate-dependent τ
+  (0.08 s at 120 Hz = snappier/flashier than designed, seconds on
+  slow devices). Suites: TERRAIN 122, PATHPOOL 62, YARDLIFE 59,
+  FIREPIT 52, NBHDRENDER 95, GLASSSEE 26, MECHANICAL 100, WINDOW 53.
+
 - **Avatar window-crowding fix (anchor claims + real free-range)**
   (2026-08-06, user-reported "avatars gather near windows like they
   are trying to escape"; unreleased — on main past v0.61.0).
