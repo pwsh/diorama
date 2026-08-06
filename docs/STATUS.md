@@ -1,6 +1,6 @@
 # Project status & pick-up guide
 
-Last updated: 2026-08-05, at **v0.59.0**. This is the single document to
+Last updated: 2026-08-06, at **v0.60.0**. This is the single document to
 read (alongside `CLAUDE.md`) to resume work with full context.
 
 ## Where things stand
@@ -376,12 +376,17 @@ instance.
   a fuselage/tow-banner text picker, an airline label field, and a
   full Airline block in the flight card incl. military callsign-word
   and hex-heuristic lines).
+  → v0.60.0 solid ground (the ground-stack depth-hatching fix:
+  paint-layered plans like the zoo no longer band — polygonOffset by
+  same-elevation nesting level on ground patches + skirts, motion
+  coverage decals lifted off the slab, light pools raised over
+  painted ground to match the 2D paint order; proven with headless
+  before/after captures at stock and widened frustums).
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
 - **Ground-stack depth-hatching fix ("banding")** (2026-08-06,
-  user-reported with a zoo-grounds screenshot; unreleased — on main
-  past v0.59.0). Reproduced headlessly via CDP on the real app;
+  user-reported with a zoo-grounds screenshot; v0.60.0). Reproduced headlessly via CDP on the real app;
   layer-toggle isolation proved the dominant artifact lived in the
   GROUND layer (the user's motion/lighting hypothesis was mostly
   wrong but not baseless — both layers held real minor co-fighters,
