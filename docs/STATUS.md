@@ -1,6 +1,6 @@
 # Project status & pick-up guide
 
-Last updated: 2026-08-06, at **v0.60.0**. This is the single document to
+Last updated: 2026-08-06, at **v0.61.0**. This is the single document to
 read (alongside `CLAUDE.md`) to resume work with full context.
 
 ## Where things stand
@@ -382,12 +382,18 @@ instance.
   coverage decals lifted off the slab, light pools raised over
   painted ground to match the 2D paint order; proven with headless
   before/after captures at stock and widened frustums).
+  → v0.61.0 measure twice (the HA Core 2026.8 panel-hosting fix:
+  the panel self-sizes instead of inheriting a height the new host
+  no longer provides — Docker-verified against real HA 2026.8.0 on
+  both viewports, byte-identical everywhere but the panel entry;
+  README + guide gain the 2026.8 upgrade note incl. the
+  handle_safe_area YAML trap).
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
 - **HA 2026.8 panel-hosting fix (self-sizing panel)** (2026-08-06,
   user-reported "major issues in the 3D view" on desktop + mobile
-  after cache clears; unreleased — on main past v0.60.0).
+  after cache clears; v0.61.0).
   Root-caused EMPIRICALLY, not from the report's framing: the
   deployed build + the user's REAL config (pulled from HA storage)
   rendered perfectly in every standalone probe (desktop + mobile

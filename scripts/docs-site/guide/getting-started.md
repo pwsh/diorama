@@ -68,6 +68,15 @@ panel_custom:
 **Diorama** now appears in your HA sidebar. Panel mode rides Home Assistant's
 own authentication, so there are no tokens to paste.
 
+> **Home Assistant 2026.8 note**: HA Core 2026.8 changed how custom panels are
+> hosted. Diorama **v0.61.0 or later** handles both old and new HA versions;
+> older Diorama builds render collapsed under HA 2026.8 (blank canvas, toolbar
+> at the top of the page). Update Diorama, then reset the frontend cache — in
+> the companion app: Settings ▸ Companion app ▸ Debugging ▸ *Reset frontend
+> cache* — and restart the app. Don't add the `handle_safe_area` option some
+> HA frontend notes mention: HA core 2026.8.0 rejects it and the panel fails
+> to load entirely.
+
 ## The panel vs. iframe modes
 
 The **native panel** above is the recommended setup: no iframe, no token, and

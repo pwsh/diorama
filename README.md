@@ -208,6 +208,16 @@ panel_custom:
     embed_iframe: false
 ```
 
+> **Home Assistant 2026.8 note**: HA Core 2026.8 changed how custom panels
+> are hosted (automatic safe-area handling; the panel host no longer passes
+> a height down). Diorama **v0.61.0 or later** sizes itself and works on
+> both old and new HA versions; older Diorama builds render collapsed
+> (blank canvas, toolbar at the top) under HA 2026.8 — update Diorama, then
+> reset the frontend cache (companion app: Settings ▸ Companion app ▸
+> Debugging ▸ Reset frontend cache) and restart the app. Do **not** add the
+> `handle_safe_area` option you may see mentioned in HA frontend notes —
+> HA core 2026.8.0 rejects it and the panel will fail to load.
+
 **4. Open it**
 
 **Diorama** appears in the HA sidebar. Panel mode rides HA's own
