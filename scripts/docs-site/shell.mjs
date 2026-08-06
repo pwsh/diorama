@@ -80,6 +80,20 @@ export function mdToHtml(md) {
   const lines = String(md).replace(/\r\n/g, '\n').split('\n');
   let out = '';
   let i = 0;
+  // GitHub-style heading slugs (per-document unique) so in-page anchors work.
+  const usedSlugs = new Map();
+  const slugOf = (raw) => {
+    const base = raw
+      .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')   // links/images → text
+      .replace(/[`*_]/g, '')                        // inline markers
+      .toLowerCase()
+      .replace(/[^a-z0-9\s-]/g, '')
+      .trim()
+      .replace(/\s+/g, '-') || 'section';
+    const n = usedSlugs.get(base) || 0;
+    usedSlugs.set(base, n + 1);
+    return n === 0 ? base : `${base}-${n + 1}`;
+  };
   const inline = (s) => htmlEsc(s)
     .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img loading="lazy" src="$2" alt="$1">')
     .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>')
@@ -98,7 +112,12 @@ export function mdToHtml(md) {
       continue;
     }
     const h = ln.match(/^(#{1,4})\s+(.*)$/);
-    if (h) { out += `<h${h[1].length}>${inline(h[2])}</h${h[1].length}>\n`; i++; continue; }
+    if (h) {
+      const lvl = h[1].length;
+      const id = slugOf(h[2]);
+      out += `<h${lvl} id="${id}">${inline(h[2])}<a class="hlink" href="#${id}" aria-label="Link to this section">#</a></h${lvl}>\n`;
+      i++; continue;
+    }
     if (/^---+\s*$/.test(ln)) { out += '<hr>\n'; i++; continue; }
     if (/^\|/.test(ln)) {
       const rows = [];
@@ -242,6 +261,11 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .prose { max-width: 78ch; }
 .prose h1 { font-size: 26px; margin: 0 0 10px; }
 .prose h2 { font-size: 20px; margin: 34px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+.prose .hlink { margin-left: 8px; color: var(--muted); text-decoration: none; opacity: 0;
+  font-weight: 400; transition: opacity 0.12s; }
+.prose h1:hover .hlink, .prose h2:hover .hlink, .prose h3:hover .hlink,
+.prose h4:hover .hlink, .prose :target .hlink { opacity: 0.8; }
+.prose h1, .prose h2, .prose h3, .prose h4 { scroll-margin-top: 70px; }
 .prose h3 { font-size: 16px; margin: 24px 0 8px; }
 .prose p, .prose li { color: var(--text); }
 .prose li { margin: 3px 0; }
