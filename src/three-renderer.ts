@@ -2054,6 +2054,16 @@ const MAX_FAN_RPS = 2.5;
 // Fan spin easing time-constant (s): a speed change / reverse / spin-down ramps
 // over ~this long rather than snapping (the valve/EV-pulse eased idiom).
 const FAN_SPIN_TAU = 0.5;
+// Foreground wall-cutaway fade time constant (s) — see _updateWallCutaway.
+// PROVENANCE: the shipped ease was a per-FRAME `+= (target - cur) * 0.1`, i.e.
+// 0.9 retention per frame, whose real time constant scaled with the refresh
+// rate (≈0.16 s at 60 fps, ≈0.08 s at 120 Hz — twice as flashy on a high-
+// refresh display — and multiple seconds on a slow device). This constant IS
+// that 60 fps value written down: τ = -(1/60)/ln(0.9). The ease is now
+// `1 - exp(-dt/τ)`, so the fade takes the same wall-clock time everywhere.
+// SYMMETRIC by design: the original used one factor for BOTH fade directions
+// (down to cutFloor and back up to baseOpacity) — keep it that way.
+const CUTAWAY_FADE_TAU = -(1 / 60) / Math.log(0.9);   // ≈ 0.1582 s
 // Floor-fan oscillation sweep: ±45° at ~0.15 Hz (a slow left-right head sweep).
 const FLOOR_FAN_OSC_AMP = Math.PI / 4;   // 45° each way
 const FLOOR_FAN_OSC_HZ = 0.15;
@@ -7811,7 +7821,17 @@ export class ThreeDRenderer {
   // sees inside. Runs per-frame from _animate (camera damping moves the camera
   // between input events). Only dot products over the pre-collected tagged
   // meshes — no scene traversal.
-  private _updateWallCutaway(): void {
+  //
+  // `dt` is the animation loop's frame delta (s). The ease is dt-BASED
+  // (CUTAWAY_FADE_TAU) so the fade lasts the same wall-clock time at 30, 60 or
+  // 144 fps — it used to be a fixed per-frame factor, which made the cutaway
+  // twice as snappy on a 120 Hz display and glacial on a slow device. The
+  // closed form `1 - exp(-dt/τ)` is the EXACT solution of that first-order
+  // ease, so it needs no substepping (the ω·h divergence gotcha belongs to the
+  // semi-implicit spring integrators — stepLerp / the nav carrot — not here).
+  // The default keeps a bare `_updateWallCutaway()` call meaning "one 60 fps
+  // frame", which is exactly what the old fixed factor did.
+  private _updateWallCutaway(dt: number = 1 / 60): void {
     if (!this._camera) return;
     const cam = this._camera.position;
     const camHoriz = Math.hypot(cam.x, cam.z);
@@ -7819,6 +7839,11 @@ export class ThreeDRenderer {
     // Camera nearly overhead (top view) → the horizontal direction is
     // undefined and no wall is "in front"; restore everything.
     const overhead = camHoriz < Math.max(this._fw, this._fd) * 1.35 * 0.12;
+    // One blend factor for the whole pass (zero per-mesh cost). dt clamped the
+    // same way _animate clamps its own frameDt, so a tab-resume gap eases 0.1 s
+    // worth of fade instead of jump-cutting; a garbage dt falls back to 60 fps.
+    const step = Number.isFinite(dt) ? Math.min(0.1, Math.max(0, dt)) : 1 / 60;
+    const k = 1 - Math.exp(-step / CUTAWAY_FADE_TAU);
     const apply = (mesh: THREE.Mesh) => {
       const cut = mesh.userData.wallCut as
         { mx: number; mz: number; nx: number; nz: number } | undefined;
@@ -7840,8 +7865,8 @@ export class ThreeDRenderer {
         // a higher minimum so the flight stays legible while faded.
         if (foreground) target = (mesh.userData.cutFloor as number) ?? 0.06;
       }
-      // Ease toward the target so walls fade rather than pop.
-      mat.opacity += (target - mat.opacity) * 0.1;
+      // Ease toward the target so walls fade rather than pop (dt-based — see `k`).
+      mat.opacity += (target - mat.opacity) * k;
       mat.transparent = true;
       // Persist the eased value so the NEXT rebuild of this same wall is born
       // here instead of at baseOpacity (see _wallFade). Covers both fade
@@ -25686,7 +25711,7 @@ export class ThreeDRenderer {
     // move the camera above; this simply follows wherever they left it.
     this._updateDynamicFrustum();
     // Foreground wall cutaway — cheap per-frame dot products over tagged walls.
-    this._updateWallCutaway();
+    this._updateWallCutaway(frameDt);
     // Spin fan rotors (own method so it's driveable deterministically in tests).
     this._advanceFanSpin(frameDt);
     // Outdoor weather effects — buffer mutation only (no per-frame allocation);

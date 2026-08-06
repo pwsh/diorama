@@ -19,6 +19,14 @@
   // stable per-mesh identity (_wallFade / _wallFadeGhost in three-renderer.ts,
   // the _plantBlend / _curtainBlend idiom). See CLAUDE.md "Glass house & wall
   // cutaway".
+  //
+  // T8/T9 guard a SECOND defect found later in the same fader: the ease was a
+  // fixed per-FRAME factor, so its time constant scaled with the refresh rate
+  // (≈0.16 s at 60 fps, ≈0.08 s at 120 Hz — twice as flashy on a high-refresh
+  // display — and SECONDS on a slow device; measured at 2.1 s in a 4.5 fps
+  // headless capture). It is now `1 - exp(-dt/τ)` with τ pinned at the designed
+  // 60 fps value. `_updateWallCutaway()` with NO argument still means exactly
+  // one 60 fps frame, which is why every pin below T7 is unchanged.
   const mod = await import('./assets/three-renderer.js?v=' + Date.now());
   const r = new mod.ThreeDRenderer(document.getElementById('c'));
   await r.load();
@@ -272,6 +280,86 @@
       last = cur;
     }
     ok('T7 predicate stable over 150 static frames', flips === 0, `${flips}`);
+  }
+
+  // ── T8: the fade is dt-BASED — identical wall-clock fade at any frame rate. ─
+  //
+  // Fresh floor → settle the south wall down to its cut floor → flip the camera
+  // so the target becomes baseOpacity → advance exactly 0.5 SIMULATED seconds,
+  // subdivided two different ways. Under the old per-FRAME factor those two
+  // subdivisions covered 1-0.9^15 = 79.4 % (30 fps) vs 1-0.9^60 = 99.8 %
+  // (120 Hz) of the gap — a 0.20 spread. dt-based must agree to float noise.
+  const TAU = -(1 / 60) / Math.log(0.9);   // ≈ 0.1582 s — the designed 60 fps τ
+  {
+    // Rebuild from scratch each time so both rates start from the SAME settled
+    // opacity (200 frames of convergence leaves ≲1e-9 of the gap).
+    const freshClimb = () => {
+      r.clearTransientGroups();
+      r.updateFloor(baseFloor({ walls: roomWalls(), furniture: [] }), sc());
+      camFront(); settle();
+      const fi = fadedIdx()[0];
+      const start = snap()[fi];
+      const base = r._cutawayWalls[fi].userData.baseOpacity;
+      camBack();                                   // target flips to base
+      return { fi, start, base };
+    };
+    const runFor = (dt, seconds) => {
+      const c = freshClimb();
+      const steps = Math.round(seconds / dt);
+      for (let i = 0; i < steps; i++) r._updateWallCutaway(dt);
+      return { ...c, frac: (snap()[c.fi] - c.start) / (c.base - c.start) };
+    };
+    const a = runFor(1 / 30, 0.5);    // 15 coarse frames
+    const b = runFor(1 / 120, 0.5);   // 60 fine frames
+    ok('T8 both rates start from the same settled opacity',
+       Math.abs(a.start - b.start) < 1e-6 && a.base === b.base,
+       `${a.start.toExponential(2)} vs ${b.start.toExponential(2)}`);
+    ok('T8 30 fps and 120 Hz cover the same fraction of the gap in 0.5 s',
+       Math.abs(a.frac - b.frac) < 1e-6, `${a.frac.toFixed(6)} vs ${b.frac.toFixed(6)}`);
+    ok('T8 that fraction is the analytic 1 - exp(-t/τ)',
+       Math.abs(a.frac - (1 - Math.exp(-0.5 / TAU))) < 1e-3,
+       `${a.frac.toFixed(6)} vs ${(1 - Math.exp(-0.5 / TAU)).toFixed(6)}`);
+
+    // The bare no-arg call must remain exactly ONE 60 fps frame — that is what
+    // keeps T1–T7 (and glass-test) byte-identical to the pre-fix behaviour.
+    const c1 = freshClimb(); r._updateWallCutaway();        // default dt
+    const v1 = snap()[c1.fi];
+    const c2 = freshClimb(); r._updateWallCutaway(1 / 60);  // explicit 60 fps
+    const v2 = snap()[c2.fi];
+    ok('T8 no-arg call == one explicit 1/60 s frame', Math.abs(v1 - v2) < 1e-12,
+       `${v1.toFixed(12)} vs ${v2.toFixed(12)}`);
+    // …and that one frame is the legacy 0.1 step (τ derives FROM 0.9 retention).
+    const legacy = c1.start + (c1.base - c1.start) * 0.1;
+    ok('T8 one 60 fps frame reproduces the legacy 0.1 step', Math.abs(v1 - legacy) < 1e-9,
+       `${v1.toFixed(9)} vs ${legacy.toFixed(9)}`);
+  }
+
+  // ── T9: dt is clamped + guarded (tab resume / garbage dt can't jump-cut). ──
+  {
+    const freshClimb = () => {
+      r.clearTransientGroups();
+      r.updateFloor(baseFloor({ walls: roomWalls(), furniture: [] }), sc());
+      camFront(); settle();
+      const fi = fadedIdx()[0];
+      const start = snap()[fi];
+      const base = r._cutawayWalls[fi].userData.baseOpacity;
+      camBack();
+      return { fi, start, base };
+    };
+    const step = (dt) => { const c = freshClimb(); r._updateWallCutaway(dt); return { ...c, v: snap()[c.fi] }; };
+    const huge = step(5);         // 5 s tab-resume gap
+    const clamp = step(0.1);      // the animation loop's own frameDt ceiling
+    ok('T9 a 5 s gap eases exactly the 0.1 s clamp (no jump cut)',
+       Math.abs(huge.v - clamp.v) < 1e-12, `${huge.v.toFixed(9)} vs ${clamp.v.toFixed(9)}`);
+    ok('T9 clamped step stays inside [start, base]',
+       huge.v > huge.start && huge.v < huge.base, `${huge.v.toFixed(4)}`);
+    const nan = step(NaN);
+    ok('T9 a non-finite dt falls back to 60 fps (never NaN opacity)',
+       isFinite(nan.v) && Math.abs(nan.v - (nan.start + (nan.base - nan.start) * 0.1)) < 1e-9,
+       `${nan.v}`);
+    const neg = step(-1);
+    ok('T9 a negative dt is inert (no backward jump)',
+       Math.abs(neg.v - neg.start) < 1e-9, `${neg.v.toFixed(9)} vs ${neg.start.toFixed(9)}`);
   }
 
   document.title = `CUTAWAY ${fails.length === 0 ? 'PASS' : 'FAIL'} ${pass}/${n}`;

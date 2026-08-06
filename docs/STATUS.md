@@ -391,6 +391,31 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Wall-cutaway ease made frame-rate-independent + demo republish**
+  (2026-08-06; unreleased — on main past v0.61.0). (1) The cutaway
+  fade's fixed 0.1/frame factor → exact closed form
+  `1 − exp(−dt/τ)`, τ derived FROM the old constant
+  (`-(1/60)/ln 0.9` ≈ 0.158 s — 60 fps behavior bit-identical, all
+  32 existing pins reproduce to ~1e-17); at 120 Hz the old ease ran
+  τ≈0.08 s (flashier than designed — a real contributor to the
+  motion-flashing report), at 4.5 fps ~2 s. Measured on the user's
+  plan: mean orbit flicker 0.0228→0.0128 %, max 0.21→0.047 %, spike
+  steps 1→0. A motion-lengthened τ was measured and REJECTED (worse
+  mean, 1.42 s settle > the 1 s bar). CUTAWAY 32→41 (T8
+  dt-invariance negative-controlled + T9 tab-resume/NaN guards);
+  GLASSSEE 26, TERRAIN 122 green. Harness trap recorded: copy test
+  pages FIRST, dist assets SECOND. (2) THE USER'S FLASHING VIDEOS
+  ROOT-CAUSED COMPLETELY: they were filmed on the gh-pages DEMO,
+  which was silently STUCK AT v0.59.0 (pre-banding-fix — the build
+  the temporal harness measured 25–79× worse in motion): the
+  v0.61.0 docs:publish reported done but the push never landed.
+  Republished (gh-pages 2925bb7), CDN-verified serving 0.61.0.
+  PROCESS RULE: after docs:publish, ALWAYS verify
+  `git ls-remote github gh-pages` moved. The "GPU-dependent
+  polygonOffset" theory is WITHDRAWN — the frame-diffed videos
+  showed the zero-offset v0.59 renderer; v0.60's exoneration
+  stands in full.
+
 - **Moving-camera "flashing" investigation (temporal flicker
   harness; depth fix EXONERATED)** (2026-08-06, user-reported "the
   hashing appears worse now when moving the camera"; unreleased —
@@ -410,10 +435,8 @@ instance.
   depth-TEST failure; units-only −8 works at el 35 but not grazing/
   widened frustum). NEW terrain-test §M temporal pin (122/122, was
   119): two-pose ground agreement 0.028% vs 7.2% stripped,
-  negative-controlled. REAL BUG found, fix queued: the cutaway ease
-  is per-FRAME (retention 0.9/frame) — frame-rate-dependent τ
-  (0.08 s at 120 Hz = snappier/flashier than designed, seconds on
-  slow devices). Suites: TERRAIN 122, PATHPOOL 62, YARDLIFE 59,
+  negative-controlled. REAL BUG found and FIXED in the follow-up entry above: the
+  cutaway ease was per-FRAME (frame-rate-dependent τ). Suites: TERRAIN 122, PATHPOOL 62, YARDLIFE 59,
   FIREPIT 52, NBHDRENDER 95, GLASSSEE 26, MECHANICAL 100, WINDOW 53.
 
 - **Avatar window-crowding fix (anchor claims + real free-range)**
