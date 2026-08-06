@@ -1,6 +1,6 @@
 # Project status & pick-up guide
 
-Last updated: 2026-08-05, at **v0.58.0**. This is the single document to
+Last updated: 2026-08-05, at **v0.59.0**. This is the single document to
 read (alongside `CLAUDE.md`) to resume work with full context.
 
 ## Where things stand
@@ -369,12 +369,19 @@ instance.
   kinematic escape steering, GPS carrot clamping and fenced-yard
   sweeps; mmWave sensors gain the same Demo-avatar checkbox motion
   sensors had).
+  → v0.59.0 true colors (airline identification on live ADS-B
+  aircraft: 129-operator callsign lookup painting real brand liveries
+  on the 3D rigs and 2D darts through one precedence ladder —
+  military/PIA/regionals veto — plus slogans, spoken ATC callsigns,
+  a fuselage/tow-banner text picker, an airline label field, and a
+  full Airline block in the flight card incl. military callsign-word
+  and hex-heuristic lines).
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
 - **Airline identification on live aircraft** (2026-08-05,
   user-supplied reference table → `docs/research/airline-reference.md`;
-  unreleased — on main past v0.58.0). New pure zero-import
+  v0.59.0). New pure zero-import
   `src/airlines.ts` (129 operators by ICAO callsign prefix: name/
   shortName/IATA/ATC telephony/slogan/brand colors/operatesFor/kind
   incl. 'pia' for FFL/DCM; military callsign-word table + the
