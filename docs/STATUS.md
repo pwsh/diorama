@@ -372,6 +372,34 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Airline identification on live aircraft** (2026-08-05,
+  user-supplied reference table → `docs/research/airline-reference.md`;
+  unreleased — on main past v0.58.0). New pure zero-import
+  `src/airlines.ts` (129 operators by ICAO callsign prefix: name/
+  shortName/IATA/ATC telephony/slogan/brand colors/operatesFor/kind
+  incl. 'pia' for FFL/DCM; military callsign-word table + the
+  AE0000–AFFFFF hex heuristic; `airlineForCallsign`/
+  `militaryCallsignInfo`/`spokenCallsign`/`resolveAirlineLivery`).
+  Identified civil aircraft tint fuselage=primary/accent=secondary
+  through `_buildAircraftModel`'s existing tint param, 2D dart tints
+  primary — ONE precedence ladder both views call (military skin/
+  olive > PIA suppression > kind-'pia' > colorless regionals veto;
+  the 2D dart honors the SKIN veto too — a no-flag category-A6 skin
+  must not paint on the plan what the sky leaves generic).
+  `FlightsConfig.airlineColors?` (absent=ON) + `sideText?`/
+  `bannerText?` (fuselage/tow-banner content: auto/operator/airline/
+  slogan/callsign/none; 'auto' golden-pinned byte-identical);
+  `airline` joins the label-field grid (10 checkboxes). Flight card
+  gains the Airline block (name/IATA/spoken form/slogan/kind/
+  operates-as/swatches; military callsign-word line + hex-heuristic
+  note; PIA = "not a real airline", no branding). Regionals carry
+  NO colours by design (SkyWest flies for four majors — inheriting
+  would fabricate; operatesFor shows instead). Startup +≈27.7 kB raw
+  (airlines table 6.6 kB gzip). Tests: FLIGHTS 827/827 (was 716),
+  FLIGHTSRENDER 591/591 (was 555), FLIGHTSUI 359/359 (was 313),
+  alert-center 67/67; flights-ui header recipe gained the missing
+  flights.mod.js line (the Planner section dies without it).
+
 - **Docs: demo mode + solar gallery subject** (2026-08-05,
   user-directed post-v0.58.0; docs-only, published to gh-pages).
   Guide: outdoor-weather.md gains the "Hand-authored demo weather"

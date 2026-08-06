@@ -245,8 +245,13 @@ export function emergencySquawk(fp: { squawk?: string | null }): string | null {
 // Which lines a flight's label plate may carry. The default (an absent
 // `FlightsConfig.labelFields`) is today's shipped two-line plate —
 // callsign + real altitude — so the field is purely additive.
+// `airline` is the OPERATING CARRIER resolved from the callsign prefix
+// (src/airlines.ts) rather than a field the feed carries — which is exactly why
+// its text is INJECTED (see flightFieldText's trailing `airline` parameter):
+// this module stays zero-import, so it never performs the lookup itself.
 export const FLIGHT_LABEL_FIELDS = [
-  'callsign', 'reg', 'type', 'operator', 'alt', 'speed', 'trend', 'squawk', 'dist',
+  'callsign', 'reg', 'type', 'operator', 'airline',
+  'alt', 'speed', 'trend', 'squawk', 'dist',
 ] as const;
 export type FlightLabelField = typeof FLIGHT_LABEL_FIELDS[number];
 export const FLIGHT_LABEL_FIELDS_DEFAULT: FlightLabelField[] = ['callsign', 'alt'];
@@ -297,13 +302,22 @@ export function flightIdentifier(fp: FlightPoint, suppress: boolean): string {
 // distance 0.5 nm) so a live aircraft doesn't repaint its plate every poll.
 // `suppress` is the PIA identity gate; a field it withholds returns '' and
 // simply drops out of the line.
+//
+// `airline` is INJECTED (trailing, optional, default ''): the operating carrier
+// is resolved from the callsign prefix by src/airlines.ts, and this module is
+// zero-import by contract — so the CALLER (three-renderer / canvas-render) does
+// the lookup and hands the resolved short name over. A stale caller omitting it
+// simply renders the `airline` field empty, which drops out of the line exactly
+// like a missing registration does.
 export function flightFieldText(field: string, fp: FlightPoint,
-                                ident: string, suppress: boolean): string {
+                                ident: string, suppress: boolean,
+                                airline = ''): string {
   switch (field) {
     case 'callsign': return ident;
     case 'reg':      return suppress ? '' : (fp.reg ?? '');
     case 'type':     return suppress ? '' : (fp.typeCode ?? '');
     case 'operator': return suppress || !fp.operator ? '' : fp.operator.slice(0, 22);
+    case 'airline':  return suppress ? '' : (airline || '').slice(0, 22);
     case 'alt':      return `${(Math.round(fp.altFt / 100) * 100).toLocaleString('en-US')} ft`;
     case 'speed':    return fp.gsKt == null ? '' : `${Math.round(fp.gsKt / 10) * 10} kt`;
     case 'trend': {
@@ -321,18 +335,123 @@ export function flightFieldText(field: string, fp: FlightPoint,
 // join into a detail line. Empty fields (no registration, level flight, …)
 // drop out; if EVERY field resolves empty the identifier stands alone.
 export function flightLabelLines(
-  fp: FlightPoint, fields: string[], privacyDim: boolean,
+  fp: FlightPoint, fields: string[], privacyDim: boolean, airline = '',
 ): { top: string; sub: string } {
   const suppress = flightIdentitySuppressed(fp, privacyDim);
   const badge = flightPrivacyDimmed(fp, privacyDim) ? '🔒 ' : '';
   const ident = badge + flightIdentifier(fp, suppress);
   const parts: string[] = [];
   for (const f of fields) {
-    const t = flightFieldText(f, fp, ident, suppress);
+    const t = flightFieldText(f, fp, ident, suppress, airline);
     if (t) parts.push(t);
   }
   if (!parts.length) parts.push(ident);
   return { top: parts[0], sub: parts.slice(1).join(' · ') };
+}
+
+// ── Fuselage & banner text customization ───────────────────────────────────
+// What the aircraft carries down its own flanks, and what a piston single's
+// towed banner says. Both are pure resolvers over an INJECTED airline lookup
+// (the `airline` parameter above, same reason) plus the layout the shipped
+// `auto` behavior already produced, so 'auto' is byte-identical by construction
+// rather than by re-derivation.
+export const FLIGHT_SIDE_TEXT_MODES = [
+  'auto', 'operator', 'airline', 'slogan', 'callsign', 'none',
+] as const;
+export type FlightSideTextMode = typeof FLIGHT_SIDE_TEXT_MODES[number];
+
+export const FLIGHT_BANNER_TEXT_MODES = [
+  'auto', 'airline', 'slogan', 'callsign',
+] as const;
+export type FlightBannerTextMode = typeof FLIGHT_BANNER_TEXT_MODES[number];
+
+// The airline strings a caller injects. Deliberately a plain shape rather than
+// airlines.ts's AirlineInfo — importing that type would break the zero-import
+// contract, and these two strings are all the resolvers need.
+export interface FlightAirlineText { shortName?: string; slogan?: string }
+
+// Normalize a stored/imported mode. Unknown values AND the default itself
+// collapse to `undefined` — "use the shipped behavior" — the labelFields /
+// modelScale "exactly the default clears" idiom applied to an enum.
+export function sanitizeSideText(v: unknown): FlightSideTextMode | undefined {
+  const s = typeof v === 'string' ? v.trim().toLowerCase() : '';
+  return s && s !== 'auto' && (FLIGHT_SIDE_TEXT_MODES as readonly string[]).includes(s)
+    ? (s as FlightSideTextMode) : undefined;
+}
+
+export function sanitizeBannerText(v: unknown): FlightBannerTextMode | undefined {
+  const s = typeof v === 'string' ? v.trim().toLowerCase() : '';
+  return s && s !== 'auto' && (FLIGHT_BANNER_TEXT_MODES as readonly string[]).includes(s)
+    ? (s as FlightBannerTextMode) : undefined;
+}
+
+// Resolve the fuselage marking pair.
+//
+// `base` is the AUTO layout the renderer already computed (operator broadside +
+// identity along the spine on a big fuselage, identity on the flanks otherwise)
+// — passing it in rather than re-deriving it is what makes `'auto'` provably
+// byte-identical to the shipped path.
+//
+// PIA gate: a suppressed aircraft's identity is withheld on every surface, so
+// only `'none'` (strictly less information) is honored; every other mode falls
+// back to `base`, which under suppression is already the bare hex.
+//
+// Each non-auto mode replaces the FLANK text and keeps `base.top` — so a big
+// airliner showing its slogan broadside still reads its identity from above,
+// and a small airframe (whose base.top is empty) simply carries the one
+// marking it has room for. An unresolvable choice (no airline, no slogan, no
+// operator) falls back to `base` rather than blanking the airframe.
+export function resolveFlightSideText(
+  mode: FlightSideTextMode | undefined,
+  base: { flank: string; top: string },
+  fp: { operator?: string | null },
+  ident: string, suppress: boolean,
+  airline?: FlightAirlineText | null,
+): { flank: string; top: string } {
+  const m = sanitizeSideText(mode);
+  if (!m) return base;
+  if (m === 'none') return { flank: '', top: '' };
+  if (suppress) return base;
+  switch (m) {
+    case 'callsign':
+      return { flank: ident, top: '' };
+    case 'operator': {
+      const op = (fp?.operator ?? '').trim();
+      return op ? { flank: op, top: base.top } : base;
+    }
+    case 'airline': {
+      const s = (airline?.shortName ?? '').trim();
+      return s ? { flank: s, top: base.top } : base;
+    }
+    case 'slogan': {
+      const sl = (airline?.slogan ?? '').trim();
+      if (sl) return { flank: sl, top: base.top };
+      const s = (airline?.shortName ?? '').trim();
+      return s ? { flank: s, top: base.top } : base;
+    }
+    default:
+      return base;
+  }
+}
+
+// What the towed banner says. `'auto'`/`'callsign'` are the shipped identity;
+// the other two fall back through shortName to the identity, so a banner is
+// never blank. (A PIA aircraft never tows a banner in the first place — the
+// renderer's `wantBanner` requires `!suppress` — but the gate is repeated here
+// so the pure resolver is safe on its own.)
+export function resolveFlightBannerText(
+  mode: FlightBannerTextMode | undefined,
+  ident: string, suppress: boolean,
+  airline?: FlightAirlineText | null,
+): string {
+  const m = sanitizeBannerText(mode);
+  if (!m || suppress) return ident;
+  if (m === 'callsign') return ident;
+  if (m === 'airline') return (airline?.shortName ?? '').trim() || ident;
+  // 'slogan'
+  return (airline?.slogan ?? '').trim()
+    || (airline?.shortName ?? '').trim()
+    || ident;
 }
 
 // ── User-configurable glow rules (research docs/research/flight-glow-rules.md) ─

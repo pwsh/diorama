@@ -2060,6 +2060,14 @@ export class ThreeView extends LitElement {
                           // configRev — already in _keyFlights — covers an edit,
                           // and a live rig re-skins in place on the next poll.
                           militarySkins: flCfg?.militarySkins,
+                          // Airline livery tint + fuselage / tow-banner text
+                          // (docs/research/airline-reference.md). Config-path
+                          // like the rest, so configRev — already in
+                          // _keyFlights — covers an edit; a live rig repaints
+                          // in place on the next poll.
+                          airlineColors: flCfg?.airlineColors,
+                          sideText: flCfg?.sideText,
+                          bannerText: flCfg?.bannerText,
                           // User glow rules (docs/research/flight-glow-rules.md).
                           // Config-path like every other opt here, so configRev
                           // — already in the key — covers an edit; no new

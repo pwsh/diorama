@@ -21,11 +21,15 @@ import {
   FLIGHTS_DEFAULT_RADIUS_NM, FLIGHT_SHELL_DEFAULT_RADIUS_M,
   flightBearingDistance, isEmergency,
   FLIGHT_GLOW_PATTERNS, MAX_FLIGHT_GLOW_RULES,
+  FLIGHT_SIDE_TEXT_MODES, FLIGHT_BANNER_TEXT_MODES,
 } from '../flights.js';
 import type {
   FlightPoint, FlightGlowRule, FlightGlowPattern, FlightGlowCriteria,
 } from '../flights.js';
 import { aircraftArchetype } from '../aircraft-types.js';
+import {
+  airlineForCallsign, militaryCallsignInfo, spokenCallsign, usMilitaryHexHeuristic,
+} from '../airlines.js';
 import { compass8 } from '../geo.js';
 
 // ── Floor settings modal ─────────────────────────────────────────────────
@@ -937,6 +941,25 @@ const FLIGHT_ARCHETYPE_LABEL: Record<string, string> = {
   heli: 'helicopter',
 };
 
+// AirlineKind → the card's chip text. PRESENTATION ONLY — deliberately not in
+// airlines.ts, which owns the data and stays free of UI copy (the
+// summarizeGlowCriteria precedent).
+const AIRLINE_KIND_LABEL: Record<string, string> = {
+  mainline: 'MAINLINE', lcc: 'LOW-COST', regional: 'REGIONAL', cargo: 'CARGO',
+  intl: 'INTERNATIONAL', charter: 'CHARTER', fractional: 'FRACTIONAL',
+  freight: 'FREIGHT', pia: 'PRIVACY',
+};
+
+// Fuselage / tow-banner text mode → dropdown copy. Presentation only, same
+// discipline as AIRLINE_KIND_LABEL above.
+const SIDE_TEXT_LABEL: Record<string, string> = {
+  auto: 'Automatic', operator: 'Operator', airline: 'Airline',
+  slogan: 'Slogan', callsign: 'Callsign', none: 'None',
+};
+const BANNER_TEXT_LABEL: Record<string, string> = {
+  auto: 'Automatic', airline: 'Airline', slogan: 'Slogan', callsign: 'Callsign',
+};
+
 @customElement('diorama-flight-modal')
 export class FlightModal extends LitElement {
   @property({ attribute: false }) planner!: Planner;
@@ -1016,6 +1039,23 @@ export class FlightModal extends LitElement {
       bearingLine = `${fp.distNm.toFixed(1)} nm`;
     }
 
+    // ── Airline / operator identity (docs/research/airline-reference.md) ────
+    // Resolved from the callsign PREFIX, which is the only carrier signal an
+    // ADS-B ident actually carries. Three mutually exclusive outcomes:
+    //   • a real carrier   → the full block below (name, IATA, spoken form,
+    //     slogan, kind, "operates as", colour swatches)
+    //   • a PIA pseudo-op  → the honest "not a real airline" line, NEVER
+    //     branding: FFL/DCM identify the flight-planning service that issued a
+    //     Privacy ICAO Address, not an operator
+    //   • a military word  → the callsign-word line, plus the hex-range note
+    // A PIA-suppressed aircraft resolves none of them (its ident is withheld).
+    const airline = anon ? null : airlineForCallsign(fp.callsign);
+    const airlinePia = airline?.kind === 'pia';
+    const airlineReal = airline && !airlinePia ? airline : null;
+    const spoken = anon ? null : spokenCallsign(fp.callsign, airline);
+    const milWord = anon ? null : militaryCallsignInfo(fp.callsign);
+    const milHex = usMilitaryHexHeuristic(fp.hex);
+
     const flags = [
       isEmergency(fp) ? this._chip(`EMERGENCY · ${String(fp.emergency).toUpperCase()}`, '#ff5252') : null,
       fp.military ? this._chip('MILITARY', '#8bc34a') : null,
@@ -1046,6 +1086,53 @@ export class FlightModal extends LitElement {
               <div style="font-size:11px;color:#ffab40;margin-top:8px">
                 Signal lost — showing the last received data.</div>` : nothing}
           </div>
+          ${airlineReal ? html`
+            <div data-airline-block style="padding:8px 0;border-bottom:1px solid var(--border)">
+              <div style="font-size:10px;color:var(--text-dim);text-transform:uppercase;
+                          letter-spacing:0.06em;margin-bottom:4px">Airline</div>
+              <div style="display:flex;gap:8px;align-items:center">
+                ${airlineReal.colorPrimary ? html`
+                  <span data-airline-swatch title=${airlineReal.colorPrimary}
+                        style="display:inline-block;width:14px;height:14px;border-radius:3px;
+                               background:${airlineReal.colorPrimary};
+                               border:1px solid rgba(255,255,255,0.35)"></span>` : nothing}
+                ${airlineReal.colorSecondary ? html`
+                  <span data-airline-swatch title=${airlineReal.colorSecondary}
+                        style="display:inline-block;width:14px;height:14px;border-radius:3px;
+                               background:${airlineReal.colorSecondary};
+                               border:1px solid rgba(255,255,255,0.35)"></span>` : nothing}
+                <span style="flex:1;font-size:15px;font-weight:600;color:var(--text)">
+                  ${airlineReal.name}</span>
+                ${this._chip(AIRLINE_KIND_LABEL[airlineReal.kind] ?? airlineReal.kind, '#90caf9')}
+              </div>
+              <div style="font-size:11px;color:var(--text-dim);margin-top:4px;line-height:1.5">
+                ${airlineReal.shortName !== airlineReal.name
+                  ? html`<span>${airlineReal.shortName}</span> · ` : nothing}
+                <span style="font-family:monospace">${airlineReal.icao}</span>${airlineReal.iata
+                  ? html` · <span style="font-family:monospace">IATA ${airlineReal.iata}</span>` : nothing}
+                ${spoken ? html`<br>spoken as “${spoken}”` : nothing}
+                ${airlineReal.slogan ? html`<br><em>“${airlineReal.slogan}”</em>` : nothing}
+                ${airlineReal.operatesFor
+                  ? html`<br>operates as ${airlineReal.operatesFor} — flies in its
+                         mainline partner's livery, so no colours are shown.` : nothing}
+              </div>
+            </div>` : nothing}
+          ${airlinePia ? html`
+            <div data-airline-block style="padding:8px 0;border-bottom:1px solid var(--border);
+                        font-size:11px;color:var(--text-dim);line-height:1.5">
+              <span style="color:var(--text)">${airline!.shortName}</span> is a privacy
+              callsign — not a real airline. The prefix identifies the flight-planning
+              service that issued this aircraft a temporary Privacy ICAO Address.
+            </div>` : nothing}
+          ${milWord || milHex ? html`
+            <div data-airline-block style="padding:8px 0;border-bottom:1px solid var(--border);
+                        font-size:11px;color:var(--text-dim);line-height:1.5">
+              ${milWord ? html`
+                <span style="color:var(--text);font-weight:600">${milWord.word}</span>
+                — ${milWord.desc}${milWord.aircraft ? html` (${milWord.aircraft})` : nothing}<br>` : nothing}
+              ${milHex ? html`Hex is in the US military range AE0000–AFFFFF (heuristic —
+                a widely observed pattern, not an official allocation).` : nothing}
+            </div>` : nothing}
           <div style="padding:4px 0">
             ${anon ? nothing : this._row('Registration', fp.reg)}
             ${anon ? nothing : this._row('Operator', fp.operator)}
@@ -1457,6 +1544,41 @@ export class SettingsDrawer extends LitElement {
               <span style="flex:1">Military aircraft skins</span>
             </label>
             <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text)"
+                   title="Aircraft whose callsign prefix identifies a known airline (DAL = Delta, BAW = British Airways …) are painted in that carrier's approximate brand colours. Military aircraft keep olive drab, privacy-flagged (PIA) aircraft show no airline at all, and regionals — which fly in their mainline partner's paint — keep the generic livery.">
+              <input type="checkbox" .checked=${cfg.airlineColors !== false}
+                     @change=${(e: Event) => set(f => { f.airlineColors = (e.target as HTMLInputElement).checked; })}>
+              <span style="flex:1">Airline liveries</span>
+            </label>
+            <div class="row" style="align-items:center">
+              <label style="font-size:12px;color:var(--text);flex:1"
+                     title="What is painted down the aircraft's own flanks. Automatic keeps the shipped livery layout: the operator broadside on a large fuselage, the identifier along the spine. A privacy-flagged (PIA) aircraft withholds its identity whatever this is set to.">Fuselage text</label>
+              <select .value=${cfg.sideText ?? 'auto'}
+                      @change=${(e: Event) => set(f => {
+                        const v = (e.target as HTMLSelectElement).value;
+                        // setFlights normalizes 'auto' + unknowns → undefined.
+                        f.sideText = v as import('../types.js').FlightsConfig['sideText'];
+                      })}
+                      style="width:130px">
+                ${FLIGHT_SIDE_TEXT_MODES.map(k => html`
+                  <option value=${k} ?selected=${(cfg.sideText ?? 'auto') === k}>
+                    ${SIDE_TEXT_LABEL[k]}</option>`)}
+              </select>
+            </div>
+            <div class="row" style="align-items:center">
+              <label style="font-size:12px;color:var(--text);flex:1"
+                     title="What a small plane's towed banner says. Automatic is the aircraft's identifier (today's behavior).">Tow banner text</label>
+              <select .value=${cfg.bannerText ?? 'auto'}
+                      @change=${(e: Event) => set(f => {
+                        const v = (e.target as HTMLSelectElement).value;
+                        f.bannerText = v as import('../types.js').FlightsConfig['bannerText'];
+                      })}
+                      style="width:130px">
+                ${FLIGHT_BANNER_TEXT_MODES.map(k => html`
+                  <option value=${k} ?selected=${(cfg.bannerText ?? 'auto') === k}>
+                    ${BANNER_TEXT_LABEL[k]}</option>`)}
+              </select>
+            </div>
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text)"
                    title="Speed reads at a glance: a hovering machine shows a rotor blur and no trail, faster aircraft grow a comet tail, then a contrail, and the fastest add an afterburner glow with ghost multiples. Off builds none of it.">
               <input type="checkbox" .checked=${cfg.speedViz !== false}
                      @change=${(e: Event) => set(f => { f.speedViz = (e.target as HTMLInputElement).checked; })}>
@@ -1540,8 +1662,8 @@ export class SettingsDrawer extends LitElement {
       (sanitizeLabelFields(cfg.labelFields) ?? FLIGHT_LABEL_FIELDS_DEFAULT) as string[]);
     const LABELS: Record<string, string> = {
       callsign: 'Callsign', reg: 'Registration', type: 'Type', operator: 'Operator',
-      alt: 'Altitude', speed: 'Speed', trend: 'Climb/descend', squawk: 'Squawk',
-      dist: 'Distance',
+      airline: 'Airline', alt: 'Altitude', speed: 'Speed', trend: 'Climb/descend',
+      squawk: 'Squawk', dist: 'Distance',
     };
     return html`
       <div style="margin-top:6px">

@@ -115,9 +115,19 @@ import {
   flightIdentitySuppressed, flightPrivacyDimmed,
   flightPointSpeedBand, flightVerticalScale,
   militarySkinFor, militarySkinsEnabled,
+  resolveFlightSideText, resolveFlightBannerText,
+  sanitizeSideText, sanitizeBannerText,
   type FlightPoint, type IssNow, type FlightGlowPattern, type FlightGlowRule,
   type FlightSpeedBand, type BgCraftMilitarySkin,
+  type FlightSideTextMode, type FlightBannerTextMode,
 } from './flights.js';
+// airlines.ts is the third member of the pure zero-import shared-chunk family
+// (flights.ts + aircraft-types.ts): the callsign-prefix → carrier table that
+// resolves the livery tint, the fuselage/banner text and the label's `airline`
+// field. Never imports three.js, so it costs the split nothing.
+import {
+  airlineForCallsign, airlineTextFor, resolveAirlineLivery, airlineColorsEnabled,
+} from './airlines.js';
 // aircraft-types.ts is likewise pure/zero-import (the same shared-chunk
 // discipline as flights.ts + avatars.ts) — the 8-archetype silhouette table.
 import {
@@ -887,6 +897,12 @@ interface FlightRig {
   // polls after the first position (the type designator arrives late), exactly
   // like the archetype itself.
   skin: BgCraftMilitarySkin | null;
+  // The AIRLINE LIVERY currently painted on, as the build signature that
+  // produced it: `''` = no livery (archetype paint), else `body:accent` as
+  // decimal ints. Part of the rebuild signature exactly like `skin`: the
+  // callsign that resolves a carrier can arrive polls after the first position,
+  // and the user's master toggle reaches it through `_flightsAirlineColors`.
+  airlineKey: string;
   // The REAR-MOST drawn extent of THIS rig's body in model +Z — the bucket's
   // `_flightArchetypeMetrics().aftZ` for a generic body, or the skin's own
   // measured (post-scale) rear extent when one is built. Every trailing effect
@@ -2365,6 +2381,13 @@ export class ThreeDRenderer {
   // FlightsConfig.militarySkins (absent = ON, vehicle library V3). False keeps
   // every live aircraft on its generic archetype body.
   private _flightsMilitarySkins = true;
+  // FlightsConfig.airlineColors (absent = ON). False keeps every aircraft on
+  // its archetype's own civil paint. The precedence ladder itself lives in
+  // airlines.ts's resolveAirlineLivery — this flag is only its master gate.
+  private _flightsAirlineColors = true;
+  // FlightsConfig.sideText / bannerText (absent = 'auto' = the shipped layout).
+  private _flightsSideText: FlightSideTextMode | undefined = undefined;
+  private _flightsBannerText: FlightBannerTextMode | undefined = undefined;
   private _flightBlurTex: THREE.CanvasTexture | null = null;    // shared; freed in destroy()
   private _flightBurnerTex: THREE.CanvasTexture | null = null;  // shared; freed in destroy()
   private _beaconGlowTex: THREE.CanvasTexture | null = null;   // shared; freed in destroy()
@@ -15800,7 +15823,8 @@ export class ThreeDRenderer {
                          banners?: boolean; modelScale?: number;
                          glowRules?: FlightGlowRule[]; shellMm?: number;
                          verticalScale?: number; speedViz?: boolean;
-                         militarySkins?: boolean }): void {
+                         militarySkins?: boolean; airlineColors?: boolean;
+                         sideText?: string; bannerText?: string }): void {
     this._flightsOrigin = origin;
     this._flightsTheta = isFinite(thetaRad) ? thetaRad : 0;
     this._flightsRadius = isFinite(radiusNm) && radiusNm > 0 ? radiusNm : FLIGHTS_DEFAULT_RADIUS_NM;
@@ -15836,6 +15860,14 @@ export class ThreeDRenderer {
     // _keyFlights — covers an edit; a live rig re-skins IN PLACE on the next
     // poll through the _applyFlightFix rebuild signature.
     this._flightsMilitarySkins = militarySkinsEnabled(opts?.militarySkins);
+    // Airline livery tint + fuselage/banner text mode. All three are
+    // config-path, so configRev — already in _keyFlights — covers an edit; a
+    // live rig repaints in place through the _applyFlightFix rebuild signature
+    // (livery) or the label/banner content keys (text). Stale-chunk defaults:
+    // absent airlineColors = ON, absent modes = 'auto' = the shipped layout.
+    this._flightsAirlineColors = airlineColorsEnabled(opts?.airlineColors);
+    this._flightsSideText = sanitizeSideText(opts?.sideText);
+    this._flightsBannerText = sanitizeBannerText(opts?.bannerText);
     // Anchor Y = the EFFECTIVE ground level, not the slab: the display shell
     // (including the FLIGHT_SHELL.clearMm property-clearance floor) is measured
     // from the GROUND, so an aircraft keeps a constant height above grade and
@@ -15901,9 +15933,18 @@ export class ThreeDRenderer {
     // this very call), so a toggle flip re-skins the live fleet in place with no
     // new dirty-key input.
     const wantSkin = this._flightSkin(fp, wantArch);
+    // The AIRLINE LIVERY joins the same signature: the callsign that resolves a
+    // carrier can arrive on a later poll than the position (and can CHANGE, on
+    // a repositioning leg), and the user's master toggle reaches it through
+    // `_flightsAirlineColors` — config-path → configRev → _keyFlights → here —
+    // so flipping it repaints the live fleet in place with no new dirty-key
+    // input and no loss of motion state.
+    const wantTint = this._flightAirlineTint(fp, fp.military, wantSkin);
+    const wantAirlineKey = this._flightAirlineKey(wantTint);
     if (rig.archetype !== wantArch || rig.military !== fp.military
-        || rig.dim !== wantDim || rig.skin !== wantSkin) {
-      this._rebuildFlightModel(rig, wantArch, fp.military, wantDim, wantSkin);
+        || rig.dim !== wantDim || rig.skin !== wantSkin
+        || rig.airlineKey !== wantAirlineKey) {
+      this._rebuildFlightModel(rig, wantArch, fp.military, wantDim, wantSkin, wantTint);
     }
     // ── Feed-latency guard (user-reported: "the plane body also moves
     // backwards", and with it the folded, flapping contrail) ────────────────
@@ -16630,13 +16671,20 @@ export class ThreeDRenderer {
   // 2D line cannot drift (they used to be mirrored ~20-line copies). These thin
   // wrappers just bind the renderer's live config (`_flightsLabelFields`,
   // `_flightsPrivacyDim`) to the pure signatures.
+  //
+  // The `airline` field's text is INJECTED (flights.ts stays zero-import and
+  // never performs the callsign lookup itself), so the lookup happens here —
+  // once per label repaint, which is poll cadence, not per frame.
   private _flightFieldText(field: string, fp: FlightPoint,
                            ident: string, suppress: boolean): string {
-    return flightFieldText(field, fp, ident, suppress);
+    return flightFieldText(field, fp, ident, suppress,
+                           airlineTextFor(fp.callsign, suppress)?.shortName ?? '');
   }
 
   private _flightLabelLines(fp: FlightPoint): { top: string; sub: string } {
-    return flightLabelLines(fp, this._flightsLabelFields, this._flightsPrivacyDim);
+    const suppress = this._flightIdentitySuppressed(fp);
+    return flightLabelLines(fp, this._flightsLabelFields, this._flightsPrivacyDim,
+                            airlineTextFor(fp.callsign, suppress)?.shortName ?? '');
   }
 
   // What goes on the fuselage: callsign → registration → hex. PIA-suppressed
@@ -16662,9 +16710,16 @@ export class ThreeDRenderer {
     // titles down its flank, and the bucket's flank/spine boxes are measured off
     // the GENERIC body, so pasting them onto a borrowed silhouette would float
     // them in space. The identifier still reads on the label plate.
+    // The user's `sideText` preference then customizes that AUTO layout through
+    // the pure `resolveFlightSideText` — which takes the auto pair as its base,
+    // so 'auto' is byte-identical by construction rather than by re-derivation.
+    const airline = airlineTextFor(fp.callsign, suppress);
     const { flank, top } = rig.skin
       ? { flank: '', top: '' }
-      : this._flightFuselageText(rig.archetype, fp, ident, suppress);
+      : resolveFlightSideText(
+          this._flightsSideText,
+          this._flightFuselageText(rig.archetype, fp, ident, suppress),
+          fp, ident, suppress, airline);
     const idKey = `${flank}|${top}`;
     if (rig.idKey !== idKey) {
       this._removeFlightIdPlanes(rig);
@@ -16673,10 +16728,16 @@ export class ThreeDRenderer {
       rig.idKey = idKey;
     }
 
+    // What the banner SAYS is the user's `bannerText` preference, resolved by
+    // the pure `resolveFlightBannerText` (absent = 'auto' = the identity, i.e.
+    // today's behavior). The key is the resolved TEXT, so a preference change
+    // repaints the cloth exactly like a callsign change already did.
+    const bannerLine = resolveFlightBannerText(
+      this._flightsBannerText, ident, suppress, airline);
     if (wantBanner) {
-      if (rig.bannerKey !== ident) {
+      if (rig.bannerKey !== bannerLine) {
         this._removeFlightBanner(rig);
-        const tex = this._makeBgTextTexture(ident, 'banner');
+        const tex = this._makeBgTextTexture(bannerLine, 'banner');
         const cv = tex.image as HTMLCanvasElement;
         const aspect = cv.width / cv.height;
         const bh = 260;
@@ -16684,7 +16745,7 @@ export class ThreeDRenderer {
         b.rotation.y = Math.PI / 2;                            // broadside-readable
         b.position.set(0, 20, 900 + (bh * aspect) / 2);        // trails behind (+Z = tail)
         rig.asm.add(b);
-        rig.banner = b; rig.bannerKey = ident;
+        rig.banner = b; rig.bannerKey = bannerLine;
       }
     } else if (rig.banner) this._removeFlightBanner(rig);
 
@@ -16884,6 +16945,43 @@ export class ThreeDRenderer {
     return this._flightsMilitarySkins ? militarySkinFor(fp, archetype) : null;
   }
 
+  // ── Airline livery tint (docs/research/airline-reference.md) ─────────────
+  // The brand colours an aircraft's callsign prefix earns it, as the `tint`
+  // pair `_buildAircraftModel` already accepts for the background tow plane —
+  // so this feature adds NO new geometry path, only a new source of the two
+  // colours the fixed-wing branches already name.
+  //
+  // The whole precedence ladder is the pure `resolveAirlineLivery`, which is
+  // also what the 2D dart consults, so the plan glyph and the 3D rig can never
+  // disagree about who gets painted. Its refusals, in order: feature off →
+  // military SKIN (a borrowed silhouette keeps its signature paint) → the
+  // military flag (olive-drab wins) → PIA identity suppression → a `kind:'pia'`
+  // pseudo-operator → a carrier with no colours at all (every regional, whose
+  // real livery belongs to its mainline partner). Any refusal returns null and
+  // the archetype's own civil paint stands, untouched.
+  private _flightAirlineTint(fp: FlightPoint, military: boolean,
+                             skin: BgCraftMilitarySkin | null):
+      { body?: number; accent?: number } | null {
+    const liv = resolveAirlineLivery(airlineForCallsign(fp.callsign), {
+      enabled: this._flightsAirlineColors,
+      military,
+      skin: skin != null,
+      suppress: this._flightIdentitySuppressed(fp),
+    });
+    if (!liv) return null;
+    const body = hexToInt(liv.primary);
+    const accent = liv.secondary ? hexToInt(liv.secondary) : undefined;
+    // A malformed hex in the table would paint black; refuse instead.
+    if (!isFinite(body)) return null;
+    return accent != null && isFinite(accent) ? { body, accent } : { body };
+  }
+
+  // The tint as its REBUILD SIGNATURE — '' when there is no livery, so an
+  // aircraft that never resolves one keeps a stable, empty key.
+  private _flightAirlineKey(tint: { body?: number; accent?: number } | null): string {
+    return tint ? `${tint.body ?? ''}:${tint.accent ?? ''}` : '';
+  }
+
   // The rig's BODY: either the generic archetype model, or — vehicle library V3,
   // research §4.4 — one of the six already-built BG_CRAFTS military silhouettes
   // borrowed as a skin.
@@ -16902,14 +17000,20 @@ export class ThreeDRenderer {
   // A skin keeps its SIGNATURE PAINT — that is the point of the feature — so it
   // deliberately skips the generic olive military repaint. Privacy dimming still
   // composes (the trailing `dim` on _buildBannerCraft).
+  //
+  // `tint` (trailing, optional) is the AIRLINE LIVERY. It reaches only the
+  // generic body — a skin is refused a livery upstream by resolveAirlineLivery,
+  // so the `skin` branch below can never see one.
   private _buildFlightBody(archetype: AircraftArchetype, military: boolean,
-                           dim: boolean, skin: BgCraftMilitarySkin | null): {
+                           dim: boolean, skin: BgCraftMilitarySkin | null,
+                           tint?: { body?: number; accent?: number } | null): {
     asm: THREE.Group; props: THREE.Object3D[];
     tailRotor: THREE.Object3D | null; propRate: number; aftZ: number;
   } {
     const M = this._flightArchetypeMetrics(archetype);
     if (!skin) {
-      const built = this._buildAircraftModel(archetype, military, dim);
+      const built = this._buildAircraftModel(archetype, military, dim,
+                                             tint ?? undefined);
       return { ...built, aftZ: M.aftZ };
     }
     const spec = BG_CRAFTS[skin];
@@ -16937,7 +17041,8 @@ export class ThreeDRenderer {
     const archetype = aircraftArchetype(fp.typeCode, fp.category);
     const dim = this._flightPrivacyDimmed(fp);
     const skin = this._flightSkin(fp, archetype);
-    const built = this._buildFlightBody(archetype, fp.military, dim, skin);
+    const tint = this._flightAirlineTint(fp, fp.military, skin);
+    const built = this._buildFlightBody(archetype, fp.military, dim, skin, tint);
     // YXZ: yaw outermost, pitch applied in the YAWED frame (the humanoid-root
     // convention) — with XYZ a climbing aircraft would bank as it turned.
     built.asm.rotation.order = 'YXZ';
@@ -16951,7 +17056,8 @@ export class ThreeDRenderer {
     this._flightVizGroup.add(viz);
     const rig: FlightRig = {
       hex: fp.hex, asm: built.asm, kind: legacyModelKind(archetype), archetype,
-      military: fp.military, dim, skin, aftZ: built.aftZ,
+      military: fp.military, dim, skin, airlineKey: this._flightAirlineKey(tint),
+      aftZ: built.aftZ,
       prop: built.props[0] ?? null, props: built.props,
       tailRotor: built.tailRotor, propRate: built.propRate,
       label: null, banner: null, labelKey: '', bannerKey: '',
@@ -16988,7 +17094,8 @@ export class ThreeDRenderer {
   // onto the new assembly (with archetype-correct metrics).
   private _rebuildFlightModel(rig: FlightRig, archetype: AircraftArchetype,
                               military: boolean, dim: boolean,
-                              skin: BgCraftMilitarySkin | null = null): void {
+                              skin: BgCraftMilitarySkin | null = null,
+                              tint: { body?: number; accent?: number } | null = null): void {
     this._removeFlightLabel(rig);
     this._removeFlightBanner(rig);
     this._removeFlightIdPlanes(rig);
@@ -17004,7 +17111,7 @@ export class ThreeDRenderer {
     this._clearGroup(rig.asm);
     this._flightsGroup.remove(rig.asm);
 
-    const built = this._buildFlightBody(archetype, military, dim, skin);
+    const built = this._buildFlightBody(archetype, military, dim, skin, tint);
     built.asm.rotation.order = 'YXZ';
     this._tagFlightAsm(built.asm, rig.hex);
     built.asm.position.set(rig.curX, rig.curY, rig.curZ);
@@ -17015,7 +17122,8 @@ export class ThreeDRenderer {
     rig.asm = built.asm;
     rig.archetype = archetype; rig.kind = legacyModelKind(archetype);
     rig.military = military; rig.dim = dim;
-    rig.skin = skin; rig.aftZ = built.aftZ;
+    rig.skin = skin; rig.airlineKey = this._flightAirlineKey(tint);
+    rig.aftZ = built.aftZ;
     rig.props = built.props; rig.prop = built.props[0] ?? null;
     rig.tailRotor = built.tailRotor; rig.propRate = built.propRate;
     rig.labelKey = ''; rig.bannerKey = ''; rig.idKey = '';

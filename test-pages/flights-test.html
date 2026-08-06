@@ -31,6 +31,7 @@
      does not complete under --virtual-time-budget):
        npx esbuild src/flights.ts --format=esm --outfile=<harness>/flights.mod.js
        npx esbuild src/aircraft-types.ts --format=esm --outfile=<harness>/aircraft-types.mod.js
+       npx esbuild src/airlines.ts --format=esm --outfile=<harness>/airlines.mod.js
        npx esbuild src/sky-astro.ts --bundle --format=esm --outfile=<harness>/sky-astro.mod.js
        T=$(mktemp -d); cp -r src/* "$T"/
        cp test-pages/fake-avatar-store.ts "$T"/avatar-store.ts
@@ -1959,7 +1960,7 @@
     {
       const S = F.sanitizeLabelFields;
       ok('19: FLIGHT_LABEL_FIELDS is the documented key set',
-        F.FLIGHT_LABEL_FIELDS.join(',') === 'callsign,reg,type,operator,alt,speed,trend,squawk,dist',
+        F.FLIGHT_LABEL_FIELDS.join(',') === 'callsign,reg,type,operator,airline,alt,speed,trend,squawk,dist',
         F.FLIGHT_LABEL_FIELDS.join(','));
       ok('19: the default plate is callsign + alt',
         F.FLIGHT_LABEL_FIELDS_DEFAULT.join(',') === 'callsign,alt');
@@ -2841,6 +2842,286 @@
       ok('28: every table value is a known skin',
         Object.values(F.MILITARY_SKIN_TYPE_CODES)
           .every(v => F.FLIGHT_MILITARY_SKINS.includes(v)));
+    }
+
+    // ── 29. Airline identification (docs/research/airline-reference.md) ──────
+    // The callsign-prefix → carrier lookup (src/airlines.ts, the third pure
+    // zero-import member of the shared-chunk family) plus flights.ts's own
+    // additions: the `airline` label field and the side/banner text resolvers,
+    // both of which take the airline strings as an INJECTED parameter so
+    // flights.ts never imports airlines.ts.
+    {
+      const A = await import('./airlines.mod.js' + V);
+
+      // 1. Ident parsing. A prefix is only an airline when what follows is
+      //    flight-number shaped — `N123AB` must never read as an airline.
+      const nm = cs => A.airlineForCallsign(cs)?.icao ?? null;
+      ok('29: DAL1234 → DAL', nm('DAL1234') === 'DAL');
+      ok('29: lowercase idents resolve', nm('dal1234') === 'DAL');
+      ok('29: surrounding whitespace is trimmed', nm('  UAL200  ') === 'UAL');
+      ok('29: a trailing letter suffix is allowed', nm('UAL200A') === 'UAL');
+      ok('29: two trailing letters are allowed', nm('SWA55AB') === 'SWA');
+      ok('29: a bare 3-letter ident is NOT an airline', nm('AAL') === null);
+      ok('29: an N-number is NOT an airline', nm('N123AB') === null);
+      ok('29: an unknown prefix resolves to null', nm('ZQX123') === null);
+      ok('29: three trailing letters are rejected', nm('UAL200ABC') === null);
+      ok('29: five digits are rejected', nm('DAL12345') === null);
+      ok('29: garbage never throws', (() => {
+        try {
+          return nm(null) === null && nm(undefined) === null && nm('') === null
+            && nm(42) === null && nm({}) === null;
+        } catch { return false; }
+      })());
+
+      // 2. The data itself — spot-checks straight off the reference doc.
+      const dal = A.airlineForCallsign('DAL1234');
+      ok('29: DAL is Delta Air Lines', dal.name === 'Delta Air Lines', dal.name);
+      ok('29: DAL short name + IATA', dal.shortName === 'Delta' && dal.iata === 'DL');
+      ok('29: DAL telephony word', dal.callsign === 'DELTA');
+      ok('29: DAL slogan', dal.slogan === 'Keep Climbing');
+      ok('29: DAL colours are the doc hexes',
+        dal.colorPrimary === '#c8102e' && dal.colorSecondary === '#00285f');
+      ok('29: BAW telephony word is SPEEDBIRD',
+        A.airlineForCallsign('BAW117').callsign === 'SPEEDBIRD');
+      // LATAM's doc row splits the IATA code ("LA (Chile) / JJ (Brasil)") — the
+      // surviving primary is the one stored.
+      ok('29: LAN carries the split IATA as LA', A.AIRLINES.LAN.iata === 'LA');
+
+      // 3. Table integrity.
+      const entries = Object.entries(A.AIRLINES);
+      // The reference doc carries 129 operator rows across its seven tables;
+      // the floor guards against a table that silently loses a section.
+      ok('29: every documented operator row is transcribed',
+        entries.length >= 129, `n=${entries.length}`);
+      ok('29: every key is a 3-letter uppercase ICAO prefix',
+        entries.every(([k]) => /^[A-Z]{3}$/.test(k)));
+      ok('29: every entry\'s icao field matches its key',
+        entries.every(([k, v]) => v.icao === k));
+      ok('29: every colour is a #rrggbb hex',
+        entries.every(([, v]) =>
+          (!v.colorPrimary || /^#[0-9a-f]{6}$/i.test(v.colorPrimary))
+          && (!v.colorSecondary || /^#[0-9a-f]{6}$/i.test(v.colorSecondary))));
+      ok('29: a secondary colour never appears without a primary',
+        entries.every(([, v]) => !v.colorSecondary || !!v.colorPrimary));
+      ok('29: every entry has a name + shortName + kind',
+        entries.every(([, v]) => !!v.name && !!v.shortName && !!v.kind));
+      // Regionals fly in their partner's paint — carrying a guessed livery
+      // would be a fabrication, so they carry `operatesFor` and NO colours.
+      const skw = A.AIRLINES.SKW;
+      ok('29: SkyWest carries operatesFor and no colours',
+        !!skw.operatesFor && !skw.colorPrimary, skw.operatesFor);
+
+      // 4. PIA pseudo-operators are NOT airlines.
+      ok('29: FFL is kind pia', A.AIRLINES.FFL.kind === 'pia');
+      ok('29: DCM is kind pia', A.AIRLINES.DCM.kind === 'pia');
+      ok('29: a PIA prefix carries no livery colours',
+        !A.AIRLINES.FFL.colorPrimary && !A.AIRLINES.DCM.colorPrimary);
+      ok('29: airlineTextFor refuses a PIA pseudo-operator',
+        A.airlineTextFor('FFL123') === null);
+      ok('29: airlineTextFor refuses a suppressed identity',
+        A.airlineTextFor('DAL1234', true) === null);
+      ok('29: airlineTextFor resolves a real carrier',
+        A.airlineTextFor('DAL1234').shortName === 'Delta');
+
+      // 5. Military / government callsign words.
+      const mw = cs => A.militaryCallsignInfo(cs)?.word ?? null;
+      ok('29: RCH1234 → REACH (the abbreviated broadcast form)', mw('RCH1234') === 'REACH');
+      ok('29: REACH11 → REACH (the spoken form)', mw('REACH11') === 'REACH');
+      ok('29: SAM123 → SAM', mw('SAM123') === 'SAM');
+      ok('29: CNV42 → CONVOY (documented ICAO designator)', mw('CNV42') === 'CONVOY');
+      ok('29: CONVOY42 → CONVOY', mw('CONVOY42') === 'CONVOY');
+      ok('29: NOAA42 → NOAA', mw('NOAA42') === 'NOAA');
+      ok('29: a bare INTERIOR matches (no mission number)', mw('INTERIOR') === 'INTERIOR');
+      ok('29: TANKERMAN is NOT a military word', mw('TANKERMAN') === null);
+      ok('29: an airline ident is not a military word', mw('DAL1234') === null);
+      ok('29: the ceremonial "…ONE" rows are deliberately absent',
+        !('AIR FORCE ONE' in A.MILITARY_CALLSIGN_WORDS)
+        && !('MARINE ONE' in A.MILITARY_CALLSIGN_WORDS));
+      ok('29: militaryCallsignInfo never throws', (() => {
+        try { return mw(null) === null && mw(7) === null && mw('') === null; }
+        catch { return false; }
+      })());
+
+      // 6. Spoken form.
+      ok('29: spokenCallsign(DAL1234) = "DELTA 1234"',
+        A.spokenCallsign('DAL1234') === 'DELTA 1234', A.spokenCallsign('DAL1234'));
+      ok('29: spokenCallsign(BAW117) = "SPEEDBIRD 117"',
+        A.spokenCallsign('BAW117') === 'SPEEDBIRD 117');
+      ok('29: the trailing-letter suffix rides along',
+        A.spokenCallsign('UAL200A') === 'UNITED 200A');
+      ok('29: a non-airline ident has no spoken form',
+        A.spokenCallsign('N12345') === null && A.spokenCallsign('RCH1234') === null);
+      ok('29: an already-resolved lookup can be passed in',
+        A.spokenCallsign('DAL1234', A.AIRLINES.DAL) === 'DELTA 1234');
+
+      // 7. US military hex heuristic — a strong OBSERVED pattern, not an
+      //    official allocation (the UI copy says so).
+      ok('29: AE0000 is the low bound', A.usMilitaryHexHeuristic('ae0000') === true);
+      ok('29: AFFFFF is the high bound', A.usMilitaryHexHeuristic('afffff') === true);
+      ok('29: ADFFFF is below the range', A.usMilitaryHexHeuristic('adffff') === false);
+      ok('29: B00000 is above the range', A.usMilitaryHexHeuristic('b00000') === false);
+      ok('29: an ordinary US civil hex is outside it',
+        A.usMilitaryHexHeuristic('a12345') === false);
+      ok('29: case is irrelevant', A.usMilitaryHexHeuristic('AE1234') === true);
+      ok('29: garbage is false, never a throw', (() => {
+        try {
+          return A.usMilitaryHexHeuristic(null) === false
+            && A.usMilitaryHexHeuristic('zzzz') === false
+            && A.usMilitaryHexHeuristic('') === false
+            && A.usMilitaryHexHeuristic(42) === false;
+        } catch { return false; }
+      })());
+
+      // 8. The LIVERY PRECEDENCE LADDER — the one ordering this whole feature
+      //    rests on. Every refusal is asserted independently.
+      const liv = (info, o) => A.resolveAirlineLivery(info, o);
+      ok('29: a mainline carrier is painted',
+        liv(A.AIRLINES.DAL, {})?.primary === '#c8102e');
+      ok('29: …with its secondary as the accent',
+        liv(A.AIRLINES.DAL, {})?.secondary === '#00285f');
+      ok('29: the master gate refuses', liv(A.AIRLINES.DAL, { enabled: false }) === null);
+      ok('29: a military SKIN refuses (the silhouette keeps its own paint)',
+        liv(A.AIRLINES.DAL, { skin: true }) === null);
+      ok('29: the military flag refuses (olive drab wins)',
+        liv(A.AIRLINES.DAL, { military: true }) === null);
+      ok('29: PIA identity suppression refuses',
+        liv(A.AIRLINES.DAL, { suppress: true }) === null);
+      ok('29: a kind:pia pseudo-operator refuses', liv(A.AIRLINES.FFL, {}) === null);
+      ok('29: a colourless regional refuses', liv(A.AIRLINES.SKW, {}) === null);
+      ok('29: an unresolved airline refuses',
+        liv(null, {}) === null && liv(undefined, {}) === null);
+      // The skin veto matters on its own: militarySkinFor fires for
+      // `category: 'A6'` with NO military dbFlag, so a view that skipped it
+      // would paint an aircraft the other view leaves generic.
+      ok('29: an A6 fighter resolves a skin WITHOUT the military flag',
+        F.militarySkinFor({ typeCode: null, category: 'A6', military: false }, 'bizjet') === 'f16');
+      ok('29: …and the skin veto alone refuses its livery',
+        liv(A.AIRLINES.DAL, { military: false, skin: true }) === null);
+      ok('29: a primary-only carrier omits the accent', (() => {
+        const r = liv(A.AIRLINES.KLM, {});
+        return r && r.primary === '#00a1de' && r.secondary === undefined;
+      })());
+      ok('29: airlineColorsEnabled is absent-is-ON',
+        A.airlineColorsEnabled(undefined) === true && A.airlineColorsEnabled(null) === true
+        && A.airlineColorsEnabled(true) === true && A.airlineColorsEnabled(false) === false);
+
+      // 9. The `airline` LABEL FIELD (flights.ts), whose text is injected.
+      ok('29: FLIGHT_LABEL_FIELDS carries `airline`',
+        F.FLIGHT_LABEL_FIELDS.includes('airline'));
+      ok('29: it sits after `operator` in the canonical order',
+        F.FLIGHT_LABEL_FIELDS.indexOf('airline') === F.FLIGHT_LABEL_FIELDS.indexOf('operator') + 1);
+      ok('29: the DEFAULT plate is unchanged (callsign + alt)',
+        JSON.stringify(F.FLIGHT_LABEL_FIELDS_DEFAULT) === JSON.stringify(['callsign', 'alt']));
+      ok('29: sanitizeLabelFields keeps `airline`',
+        JSON.stringify(F.sanitizeLabelFields(['airline', 'alt'])) === JSON.stringify(['airline', 'alt']));
+      ok('29: sanitizeLabelFields still drops unknown keys beside it',
+        JSON.stringify(F.sanitizeLabelFields(['airline', 'nope'])) === JSON.stringify(['airline']));
+      const AFP = { hex: 'a1', callsign: 'DAL1234', altFt: 30000, reg: null,
+        typeCode: null, typeDesc: null, operator: null, squawk: null,
+        gsKt: null, vertRateFpm: null, distNm: null, pia: false, ladd: false };
+      ok('29: flightFieldText renders the INJECTED airline name',
+        F.flightFieldText('airline', AFP, 'DAL1234', false, 'Delta') === 'Delta');
+      ok('29: an omitted injection renders empty (stale-caller safe)',
+        F.flightFieldText('airline', AFP, 'DAL1234', false) === '');
+      ok('29: PIA suppression withholds the airline field',
+        F.flightFieldText('airline', AFP, 'A1', true, 'Delta') === '');
+      ok('29: a long airline name is capped at 22 chars',
+        F.flightFieldText('airline', AFP, 'X', false, 'A'.repeat(40)).length === 22);
+      ok('29: flightLabelLines threads the injection through',
+        F.flightLabelLines(AFP, ['callsign', 'airline'], true, 'Delta').sub === 'Delta',
+        JSON.stringify(F.flightLabelLines(AFP, ['callsign', 'airline'], true, 'Delta')));
+      ok('29: an empty injection drops the line entirely',
+        F.flightLabelLines(AFP, ['callsign', 'airline'], true).sub === '');
+
+      // 10. Fuselage (`sideText`) + banner (`bannerText`) modes.
+      ok('29: the side-text vocabulary is the documented six',
+        JSON.stringify([...F.FLIGHT_SIDE_TEXT_MODES])
+          === JSON.stringify(['auto', 'operator', 'airline', 'slogan', 'callsign', 'none']));
+      ok('29: the banner-text vocabulary is the documented four',
+        JSON.stringify([...F.FLIGHT_BANNER_TEXT_MODES])
+          === JSON.stringify(['auto', 'airline', 'slogan', 'callsign']));
+      // The default + anything unusable collapses to undefined — "use the
+      // shipped behavior" (the modelScale "exactly the default clears" idiom).
+      ok('29: sanitizeSideText normalizes auto → undefined',
+        F.sanitizeSideText('auto') === undefined);
+      ok('29: sanitizeSideText keeps a real mode', F.sanitizeSideText('slogan') === 'slogan');
+      ok('29: sanitizeSideText is case/space tolerant',
+        F.sanitizeSideText('  SLOGAN ') === 'slogan');
+      ok('29: sanitizeSideText drops unknowns',
+        F.sanitizeSideText('nope') === undefined && F.sanitizeSideText(7) === undefined
+        && F.sanitizeSideText(null) === undefined);
+      ok('29: sanitizeBannerText normalizes auto → undefined',
+        F.sanitizeBannerText('auto') === undefined);
+      ok('29: sanitizeBannerText rejects `none` (a banner is never blank)',
+        F.sanitizeBannerText('none') === undefined);
+      ok('29: sanitizeBannerText keeps a real mode',
+        F.sanitizeBannerText('airline') === 'airline');
+
+      // The AUTO layout is byte-identical BY CONSTRUCTION: the resolver takes
+      // the shipped pair as its base and returns it untouched.
+      const BASE = { flank: 'AMERICAN AIRLINES INC', top: 'AAL266' };
+      const AL = { shortName: 'Delta', slogan: 'Keep Climbing' };
+      const OPFP = { operator: 'AMERICAN AIRLINES INC' };
+      const side = (m, al = AL, fp = OPFP, sup = false) =>
+        F.resolveFlightSideText(m, BASE, fp, 'AAL266', sup, al);
+      ok('29: auto returns the base pair unchanged',
+        JSON.stringify(side('auto')) === JSON.stringify(BASE));
+      ok('29: an absent mode returns the base pair unchanged',
+        JSON.stringify(side(undefined)) === JSON.stringify(BASE));
+      ok('29: an unknown mode returns the base pair unchanged',
+        JSON.stringify(side('bogus')) === JSON.stringify(BASE));
+      ok('29: none blanks both surfaces',
+        JSON.stringify(side('none')) === JSON.stringify({ flank: '', top: '' }));
+      ok('29: callsign puts the identity on the flanks only',
+        JSON.stringify(side('callsign')) === JSON.stringify({ flank: 'AAL266', top: '' }));
+      ok('29: airline paints the short name and keeps the spine identity',
+        JSON.stringify(side('airline'))
+          === JSON.stringify({ flank: 'Delta', top: 'AAL266' }));
+      ok('29: slogan paints the slogan',
+        JSON.stringify(side('slogan'))
+          === JSON.stringify({ flank: 'Keep Climbing', top: 'AAL266' }));
+      ok('29: slogan falls back to the short name when there is none',
+        JSON.stringify(side('slogan', { shortName: 'SkyWest' }))
+          === JSON.stringify({ flank: 'SkyWest', top: 'AAL266' }));
+      ok('29: an unresolvable airline falls back to the base pair',
+        JSON.stringify(side('airline', null)) === JSON.stringify(BASE)
+        && JSON.stringify(side('slogan', null)) === JSON.stringify(BASE));
+      ok('29: operator forces the operator onto the flanks',
+        JSON.stringify(side('operator'))
+          === JSON.stringify({ flank: 'AMERICAN AIRLINES INC', top: 'AAL266' }));
+      ok('29: operator with no operator falls back to the base pair',
+        JSON.stringify(side('operator', AL, { operator: null })) === JSON.stringify(BASE));
+      // PIA: only `none` (strictly LESS information) is honored.
+      ok('29: PIA suppression falls back to the base pair for every mode',
+        ['operator', 'airline', 'slogan', 'callsign']
+          .every(m => JSON.stringify(side(m, AL, OPFP, true)) === JSON.stringify(BASE)));
+      ok('29: …but `none` is still honored under suppression',
+        JSON.stringify(side('none', AL, OPFP, true)) === JSON.stringify({ flank: '', top: '' }));
+
+      const ban = (m, al = AL, sup = false) => F.resolveFlightBannerText(m, 'N737GA', sup, al);
+      ok('29: banner auto is the identity', ban('auto') === 'N737GA');
+      ok('29: banner absent is the identity', ban(undefined) === 'N737GA');
+      ok('29: banner callsign is the identity', ban('callsign') === 'N737GA');
+      ok('29: banner airline is the short name', ban('airline') === 'Delta');
+      ok('29: banner slogan is the slogan', ban('slogan') === 'Keep Climbing');
+      ok('29: banner slogan falls back through short name',
+        ban('slogan', { shortName: 'SkyWest' }) === 'SkyWest');
+      ok('29: a banner is never blank', ban('slogan', null) === 'N737GA'
+        && ban('airline', null) === 'N737GA');
+      ok('29: suppression pins the banner to the identity',
+        ban('airline', AL, true) === 'N737GA');
+
+      // 11. The LIVE fixture — the airline lookup against a real 94-aircraft
+      //     airplanes.live capture, not a hand-built point.
+      const liveList = F.normalizeAircraftList(LAX);
+      const resolved = liveList.filter(fp => A.airlineForCallsign(fp.callsign));
+      ok('29: the real LAX capture resolves airlines', resolved.length > 5,
+        `${resolved.length}/${liveList.length}`);
+      ok('29: every resolved carrier is a table entry',
+        resolved.every(fp => A.AIRLINES[A.airlineForCallsign(fp.callsign).icao]));
+      ok('29: no aircraft in the capture resolves to a PIA table entry as a livery',
+        resolved.every(fp => A.resolveAirlineLivery(A.airlineForCallsign(fp.callsign), {})
+          === null || A.airlineForCallsign(fp.callsign).kind !== 'pia'));
     }
   } catch (err) {
     ok('HARNESS threw', false, String(err && err.stack || err));

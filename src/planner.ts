@@ -69,6 +69,7 @@ import { normalizeAircraftList, flightBearingDistance, MAX_AIRCRAFT,
          FLIGHT_SHELL_DEFAULT_RADIUS_M, FLIGHT_SHELL_MIN_RADIUS_M,
          FLIGHT_SHELL_MAX_RADIUS_M,
          flightVerticalScale, FLIGHT_VSCALE_DEFAULT,
+         sanitizeSideText, sanitizeBannerText,
          type FlightPoint, type IssNow } from './flights.js';
 import { fetchLocalAircraft, fetchAirplanesLive, fetchIssNow } from './adsb-sources.js';
 // The ONE satellite alt/az routine (the renderer's sky uses the same function —
@@ -6133,6 +6134,22 @@ export class Planner extends EventTarget {
     // to a boolean). `false` is meaningful and stays.
     if (this.store.flights.militarySkins === true) {
       this.store.flights.militarySkins = undefined;
+    }
+    // Airline livery tint (docs/research/airline-reference.md): the SAME
+    // absent-is-on boolean discipline — an explicit `true` is redundant, `false`
+    // is meaningful and stays.
+    if (this.store.flights.airlineColors === true) {
+      this.store.flights.airlineColors = undefined;
+    }
+    // Fuselage + banner text mode. The pure sanitizers own the vocabulary AND
+    // collapse the default ('auto') plus any unknown value back to undefined,
+    // so an import, a hand-edited config and a settings edit all land in the
+    // shape both renderers read.
+    if (this.store.flights.sideText !== undefined) {
+      this.store.flights.sideText = sanitizeSideText(this.store.flights.sideText);
+    }
+    if (this.store.flights.bannerText !== undefined) {
+      this.store.flights.bannerText = sanitizeBannerText(this.store.flights.bannerText);
     }
     // Same discipline for the user glow rules (docs/research/flight-glow-rules.md
     // §6.3): unknown patterns / unusable colours drop the rule, numeric criteria

@@ -55,7 +55,7 @@ import {
   flightDisplayPos, flightShellMm, sanitizeLabelFields,
   resolveFlightGlow, flightGlowFrame, lerpHexColor, FLIGHT_DEFAULT_BEACON,
   FLIGHT_LABEL_FIELDS_DEFAULT, FLIGHTS_DEFAULT_RADIUS_NM, type FlightPoint,
-  flightFieldText, flightLabelLines, flightPointSpeedBand,
+  flightFieldText, flightLabelLines, flightPointSpeedBand, militarySkinFor,
 } from './flights.js';
 // aircraft-types.ts is pure + zero-import like flights.ts. Imported HERE only so
 // the 2D speed echo resolves the archetype fallback (used when the feed carries
@@ -63,6 +63,9 @@ import {
 // speed-less turboprop could show band-2 dashes on the plan and a band-3 tail in
 // the scene. Type-table only; nothing three.js-shaped comes with it.
 import { aircraftArchetype } from './aircraft-types.js';
+import {
+  airlineForCallsign, airlineTextFor, resolveAirlineLivery,
+} from './airlines.js';
 // The label-text resolvers live in flights.ts (pure, shared with three-renderer
 // so the 2D line and the 3D plate can never drift — they used to be mirrored
 // copies here). Re-exported because the flights-ui test page consumes them off
@@ -615,6 +618,18 @@ function drawFlights(ctx: CanvasRenderingContext2D, p: Planner, view: View): voi
   const fields = sanitizeLabelFields(cfg.labelFields) ?? FLIGHT_LABEL_FIELDS_DEFAULT;
   const beaconsOn = cfg.beacons !== false;
   const privacyDim = cfg.privacyDim !== false;
+  // Airline livery (docs/research/airline-reference.md). The 2D glyph is
+  // deliberately ABSTRACT — one dart for every aircraft — but its FILL can
+  // carry the carrier's brand colour for free, which is the one livery cue a
+  // few plan pixels can express. Resolution goes through the SAME pure
+  // `resolveAirlineLivery` the 3D tint uses — INCLUDING its military-SKIN veto,
+  // which is resolved here too even though the 2D glyph never draws a
+  // silhouette. `militarySkinFor` can fire on `category === 'A6'` with no
+  // military dbFlag set, so skipping it would leave one class of aircraft
+  // tinted on the plan and untinted in the sky. The set of painted aircraft is
+  // identical in both views by construction.
+  const airlineColors = cfg.airlineColors !== false;
+  const militarySkins = cfg.militarySkins !== false;
   const glowRules = cfg.glowRules;
   const dpr = window.devicePixelRatio || 1;
   const R = 9 * dpr;
@@ -643,6 +658,9 @@ function drawFlights(ctx: CanvasRenderingContext2D, p: Planner, view: View): voi
     // PIA/LADD courtesy dimming (research §4.2) — the glyph AND its text fade;
     // the status beacon deliberately does NOT (a LADD aircraft still beacons).
     const dim = privacyDim && (fp.pia === true || fp.ladd === true);
+    // Resolved ONCE per aircraft — the speed-band fallback and the livery veto
+    // both need it.
+    const arch = aircraftArchetype(fp.typeCode, fp.category);
     ctx.save();
     ctx.translate(pt.x, pt.y);
     ctx.rotate(a);
@@ -652,7 +670,7 @@ function drawFlights(ctx: CanvasRenderingContext2D, p: Planner, view: View): voi
     // the dart paints over its own trail. Band 1 draws nothing — the absence is
     // the hover cue in 2D exactly as it is in 3D.
     if (speedViz) {
-      const band = flightPointSpeedBand(fp, null, aircraftArchetype(fp.typeCode, fp.category));
+      const band = flightPointSpeedBand(fp, null, arch);
       if (band >= 2) {
         ctx.save();
         ctx.lineCap = 'round';
@@ -690,7 +708,13 @@ function drawFlights(ctx: CanvasRenderingContext2D, p: Planner, view: View): voi
     ctx.lineTo(0, R * 0.22);                 // notch
     ctx.lineTo(-R * 0.62, R * 0.58);         // left tail
     ctx.closePath();
-    ctx.fillStyle = fp.military ? 'rgba(139,152,99,0.92)' : 'rgba(203,213,225,0.9)';
+    const livery = resolveAirlineLivery(airlineForCallsign(fp.callsign), {
+      enabled: airlineColors, military: fp.military,
+      skin: militarySkins && militarySkinFor(fp, arch) != null,
+      suppress: privacyDim && fp.pia === true,
+    });
+    ctx.fillStyle = fp.military ? 'rgba(139,152,99,0.92)'
+      : livery ? livery.primary : 'rgba(203,213,225,0.9)';
     ctx.fill();
     ctx.lineWidth = 1 * dpr;
     ctx.strokeStyle = 'rgba(15,23,32,0.7)';
@@ -730,7 +754,10 @@ function drawFlights(ctx: CanvasRenderingContext2D, p: Planner, view: View): voi
       ctx.restore();
     }
     if (showLabels) {
-      const { top, sub } = flightLabelLines(fp, fields, privacyDim);
+      // The `airline` label field's text is INJECTED — flights.ts is zero-import
+      // and never performs the callsign lookup itself (see flightFieldText).
+      const { top, sub } = flightLabelLines(fp, fields, privacyDim,
+        airlineTextFor(fp.callsign, privacyDim && fp.pia === true)?.shortName ?? '');
       ctx.save();
       ctx.globalAlpha = dim ? 0.5 : 1;
       ctx.textAlign = 'left';

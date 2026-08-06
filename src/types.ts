@@ -1561,6 +1561,29 @@ export interface FlightsConfig {
   // every aircraft on the generic archetype body. `setFlights` normalizes
   // exactly-true back to undefined (the minimal-config idiom).
   militarySkins?: boolean;
+  // AIRLINE LIVERY TINT (docs/research/airline-reference.md): an aircraft whose
+  // callsign prefix resolves to a known carrier (`airlineForCallsign` in
+  // src/airlines.ts) is painted in that airline's approximate brand colours —
+  // primary on the body, secondary on the accents. ABSENT = ON. The precedence
+  // is a hard ladder owned by `resolveAirlineLivery`: a military SKIN, the
+  // military flag, and PIA identity suppression each veto the livery outright,
+  // and a regional (whose real livery is its mainline partner's) carries no
+  // colours at all rather than a guessed one. `setFlights` normalizes
+  // exactly-true back to undefined (the militarySkins idiom).
+  airlineColors?: boolean;
+  // What the aircraft carries down its own FLANKS. ABSENT = 'auto' = the
+  // shipped livery layout (operator broadside + identity along the spine on a
+  // big fuselage, identity on the flanks otherwise). 'operator' / 'airline' /
+  // 'slogan' / 'callsign' force one marking; 'none' leaves the airframe blank
+  // (the label plate still identifies it). A PIA aircraft withholds its
+  // identity on every surface regardless of this setting. Resolved by
+  // `resolveFlightSideText` in src/flights.ts; `setFlights` normalizes 'auto'
+  // and any unknown value back to undefined.
+  sideText?: 'auto' | 'operator' | 'airline' | 'slogan' | 'callsign' | 'none';
+  // What a piston single's TOWED BANNER says. ABSENT = 'auto' = the identity
+  // (today's behavior). Resolved by `resolveFlightBannerText`; same
+  // normalization discipline.
+  bannerText?: 'auto' | 'airline' | 'slogan' | 'callsign';
   // User-authored glow rules (docs/research/flight-glow-rules.md): an ordered,
   // FIRST-MATCH-WINS list assigning a colour + animation pattern to matching
   // aircraft. Layered ON TOP of the default beacon ladder — an emergency

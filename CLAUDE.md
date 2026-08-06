@@ -327,7 +327,7 @@ importable by BOTH the app graph and the renderer chunk — the avatars.ts prece
 fr24 aliases, no-position + `alt_baro === 'ground'` filtered, **`C*`/`B3` non-aircraft categories
 dropped** (ground vehicles/obstructions — the ground sentinel can't catch airborne-flagged ones),
 never throws), `isEmergency` (enum non-null OR squawk 7500/7600/7700), `FLIGHT_LABEL_FIELDS` +
-`sanitizeLabelFields` (keys `callsign|reg|type|operator|alt|speed|trend|squawk|dist`, default
+`sanitizeLabelFields` (keys `callsign|reg|type|operator|airline|alt|speed|trend|squawk|dist`, default
 `['callsign','alt']`), `aircraftModelKind` (legacy 3-way — provably `legacyModelKind(aircraftArchetype(null, cat))`),
 `MAX_AIRCRAFT` 50 nearest-first, and the **display-shell compression** (deliberately NOT to scale — the neighborhood honesty precedent): `compressRadiusMm`
 (**radius-anchored PIECEWISE-LINEAR mapping**: `u = clamp(d/R, 0, 1.05)`, `f(u) = 0.75·u` for
@@ -521,10 +521,11 @@ returns `changed` — call sites own the single `emitConfig`. A low overflight a
 `householdEvents` kind `flyover` (x/y null = house-wide) → `BUBBLE_POOL_EVENT.flyover` ✈️👀🛩️.
 **Settings ▸ Integrations "Flight tracking"** block (status line w/ aircraft count + poll age,
 source radios w/ the airplanes.live privacy disclosure + CORS/mixed-content hints, radius 5–100 nm default 15,
-poll, min/max alt filters, "Callsign labels" + a 9-checkbox "Label fields" grid (canonical order,
-gated behind "Callsign labels") + "Status beacons" + "Military aircraft skins" + "Dim privacy-flagged aircraft" + "Track the
+poll, min/max alt filters, "Callsign labels" + a 10-checkbox "Label fields" grid (canonical order,
+gated behind "Callsign labels") + "Status beacons" + "Military aircraft skins" + "Airline liveries" +
+"Fuselage text" / "Tow banner text" dropdowns + "Dim privacy-flagged aircraft" + "Track the
 ISS", alerts sub-group — the watch-list normalizes in `setFlights` (trim/uppercase), and
-`setFlights` sanitizes `labelFields`, not the UI, so imports get the same shape).
+`setFlights` sanitizes `labelFields`/`sideText`/`bannerText`/`airlineColors`, not the UI, so imports get the same shape).
 **Speed visualization + vertical scale (2026-07-31, user-requested, research-backed).**
 `FlightsConfig.speedViz?` (absent = ON; "Speed effects" checkbox): pure
 `flightSpeedBand(gsKmh, prevBand?, archetype?)` (flights.ts — thresholds 60/200/450/700 km/h,
@@ -596,10 +597,41 @@ the dblclick timer (flights have no dblclick, a second tap re-opens the card). 2
 gate so a hidden layer is untappable; `hitFlight` + `tryOpenFlightInfo` run LOW priority in both
 click branches. `<diorama-flight-modal>` (modals.ts, alarm/thermostat recipe, mounted in app.ts)
 is a READ-ONLY card — real altitude/speed/distance/bearing/fix-age, status chips, PIA
-anonymization, "signal lost" when the aircraft leaves the feed — fed by the new
+anonymization, "signal lost" when the aircraft leaves the feed, and (2026-08-05) the **Airline
+block**: full name (+shortName), IATA, spoken ATC form ("spoken as DELTA 1234"), slogan, kind
+chip, regional "operates as", two color swatches; military idents get the callsign-word line
+(REACH → AMC airlift) + a dim `usMilitaryHexHeuristic` note; kind-'pia' idents get "privacy
+callsign — not a real airline" and NO branding — fed by the new
 `Planner.flightByHex(hex)` and repainted on the LIVE channel while open. NB flights-ui-test's
 `canvas-render.mod.js` is a COMBINED bundle of canvas-render + canvas-hit + canvas-interact from
-one temp entry (separate bundles would each get their own `flightHitPx` module instance).
+one temp entry (separate bundles would each get their own `flightHitPx` module instance) —
+**and the page ALSO dynamically imports `flights.mod.js`** (omit it and the Planner section dies;
+recipe fixed in the header).
+**Airline identification (2026-08-05, user-supplied reference table — `docs/research/airline-reference.md`)**:
+`src/airlines.ts` (pure, ZERO-import — joins the flights.ts/aircraft-types.ts/avatars.ts
+shared-chunk family; ~21 kB min / 6.6 kB gzip in the startup graph, the aircraft-types
+precedent): `AIRLINES` (129 operators keyed by ICAO 3-letter callsign prefix — name/shortName/
+IATA/ATC telephony word/slogan/brand colors/`operatesFor`/kind incl. `'pia'` for the FFL/DCM
+privacy pseudo-airlines), `MILITARY_CALLSIGN_WORDS` (+RCH/CNV aliases; ceremonial "…ONE" rows
+deliberately absent — they'd false-positive on idents ending in 1; COAST GUARD skipped, tail-number
+form), `airlineForCallsign` (3-letter prefix + flight-number-shaped remainder, never throws),
+`militaryCallsignInfo`, `spokenCallsign` → "DELTA 1234", `usMilitaryHexHeuristic` (AE0000–AFFFFF,
+labeled a heuristic), and **`resolveAirlineLivery` — the ONE precedence ladder both renderers
+call**: disabled → military SKIN → military flag (olive wins) → PIA identity suppression →
+kind-'pia' → colorless carrier (every regional — their livery is the partner's, and SkyWest flies
+for four majors, so inheriting would fabricate; `operatesFor` shows in the card instead) all veto;
+else `tint {body: colorPrimary, accent: colorSecondary}` through `_buildAircraftModel`'s existing
+trailing tint param (privacyDim translucency composes on top). The 2D dart resolves the SAME
+ladder incl. the skin veto (a category-A6 skin fires with no military flag — skipping the veto
+would paint on the plan what the sky leaves generic; test-pinned). Config:
+`FlightsConfig.airlineColors?` (absent = ON), `sideText?`
+(`'auto'|'operator'|'airline'|'slogan'|'callsign'|'none'`, absent = 'auto' = the shipped
+`_flightFuselageText` behavior golden-pinned byte-identical) and `bannerText?`
+(`'auto'|'airline'|'slogan'|'callsign'`, GA tow banner) — all exactly-default → undefined in
+`setFlights`, ride `updateFlights` opts (stale-chunk-safe, config-path, no new dirty-key inputs);
+the rig rebuild signature gained the airline color pair so a toggle/feed change rebuilds that hex
+in place. `flightFieldText`/`flightLabelLines` take a trailing INJECTED airline string (flights.ts
+stays zero-import); the `airline` label field renders the shortName.
 **User glow rules** (`Store.flights.glowRules?: FlightGlowRule[]`, cap 30, research
 `docs/research/flight-glow-rules.md`): an ordered, FIRST-MATCH-WINS list (the `evalRules` idiom)
 assigning a colour + animation pattern to matching aircraft. Whole surface is pure, in
@@ -627,15 +659,15 @@ new dirty-key input. 2D `drawFlights` calls the same pair (`solid`+colorB = two 
 call `resolveFlightGlow`, never re-derive locally. Settings ▸ Flight tracking "Glow rules"
 editor (collapsed summary rows, ✎ expand, ▲▼ reorder — order materially changes behaviour).
 **Attribution**: "Flight data © airplanes.live" joins the fixed bottom-left chip (stacked with the
-OSM line) whenever cloud + enabled + data. Tests: `flights-test.html` (`FLIGHTS PASS 716/716` —
+OSM line) whenever cloud + enabled + data. Tests: `flights-test.html` (`FLIGHTS PASS 827/827` —
 fixture = a REAL 94-aircraft airplanes.live LAX capture; incl. the live-path emit matrix, the
 archetype golden matrix, the emergency-alert lifecycle, the shell-rescale golden/property suite,
 and §6e's draw-radius clamp matrix + similarity law — the pre-existing derivation goldens run
-through an `FB` wrapper that pins `shellMm` to FLIGHT_SHELL_BASE_MM and stay byte-identical), `flights-render-test.html` (`FLIGHTSRENDER PASS 555/555` — heading/pitch signs asserted
+through an `FB` wrapper that pins `shellMm` to FLIGHT_SHELL_BASE_MM and stay byte-identical), `flights-render-test.html` (`FLIGHTSRENDER PASS 591/591` — heading/pitch signs asserted
 via `getWorldDirection`; archetype geometry, livery text layout, beacon priority/gating, privacy
 dim, in-place rebuild, distance scale, fog exemption, flight raycast, §4d's non-default-shell
 position/scale/frustum parity), `flights-ui-test.html`
-(`FLIGHTSUI 313/313` — settings round-trips, flight modal matrix, 2D hit routing; alert-center
+(`FLIGHTSUI 359/359` — settings round-trips, flight modal matrix, 2D hit routing; alert-center
 67/67 stays green).
 
 ### Geo reference & GPS device pins (World Outside, Feature G)

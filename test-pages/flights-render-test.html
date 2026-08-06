@@ -2769,6 +2769,163 @@
     }
   }
 
+  // ══ 29. Airline liveries + fuselage / banner text ═══════════════════════════
+  // docs/research/airline-reference.md. The livery is the tint pair
+  // _buildAircraftModel already accepted for the background tow plane, so the
+  // assertions compare COLOUR SIGNATURES against a directly-tinted reference
+  // build — the materials go through _mat()'s _simsColor saturation push, so
+  // comparing against the raw table hex would be wrong.
+  {
+    // AIRFRAME colours only: a live rig's assembly also carries the fuselage
+    // lettering planes and (when flagged) the status beacon bead, none of which
+    // a bare _buildAircraftModel reference has.
+    const colorSig = (root) => {
+      const out = [];
+      root.traverse(o => {
+        if (!o.isMesh || !o.material || o.userData.outline) return;
+        if (o.userData.textPlane || o.userData.flightId || o.userData.beacon) return;
+        out.push(o.material.color.getHex());
+      });
+      return out.sort((a, b) => a - b).join(',');
+    };
+    const DELTA_BODY = 0xc8102e, DELTA_ACCENT = 0x00285f;
+    const refTint = r._buildAircraftModel('narrowbody', false, false,
+      { body: DELTA_BODY, accent: DELTA_ACCENT });
+    const refPlain = r._buildAircraftModel('narrowbody', false, false);
+    const SIG_TINT = colorSig(refTint.asm), SIG_PLAIN = colorSig(refPlain.asm);
+    r._clearGroup(refTint.asm); r._clearGroup(refPlain.asm);
+    ok('29: the tinted + untinted reference builds genuinely differ',
+       SIG_TINT !== SIG_PLAIN);
+
+    const AFP = o => FP({ category: 'A3', typeCode: 'B738',
+      operator: 'DELTA AIR LINES INC', ...o });
+
+    // ── The livery itself ────────────────────────────────────────────────────
+    r.updateFlights([
+      AFP({ hex: 'c10001', callsign: 'DAL1234' }),                       // painted
+      AFP({ hex: 'c10002', callsign: 'ZQX1234' }),                       // unknown prefix
+      AFP({ hex: 'c10003', callsign: 'DAL1234', military: true }),       // olive wins
+      AFP({ hex: 'c10004', callsign: 'DAL1234', pia: true }),            // PIA vetoes
+      AFP({ hex: 'c10005', callsign: 'SKW1234' }),                       // colourless regional
+      AFP({ hex: 'c10006', callsign: 'FFL0123' }),                       // PIA pseudo-operator
+    ], ORIGIN, 0, RAD_NM, true, ANCHOR, {});
+
+    ok('29: a DAL callsign paints the Delta livery',
+       colorSig(rig('c10001').asm) === SIG_TINT);
+    ok('29: …and records it as the rebuild signature',
+       rig('c10001').airlineKey === `${DELTA_BODY}:${DELTA_ACCENT}`,
+       rig('c10001').airlineKey);
+    ok('29: an unknown prefix keeps the archetype paint',
+       colorSig(rig('c10002').asm) === SIG_PLAIN && rig('c10002').airlineKey === '');
+    ok('29: a MILITARY aircraft is never airline-tinted',
+       colorSig(rig('c10003').asm) !== SIG_TINT && rig('c10003').airlineKey === '');
+    ok('29: a PIA aircraft is never airline-tinted',
+       colorSig(rig('c10004').asm) !== SIG_TINT && rig('c10004').airlineKey === '');
+    ok('29: …and its fuselage identity stays the bare hex',
+       rig('c10004').idKey === 'C10004|', rig('c10004').idKey);
+    ok('29: a colourless regional keeps the archetype paint',
+       rig('c10005').airlineKey === '');
+    ok('29: a PIA pseudo-operator prefix paints nothing',
+       rig('c10006').airlineKey === '');
+
+    // A military SKIN outranks the livery: the borrowed silhouette keeps its
+    // own signature paint (there is nothing for a tint to reach).
+    r.updateFlights([FP({ hex: 'c10007', callsign: 'DAL1234', typeCode: 'F16',
+      military: true, category: 'A6' })], ORIGIN, 0, RAD_NM, true, ANCHOR, {});
+    ok('29: a military SKIN refuses the livery',
+       rig('c10007').skin === 'f16' && rig('c10007').airlineKey === '');
+
+    // ── The master toggle repaints IN PLACE, keeping motion state ────────────
+    r.updateFlights([AFP({ hex: 'c10010', callsign: 'DAL1234' })],
+                    ORIGIN, 0, RAD_NM, true, ANCHOR, {});
+    const tgl = rig('c10010');
+    const asmBefore = tgl.asm;
+    tgl.curX = 1234; tgl.curY = 9000; tgl.curZ = -777; tgl.yaw = 0.75;
+    tgl.spin = 3.5; tgl.beaconPhase = 2.25;
+    ok('29: the rig starts painted', colorSig(tgl.asm) === SIG_TINT);
+    r.updateFlights([AFP({ hex: 'c10010', callsign: 'DAL1234' })],
+                    ORIGIN, 0, RAD_NM, true, ANCHOR, { airlineColors: false });
+    ok('29: airlineColors:false repaints the rig back to the archetype livery',
+       colorSig(rig('c10010').asm) === SIG_PLAIN);
+    ok('29: …by REBUILDING the assembly in place', rig('c10010').asm !== asmBefore);
+    ok('29: …keeping the eased display position',
+       rig('c10010').curX === 1234 && rig('c10010').curY === 9000
+       && rig('c10010').curZ === -777);
+    ok('29: …and the position is written onto the fresh assembly',
+       rig('c10010').asm.position.x === 1234 && rig('c10010').asm.position.z === -777);
+    ok('29: …keeping yaw / prop spin / beacon phase',
+       rig('c10010').yaw === 0.75 && rig('c10010').spin === 3.5
+       && rig('c10010').beaconPhase === 2.25);
+    ok('29: …and the signature clears so it will not rebuild again',
+       rig('c10010').airlineKey === '');
+    r.updateFlights([AFP({ hex: 'c10010', callsign: 'DAL1234' })],
+                    ORIGIN, 0, RAD_NM, true, ANCHOR, {});
+    ok('29: re-enabling repaints it', colorSig(rig('c10010').asm) === SIG_TINT);
+
+    // A poll that changes nothing must not rebuild (the _syncFlightBeacon idiom).
+    const stableAsm = rig('c10010').asm;
+    r.updateFlights([AFP({ hex: 'c10010', callsign: 'DAL1234' })],
+                    ORIGIN, 0, RAD_NM, true, ANCHOR, {});
+    ok('29: an unchanged poll does not rebuild the model',
+       rig('c10010').asm === stableAsm);
+
+    // ── Fuselage text (`sideText`) reaches the painter ────────────────────────
+    const sideKey = (mode) => {
+      r.updateFlights([AFP({ hex: 'c10020', callsign: 'DAL1234' })],
+                      ORIGIN, 0, RAD_NM, true, ANCHOR,
+                      mode === undefined ? {} : { sideText: mode });
+      return rig('c10020').idKey;
+    };
+    const AUTO_KEY = sideKey(undefined);
+    ok('29: auto keeps the shipped livery layout (operator | identity)',
+       AUTO_KEY === 'DELTA AIR LINES INC|DAL1234', AUTO_KEY);
+    ok('29: sideText "auto" is byte-identical to absent', sideKey('auto') === AUTO_KEY);
+    ok('29: sideText "slogan" reaches the fuselage painter',
+       sideKey('slogan') === 'Keep Climbing|DAL1234', rig('c10020').idKey);
+    ok('29: sideText "airline" paints the short name',
+       sideKey('airline') === 'Delta|DAL1234');
+    ok('29: sideText "callsign" paints the identity on the flanks only',
+       sideKey('callsign') === 'DAL1234|');
+    ok('29: sideText "none" blanks the airframe', sideKey('none') === '|');
+    ok('29: …and removes the id planes entirely', rig('c10020').idPlanes === null);
+    ok('29: an unknown mode falls back to auto', sideKey('bogus') === AUTO_KEY);
+    ok('29: slogan text actually reaches a drawn plane', (() => {
+      sideKey('slogan');
+      return withUD(rig('c10020').asm, 'flightId').length >= 2;
+    })());
+
+    // ── Tow-banner text (`bannerText`) ──────────────────────────────────────
+    // A piston single with a callsign tows the banner (the shipped rule).
+    const banKey = (mode) => {
+      r.updateFlights([FP({ hex: 'c10030', callsign: 'DAL1234', category: 'A1' })],
+                      ORIGIN, 0, RAD_NM, true, ANCHOR,
+                      mode === undefined ? {} : { bannerText: mode });
+      return rig('c10030').bannerKey;
+    };
+    ok('29: the piston rig really is towing a banner', (() => {
+      banKey(undefined);
+      return rig('c10030').banner !== null && rig('c10030').archetype === 'ga-high';
+    })());
+    ok('29: banner auto is the identity (unchanged)', banKey(undefined) === 'DAL1234');
+    ok('29: banner "airline" tows the short name', banKey('airline') === 'Delta');
+    ok('29: banner "slogan" tows the slogan', banKey('slogan') === 'Keep Climbing');
+    ok('29: banner "callsign" tows the identity', banKey('callsign') === 'DAL1234');
+    ok('29: a banner-text change repaints the cloth', rig('c10030').banner !== null);
+
+    // ── The `airline` LABEL FIELD resolves renderer-side ─────────────────────
+    r.updateFlights([AFP({ hex: 'c10040', callsign: 'DAL1234' })],
+                    ORIGIN, 0, RAD_NM, true, ANCHOR, { labelFields: ['callsign', 'airline'] });
+    ok('29: the label plate carries the resolved airline',
+       rig('c10040').labelKey === 'DAL1234|Delta', rig('c10040').labelKey);
+    r.updateFlights([AFP({ hex: 'c10041', callsign: 'DAL1234', pia: true })],
+                    ORIGIN, 0, RAD_NM, true, ANCHOR, { labelFields: ['callsign', 'airline'] });
+    ok('29: a PIA plate withholds the airline',
+       rig('c10041').labelKey === '🔒 C10041|', rig('c10041').labelKey);
+
+    // Clear the section's rigs so later frames do not carry them.
+    r.updateFlights([], ORIGIN, 0, RAD_NM, true, ANCHOR, {});
+  }
+
   // ── report ─────────────────────────────────────────────────────────────────
   const pass = tests.filter(t => t.ok).length;
   const fail = tests.length - pass;

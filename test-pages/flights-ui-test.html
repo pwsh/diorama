@@ -20,7 +20,10 @@
   <div id="rows"></div>
   <div id="mount"></div>
 
-  <!-- Two bundles, no live HA (the alert-center-test / config-test recipe):
+  <!-- Bundles, no live HA (the alert-center-test / config-test recipe).
+       NB the page ALSO dynamically imports flights.mod.js — omit it and the
+       Planner section dies with "Failed to fetch dynamically imported module":
+         npx esbuild src/flights.ts --format=esm --outfile=<harness>/flights.mod.js
          # pure alerts module (zero deps):
          npx esbuild src/alerts.ts --bundle --format=esm --outfile=<harness>/alerts.mod.js
          # the REAL Planner over an in-page fake HaApi (IndexedDB doesn't run under
@@ -895,12 +898,15 @@
       await flip(cbFor('Tow banners (small planes)'), true);
       eq('re-checking banners writes the store', p2.store.flights.banners, true);
 
-      const FIELD_LABELS = ['Callsign', 'Registration', 'Type', 'Operator', 'Altitude',
-                            'Speed', 'Climb/descend', 'Squawk', 'Distance'];
+      // 10 fields since the airline arc — 'Airline' sits after 'Operator' in
+      // the canonical FLIGHT_LABEL_FIELDS order, so 'Altitude' moved to index 5.
+      const FIELD_LABELS = ['Callsign', 'Registration', 'Type', 'Operator', 'Airline',
+                            'Altitude', 'Speed', 'Climb/descend', 'Squawk', 'Distance'];
       const fieldCbs = FIELD_LABELS.map(t => cbFor(t));
-      eq('all 9 label-field checkboxes rendered', fieldCbs.filter(Boolean).length, 9);
+      eq('all 10 label-field checkboxes rendered', fieldCbs.filter(Boolean).length, 10);
       eq('Callsign checked by default', fieldCbs[0].checked, true);
-      eq('Altitude checked by default', fieldCbs[4].checked, true);
+      eq('Altitude checked by default', fieldCbs[5].checked, true);
+      eq('Airline unchecked by default', fieldCbs[4].checked, false);
       eq('Registration unchecked by default', fieldCbs[1].checked, false);
       await flip(cbFor('Registration'), true);
       ok('checking a field writes canonical-order labelFields',
@@ -1029,6 +1035,77 @@
         p2.store.flights.beacons === true && p2.store.flights.speedViz === true,
         `${p2.store.flights.beacons}/${p2.store.flights.speedViz}`);
       await flip(cbFor('Military aircraft skins'), true);
+
+      // ── 12b. Airline liveries + fuselage / tow-banner text ────────────────
+      // docs/research/airline-reference.md. One opt-OUT checkbox (the
+      // militarySkins idiom — re-checking CLEARS the field) and two dropdowns
+      // whose default value 'auto' likewise normalizes back to undefined.
+      const alCb = cbFor('Airline liveries');
+      ok('“Airline liveries” checkbox rendered', !!alCb);
+      ok('airline liveries default to ON (absent = on)',
+        alCb.checked === true && p2.store.flights.airlineColors === undefined);
+      await flip(alCb, false);
+      eq('unchecking writes airlineColors false', p2.store.flights.airlineColors, false);
+      ok('…and the checkbox reflects it', cbFor('Airline liveries').checked === false);
+      await flip(cbFor('Airline liveries'), true);
+      eq('re-checking clears the field back to the default',
+        p2.store.flights.airlineColors, undefined);
+      ok('…and reads the absent state as ON', cbFor('Airline liveries').checked === true);
+
+      const selFor = text => {
+        const l = [...drawer.querySelectorAll('label')]
+          .find(el => el.textContent.replace(/\s+/g, ' ').trim() === text);
+        return l ? l.parentElement.querySelector('select') : null;
+      };
+      const pick = async (el, v) => {
+        el.value = v; el.dispatchEvent(new Event('change'));
+        await drawer.updateComplete; await sleep(4);
+      };
+      const sideSel = selFor('Fuselage text');
+      ok('“Fuselage text” dropdown rendered', !!sideSel);
+      ok('fuselage text defaults to auto',
+        sideSel && sideSel.value === 'auto' && p2.store.flights.sideText === undefined,
+        `${sideSel && sideSel.value} / ${p2.store.flights.sideText}`);
+      ok('the fuselage dropdown offers all six modes',
+        sideSel.options.length === 6
+        && [...sideSel.options].map(o => o.value).join(',')
+           === 'auto,operator,airline,slogan,callsign,none',
+        [...sideSel.options].map(o => o.value).join(','));
+      await pick(sideSel, 'slogan');
+      eq('picking a mode writes the store', p2.store.flights.sideText, 'slogan');
+      eq('…and the dropdown reflects it', selFor('Fuselage text').value, 'slogan');
+      await pick(selFor('Fuselage text'), 'none');
+      eq('“none” round-trips', p2.store.flights.sideText, 'none');
+      await pick(selFor('Fuselage text'), 'auto');
+      eq('back to auto CLEARS the field (setFlights normalization)',
+        p2.store.flights.sideText, undefined);
+
+      const banSel = selFor('Tow banner text');
+      ok('“Tow banner text” dropdown rendered', !!banSel);
+      ok('banner text defaults to auto',
+        banSel && banSel.value === 'auto' && p2.store.flights.bannerText === undefined,
+        `${banSel && banSel.value} / ${p2.store.flights.bannerText}`);
+      ok('the banner dropdown offers four modes (no “none”)',
+        banSel.options.length === 4
+        && ![...banSel.options].some(o => o.value === 'none'));
+      await pick(banSel, 'airline');
+      eq('picking a banner mode writes the store', p2.store.flights.bannerText, 'airline');
+      await pick(selFor('Tow banner text'), 'auto');
+      eq('back to auto clears the banner field', p2.store.flights.bannerText, undefined);
+      // Sanitization is setFlights's job, not the UI's — an imported / hand
+      // edited config lands in the same shape.
+      p2.setFlights(f => { f.sideText = 'BOGUS'; f.bannerText = 'none'; });
+      eq('setFlights drops an unknown fuselage mode', p2.store.flights.sideText, undefined);
+      eq('setFlights drops “none” from the banner vocabulary',
+        p2.store.flights.bannerText, undefined);
+      p2.setFlights(f => { f.sideText = '  SLOGAN '; });
+      eq('setFlights normalizes case + whitespace', p2.store.flights.sideText, 'slogan');
+      p2.setFlights(f => { f.sideText = undefined; });
+      // Independence from the neighbouring toggles.
+      await flip(cbFor('Airline liveries'), false);
+      ok('turning liveries off leaves skins + beacons alone',
+        p2.store.flights.militarySkins === undefined && p2.store.flights.beacons === true);
+      await flip(cbFor('Airline liveries'), true);
 
       // ── 12a. Glow rules editor (flight-glow-rules.md §6.4) ─────────────────
       // Collapsed summary rows + an ✎-expanded criteria form, every write going
@@ -1360,6 +1437,76 @@
       p2.dispatchEvent(new CustomEvent('live'));
       t = await cardText();
       ok('a null feed does not crash the open card', has(t, 'AAL266'));
+
+      // ── 13a. Airline block (docs/research/airline-reference.md) ────────────
+      // Four mutually exclusive outcomes: a real carrier, a regional (which
+      // explains its partner livery instead of showing colours), a military
+      // callsign word, and a PIA pseudo-operator that gets NO branding.
+      section('Flight detail card — airline block');
+      const swatches = () => card.querySelectorAll('[data-airline-swatch]').length;
+      p2.flightsNow = [mkFp({ hex: 'aa0001', callsign: 'DAL1234', typeCode: 'B738',
+        category: 'A3', altFt: 31000 })];
+      card.show('aa0001');
+      t = await cardText();
+      ok('mainline: the card names the airline', has(t, 'Delta Air Lines'), t.slice(0, 240));
+      ok('mainline: it shows the ICAO + IATA codes', has(t, 'DAL') && has(t, 'IATA DL'));
+      ok('mainline: it shows the SPOKEN form', has(t, 'DELTA 1234'), t.slice(0, 300));
+      ok('mainline: it shows the slogan', has(t, 'Keep Climbing'));
+      ok('mainline: it chips the carrier kind', has(t, 'MAINLINE'));
+      eq('mainline: two colour swatches are drawn', swatches(), 2);
+
+      p2.flightsNow = [mkFp({ hex: 'aa0002', callsign: 'SKW5678', typeCode: 'CRJ9',
+        category: 'A3' })];
+      card.show('aa0002');
+      t = await cardText();
+      ok('regional: the card names the regional', has(t, 'SkyWest'), t.slice(0, 240));
+      ok('regional: it explains the partner livery',
+         has(t, 'operates as') && has(t, 'Delta Connection'), t.slice(0, 320));
+      ok('regional: it chips REGIONAL', has(t, 'REGIONAL'));
+      eq('regional: NO colour swatches (the livery is its partner\'s)', swatches(), 0);
+      ok('regional: it still shows the spoken form', has(t, 'SKYWEST 5678'));
+
+      p2.flightsNow = [mkFp({ hex: 'ae1234', callsign: 'RCH412', military: true,
+        typeCode: 'C17', category: 'A5' })];
+      card.show('ae1234');
+      t = await cardText();
+      ok('military: the callsign WORD is explained',
+         has(t, 'REACH') && has(t, 'Air Mobility Command'), t.slice(0, 300));
+      ok('military: the typical airframes are listed', has(t, 'C-17'));
+      ok('military: the hex-range note is labelled a HEURISTIC',
+         has(t, 'AE0000') && has(t, 'heuristic'), t.slice(0, 400));
+      ok('military: no airline branding is invented',
+         !has(t, 'MAINLINE') && swatches() === 0);
+      // A civil aircraft outside the range gets no hex note.
+      p2.flightsNow = [mkFp({ hex: 'a12345', callsign: 'UAL99' })];
+      card.show('a12345');
+      t = await cardText();
+      ok('a civil hex outside AE0000–AFFFFF gets no military note',
+         !has(t, 'heuristic'), t.slice(0, 240));
+      ok('…but still resolves its airline', has(t, 'United Airlines'));
+
+      p2.flightsNow = [mkFp({ hex: 'ff0001', callsign: 'FFL0123', pia: true })];
+      card.show('ff0001');
+      t = await cardText();
+      ok('PIA: no airline name is shown', !has(t, 'ForeFlight'), t.slice(0, 300));
+      ok('PIA: no colour swatches', swatches() === 0);
+      ok('PIA: the card still explains the anonymization', has(t, 'anonymized (PIA)'));
+      // With the courtesy off, the pseudo-operator is named for what it IS —
+      // "not a real airline" — and still never branded.
+      p2.store.flights = { enabled: true, source: 'cloud', iss: false, privacyDim: false };
+      p2.dispatchEvent(new CustomEvent('live'));
+      t = await cardText();
+      ok('PIA (courtesy off): named as a privacy callsign, not an airline',
+         has(t, 'privacy callsign') && has(t, 'not a real airline'), t.slice(0, 320));
+      ok('PIA (courtesy off): still no colour swatches', swatches() === 0);
+      p2.store.flights = { enabled: true, source: 'cloud', iss: false };
+
+      // An unresolvable ident renders no airline block at all.
+      p2.flightsNow = [mkFp({ hex: 'bb0001', callsign: 'N472QS' })];
+      card.show('bb0001');
+      await cardText();
+      eq('an unresolvable ident renders no airline block',
+         card.querySelectorAll('[data-airline-block]').length, 0);
 
       // Sparse aircraft: nothing invented for missing fields.
       p2.flightsNow = [mkFp({ hex: 'bare01', altFt: 5000 })];
