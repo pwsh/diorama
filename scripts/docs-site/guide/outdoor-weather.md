@@ -14,9 +14,63 @@ Set up weather in the **Weather** settings. Pick one of three sources:
 - **HA weather entity** — bind any `weather.` entity and Diorama reads its condition, temperature, wind, and forecast.
 - **Local sensor station** — point Diorama at your own precipitation, wind, temperature, and lightning sensors, and it derives a condition from them.
 - **Open-Meteo** — a free, keyless online forecast. Enter a ZIP code (or lat/lon) and Diorama geocodes it once and polls every 15 minutes.
+- **Demo (hand-authored)** — type the weather in yourself. Nothing is bound and nothing is fetched, so it needs neither a weather entity nor an internet connection. See below.
 
 The panel keeps working offline — the last reading holds and is marked stale
 after a while.
+
+### Hand-authored demo weather
+
+Pick **Demo (hand-authored)** as the source and you author the weather instead
+of reading it. It's for showing the panel off, dialing in a look, and trying the
+visualizations without waiting for real rain — and because it fetches nothing,
+it's the one source that fully drives the scene in the
+[live demo](../demo/index.html?demo=ranch-3bed) and in offline mode.
+
+Everything downstream follows your values exactly as if a real station had
+reported them: the chip, the 3D precipitation / fog / lightning / wind / cloud
+shadows, the sky dome, sun, moon and stars, the scene lighting, the solar
+panels, and the avatars' weather thoughts. The per-effect toggles and the
+weather layer still apply on top, so you can author a downpour and keep the
+particles off.
+
+What you can set:
+
+- **Condition** — any of the fifteen conditions Home Assistant uses (sunny, cloudy, rainy, pouring, snowy, sleet, hail, fog, windy, lightning, thunderstorm, and the rest). This is what picks the precipitation type, the fog, and the storm flashes.
+- **Temperature** and **Feels like** — in °C or °F, following your imperial/metric setting.
+- **Humidity**, **Wind**, **Wind bearing** (the direction the wind blows *from*), **Wind gust**, **Cloud cover**, **Visibility**, and **UV index**.
+- **Rain coming soon** and **Tomorrow** — the storm-brewing sky (a darkened upwind horizon) and the avatars' ☔ / ⛄ anticipation thoughts.
+- **Moon phase** — override tonight's phase, or leave it on *(follow moon entity)*.
+- **Demo alert** — advisory, watch, or warning. It fires a synthetic alert, so the chip grows its ⚠ badge and the 3D beacon pulses, without an alert entity. While demo is the source the bound alert entity is bypassed entirely.
+
+Blank means "not reported", and the effect that reads it simply stays off — a
+blank cloud cover draws no cloud shadows, a blank visibility leaves the fog to
+the condition alone.
+
+#### Placing the sun
+
+The **Sun & moon** block takes a **sun elevation** (−90…90) and a **sun azimuth**
+(0…360 compass degrees). Fill in **both** and that sun takes over from your
+`sun.sun` entity everywhere it matters:
+
+- the direction of the sun light in the 3D scene,
+- the sun disc on the sky dome,
+- the stars (they fade in through twilight as the sun drops),
+- the sun-tracking [solar panels](devices.html) in both 2D and 3D,
+- the automatic **clock** lighting mode's day / dusk / night choice,
+- and the avatars' time of day, which flavors their thought bubbles.
+
+**Set the elevation below 0 to make it night** — sunny becomes clear-night, the
+sun disc fades out, the stars come up, the solar panels park flat, and in clock
+lighting mode the scene lights as night no matter what time it actually is.
+Leave either field blank and the real sun (or the local clock) is used as
+before.
+
+There is one thing the demo source deliberately doesn't invent: **forecast
+strips**. The chip's hourly and daily rows have no fake data to draw, so they
+stay hidden while demo is selected. Everything you authored is kept, so
+switching to a real source and back restores it — and switching *away* puts the
+real readings, the real sun, and the bound alert entity straight back.
 
 ### The weather chip
 

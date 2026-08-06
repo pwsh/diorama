@@ -120,6 +120,7 @@ function resetScene(): void {
   R.updateMotionSensors([], nullState, false);
   R.updateEnvSensors([], nullState);
   R.updateSafetySensors([], nullState);
+  R.updateSolarPanels([], nullState, null, null, null);
   R.updateAlarmPanels([], nullState);
   R.updateCameras([], nullState);
   R.updateBleProxies([]);
@@ -754,6 +755,32 @@ function capSafety(sub: Subject, o: CapOpts): string {
   });
 }
 
+// Sun-tracking solar panel: the sun sweeps sunrise → noon → sunset and the head
+// yaws + tilts to face it, parking flat at both ends of the arc. The camera is
+// held STILL (an orbit would mask the tracking, which is the whole subject) and
+// the az/elev pair goes straight into the shipped updateSolarPanels — the same
+// two numbers the scene sun light and the sidebar aim readout consume, so the
+// GIF shows the real solarAim() result, not a mock. A bound power sensor ramps
+// with the sun so the energy bead lights, and a mid UV index tints the frame.
+function capSolar(_sub: Subject, o: CapOpts): string {
+  const gifPx = o.size ?? 400, N = o.frames ?? 40, fps = o.fps ?? 9;
+  const f = baseFloor(4200, 4200);
+  const panels = [{ id: 'sp', x: f.w / 2, y: f.d / 2, rotation: 0, powerEntity: 'sensor.solar' }];
+  f.solarPanels = panels;
+  R.updateFloor(f, DAY, undefined, undefined, nullState);
+  orbitCam([0, 1000, 0], 3500, 16, Math.PI * 0.78);
+  return runCapture(N, gifPx, fps, 60, (i) => {
+    const t = i / (N - 1);
+    // Azimuth walks 80° → 290° compass; elevation is a sine arc that starts and
+    // ends BELOW the horizon, so the clip opens and closes on the parked pose.
+    const az = 80 + 210 * t;
+    const elev = Math.sin(t * Math.PI) * 62 - 6;
+    const watts = Math.round(Math.max(0, Math.sin(t * Math.PI)) * 3200);
+    const st = stateOf({ 'sensor.solar': { state: String(watts), attributes: { unit_of_measurement: 'W', device_class: 'power' } } });
+    R.updateSolarPanels(panels, st, az, elev, 7);
+  });
+}
+
 // BLE proxy antenna + an identified person rig moving nearby.
 function capBleProxy(_sub: Subject, o: CapOpts): string {
   const gifPx = o.size ?? 400, N = o.frames ?? 30, fps = o.fps ?? 12;
@@ -926,6 +953,7 @@ function captureSubject(sub: Subject, o: CapOpts): string {
     case 'motion': return capMotion(sub, o);
     case 'env': return capEnv(sub, o);
     case 'safety': return capSafety(sub, o);
+    case 'solar': return capSolar(sub, o);
     case 'ble_proxy': return capBleProxy(sub, o);
     case 'camera': return capCamera(sub, o);
     case 'bin': return capBin(sub, o);
@@ -1212,6 +1240,7 @@ function buildCatalog(): any {
           : 'idle → alarm rings';
     push({ type: 'safety', id: sk, page: 'sensors', group: 'Safety', label, notes, gif: `media/sensors/safety_${sk}.gif`, meta: {} });
   }
+  push({ type: 'solar', id: 'solar', page: 'sensors', group: 'Energy', label: 'Solar panel', notes: 'sun-tracking head: parked → sunrise → noon → sunset → parked', gif: 'media/sensors/solar.gif', meta: {} });
   for (const bk of ['trash_bin', 'recycle_bin']) {
     const def = FURNITURE_KINDS[bk as keyof typeof FURNITURE_KINDS];
     push({ type: 'bin', id: bk, page: 'sensors', group: 'Bins', label: def.label, notes: 'lid flip empty ↔ full', gif: `media/sensors/${bk}.gif`, meta: {} });

@@ -28,6 +28,7 @@ tracked objects load without extra clicks.
 - **Zones & objects** — the sensor's inclusion zones and tracked objects show in place; zones glow when someone's inside. You can edit zones directly on the canvas.
 - **Coverage** — the **Cov** topbar toggle draws each sensor's field-of-view wedge (from its range, field of view, and heading) in both 2D and 3D.
 - **Pose** — sensor height and mount angle come from the HA number entities, so the 3D body tilts and aims the way the real sensor does.
+- **Demo avatar** — check "Demo avatar" for an always-on figure that lives in the sensor's room, with or without a binding. It's the same display presence motion sensors offer (below), drawn from this sensor's own avatar pool, and it's happy to share: a bound sensor shows its real radar targets *and* the demo figure.
 
 Give each sensor a **color** to tell its targets apart, and optionally a
 plumbob color override.
@@ -41,8 +42,13 @@ Because a plain motion sensor only knows "someone is in this room," you can give
 it an **AI avatar**: when its entity is on, a synthetic figure wanders the
 sensor's own room, sitting and doing activities, confined to the room's walls.
 
-- **Demo avatar** — check "Demo avatar" to show an always-on figure with no binding at all, for a lively display. Demo figures render in kiosk and view modes too.
+- **Demo avatar** — check "Demo avatar" to show an always-on figure with no binding at all, for a lively display. Demo figures render in kiosk and view modes too. mmWave sensors have the same checkbox (above).
 - Each fresh figure re-rolls its look from the sensor's avatar pool, so a respawn looks different.
+
+Synthetic figures — AI avatars, demo avatars, and roamers — live in the **3D
+view only**. The 2D plan draws real detections (radar, Bluetooth, camera), so a
+demo figure walking a room in 3D shows no dot on the plan. That's deliberate,
+not a missing marker.
 
 ### Environmental sensors
 
@@ -52,6 +58,23 @@ radon, sound, and more) is auto-detected from the entity's device class and can
 be overridden. Kinds with health thresholds (like CO₂ and CO) escalate their
 color to amber or red as the reading climbs. Drag the handle on a selected chip,
 or use the Size slider, to scale it.
+
+### Solar panels
+
+The Solar tool plants a motorized panel in the yard that **aims itself at the
+sun**. It reads the same sun your 3D scene lighting does — your `sun.sun`
+entity, the [hand-authored demo sun](outdoor-weather.html), or a local-clock
+fallback if neither is available — so the panel and the shadows on the ground
+always agree. It turns to the sun's bearing and tilts to face it directly; once
+the sun sets it parks flat until morning.
+
+- **Rotation** sets the pedestal's base bearing; the tracking turns from there.
+- **Bind a power sensor** (watts) and the panel grows an energy bead that brightens with output, and a wattage chip on the plan. A **negative** reading — drawing from the grid rather than generating — turns both amber.
+- The frame is tinted by the current **UV index** when your weather source reports one, using the same bands as the weather chip's UV row.
+- Panels stand on the ground, following your yard's grade and terraces, and ride the **sensors** layer. They're display-only — there's nothing to click.
+
+The sidebar shows the aimed bearing and tilt live, so you can tell at a glance
+whether it's tracking a real sun or a clock guess.
 
 ### Lights
 
