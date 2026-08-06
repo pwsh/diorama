@@ -385,6 +385,32 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **HA 2026.8 panel-hosting fix (self-sizing panel)** (2026-08-06,
+  user-reported "major issues in the 3D view" on desktop + mobile
+  after cache clears; unreleased — on main past v0.60.0).
+  Root-caused EMPIRICALLY, not from the report's framing: the
+  deployed build + the user's REAL config (pulled from HA storage)
+  rendered perfectly in every standalone probe (desktop + mobile
+  viewports, live flights, poisoned camera) — the actual trigger
+  was the user's HA Core auto-updating to 2026.8.0 the same day as
+  our releases. HA frontend PR #53127 styles `ha-panel-custom`
+  (display:block + safe-area padding) with NO height; the panel's
+  height:100% now resolves to auto → total layout collapse (canvas
+  0 px, toolbar at top, sidebar unscrollable — reproduced
+  pixel-for-pixel in a real HA 2026.8 Docker instance, matching the
+  user's screenshots). Fix: src/panel.ts ONLY — the panel element
+  self-sizes (viewport − ownTop − hostPadding, ownTop read while
+  collapsed; per-side safe-area padding max(0, inset−hostPad) so
+  each inset is reserved exactly once on either host generation;
+  resize/orientation/visualViewport + host ResizeObserver,
+  rAF-coalesced). In-container verified both viewports (sidebar
+  scrolls, canvas fills, Iso frames, aspect matches); standalone/
+  iframe/card BYTE-IDENTICAL (?v=-normalized artifact diff, only
+  diorama-panel.js changed — independently re-verified). CARD
+  92/92, SIDEBARORG 153/153. NB `handle_safe_area` YAML is a TRAP:
+  core 2026.8.0 rejects the key and the panel fails to load — never
+  recommend it (documented in CLAUDE.md Deploy).
+
 - **Ground-stack depth-hatching fix ("banding")** (2026-08-06,
   user-reported with a zoo-grounds screenshot; v0.60.0). Reproduced headlessly via CDP on the real app;
   layer-toggle isolation proved the dominant artifact lived in the

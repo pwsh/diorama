@@ -159,6 +159,8 @@ npm run build
 
 Two integration modes (both built from the same dist/):
 
+**HA 2026.8 panel hosting (2026-08-06, user-reported total panel-layout collapse — root-caused in a real HA 2026.8 Docker repro)**: HA frontend 2026.8 (PR #53127) styles `ha-panel-custom` itself (`display:block` + safe-area padding) but sets NO height — previously it was an unstyled `display:inline` element that established no containing block, so the panel's `height:100%` silently resolved against `ha-drawer`'s app-content. Under 2026.8 a percentage height computes to `auto` → the panel sizes to content → canvas 0-height, toolbar at top, sidebar unscrollable (mobile panel measured 197 px). Fix in `src/panel.ts` ONLY (panel-mode entry — standalone/iframe/card byte-identical, verified): the panel element SELF-SIZES — `height = viewportHeight − ownTop − hostPaddingBottom` with `ownTop` read while collapsed to 0 (content must not feed back into where we start), own per-side safe-area padding `max(0, inset − hostPad)` via native CSS `calc()` (each inset reserved exactly ONCE whichever generation of host applies it), re-measured on resize/orientation/visualViewport + a ResizeObserver on the host (rAF-coalesced, signature-gated). Works on ≤2026.7 (emulated: host applies nothing → we apply everything) and 2026.8 (host pads → we don't double-pad), converging on identical content boxes. **NEVER add `handle_safe_area` to the README's panel_custom YAML**: the frontend's CustomPanelConfig knows the key but core 2026.8.0's YAML schema REJECTS it — `Invalid config for 'panel_custom'` and the panel fails to load entirely.
+
 **Native panel (preferred — no token, HA handles auth):**
 ```yaml
 panel_custom:
