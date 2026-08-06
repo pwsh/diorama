@@ -35,7 +35,7 @@ model — see `docs/demo-houses/README.md`.
 
 **Docs site & demo floorplans**: the published documentation site
 (https://pwsh.github.io/diorama/ — home + user guide (12 pages incl. the
-2026-08-05 "Vehicles & aircraft" page) + model-GIF gallery (778 subjects / 14 pages incl. vehicle-models + flying-models) under
+2026-08-05 "Vehicles & aircraft" page) + model-GIF gallery (779 subjects / 14 pages incl. vehicle-models + flying-models) under
 `/models/` + floor-plan library under `/floorplans/` + the **live editable demo**
 under `/demo/`, see "GitHub Pages live demo") is generated into the
 gitignored `docs-site/` by `npm run docs:site` (home + guide from

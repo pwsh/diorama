@@ -372,6 +372,23 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Docs: demo mode + solar gallery subject** (2026-08-05,
+  user-directed post-v0.58.0; docs-only, published to gh-pages).
+  Guide: outdoor-weather.md gains the "Hand-authored demo weather"
+  section (+ "Placing the sun" — elevation < 0 = night, the seven
+  sun consumers); devices.md gains the mmWave "Demo avatar" bullet,
+  the synthetic-avatars-are-3D-only note, and a NEW "Solar panels"
+  section (the v0.57.0 fixture had shipped with no guide entry).
+  Gallery: subject type `solar` (`capSolar`, sensors page "Energy"
+  group — sunrise→noon→sunset sweep through the real
+  `updateSolarPanels`; parked→tracking→parked verified per-frame);
+  778→779 subjects / 14 pages, captured `--only solar`, parity
+  guards green; network_rack + mailbox GIF freshness verified
+  against their geometry commits (nothing stale). docs:demo re-run
+  so the live demo serves v0.58.0 (demo weather works in the
+  browser playground); floorplans screenshots intact, gh-pages
+  force-pushed. Commits 36c3ea0 + 4036877.
+
 - **Demo weather source** (2026-08-05, user-requested "demo weather
   function selectable in the weather settings"; v0.58.0). Fourth `WeatherConfig.source` `'demo'` +
   `demo?: DemoWeatherConfig` (condition/temps/humidity/wind+bearing+
@@ -455,7 +472,7 @@ instance.
 
 - **Docs: vehicle gallery rebuild + flying-models page** (2026-08-05,
   user-directed pre-release; released in v0.57.0).
-  Gallery 712→778 subjects / 14 pages: all 26 ground vehicles
+  Gallery 712→778 subjects / 14 pages (779 after the v0.58.0 solar-panel subject): all 26 ground vehicles
   re-captured with --force (the gallery has NO version-keyed cache —
   skip = file-exists, now documented in GALLERY.md; spot-checks
   confirmed closed gullwings / seated ambulance bar / continuous
