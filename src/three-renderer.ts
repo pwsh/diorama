@@ -636,6 +636,14 @@ interface AiState {
   propX?: number; propY?: number;
   nextPropAt?: number;
   propLegs?: number;
+  // Activity-anchor RESERVATION: the anchor id (`ActivityAnchor.furnitureId`, a
+  // unique key per anchor) this rig is currently WALKING TO. Set by _aiPickGoal's
+  // anchor branch, cleared on every re-pick. Without it, several synthetic rigs
+  // pick the SAME anchor on the same roll and pile onto one spot — the reported
+  // "avatars gather at one window" (a plan whose in-range anchor pool is a single
+  // `gaze_window` makes every roamer target that one point). The occupancy claim
+  // below only covers rigs that already ARRIVED; this covers the walk.
+  anchorGoalId?: string;
 }
 
 // Phase 4b: a declarative accessory registered for per-frame animation. Base
@@ -2081,6 +2089,14 @@ const PHASE4_ACTIVITIES: ReadonlySet<ExtActivityKind> = new Set<ExtActivityKind>
 const ENTITY_GATED_ACTIVITIES: ReadonlySet<ExtActivityKind> = new Set<ExtActivityKind>([
   'load_dishwasher', 'make_coffee',
 ]);
+// Radius (mm) of one wander LEG: the AI controller's random goal cell is drawn
+// from this disc around the rig's search centre, so it is a step length, not a
+// territory — a roamer's centre follows the rig, so it walks the whole house.
+const AI_WANDER_RADIUS_MM = 4500;
+// Roamer SPAWN scatter radius (mm). Every roamer target arrives at the same
+// floor-centre point, so without this they all seed on one cell (a heap at the
+// plan centre, and at a window when the centre sits by an exterior wall).
+const ROAM_SPAWN_SCATTER_MM = 25000;
 // How far IN FRONT of an oriented interactive device the AI controller aims its
 // walk goal (mm). Matches the activity-anchor stand-off idea — far enough that
 // the nav snap lands on a cell on the front side rather than wrapping around
@@ -2669,6 +2685,14 @@ export class ThreeDRenderer {
   private _mediaClickables: THREE.Group[] = [];
   // Contextual-activity anchors collected from the current floor's furniture.
   private _activityAnchors: ActivityAnchor[] = [];
+  // Activity-anchor OCCUPANCY claims (anchor id → the rig key holding it), the
+  // standing-activity twin of `seatClaims`. Rebuilt every frame from LIVE rigs at
+  // the top of updateTargets (a disposed rig can never leak a claim) and updated
+  // in-loop as rigs capture. An anchor is a ONE-PERSON spot — a fireplace hearth,
+  // a window pane, the front of a fridge — so a second rig must not engage it, and
+  // (via `_anchorTaken`) must not even walk to it. Before this, nothing stopped
+  // every avatar in a plan from stacking on the same anchor.
+  private _anchorClaims = new Map<string, string>();
   // Appliance-door pivots (unbound-appliance liveliness). Rebuilt in updateFloor
   // alongside the furniture; each entry drives one hinge Group toward an
   // open/closed target with an eased blend. The blend + proximity-dwell maps are
@@ -7301,6 +7325,23 @@ export class ThreeDRenderer {
     // Rebuild the humanoid navigation grid from the same walls + furniture.
     // Hidden walls don't block (consistent with hidden furniture).
     this._buildNav(f, visFurniture, customObjects, showWalls);
+
+    // Nav-validate the AMBIENT anchors (warm_hands / gaze_window). Unlike an
+    // authored furniture anchor — whose point deliberately sits inside the
+    // footprint, with `standOff` walking the rig out the front — these two bake
+    // their standing spot INTO the anchor position, so a blocked cell there is a
+    // spot no rig can ever occupy. Since windows became nav-solid, a 600 mm inset
+    // in front of a window can land inside the inflated wall band (or under a
+    // piece pushed against it); the goal snap would then quietly relocate the
+    // goal — potentially through the wall via the largest-region preference.
+    // Dropping the anchor is honest: no standing room, no gaze spot.
+    if (this._nav && this._nav.blockedCount > 0) {
+      this._activityAnchors = this._activityAnchors.filter(a => {
+        if (a.kind !== 'warm_hands' && a.kind !== 'gaze_window') return true;
+        const w = this._sceneToWorld(a.x, a.z);
+        return !this._blockedWorld(w.x, w.y);
+      });
+    }
   }
 
   // Tag a wall mesh for the foreground-cutaway fader. Records the segment
@@ -20322,6 +20363,21 @@ export class ThreeDRenderer {
     return { x: this._fw / 2 - sx, y: sz + this._fd / 2 };
   }
 
+  // Is this single-occupancy spot already spoken for by a DIFFERENT rig — either
+  // occupied right now (an activity anchor in `_anchorClaims`, a seat held via
+  // `Humanoid.sitSpotId`) or reserved as another controller's walk goal
+  // (`AiState.anchorGoalId`)? `self` is the asking controller, so a rig re-picking
+  // the anchor it already holds is never blocked by its own reservation.
+  private _anchorTaken(id: string, self: AiState): boolean {
+    if (this._anchorClaims.has(id)) return true;
+    for (const k in this._humanoids) if (this._humanoids[k].sitSpotId === id) return true;
+    for (const k in this._aiState) {
+      const other = this._aiState[k];
+      if (other !== self && other.anchorGoalId === id) return true;
+    }
+    return false;
+  }
+
   // The AI avatar's home room: the closed wall loop containing its sensor.
   // Simple presence sensors only know "someone is in this room", so the
   // avatar is HARD-confined to this loop (spawn, wander goals, activity
@@ -20361,6 +20417,19 @@ export class ThreeDRenderer {
           x = w.x; y = w.y;
         }
       }
+      // ROAMERS SCATTER ON SPAWN. Every roamer target arrives at the SAME point
+      // (three-view pins them all to the floor centre), so they all seeded on one
+      // cell and stood in a heap until their first goals pulled them apart — and
+      // if that point happens to sit near an exterior wall, the heap forms right
+      // at a window. Give each one its own indoor start instead. Falls back to the
+      // shared seed when the plan has no wall loops or nothing free is in range.
+      if (roam && !goalMode && this._nav && this._nav.blockedCount > 0) {
+        const reg = this._regionOfWorld(x, y);
+        const c = this._aiRandomCell(x, y, reg, null,
+                                     this._wallLoops.length ? this._wallLoops : undefined,
+                                     ROAM_SPAWN_SCATTER_MM);
+        if (c) { x = c.x; y = c.y; }
+      }
       // Emerge: a fresh wander spawn in a region that has a sunken flight
       // occasionally starts AT the deepest tread (fade-in as usual) and its
       // first goal is placed out in the room, so it walks UP the flight and out
@@ -20377,7 +20446,11 @@ export class ThreeDRenderer {
       }
       ai = {
         x, y, goalX: x, goalY: y, state: 'idle', timer: 1 + Math.random() * 2,
-        path: null, speed: 0.7, anchorX: t.x, anchorY: t.y,
+        path: null, speed: 0.7,
+        // A roamer's search centre follows the RIG (see the wander branch below);
+        // seed it at the spawn cell rather than the floor-centre target, so even
+        // the emerge pick below searches around where the avatar actually stands.
+        anchorX: roam ? x : t.x, anchorY: roam ? y : t.y,
         mode: goalMode ? 'goal' : 'wander', roam,
       };
       this._aiState[t.key] = ai;
@@ -20401,7 +20474,18 @@ export class ThreeDRenderer {
       return;
     }
 
-    ai.anchorX = t.x; ai.anchorY = t.y;   // sensor may have been moved / re-placed
+    // Goal-search CENTRE. A sensor-anchored avatar re-reads its fixture each frame
+    // (the sensor may have been moved / re-placed) — that anchor is the whole point
+    // of a presence avatar. A ROAMER has no fixture: three-view pins its target x/y
+    // to the FLOOR CENTRE every frame, so re-reading it nailed every roamer's search
+    // disc (`_aiRandomCell` 4.5 m, the anchor branch 6 m) to that ONE point forever —
+    // the documented "free-range" wanderer could never leave it, and several roamers
+    // all shared ONE candidate pool, so they converged on whatever few anchors it
+    // held. Track the rig's own virtual raw instead: the wander becomes a real random
+    // walk across the house and each rig gets its own local pool. The floor centre
+    // still seeds the SPAWN (the first-sighting branch above reads t.x/t.y).
+    if (roam) { ai.anchorX = ai.x; ai.anchorY = ai.y; }
+    else { ai.anchorX = t.x; ai.anchorY = t.y; }
 
     if (ai.state === 'wander') {
       // Walk the virtual raw along the planned waypoint chain at leg speed.
@@ -20566,14 +20650,24 @@ export class ThreeDRenderer {
   // ~35% a free cell INSIDE any closed wall loop, ~15% anywhere in the region
   // (porch/yard excursions stay possible) — each branch falling through to the
   // next when it has no candidates.
+  //
+  // REACHABILITY is measured from the RIG, CONFINEMENT from its anchor. The nav
+  // `region` comes from `ai.x/ai.y` (the thing that has to walk there) — reading it
+  // off the anchor was wrong whenever the two differ: a sensor mounted in/near a
+  // wall resolves through `_nearestFreeCell`, whose largest-region preference can
+  // hand back a region the rig cannot reach, and then EVERY candidate filter
+  // rejects everything (frozen avatar) or the goal lands across a wall. The home
+  // `loop` still comes from the anchor — that is the sensor's room, which is what
+  // confinement means.
   private _aiPickGoal(ai: AiState, allowDescend = true): void {
-    const region = this._regionOfWorld(ai.anchorX, ai.anchorY);
+    const region = this._regionOfWorld(ai.x, ai.y);
     const roam = !!ai.roam;
     const loop = roam ? null : this._aiHomeLoop(ai.anchorX, ai.anchorY);
     let gx: number | null = null, gy = 0;
     ai.descendGoal = false;
     ai.interactId = undefined; ai.interactX = undefined; ai.interactY = undefined;
     ai.propKind = undefined; ai.propX = undefined; ai.propY = undefined;
+    ai.anchorGoalId = undefined;
     // "Go downstairs": if a sunken flight's deepest tread is reachable in this
     // region, occasionally target it (~1 in 6 rolls — the goal picker is a
     // wander path, so Math.random matches its existing pattern). On arrival the
@@ -20649,13 +20743,13 @@ export class ThreeDRenderer {
     const roll = roam ? Math.random() : -1;
     const wantAnchor = roam ? roll < 0.50 : Math.random() < 0.25;
     if (gx === null && wantAnchor) {
-      const cands: { x: number; y: number }[] = [];
-      const consider = (sx: number, sz: number) => {
+      const cands: { x: number; y: number; id?: string }[] = [];
+      const consider = (sx: number, sz: number, id?: string) => {
         const w = this._sceneToWorld(sx, sz);
         if (Math.hypot(w.x - ai.anchorX, w.y - ai.anchorY) > 6000) return;
         if (this._regionOfWorld(w.x, w.y) !== region) return;
         if (loop && !pip(w.x, w.y, loop)) return;
-        cands.push(w);
+        cands.push({ ...w, id });
       };
       // Aim at the anchor's STAND POINT, not the piece centre: that is where the
       // pose blend parks the rig, and (since the stand offset runs out the
@@ -20663,11 +20757,26 @@ export class ThreeDRenderer {
       // centre let the goal snap to whichever free cell was nearest — often
       // BEHIND an oriented appliance, where the rig can no longer engage.
       // standOff is 0 for the ambient anchors, so those are unchanged.
+      // ONE RIG PER ANCHOR. An activity anchor (hearth front, window pane, fridge
+      // face) and a sit spot are single-occupancy spots, so skip any that another
+      // rig already holds (`_anchorClaims` / `seatClaims`-equivalent) or is already
+      // walking to (`anchorGoalId` on another controller). Without this every
+      // synthetic rig rolls from the same pool and they converge on one point —
+      // and in a plan whose in-range pool is a single `gaze_window` anchor, that
+      // point is a window, which reads as a crowd trying to climb out of it.
       for (const a of this._activityAnchors) {
-        consider(a.x + Math.sin(a.facing) * a.standOff, a.z + Math.cos(a.facing) * a.standOff);
+        if (this._anchorTaken(a.furnitureId, ai)) continue;
+        consider(a.x + Math.sin(a.facing) * a.standOff, a.z + Math.cos(a.facing) * a.standOff,
+                 a.furnitureId);
       }
-      for (const sp of this._sitSpots) consider(sp.x, sp.z);
-      if (cands.length) { const c = cands[(Math.random() * cands.length) | 0]; gx = c.x; gy = c.y; }
+      for (const sp of this._sitSpots) {
+        if (this._anchorTaken(sp.id, ai)) continue;
+        consider(sp.x, sp.z, sp.id);
+      }
+      if (cands.length) {
+        const c = cands[(Math.random() * cands.length) | 0];
+        gx = c.x; gy = c.y; ai.anchorGoalId = c.id;
+      }
     }
     // Roamer interior bias, ~35% band: a random free cell INSIDE any closed wall
     // loop (falls through to the region-wide pick below when there are no loops).
@@ -20680,7 +20789,7 @@ export class ThreeDRenderer {
       if (c) { gx = c.x; gy = c.y; }
     }
     ai.speed = 0.55 + Math.random() * 0.45;   // m/s per leg
-    if (gx === null) { ai.path = null; ai.goalX = ai.x; ai.goalY = ai.y; return; }
+    if (gx === null) { this._aiNoGoal(ai); return; }
 
     const n = this._nav;
     if (!n || n.blockedCount === 0) {
@@ -20690,15 +20799,41 @@ export class ThreeDRenderer {
     // inside blocked footprints; we want the avatar to STOP just outside,
     // within dwell range — and still inside its room).
     const goalCell = this._nearestFreeCellInLoop(this._cellIdxOf(gx, gy), region, loop);
+    // The snap helpers END in `_nearestFreeCell`, whose largest-region preference
+    // can hand back a cell in a DIFFERENT region (typically the yard, the biggest
+    // one) when nothing in-region is near. Walking there is impossible, so treat it
+    // as "no goal" — see the A*-failure note below for why straight-lining is not
+    // an option.
+    if (region >= 0 && n.region[goalCell] !== region) { this._aiNoGoal(ai); return; }
     const gs = this._cellToScene(goalCell);
     const gw = this._sceneToWorld(gs.x, gs.z);
     const start = this._nearestFreeCell(this._cellIdxOf(ai.x, ai.y));
     const cells = (start === goalCell) ? [goalCell] : this._aStar(start, goalCell);
-    if (!cells) { ai.path = [{ x: gw.x, y: gw.y }]; ai.goalX = gw.x; ai.goalY = gw.y; return; }
+    // A* FAILED (unreachable, or past the node cap). This used to fall back to a
+    // single straight-line waypoint — but `ai.x/ai.y` is a VIRTUAL raw with no
+    // collision, so it sailed straight THROUGH the wall and the rig, which cannot
+    // follow, retargeted to the nearest cell in its own region: the spot just
+    // inside the wall it was trying to cross. Parking avatars against walls (and
+    // against WINDOWS in particular, now that a sill is nav-solid) is exactly the
+    // artefact this controller must not produce. Drop the goal and idle briefly;
+    // _advanceAi re-picks within a few seconds.
+    if (!cells) { this._aiNoGoal(ai); return; }
     const wp = this._stringPull(cells, gs).map(s => this._sceneToWorld(s.x, s.z));
     ai.path = wp.length ? wp : [{ x: gw.x, y: gw.y }];
     const last = ai.path[ai.path.length - 1];
     ai.goalX = last.x; ai.goalY = last.y;
+  }
+
+  // Abandon this goal roll: no path, goal pinned to the rig's own position, and
+  // every arrival latch cleared so nothing "arrives" at a goal that was never
+  // planned. The caller (_advanceAi) sees the empty path and schedules a short
+  // idle before the next pick.
+  private _aiNoGoal(ai: AiState): void {
+    ai.path = null; ai.goalX = ai.x; ai.goalY = ai.y;
+    ai.descendGoal = false;
+    ai.interactId = undefined; ai.interactX = undefined; ai.interactY = undefined;
+    ai.propKind = undefined; ai.propX = undefined; ai.propY = undefined;
+    ai.anchorGoalId = undefined;
   }
 
   // ── Shared-props Class 1: pick a chore prop + its walk target (world mm). ────
@@ -20712,7 +20847,8 @@ export class ThreeDRenderer {
     if (!this._avatarPropsOn) return null;
     const now = performance.now() / 1000;
     if (now < (ai.nextPropAt ?? 0)) return null;
-    const region = this._regionOfWorld(ai.anchorX, ai.anchorY);
+    // Reachability from the RIG, confinement from the anchor — see _aiPickGoal.
+    const region = this._regionOfWorld(ai.x, ai.y);
     const loop = ai.roam ? null : this._aiHomeLoop(ai.anchorX, ai.anchorY);
     const cond = this._propWeatherCondition;
     // Thirsty plants → world position (via the pivot's scene world pos).
@@ -20760,14 +20896,15 @@ export class ThreeDRenderer {
   // when provided, the cell must fall inside AT LEAST ONE of the loops (used to
   // keep roamer goals indoors). World-mm center, or null.
   private _aiRandomCell(anchorWx: number, anchorWy: number, region: number,
-                        loop: Vec2[] | null, anyLoops?: Vec2[][]):
+                        loop: Vec2[] | null, anyLoops?: Vec2[][],
+                        radiusMm = AI_WANDER_RADIUS_MM):
       { x: number; y: number } | null {
     const n = this._nav;
     if (!n) {
       return { x: anchorWx + (Math.random() - 0.5) * 4000,
                y: anchorWy + (Math.random() - 0.5) * 4000 };
     }
-    const R = 4500;
+    const R = radiusMm;
     const c0 = this._cellIdxOf(anchorWx, anchorWy);
     const cx0 = c0 % n.nx, cy0 = (c0 / n.nx) | 0;
     const rad = Math.ceil(R / n.cell);
@@ -20822,6 +20959,16 @@ export class ThreeDRenderer {
     // Walking (non-anchored, visible) rigs eligible for mutual separation this
     // frame, resolved after the main loop so they gently push apart.
     const movers: { h: Humanoid; key: string }[] = [];
+
+    // ── Activity-anchor OCCUPANCY claims (anchor id → owning rig key), the
+    // standing twin of `seatClaims` below. Rebuilt here from LIVE rigs so a
+    // disposed rig can't leak a claim, and BEFORE the AI pre-pass so this frame's
+    // goal picks already see who holds what.
+    this._anchorClaims.clear();
+    for (const key in this._humanoids) {
+      const a = this._humanoids[key].activityAnchor;
+      if (a) this._anchorClaims.set(a.furnitureId, key);
+    }
 
     // AI-avatar pre-pass: advance each synthetic target's virtual raw position
     // and rewrite its x/y IN PLACE (the targets array is rebuilt each frame in
@@ -21109,7 +21256,11 @@ export class ThreeDRenderer {
         wantAct = !(rawSpeedMs > 0.4 || dA > a.r + 250 || fireOff);
         if (!wantAct) {
           h.dwell = 0;
-          if (h.act < 0.05) h.activityAnchor = null;  // fully disengaged → release
+          if (h.act < 0.05) {                          // fully disengaged → release
+            if (this._anchorClaims.get(a.furnitureId) === t.key)
+              this._anchorClaims.delete(a.furnitureId);
+            h.activityAnchor = null;
+          }
         }
       }
       // Pets (quadruped rigs) never grab standing appliance anchors, so a cat
@@ -21118,6 +21269,13 @@ export class ThreeDRenderer {
         let best: ActivityAnchor | null = null, bd = Infinity;
         for (const a of this._activityAnchors) {
           if (!PHASE4_ACTIVITIES.has(a.kind)) continue;
+          // SINGLE OCCUPANCY (the seat-claim rule for standing anchors): one rig
+          // per hearth / window / appliance face. Two avatars sharing an anchor
+          // stand in the same 400 mm spot playing the same pose — the "crowd at
+          // the window" artefact. Claims are rebuilt each frame from live rigs and
+          // updated in-loop, so same-frame converging rigs can't both grab it.
+          const owner = this._anchorClaims.get(a.furnitureId);
+          if (owner !== undefined && owner !== t.key) continue;
           const dA = Math.hypot(p.x - a.x, p.z - a.z);
           if (dA >= a.r || dA >= bd) continue;
           const need = (a.kind === 'toilet' || a.kind === 'bathe') ? 2.0 : 1.2;
@@ -21136,7 +21294,10 @@ export class ThreeDRenderer {
               (p.x - a.x) * a.frontNx + (p.z - a.z) * a.frontNz <= 0) continue;
           bd = dA; best = a;
         }
-        if (best) { h.activityAnchor = best; wantAct = true; }
+        if (best) {
+          h.activityAnchor = best; wantAct = true;
+          this._anchorClaims.set(best.furnitureId, t.key);
+        }
       }
       h.act += ((wantAct ? 1 : 0) - h.act) * Math.min(1, dt * 3);
       const act = h.act;
@@ -21938,13 +22099,32 @@ export class ThreeDRenderer {
       if (h.respawnPhase === 1) {
         h.scale -= h.scale * Math.min(1, dt * 12);
         if (h.scale < 0.05) {
-          const gi = this._cellIdxOf(t.x, t.y);
-          const gr = this._regionOfWorld(t.x, t.y);
+          // Land in the goal's region: for a RADAR/BLE rig the goal IS ground
+          // truth (the person really is in the room nav couldn't route to), so
+          // following it is the whole point of this respawn.
+          //
+          // A SYNTHETIC rig (ai / roam / demo) has no such truth — its "goal" is
+          // this controller's own fiction. Teleporting it into the goal's region
+          // would hop it through walls into the yard on nothing more than a bad
+          // roll. Keep it in the region it is standing in and re-sync the virtual
+          // raw + path to the landing cell, so the controller picks a fresh,
+          // genuinely reachable goal instead of re-diverging immediately.
+          const ai = t.ai ? this._aiState[t.key] : undefined;
+          const gi = ai ? this._cellIdxOf(ai.x, ai.y) : this._cellIdxOf(t.x, t.y);
+          const gr = ai
+            ? this._regionOfWorld(this._fw / 2 - h.navX, h.navZ + this._fd / 2)
+            : this._regionOfWorld(t.x, t.y);
           const sc = this._cellToScene(this._nearestFreeCellInRegion(gi, gr));
           h.navX = sc.x; h.navZ = sc.z; h.lastX = sc.x; h.lastZ = sc.z;
           this._pinCarrot(h);
           h.vx = 0; h.vz = 0; h.path = null; h.pathRev = -1; h.goalCell = -1;
           h.stuckT = 0; h.respawnPhase = 0;
+          if (ai) {
+            const w = this._sceneToWorld(sc.x, sc.z);
+            ai.x = w.x; ai.y = w.y; t.x = w.x; t.y = w.y;
+            this._aiNoGoal(ai);
+            ai.state = 'idle'; ai.timer = 1 + Math.random() * 2;
+          }
         }
       } else {
         h.scale += (1 - h.scale) * Math.min(1, dt * 10);

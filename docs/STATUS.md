@@ -391,6 +391,33 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Avatar window-crowding fix (anchor claims + real free-range)**
+  (2026-08-06, user-reported "avatars gather near windows like they
+  are trying to escape"; unreleased — on main past v0.61.0).
+  Reproduced on the USER'S REAL plan (8 roamers, simulated minutes,
+  instrumented goal logging): 59.3 % of rig-frames within 1.5 m of
+  ONE window, 7/8 rigs simultaneously. Root cause NOT the
+  windows-block-nav change (counterfactual pre-fix nav: same 52 %
+  crowd — it just leaked outdoors, hence "the window they would
+  leave from"): activity anchors had NO occupancy rule (seats have
+  seatClaims; anchors had nothing) AND the roamer wander centre was
+  PINNED to the floor centre (~540 mm from that window wall) so all
+  8 shared one degenerate single-anchor goal pool. Fix
+  (three-renderer only): `_anchorClaims` + `AiState.anchorGoalId`
+  (one rig per anchor, reserved from goal-pick through capture);
+  wander centre follows the rig + spawn scatter; goal reachability
+  from the RIG's region with cross-region snaps rejected; A*
+  failure re-picks instead of straight-lining into the wall (5/62 →
+  0/78); stuck-respawn keeps synthetic rigs in their own region;
+  nav-blocked ambient anchors dropped. After: 6.0 % window
+  proximity, max 2 rigs, attention spread across 10 windows,
+  roamers genuinely excursion into the yard (~19 %; interior guard
+  holds 0.7). NEW avatar-crowd-test 30/30 (15/30 vs the shipped
+  build as a measured negative control); NAVPARITY 70, DEMOAVATAR
+  23, ROAMER 20, BOOKCASE-LOS 11, STAIRS-DESCEND 23, AVINTERACT 26
+  all green. Deferred: chore-prop targets carry no claim (cooldown-
+  protected); `_bleReplan` straight-lines by design (device truth).
+
 - **HA 2026.8 panel-hosting fix (self-sizing panel)** (2026-08-06,
   user-reported "major issues in the 3D view" on desktop + mobile
   after cache clears; v0.61.0).

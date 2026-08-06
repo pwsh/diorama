@@ -1,0 +1,401 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>AVATARCROWD …</title>
+<style>
+  body { margin:0; background:#0d1116; color:#cfd8dc; font:13px/1.5 sans-serif; padding:14px; }
+  h1 { font-size:15px; margin:0 0 10px; }
+  #summary { font-size:14px; font-weight:bold; margin:10px 0; padding:8px 10px; border-radius:5px; }
+  .okbg { background:#12331f; color:#69f0ae; } .badbg { background:#3a1414; color:#ff8a80; }
+  .row { display:flex; justify-content:space-between; gap:10px; padding:2px 0; border-bottom:1px solid #1c2530; }
+  .pass { color:#69f0ae; } .fail { color:#ff5252; }
+  .name { color:#90caf9; } .extra { color:#ffd54f; font-size:11px; }
+  #stage { width:900px; height:560px; }
+</style>
+<h1>Avatar crowding — one rig per activity anchor, roamers roam, no wall-parking</h1>
+<div id="summary">Running…</div>
+<div id="rows"></div>
+<div id="stage"></div>
+
+<!-- Regression guard for the "avatars gather at one window like they're trying to
+     escape" report (2026-08-06). The reported symptom was blamed on the
+     2026-08-05 windows-block-nav change, but a pre/post counterfactual on the
+     reporter's own plan showed the clustering was IDENTICAL before it (52% of
+     rig-frames within 1.5 m of one window vs 57% after) — the window change only
+     removed the leak that used to let the crowd dribble out into the yard, which
+     is what made a long-standing pile-up permanently visible.
+
+     Root cause (three separate defects, all pinned here):
+       1. ACTIVITY ANCHORS HAD NO OCCUPANCY RULE. `_sitSpots` have `seatClaims`;
+          `_activityAnchors` had nothing — so every rig in a plan could target AND
+          capture the same anchor. Ambient `gaze_window` anchors (6 per floor, one
+          600 mm inside each of the largest windows) are generated even in a plan
+          with no activity furniture, so in a furniture-sparse house they can be
+          the ONLY candidates the goal picker sees. Reporter's floor: 6 anchors,
+          all `gaze_window`, and exactly ONE in range of the roamer search centre.
+       2. ROAMER SEARCH CENTRE WAS PINNED TO THE FLOOR CENTRE. three-view sets a
+          roamer target's x/y to (f.w/2, f.d/2) EVERY frame and _advanceAi copied
+          it into `ai.anchorX/Y`, so the documented "free-range" wanderer's 4.5 m
+          cell disc / 6 m anchor disc never moved off one point — and every roamer
+          shared that one pool. When the floor centre lands near an exterior wall
+          (it did), the pool is a strip of window anchors.
+       3. AN UNREACHABLE GOAL WALKED THROUGH WALLS. On A* failure _aiPickGoal fell
+          back to a single straight-line waypoint; the virtual raw has no collision
+          so it sailed through the wall, and the rig — which cannot follow —
+          retargeted to the nearest cell in its own region: the spot just inside
+          that wall. Avatars parked against walls/windows by construction.
+
+     Fixture: a house rect placed so the FLOOR CENTRE sits 1 m inside the north
+     wall, one window on that wall, one door on the far wall — the reporter's
+     geometry, fully synthetic.
+
+     Build recipe (from repo root; NEVER reuse stale bundles):
+       npm run build
+       H=/tmp/diorama-harness-crowd; rm -rf "$H"; mkdir -p "$H"; cp -r dist/* "$H"/
+       cp test-pages/avatar-crowd-test.html "$H"/
+       T=$(mktemp -d); cp -r src/* "$T"/; cp tsconfig.json "$T"/
+       cp test-pages/fake-avatar-store.ts "$T"/avatar-store.ts
+       cp test-pages/demo-avatar-entry.ts "$T"/demo-avatar-entry.ts
+       npx esbuild "$T"/demo-avatar-entry.ts --bundle --format=esm --tsconfig="$T"/tsconfig.json \
+         --alias:lit=$PWD/node_modules/lit/index.js \
+         --alias:lit/decorators.js=$PWD/node_modules/lit/decorators.js \
+         --alias:three=$PWD/node_modules/three/build/three.module.js \
+         "--alias:three/examples/jsm/controls/OrbitControls.js=$PWD/node_modules/three/examples/jsm/controls/OrbitControls.js" \
+         "--alias:three/examples/jsm/loaders/OBJLoader.js=$PWD/node_modules/three/examples/jsm/loaders/OBJLoader.js" \
+         "--alias:three/examples/jsm/loaders/MTLLoader.js=$PWD/node_modules/three/examples/jsm/loaders/MTLLoader.js" \
+         --outfile="$H"/demoav.mod.js
+       (cd "$H" && python3 -m http.server 8874 &)
+       google-chrome --headless=new --disable-gpu --use-angle=swiftshader \
+         --run-all-compositor-stages-before-draw --window-size=1200,900 \
+         --virtual-time-budget=240000 --dump-dom \
+         "http://localhost:8874/avatar-crowd-test.html" | grep -o "<title>[^<]*"
+
+     NB the AI controller derives every timer and dt from performance.now(), which
+     barely advances under headless virtual time — the whole page runs on a FAKE
+     CLOCK (the ai-test.html / demo-avatar-test.html idiom) so ticks really do
+     simulate minutes of wandering.
+
+     NEGATIVE CONTROL — this page scores 15/30 against the pre-fix build, with
+     every headline number saturated: 6 of 6 rigs holding the ONE anchor, 97.97%
+     of frames with ≥3 of 6 standing at the window (100% in the window-only
+     fixture), hottest 1 m bucket 70.2%, 0/18000 frames where a roamer's search
+     centre had moved off the floor centre, 8 of 64 goals planned as straight
+     lines through a wall, and 0 frames anywhere near the door. Rebuild that
+     bundle from a clean checkout if a threshold here ever needs re-justifying —
+     the separation is ~30x on the crowd metrics, not a hair's breadth. --> 
+<script type="module">
+  const V = '?v=' + Date.now();
+  const { Planner } = await import('./demoav.mod.js' + V);
+
+  const results = [];
+  const ok = (name, cond, extra = '') => results.push({ name, pass: !!cond, extra: String(extra) });
+  window.__R = results;
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  async function waitFor(cond, tries = 1200) {
+    for (let i = 0; i < tries; i++) { if (cond()) return true; await sleep(5); }
+    return !!cond();
+  }
+
+  // ── Fake clock (installed up front — the renderer reads performance.now for
+  // frame dt, idle timers, interaction cooldowns and prop sessions).
+  const realNow = performance.now.bind(performance);
+  let fakeNow = realNow();
+  performance.now = () => fakeNow;
+  const STEP = 100;   // ms/tick == the renderer's own frameDt clamp (max sim rate)
+
+  const states = {};
+  const api = {
+    offline: true, states,
+    async connect() {}, disconnect() {}, onState() {}, onConn() {},
+    async getUserData() { return null; }, async setUserData() {}, async callService() {},
+    async getDevices() { return []; }, async getEntityRegistry() { return []; },
+    async getFloorRegistry() { return []; }, async getAreaRegistry() { return []; },
+    async getHistory() { return {}; }, async getCalendarEvents() { return []; },
+    async getWeatherForecasts() { return null; }, async updateEntityRegistry() {},
+    async subscribePersistentNotifications() { return () => {}; },
+    async listRepairsIssues() { return []; }, async ignoreRepairsIssue() {},
+    async subscribeMqtt() { return () => {}; }, async publishMqtt() {},
+  };
+
+  // ── Fixture geometry ──────────────────────────────────────────────────────
+  // House rect inside a yard, deliberately offset so the FLOOR CENTRE (8000,7000)
+  // — the point three-view pins every roamer target to — lands 1 m inside the
+  // north wall, which is the wall carrying the window.
+  const FW = 16000, FD = 14000;
+  const HX0 = 2000, HY0 = 6000, HX1 = 14000, HY1 = 12000;
+  const perim = [{ x: HX0, y: HY0 }, { x: HX1, y: HY0 }, { x: HX1, y: HY1 },
+                 { x: HX0, y: HY1 }, { x: HX0, y: HY0 }];
+  const WIN  = { id: 'w1', x: 8000, y: HY0, w: 1400, rotation: 0, entity_id: null };
+  const DOOR = { id: 'd1', x: 5000, y: HY1, w: 900, rotation: 0, entity_id: null };
+  let fixtureN = 0;
+  const baseFloor = (extra = {}) => ({
+    id: 'f' + (++fixtureN), name: 'Crowd', w: FW, d: FD,
+    walls: [{ id: 'perim', points: perim, kind: 'full' }],
+    furniture: [], lights: [], switches: [], sensors: [], motionSensors: [],
+    envSensors: [], infoCards: [], actionButtons: [], doors: [], windows: [],
+    rooms: [{ id: 'rm1', name: 'Living Room', anchor: { x: 8000, y: 9000 } }],
+    roamers: [], bleProxies: [], alarmPanels: [], calendarPanels: [], thermostats: [],
+    safetySensors: [], alertBeacons: [], robots: [], cameras: [], projectors: [],
+    valves: [], plugs: [], sprinklerZones: [], flagpoles: [], pools: [],
+    presenceZones: [], groundAreas: [], voidAreas: [], rulers: [],
+    bg: null, model3d: null, look3d: null,
+    ...extra,
+  });
+  const roamers = k => Array.from({ length: k }, (_, i) => ({ id: 'r' + i, name: 'R' + i, color: '#ba68c8' }));
+  const motions = (k, x, y) => Array.from({ length: k }, (_, i) => ({
+    id: 'm' + i, x: x + i * 500, y, heading: 0, fov: 360, range: 6000, label: 'm' + i,
+    entity_id: null, color: '#4dd0e1', intensity: 1, demo: true }));
+
+  const planner = new Planner();
+  await planner.connectWith(api);
+  const view = document.createElement('diorama-three-view');
+  view.planner = planner;
+  document.getElementById('stage').appendChild(view);
+  await view.updateComplete;
+  const R = () => view._renderer;
+  ok('0 renderer mounted', await waitFor(() => R() && R().loaded), '');
+
+  const tick = n => { for (let i = 0; i < n; i++) { fakeNow += STEP; view._tickOnce(); } };
+  const setFloor = async f => {
+    planner.store.floors = [f]; planner.store.currentFloorId = f.id;
+    planner.emitConfig();
+    // A few awaited ticks so the element's floor-switch branch + lazy rebuilds land.
+    for (let i = 0; i < 12; i++) { fakeNow += STEP; view._tickOnce(); await sleep(3); }
+  };
+  const s2w = (sx, sz) => ({ x: R()._fw / 2 - sx, y: sz + R()._fd / 2 });
+  const navWorld = h => s2w(h.navX, h.navZ);
+
+  // Run the controller for `ticks` frames, sampling crowding + invariants.
+  // `warmup` frames are simulated but NOT sampled: every rig fades in and takes
+  // its first goal in the opening seconds, and a spawn transient is not the
+  // steady-state crowding this page is about.
+  function simulate(ticks, warmup = 300) {
+    const r = R();
+    const st = { samples: 0, nearWin: 0, nearDoor: 0, navOut: 0, rawOut: 0,
+                 maxAnchorHolders: 0, maxAnchorGoals: 0, maxSeatHolders: 0,
+                 gazeEngaged: 0, crossRegionGoal: 0, straightPaths: 0, picks: 0,
+                 anchorMovedFromCentre: 0, rawBlocked: 0, rawCrossedWall: 0, maxNearWin: 0, ticks: 0, crowdTicks: 0 };
+    const heat = new Map(); const xs = [];
+    let lastGoal = {}; const prevRaw = {};
+    for (let i = 0; i < warmup; i++) { fakeNow += STEP; view._tickOnce(); }
+    for (const k in r._aiState) prevRaw[k] = { x: r._aiState[k].x, y: r._aiState[k].y };
+    for (let i = 0; i < ticks; i++) {
+      fakeNow += STEP; view._tickOnce();
+      // The crowd metric that matters: how many rigs stand at the SAME window at
+      // the SAME time. Pre-fix this saturated at the whole population.
+      {
+        let c = 0, pop = 0;
+        for (const k in r._humanoids) {
+          pop++;
+          const nw = navWorld(r._humanoids[k]);
+          if (Math.hypot(nw.x - WIN.x, nw.y - WIN.y) < 1500) c++;
+        }
+        if (c > st.maxNearWin) st.maxNearWin = c;
+        // A "crowd" = at least THREE rigs, and at least half the population,
+        // standing at the one window. Pre-fix that held for ~70% of every run;
+        // two people crossing paths near a window in a 12 x 6 m room is not the
+        // reported artefact, so the floor of three keeps the metric meaningful
+        // for small populations.
+        st.ticks++;
+        if (pop && c >= Math.max(3, Math.ceil(pop / 2))) st.crowdTicks++;
+      }
+      // Occupancy invariants — resolved per frame across ALL live rigs.
+      const holders = {}, goals = {}, seats = {};
+      for (const k in r._humanoids) {
+        const h = r._humanoids[k];
+        if (h.activityAnchor) holders[h.activityAnchor.furnitureId] = (holders[h.activityAnchor.furnitureId] || 0) + 1;
+        if (h.sitSpotId) seats[h.sitSpotId] = (seats[h.sitSpotId] || 0) + 1;
+        if (h.activityAnchor && h.activityAnchor.kind === 'gaze_window' && h.act > 0.5) st.gazeEngaged++;
+      }
+      for (const k in r._aiState) {
+        const ai = r._aiState[k];
+        if (ai.anchorGoalId) goals[ai.anchorGoalId] = (goals[ai.anchorGoalId] || 0) + 1;
+      }
+      st.maxAnchorHolders = Math.max(st.maxAnchorHolders, ...Object.values(holders), 0);
+      st.maxAnchorGoals = Math.max(st.maxAnchorGoals, ...Object.values(goals), 0);
+      st.maxSeatHolders = Math.max(st.maxSeatHolders, ...Object.values(seats), 0);
+      for (const k in r._aiState) {
+        const ai = r._aiState[k], h = r._humanoids[k];
+        st.samples++;
+        const sig = `${ai.goalX | 0},${ai.goalY | 0}`;
+        if (lastGoal[k] !== sig) {
+          lastGoal[k] = sig; st.picks++;
+          const rr = r._regionOfWorld(ai.x, ai.y), gr = r._regionOfWorld(ai.goalX, ai.goalY);
+          if (rr >= 0 && gr >= 0 && rr !== gr) st.crossRegionGoal++;
+          // A single-waypoint path over a long distance is the straight-line
+          // fallback this fix removed (a legitimate string-pull over a short,
+          // line-of-sight leg is also length 1, so measure the DISTANCE too).
+          if (ai.path && ai.path.length === 1 &&
+              Math.hypot(ai.path[0].x - ai.x, ai.path[0].y - ai.y) > 3000 &&
+              !r._losClearWorld(ai.x, ai.y, ai.path[0].x, ai.path[0].y)) st.straightPaths++;
+        }
+        if (r._outdoors(ai.x, ai.y)) st.rawOut++;
+        // The definitive "walked through a wall" probe. The virtual raw is a
+        // collision-FREE point, so the old straight-line fallback path dragged it
+        // clean across the shell; a planned + string-pulled route never crosses a
+        // nav-solid run. Measured on the per-frame movement segment (a position
+        // sample alone can step over a thin wall between frames). NB this is the
+        // wall test, not the blocked-cell test: waypoint corner-cutting inside the
+        // 170 mm person-inflation band is expected and harmless.
+        const pr = prevRaw[k];
+        if (pr && r._segCrossesNavWall(pr.x, pr.y, ai.x, ai.y)) st.rawCrossedWall++;
+        prevRaw[k] = { x: ai.x, y: ai.y };
+        if (r._blockedWorld(ai.x, ai.y)) st.rawBlocked++;
+        if (ai.roam && Math.hypot(ai.anchorX - FW / 2, ai.anchorY - FD / 2) > 1500) st.anchorMovedFromCentre++;
+        if (h) {
+          const nw = navWorld(h);
+          if (r._outdoors(nw.x, nw.y)) st.navOut++;
+          if (Math.hypot(nw.x - WIN.x, nw.y - WIN.y) < 1500) st.nearWin++;
+          if (Math.hypot(nw.x - DOOR.x, nw.y - DOOR.y) < 1500) st.nearDoor++;
+          xs.push(nw.x);
+          const bk = `${Math.round(nw.x / 1000)},${Math.round(nw.y / 1000)}`;
+          heat.set(bk, (heat.get(bk) || 0) + 1);
+        }
+      }
+    }
+    const hot = [...heat.entries()].sort((a, b) => b[1] - a[1]);
+    st.hottestFrac = hot.length ? hot[0][1] / Math.max(1, st.samples) : 0;
+    st.hottest = hot.slice(0, 4).map(([k, v]) => `${k}:${v}`).join(' ');
+    st.xSpread = xs.length ? (Math.max(...xs) - Math.min(...xs)) | 0 : 0;
+    st.winFrac = st.nearWin / Math.max(1, st.samples);
+    st.crowdFrac = st.crowdTicks / Math.max(1, st.ticks);
+    return st;
+  }
+
+  // ── 1. Ambient gaze anchors exist and are the ONLY anchors here ────────────
+  await setFloor(baseFloor({ roamers: roamers(6), windows: [WIN], doors: [DOOR] }));
+  {
+    const anchors = R()._activityAnchors;
+    ok('1a a furniture-free floor still synthesises the ambient window anchor',
+       anchors.length === 1 && anchors[0].kind === 'gaze_window',
+       anchors.map(a => a.kind + ':' + a.furnitureId).join(','));
+    ok('1b six roamers spawned', Object.keys(R()._humanoids).length === 6,
+       Object.keys(R()._humanoids).join(','));
+  }
+
+  // ── 2. The crowd: ~5 simulated minutes with 6 roamers, one window anchor ───
+  const A = simulate(3000);
+  ok('2a AT MOST ONE rig ever HOLDS the window anchor (single-occupancy claim)',
+     A.maxAnchorHolders <= 1, `max holders = ${A.maxAnchorHolders}`);
+  ok('2b AT MOST ONE rig ever RESERVES it as a walk goal (anchorGoalId)',
+     A.maxAnchorGoals <= 1, `max reservations = ${A.maxAnchorGoals}`);
+  // THE headline metric: how many of the six rigs stand at that window at once.
+  // Pre-fix all of them did; one gazing plus someone walking past is fine.
+  // NEGATIVE CONTROL (this page run against the pre-fix build): 97.97% of frames
+  // had ≥3 of the 6 rigs at the window, peak 6. A few percent of chance encounters
+  // in a 12 x 6 m room is not a crowd; the separation is ~30x either way.
+  ok('2c half the population is never standing at the window (pre-fix: 97.97% of frames)',
+     A.crowdFrac < 0.08 && A.maxNearWin <= 3,
+     `${(A.crowdFrac * 100).toFixed(2)}% of frames with ≥3 of 6 there, peak ${A.maxNearWin}`);
+  // Pre-fix this fixture measured 74% of rig-frames within 1.5 m of the window
+  // and 71% of all frames inside ONE 1 m bucket at the gaze spot.
+  ok('2d rig-frames within 1.5 m of the window stay well under the pre-fix 74.9%',
+     A.winFrac < 0.40, `${(A.winFrac * 100).toFixed(1)}% (pre-fix 74.9%)`);
+  ok('2e no single 1 m bucket swallows the population (pre-fix hottest was 70.2%)',
+     A.hottestFrac < 0.35, `hottest ${(A.hottestFrac * 100).toFixed(1)}% — ${A.hottest}`);
+  ok('2f the gaze behaviour still HAPPENS (this is a crowd fix, not a mute)',
+     A.gazeEngaged > 0, `${A.gazeEngaged} engaged frames`);
+
+  // ── 3. Roamers actually roam ──────────────────────────────────────────────
+  ok('3a a roamer\'s search centre tracks the RIG, not the pinned floor centre',
+     A.anchorMovedFromCentre > A.samples * 0.5,
+     `${A.anchorMovedFromCentre}/${A.samples} frames > 1.5 m from the floor centre`);
+  ok('3b rigs cover the house rather than one disc (x-spread)',
+     A.xSpread > 6000, `${A.xSpread} mm of a ${HX1 - HX0} mm wide house`);
+
+  // ── 4. Nothing walks THROUGH a wall ───────────────────────────────────────
+  // NB going outdoors is legitimate here — this floor has a DOOR, and a roamer's
+  // ~15% "anywhere in the region" band is documented to allow yard excursions.
+  // What must never happen is crossing the shell instead of using the door.
+  ok('4a the virtual raw never crosses a nav-solid wall run',
+     A.rawCrossedWall === 0, `${A.rawCrossedWall} of ${A.samples} frames`);
+  ok('4b no long straight-line path was ever planned through a wall',
+     A.straightPaths === 0, `${A.straightPaths} of ${A.picks} picks`);
+  ok('4c every planned goal is in the RIG\'s own nav region',
+     A.crossRegionGoal === 0, `${A.crossRegionGoal} of ${A.picks} picks`);
+  ok('4d the door is used (outdoor excursions happen, and only via the opening)',
+     A.nearDoor > 0, `${A.nearDoor} frames near the door`);
+
+  // ── 5. Sensor-anchored demo avatars don't crowd either ────────────────────
+  await setFloor(baseFloor({ motionSensors: motions(4, 7000, 9000), windows: [WIN], doors: [DOOR] }));
+  const B = simulate(2500);
+  ok('5a demo (sensor-anchored) avatars: at most one holds the window anchor',
+     B.maxAnchorHolders <= 1, `max holders = ${B.maxAnchorHolders}`);
+  ok('5b demo avatars do not pile at the window (pre-fix 47%)',
+     B.crowdFrac < 0.08 && B.winFrac < 0.40,   // pre-fix: 20.56% crowd, 45.6% near
+     `${(B.crowdFrac * 100).toFixed(2)}% crowd frames, ${(B.winFrac * 100).toFixed(1)}% near`);
+  ok('5c demo avatars never cross a wall', B.rawCrossedWall === 0, `${B.rawCrossedWall} frames`);
+
+  // ── 6. Seat claims (the pre-existing rule this one mirrors) still hold ────
+  await setFloor(baseFloor({
+    roamers: roamers(6), windows: [WIN], doors: [DOOR],
+    furniture: [{ id: 'ch1', kind: 'chair', x: 6000, y: 9000, w: 500, h: 500, rotation: 0 }],
+  }));
+  const C = simulate(2000);
+  ok('6a at most one rig ever claims the single chair', C.maxSeatHolders <= 1,
+     `max = ${C.maxSeatHolders}`);
+  ok('6b and at most one holds the window anchor alongside it',
+     C.maxAnchorHolders <= 1, `max = ${C.maxAnchorHolders}`);
+
+  // ── 7. An ambient anchor with no standing room is DROPPED ─────────────────
+  // A wardrobe shoved under the window blocks the 600 mm gaze spot; the anchor
+  // must not survive as a goal nobody can stand on (the goal snap would relocate
+  // it — possibly across the wall via the largest-region preference).
+  await setFloor(baseFloor({
+    roamers: roamers(3), windows: [WIN], doors: [DOOR],
+    furniture: [{ id: 'wd1', kind: 'wardrobe', x: 8000, y: 6700, w: 2000, h: 700, rotation: 0 }],
+  }));
+  {
+    const anchors = R()._activityAnchors.filter(a => a.kind === 'gaze_window');
+    ok('7a a gaze anchor whose stand cell is nav-blocked is dropped',
+       anchors.length === 0, `${anchors.length} left`);
+    const D = simulate(1200);
+    ok('7b with no reachable window anchor nothing camps at the window',
+       D.crowdFrac < 0.05 && D.winFrac < 0.25,   // pre-fix: 7.75% crowd, 45.1% near
+       `${(D.crowdFrac * 100).toFixed(2)}% crowd frames, ${(D.winFrac * 100).toFixed(1)}% near`);
+    ok('7c and the rigs still wander instead of freezing', D.xSpread > 4000,
+       `${D.xSpread} mm`);
+  }
+
+  // ── 8. Window-only opening: rigs stay inside and still don't camp ─────────
+  // No door at all, so the interior and the yard are genuinely SEPARATE nav
+  // regions (a sill is not a way out). Nothing may leak through, and nothing may
+  // queue at the only gap either.
+  await setFloor(baseFloor({ roamers: roamers(5), windows: [WIN] }));
+  {
+    const n = R()._nav;
+    const inside = R()._regionOfWorld(8000, 9000), yard = R()._regionOfWorld(1000, 1000);
+    ok('8a a window-only shell really is two nav regions (windows are solid)',
+       inside !== yard && inside >= 0 && yard >= 0, `inside=${inside} yard=${yard}`);
+    const E = simulate(2000);
+    ok('8b no rig reaches the yard', E.navOut === 0 && E.rawOut === 0,
+       `nav ${E.navOut} raw ${E.rawOut}`);
+    ok('8c no crowd at the only opening (pre-fix 76%)',
+       E.crowdFrac < 0.08 && E.winFrac < 0.40,   // pre-fix: 100.00% crowd, 76.9% near
+       `${(E.crowdFrac * 100).toFixed(2)}% crowd frames, ${(E.winFrac * 100).toFixed(1)}% near`);
+    ok('8d at most one rig holds the window anchor', E.maxAnchorHolders <= 1,
+       `max = ${E.maxAnchorHolders}`);
+    ok('8e rigs still traverse the house', E.xSpread > 6000, `${E.xSpread} mm`);
+  }
+
+  // ── 9. Rigs are permanent display presences (no stuck-fade loop) ──────────
+  {
+    const live = Object.values(R()._humanoids);
+    ok('9a all rigs survived at full scale (nothing fade/respawn-looped)',
+       live.length === 5 && live.every(h => h.scale > 0.9 && h.group.visible),
+       live.map(h => h.scale.toFixed(2)).join(','));
+    ok('9b none is sitting in the unreachable-goal stuck state',
+       live.every(h => h.stuckT < 3), live.map(h => h.stuckT.toFixed(1)).join(','));
+  }
+
+  // ── report ────────────────────────────────────────────────────────────────
+  const passed = results.filter(r => r.pass).length;
+  const el = document.getElementById('rows');
+  el.innerHTML = results.map(r =>
+    `<div class="row"><span class="name">${r.name}</span>` +
+    `<span class="${r.pass ? 'pass' : 'fail'}">${r.pass ? 'PASS' : 'FAIL'}` +
+    (r.extra ? ` <span class="extra">${r.extra}</span>` : '') + `</span></div>`).join('');
+  const sum = document.getElementById('summary');
+  sum.textContent = `AVATARCROWD ${passed === results.length ? 'PASS' : 'FAIL'} ${passed}/${results.length}`;
+  sum.className = passed === results.length ? 'okbg' : 'badbg';
+  document.title = `AVATARCROWD ${passed === results.length ? 'PASS' : 'FAIL'} ${passed}/${results.length}`;
+</script>
