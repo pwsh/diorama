@@ -1,6 +1,6 @@
 # Project status & pick-up guide
 
-Last updated: 2026-08-05, at **v0.57.0**. This is the single document to
+Last updated: 2026-08-05, at **v0.58.0**. This is the single document to
 read (alongside `CLAUDE.md`) to resume work with full context.
 
 ## Where things stand
@@ -360,12 +360,20 @@ instance.
   sedan, Apollo Lunar Rover and Perseverance; the gallery grows a
   62-craft flying-models page and re-captures all 26 ground
   vehicles).
+  → v0.58.0 weather on demand (a hand-authored Demo weather source
+  driving every consumer — condition/temps/wind/cloud/moon/sun/alert,
+  with the demo sun reaching all seven sun consumers incl. solar
+  panels and the avatar time-of-day tiers, zero network; windows are
+  now solid to avatar nav AND robot steering — the vacuum can't slip
+  through a window gap and the mower is hard-contained outdoors with
+  kinematic escape steering, GPS carrot clamping and fenced-yard
+  sweeps; mmWave sensors gain the same Demo-avatar checkbox motion
+  sensors had).
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
 - **Demo weather source** (2026-08-05, user-requested "demo weather
-  function selectable in the weather settings"; unreleased — on main
-  past v0.57.0). Fourth `WeatherConfig.source` `'demo'` +
+  function selectable in the weather settings"; v0.58.0). Fourth `WeatherConfig.source` `'demo'` +
   `demo?: DemoWeatherConfig` (condition/temps/humidity/wind+bearing+
   gust/cloud/visibility/UV/rainSoon/forecastCondition/moonPhase/sun
   elev+az/alertSeverity; whole-object weather passthrough). Pure
@@ -395,7 +403,7 @@ instance.
   three/tsconfig aliases; alias `three` to the package DIRECTORY).
 
 - **Robot window LOS + mower outdoor containment** (2026-08-05,
-  user-directed; unreleased — on main past v0.57.0).
+  user-directed; v0.58.0).
   (1) `segCrossesSolidWall` → `navSolids` (windows solid to robots;
   its ONLY production consumer was the vacuum path — call-site table
   verified, no visual consumer exists, documented at the fn); zero
@@ -419,7 +427,7 @@ instance.
 
 - **Windows block nav + mmWave demo avatars** (2026-08-05,
   user-reported "avatars breaking through windows" + "unbound sensors
-  not generating avatars"; unreleased — on main past v0.57.0).
+  not generating avatars"; v0.58.0).
   (1) `wallCutsForSegment` gained ADDITIVE `navSolids` (door-cuts-only
   complement; identity-returns `solids` on window-free segments —
   byte-identical; `WallOpeningCut.kind` was already the discriminant;
