@@ -1670,6 +1670,11 @@ export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: V
         if (door && !door.locked) {
           // Screen-CW degrees: world endpoint at hinge + (cos θ, -sin θ).
           // Inverse: θ = atan2(-(my - hy), mx - hx), in degrees, snapped 15°.
+          // DELIBERATELY pivots about the HINGE (x, y), not the span centre:
+          // this gesture IS "swing this end around", and the grabbed endpoint
+          // handle must track the cursor. The SIDEBAR rotation input is the
+          // one that re-anchors (geometry.rotateDoorAboutCenter) so a 180°
+          // flip stays put — do NOT unify the two.
           const ang = Math.atan2(-(mm.y - door.y), mm.x - door.x);
           const deg = Math.round(ang * 180 / Math.PI / 15) * 15;
           door.rotation = ((deg % 360) + 360) % 360;

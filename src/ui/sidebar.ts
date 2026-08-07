@@ -58,7 +58,8 @@ import { CLOCK_PRESETS, DATE_PRESETS, type ValueRule, type RuleOp } from '../val
 import type { Vec2, InfoCard, InfoCardMount, InfoCardDisplayMode, ActionButton, ActionKind, Ruler, DimensionMode, NeighborhoodConfig, DoorKind, GarageStyle } from '../types.js';
 import { resolveRulerEnds } from '../geometry.js';
 import { floorElevationMm, DOOR_DEFAULT_W, doorDefaultWidth, isSlidingDoorKind,
-  isDoubleLeafDoorKind, GARAGE_DOOR_H, GARAGE_HEIGHT_MIN, GARAGE_HEIGHT_MAX,
+  isDoubleLeafDoorKind, rotateDoorAboutCenter, rotateWindowAboutCenter,
+  GARAGE_DOOR_H, GARAGE_HEIGHT_MIN, GARAGE_HEIGHT_MAX,
   garageDoorHeightMm } from '../geometry.js';
 
 // Compact relative-age label for a GPS fix timestamp (ms epoch).
@@ -5377,7 +5378,12 @@ export class Sidebar extends LitElement {
           <input type="number" step="15" .value=${String(Math.round(d.rotation))}
                  @input=${(e: Event) => upd(() => {
                    const v = parseFloat((e.target as HTMLInputElement).value) || 0;
-                   d.rotation = ((Math.round(v / 15) * 15) % 360 + 360) % 360;
+                   // Pivot about the SPAN CENTRE, not the hinge — a 180° turn
+                   // must flip inside/outside in place, not fling the panel to
+                   // the far side of (x, y). (The canvas endpoint drag keeps
+                   // its hinge pivot on purpose.)
+                   const r = rotateDoorAboutCenter(d, Math.round(v / 15) * 15);
+                   d.x = r.x; d.y = r.y; d.rotation = r.rotation;
                  })}>
         </div>
         ${(d.kind ?? 'swing') === 'garage' || isDoubleLeafDoorKind(d.kind) ? nothing : html`
@@ -5565,7 +5571,11 @@ export class Sidebar extends LitElement {
           <input type="number" step="15" .value=${String(Math.round(w.rotation))}
                  @input=${(e: Event) => upd(() => {
                    const v = parseFloat((e.target as HTMLInputElement).value) || 0;
-                   w.rotation = ((Math.round(v / 15) * 15) % 360 + 360) % 360;
+                   // Windows are already centre-anchored, so this only sets
+                   // `rotation` — routed through the shared helper so the door
+                   // and window editors can never drift apart.
+                   const r = rotateWindowAboutCenter(w, Math.round(v / 15) * 15);
+                   w.x = r.x; w.y = r.y; w.rotation = r.rotation;
                  })}>
         </div>
         <div class="row"><label>Type</label>
@@ -7112,6 +7122,15 @@ export class Sidebar extends LitElement {
                   @click=${() => { s.demo = !s.demo; p.save(); p.emitConfig(); }}>
             ${s.demo ? '🎬 On (no device needed)' : '— Off'}
           </button>
+        </div>
+        <div class="row" title="Also mark where the radar ACTUALLY says each target is: a small hollow circle in 2D, a floating ball in 3D. The avatar walks a smoothed, wall-aware path and even the 2D dot is spring-eased, so both can sit metres from the live report — this marker is the un-smoothed truth and snaps at the sensor's push rate.">
+          <label>Show real positions</label>
+          <input type="checkbox" .checked=${s.showRealPositions === true}
+                 @change=${(e: Event) => {
+                   const on = (e.target as HTMLInputElement).checked;
+                   if (on) s.showRealPositions = true; else delete s.showRealPositions;
+                   p.save(); p.emitConfig();
+                 }}>
         </div>
         ${this._avatarGrid(s, (mut: () => void) => { mut(); p.save(); p.emitConfig(); })}
         <div class="row"><label>HA Device</label>

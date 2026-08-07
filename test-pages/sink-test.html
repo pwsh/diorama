@@ -180,8 +180,103 @@
     assert('all sink 2D primitive cases draw without throwing', threw === '', threw);
   }
 
+  // ── 3D: ONE cohesive deck slab + a bowl that is actually VISIBLE ─────────
+  // 2026-08-07, user-reported (longstanding): "sink tops render as intersecting
+  // geometric shapes, not a cohesive top with a bowl". Each counter used to be
+  // FOUR abutting rim boxes tiled around the opening — their shared face planes
+  // hatched under flat toon shading, and each box carried its own inverted-hull
+  // outline shell, so abutting shells z-fought into dark seams. Every sink now
+  // builds ONE extruded slab whose opening is a real HOLE (the wall-with-window
+  // idiom), with the basin walls kept BELOW the deck's top face and OUTSIDE the
+  // hole so the deck lip always overhangs them.
+  function testDeckAndBowl() {
+    const K = geo.FURNITURE_KINDS;
+    const furn = SINK_KINDS.map((k, i) => ({
+      id: 'dk_' + k, x: 1000 + i * 1400, y: 5000, w: K[k].w, h: K[k].h, kind: k,
+    }));
+    build(furn, {});
+    for (const k of SINK_KINDS) {
+      const g = findByFixtureId(r._floorGroup, 'dk_' + k);
+      const ht = K[k].ht;
+      g && g.updateMatrixWorld(true);
+      const bbOf = (o) => {
+        o.geometry.computeBoundingBox();
+        return o.geometry.boundingBox.clone().applyMatrix4(o.matrixWorld);
+      };
+      const decks = [], others = [];
+      g && g.traverse(o => {
+        if (!o.isMesh || !o.geometry || o.userData?.outline) return;
+        (o.userData?.sinkDeck ? decks : others).push(o);
+      });
+      // (1) EXACTLY ONE deck slab — the whole point of the rebuild.
+      assert(`${k}: exactly ONE counter/deck slab`, decks.length === 1, `n=${decks.length}`);
+      if (decks.length !== 1) continue;
+      const deck = bbOf(decks[0]);
+      // (2) The deck's top face IS the piece's top surface (rim height).
+      assert(`${k}: the deck slab's top face is the counter surface`,
+        Math.abs(deck.max.y - ht) < 1.5, `top=${deck.max.y.toFixed(1)} ht=${ht}`);
+      // (3) It is a real slab with a real HOLE: an extruded ring has strictly
+      // more vertices than the 24 of a plain box, and its footprint spans the
+      // opening (so the hole is interior, not a notch).
+      const vcount = decks[0].geometry.getAttribute('position').count;
+      assert(`${k}: the deck is an extruded profile with a hole (not a box)`,
+        vcount > 24, `verts=${vcount}`);
+      // (4) The basin floor sits strictly BELOW the deck's UNDERSIDE (a real
+      // recess, not a plate tucked into the slab).
+      const rig = r._sinks.find(s => s.fuId === 'dk_' + k);
+      assert(`${k}: basin floor strictly below the deck slab`,
+        rig && rig.emptyY < deck.min.y, `emptyY=${rig?.emptyY?.toFixed(0)} deckBottom=${deck.min.y.toFixed(0)}`);
+      // (5) NO basin part may reach the deck's top plane — the no-coplanar pin.
+      // (Bowl walls bury SINK_WALL_BURY under it; faucet parts stand clear
+      // ABOVE it and are excluded by being above the deck entirely.)
+      const inDeckBand = others.filter(o => {
+        const b = bbOf(o);
+        return b.max.y > deck.min.y + 0.5 && b.max.y <= deck.max.y + 0.001
+               && b.min.y < deck.max.y - 0.5;
+      });
+      const touching = inDeckBand.filter(o => bbOf(o).max.y > deck.max.y - 4);
+      assert(`${k}: no basin part reaches the deck top plane (no coplanar hatch)`,
+        touching.length === 0,
+        touching.map(o => `${o.geometry.type}@${bbOf(o).max.y.toFixed(1)}`).join(',') || 'clean');
+      // (6) The water fill plane lives INSIDE the bowl opening footprint.
+      if (rig) {
+        const fb = bbOf(rig.fill);
+        const inside = fb.min.x > deck.min.x && fb.max.x < deck.max.x
+                    && fb.min.z > deck.min.z && fb.max.z < deck.max.z
+                    && fb.max.y < deck.min.y;
+        assert(`${k}: the water fill plane sits inside the bowl, under the deck`, inside,
+          `fill y=${fb.max.y.toFixed(0)} deckBottom=${deck.min.y.toFixed(0)}`);
+      }
+      // (7) Footprint UNCHANGED vs the kind's declared dims (nav + the demo
+      // plans depend on it). The deck legitimately overhangs the carcass, so
+      // measure the whole group and allow the authored overhang only. The blob
+      // shadow (a floor-lying PlaneGeometry decal, deliberately wider than the
+      // piece) is not structure — exclude it.
+      let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+      g.traverse(o => {
+        if (!o.isMesh || !o.geometry || o.userData?.outline) return;
+        if (o.geometry.type === 'PlaneGeometry' && Math.abs(o.rotation.x + Math.PI / 2) < 1e-6) return;
+        const b = bbOf(o);
+        minX = Math.min(minX, b.min.x); maxX = Math.max(maxX, b.max.x);
+        minZ = Math.min(minZ, b.min.z); maxZ = Math.max(maxZ, b.max.z);
+      });
+      assert(`${k}: footprint stays within its declared dims + counter overhang`,
+        (maxX - minX) <= K[k].w + 60 && (maxZ - minZ) <= K[k].h + 60,
+        `${(maxX - minX).toFixed(0)}x${(maxZ - minZ).toFixed(0)} vs ${K[k].w}x${K[k].h}`);
+    }
+    // kitchen_sink's ONE slab carries BOTH bowl holes (the deck strip between
+    // them IS the divider — the separate stainless divider box is retired).
+    {
+      const g = findByFixtureId(r._floorGroup, 'dk_kitchen_sink');
+      let decks = 0;
+      g && g.traverse(o => { if (o.userData?.sinkDeck && !o.userData?.outline) decks++; });
+      assert('kitchen_sink: still ONE deck slab despite TWO bowls', decks === 1, `n=${decks}`);
+    }
+  }
+
   testPure();
   testBuildEachKind();
+  testDeckAndBowl();
   testRunStop();
   testBlendSurvivesRebuild();
   testUnbound();

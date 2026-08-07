@@ -428,6 +428,16 @@ export interface TargetWorld {
   // The rig walks there, then fast-fades + disposes (cap ~6 s). Without it, a
   // vanishing BLE person uses the normal despawn fade. Stale chunk ignores it.
   leaveVia?: { x: number; y: number };
+  // Optional (additive): the owning mmWave sensor has `showRealPositions` on —
+  // render a small marker ball at the RAW radar report (see rawX/rawY) next to
+  // the smoothed rig. Radar targets only (synthetic ai/ble/cam/roam rigs have no
+  // sensor report to show). A stale renderer chunk ignores it → no marker.
+  showReal?: boolean;
+  // Optional (additive): the UN-SMOOTHED latest radar coordinate in WORLD mm —
+  // LerpSlot.tx/ty (the spring's GOAL) mapped through localToWorld, as opposed to
+  // x/y which comes from the eased cx/cy. Present only alongside showReal.
+  rawX?: number;
+  rawY?: number;
 }
 
 // Per-frame context for the Sims-style activity system. Built cheaply every
@@ -2686,6 +2696,15 @@ export class ThreeDRenderer {
   // Per-target humanoid rigs, persisted across frames so we can carry
   // walk-cycle phase + smoothed body facing.
   private _humanoids: Record<string, Humanoid> = {};
+  // "Real position" marker balls (Sensor.showRealPositions): one small glowing
+  // sphere per RADAR target of a flagged sensor, parked at the target's RAW,
+  // UN-SMOOTHED report (TargetWorld.rawX/rawY) while the rig walks its own
+  // nav-smoothed path. Keyed by target key. Plain meshes with a per-marker
+  // geometry+material (nothing shared), parented into _targetGroup so they ride
+  // the targets/Avatars layer flip and the floor-switch teardown for free.
+  private _realPosMarkers: Record<string, THREE.Mesh> = {};
+  private static readonly REAL_POS_R_MM = 90;      // marker ball radius
+  private static readonly REAL_POS_Y_MM = 1000;    // hover height (chest-ish)
   // Active costume-swap sparkle sprites (rare, transient). Each is parented to a
   // rig group; advanced in _advanceSparkles (scale-out + fade over ~0.6 s) then
   // removed + material-disposed. Reset on clearTransientGroups.
@@ -3945,6 +3964,10 @@ export class ThreeDRenderer {
       this._disposeHumanoid(this._humanoids[key]);
     }
     this._humanoids = {};
+    // Raw-position markers lived under _targetGroup (cleared above, which
+    // disposed their geometry + materials) — just drop the tracking map so the
+    // next updateTargets rebuilds them fresh for the new floor's sensors.
+    this._realPosMarkers = {};
     // Sparkle sprites live on the rigs just disposed above; drop the tracking list
     // (their materials went with the rig subtrees).
     this._sparkles = [];
@@ -9862,50 +9885,141 @@ export class ThreeDRenderer {
       grp.add(stream);
       opts?.sinkSink?.push({ fill, stream, emptyY, fullY });
     };
+    // ── Sink tops: ONE deck slab, real hole, buried basin walls ─────────────
+    // Every sink's counter used to be FOUR abutting rim boxes tiled around the
+    // basin opening. Under flat toon shading (and with one inverted-hull
+    // outline shell per box) those shared face planes hatched into dark seams
+    // crossing the counter — the user-reported "intersecting geometric shapes
+    // instead of a cohesive top with a bowl". The fix is the same one the wall
+    // builder already uses for window openings: ONE extruded mesh whose
+    // opening is a genuine HOLE in the profile, so there are no internal faces
+    // and exactly one outline shell.
+    //
+    // Reading order from above is then: deck surface → clean bowl opening →
+    // darker bowl interior. The basin walls are sized OUTSIDE the hole (by
+    // SINK_BOWL_LIP) and topped BELOW the deck's top face (by SINK_WALL_BURY),
+    // so the deck lip always overhangs them and no basin face is ever coplanar
+    // with the deck.
+    const SINK_WALL_BURY = 6;      // basin wall tops sit this far under the deck top
+    const SINK_BOWL_LIP = 10;      // basin walls stand this far outside the hole
+    // Shape XY → scene XZ under `rotation.x = -PI/2`: (sx, sy) → (sx, ·, -sy),
+    // and the extrusion depth runs along +Y. So a piece-local z maps to -sy.
+    const roundRectPath = (p: THREE.Path, x: number, y: number,
+                           hw: number, hd: number, r: number) => {
+      p.moveTo(x - hw + r, y - hd);
+      p.lineTo(x + hw - r, y - hd);
+      p.absarc(x + hw - r, y - hd + r, r, -Math.PI / 2, 0, false);
+      p.lineTo(x + hw, y + hd - r);
+      p.absarc(x + hw - r, y + hd - r, r, 0, Math.PI / 2, false);
+      p.lineTo(x - hw + r, y + hd);
+      p.absarc(x - hw + r, y + hd - r, r, Math.PI / 2, Math.PI, false);
+      p.lineTo(x - hw, y - hd + r);
+      p.absarc(x - hw + r, y - hd + r, r, Math.PI, Math.PI * 1.5, false);
+      p.closePath();
+    };
+    // `o.deck` tags the real counter slab (test hook); the same helper also
+    // builds each sink's CABINET / PEDESTAL body as a shell with a vertical
+    // shaft where the basin hangs. That shaft is load-bearing, not cosmetic:
+    // a solid cabinet block's top face sits ABOVE the recessed bowl floor, so
+    // looking down the deck opening you saw the cabinet lid instead of the
+    // basin — the recess was never actually visible.
+    const addSinkDeck = (mat: THREE.Material, w: number, d: number, thick: number,
+                         cx: number, cz: number, topY: number,
+                         holes: { x: number; z: number; hw: number; hd: number; round?: boolean }[],
+                         o?: { outerRound?: boolean; deck?: boolean }) => {
+      const shape = new THREE.Shape();
+      if (o?.outerRound) shape.absellipse(0, 0, w / 2, d / 2, 0, Math.PI * 2, false);
+      else roundRectPath(shape as unknown as THREE.Path, 0, 0, w / 2, d / 2,
+                         Math.min(w, d) * 0.06);
+      for (const h of holes) {
+        const path = new THREE.Path();
+        const hx = h.x - cx, hy = -(h.z - cz);
+        if (h.round) path.absellipse(hx, hy, h.hw, h.hd, 0, Math.PI * 2, true);
+        else roundRectPath(path, hx, hy, h.hw, h.hd, Math.min(h.hw, h.hd) * 0.3);
+        shape.holes.push(path);
+      }
+      const mesh = new THREE.Mesh(
+        new THREE.ExtrudeGeometry(shape, { depth: thick, bevelEnabled: false, curveSegments: 20 }),
+        mat);
+      mesh.rotation.x = -Math.PI / 2;
+      mesh.position.set(cx, topY - thick, cz);
+      if (o?.deck !== false) mesh.userData.sinkDeck = true;
+      grp.add(mesh);
+      return mesh;
+    };
+    // Half-extents of the shaft a cabinet/pedestal body must leave open for a
+    // basin whose DECK HOLE is hw × hd: outside the basin walls (which stand
+    // SINK_BOWL_LIP out, `wallT` thick) by a further 8 mm, so the shaft's own
+    // inner surface always hides behind the bowl.
+    const sinkShaft = (hw: number, hd: number, wallT = 0) =>
+      ({ hw: hw + SINK_BOWL_LIP + wallT + 8, hd: hd + SINK_BOWL_LIP + wallT + 8 });
     // Recessed OVAL basin bowl (bathroom sinks): an open-ended (top + bottom
-    // open) cylindrical inner wall dropping from the rim down to a darker bowl
-    // floor disc, so the cavity reads as a real recess from the dimetric camera.
-    // DoubleSide so the far inner wall is visible looking down. `zScale` ovals
-    // it. Returns the bowl floor Y (for the water fill). Inset a hair below the
-    // rim (the rim lip overhangs) — no coincident face with the rim slab.
+    // open) cylindrical inner wall dropping from just UNDER the deck down to a
+    // darker bowl floor disc, so the cavity reads as a real recess from the
+    // dimetric camera. DoubleSide so the far inner wall is visible looking
+    // down. `holeHW`/`holeHD` are the DECK HOLE half-extents — the wall flares
+    // SINK_BOWL_LIP wider than the hole so the deck lip hides its top edge.
+    // Returns the bowl floor Y (for the water fill).
     // Bowl materials are created lazily (only when a sink actually builds one) so
     // ordinary furniture never mints two throwaway materials per rebuild.
     let _bowlWall: THREE.Material | null = null, _bowlFloorMat: THREE.Material | null = null;
     const bowlWallMat = () => (_bowlWall ??= this._mat({ color: 0xe9e9e3, roughness: 0.2, metalness: 0.0, side: THREE.DoubleSide }));
     const bowlFloorMatFn = () => (_bowlFloorMat ??= this._mat({ color: 0xcfd2cf, roughness: 0.35, metalness: 0.0 }));
-    const addOvalBowl = (cx: number, cz: number, rTop: number, rBot: number,
-                         rimTopY: number, depth: number, zScale = 1) => {
+    const addOvalBowl = (cx: number, cz: number, holeHW: number, holeHD: number,
+                         deckTopY: number, depth: number, botFrac = 0.72) => {
       const bowlWall = bowlWallMat(), bowlFloorMat = bowlFloorMatFn();
-      const floorY = rimTopY - depth;
+      const floorY = deckTopY - depth;
+      const rTop = holeHW + SINK_BOWL_LIP;
+      const zScale = (holeHD + SINK_BOWL_LIP) / rTop;
+      const rBot = rTop * botFrac;
+      const wallTop = deckTopY - SINK_WALL_BURY, wallH = wallTop - floorY;
       const wall = new THREE.Mesh(
-        new THREE.CylinderGeometry(rTop, rBot, depth, 22, 1, true), bowlWall);
-      wall.position.set(cx, rimTopY - depth / 2, cz);
+        new THREE.CylinderGeometry(rTop, rBot, wallH, 26, 1, true), bowlWall);
+      wall.position.set(cx, floorY + wallH / 2, cz);
       wall.scale.z = zScale;
       wall.userData = { outlineSkip: true };
       grp.add(wall);
-      const floor = new THREE.Mesh(new THREE.CylinderGeometry(rBot, rBot * 0.9, 10, 22), bowlFloorMat);
-      floor.position.set(cx, floorY + 5, cz);
+      // Floor disc slightly WIDER than the wall's bottom so its rim tucks into
+      // the wall instead of meeting it edge-on (coincident-face gotcha).
+      const floor = new THREE.Mesh(
+        new THREE.CylinderGeometry(rBot * 1.04, rBot * 0.9, 12, 26), bowlFloorMat);
+      floor.position.set(cx, floorY + 6, cz);
       floor.scale.z = zScale;
+      floor.userData = { outlineSkip: true };   // see addRectBasin's note
       grp.add(floor);
       // Drain nub, proud of the bowl floor (coincident-face gotcha).
-      addCyl(rBot * 0.16, rBot * 0.16, 8, dark, cx, floorY + 12, cz, 12);
-      return floorY;
+      addCyl(rBot * 0.16, rBot * 0.16, 8, dark, cx, floorY + 14, cz, 12);
+      return { floorY, rTop, zScale };
     };
-    // Recessed RECTANGULAR basin well (kitchen / utility): a darker floor plate
-    // + four inner walls dropping from the rim, inset 6 mm inside the opening so
-    // the rim reads as an overhanging lip (no coincident face with the rim slab).
+    // Recessed RECTANGULAR basin well (kitchen / utility): four walls dropping
+    // from just under the deck to a darker floor plate. `hw`/`hd` are the DECK
+    // HOLE half-extents; walls stand SINK_BOWL_LIP outside them (so the deck
+    // overhangs) and their tops bury SINK_WALL_BURY under the deck's top face.
+    // `o.wallBotY` lets a piece (utility sink) run the same walls all the way
+    // down as the tub's visible outer shell.
     const addRectBasin = (cx: number, cz: number, hw: number, hd: number,
-                          rimTopY: number, depth: number) => {
-      const bowlWall = bowlWallMat(), bowlFloorMat = bowlFloorMatFn();
-      const floorY = rimTopY - depth;
-      const t = 22;                                   // inner-wall thickness
-      const iw = hw - 6, id = hd - 6;                 // inset from the opening
-      addBox(iw * 2, 10, id * 2, bowlFloorMat, cx, floorY + 5, cz);        // bowl floor
-      addBox(iw * 2, depth, t, bowlWall, cx, rimTopY - depth / 2, cz + id - t / 2);  // back wall
-      addBox(iw * 2, depth, t, bowlWall, cx, rimTopY - depth / 2, cz - id + t / 2);  // front wall
-      addBox(t, depth, id * 2, bowlWall, cx + iw - t / 2, rimTopY - depth / 2, cz);  // right wall
-      addBox(t, depth, id * 2, bowlWall, cx - iw + t / 2, rimTopY - depth / 2, cz);  // left wall
-      addCyl(30, 30, 8, dark, cx, floorY + 12, cz, 12);                    // drain
+                          deckTopY: number, depth: number,
+                          o?: { t?: number; wallBotY?: number; wallMat?: THREE.Material }) => {
+      const bowlWall = o?.wallMat ?? bowlWallMat(), bowlFloorMat = bowlFloorMatFn();
+      const floorY = deckTopY - depth;
+      const t = o?.t ?? 22;                           // wall thickness
+      const iw = hw + SINK_BOWL_LIP, id = hd + SINK_BOWL_LIP;   // wall INNER faces
+      const wallTop = deckTopY - SINK_WALL_BURY;
+      const wallBot = o?.wallBotY ?? floorY;
+      const wallH = wallTop - wallBot, wallY = wallBot + wallH / 2;
+      // Floor plate reaches HALF into the walls so its edges are buried.
+      // Every basin part is `outlineSkip`: an inverted-hull shell expands its
+      // host a few mm in EVERY direction, which pushed each wall's dark shell
+      // back up THROUGH the deck as heavy black bars across the counter (the
+      // oval bowl's wall was already skipped for the same reason). The deck's
+      // own shell still draws the dark rim around the opening.
+      const noOutline = (m: THREE.Mesh) => { m.userData.outlineSkip = true; return m; };
+      noOutline(addBox((iw + t / 2) * 2, 12, (id + t / 2) * 2, bowlFloorMat, cx, floorY + 6, cz));
+      noOutline(addBox((iw + t) * 2, wallH, t, bowlWall, cx, wallY, cz + id + t / 2));   // back wall
+      noOutline(addBox((iw + t) * 2, wallH, t, bowlWall, cx, wallY, cz - id - t / 2));   // front wall
+      noOutline(addBox(t, wallH, id * 2, bowlWall, cx + iw + t / 2, wallY, cz));         // right wall
+      noOutline(addBox(t, wallH, id * 2, bowlWall, cx - iw - t / 2, wallY, cz));         // left wall
+      addCyl(30, 30, 8, dark, cx, floorY + 14, cz, 12);                       // drain
       return floorY;
     };
 
@@ -11108,28 +11222,30 @@ export class ThreeDRenderer {
         // Compact vanity: cabinet base + overhanging counter with a raised rim
         // framing a RECESSED oval bowl + a faucet with running water/fill.
         const carcassTop = HT - 40;
-        addBox(W, carcassTop, D, wood, 0, carcassTop / 2, 0);            // cabinet body
+        const sOpenW = W * 0.55, sOpenD = D * 0.5, sZc = -D * 0.03;
+        const sShaft = sinkShaft(sOpenW / 2, sOpenD / 2);
+        addSinkDeck(wood, W, D, carcassTop, 0, 0, carcassTop,            // cabinet body
+                    [{ x: 0, z: sZc, hw: sShaft.hw, hd: sShaft.hd }], { deck: false });
         const sPanel = this._mat({ color: tint, roughness: 0.55, metalness: 0.05 });
         const sPull = this._mat({ color: 0x3a444d, metalness: 0.8, roughness: 0.35 });
         const sdw = W - 40, sdh = carcassTop - 90;
         addBox(sdw, sdh, 16, sPanel, 0, 45 + sdh / 2, -D / 2 - 8);       // single door front (-Z)
         addBox(20, 120, 18, sPull, W * 0.28, 45 + sdh * 0.55, -D / 2 - 26);
         const stone = this._mat({ color: 0xeceff1, roughness: 0.2, metalness: 0.05 });
-        const openW = W * 0.55, openD = D * 0.5, zc = -D * 0.03;
-        const rimH = 40, rimY = carcassTop + rimH / 2;
-        const zBack = zc + openD / 2, zFront = zc - openD / 2;
-        addBox(W + 40, rimH, (D / 2 + 20) - zBack, stone, 0, rimY, (zBack + D / 2 + 20) / 2);   // back band
-        addBox(W + 40, rimH, zFront - (-D / 2 - 20), stone, 0, rimY, (zFront + (-D / 2 - 20)) / 2); // front band
-        addBox((W + 40) / 2 - openW / 2, rimH, openD, stone, -(openW / 2 + ((W + 40) / 2 - openW / 2) / 2), rimY, zc);
-        addBox((W + 40) / 2 - openW / 2, rimH, openD, stone,  (openW / 2 + ((W + 40) / 2 - openW / 2) / 2), rimY, zc);
-        const rTop = openW * 0.42, zSc = (openD * 0.9) / (rTop * 2);
-        const bowlFloorY = addOvalBowl(0, zc, rTop, rTop * 0.72, HT, 130, zSc);
+        // ONE overhanging counter slab with the oval bowl as a real hole.
+        const openW = sOpenW, openD = sOpenD, zc = sZc;
+        const rimH = HT - carcassTop;                                    // 40
+        const zBack = zc + openD / 2;
+        addSinkDeck(stone, W + 40, D + 40, rimH, 0, 0, HT,
+                    [{ x: 0, z: zc, hw: openW / 2, hd: openD / 2, round: true }]);
+        const bowl = addOvalBowl(0, zc, openW / 2, openD / 2, HT, 130);
         // Faucet: vertical body at the back + a spout arm reaching over the bowl.
         const vSteel = this._mat({ color: 0xb8c0c6, metalness: 0.8, roughness: 0.28 });
         addCyl(15, 17, 180, vSteel, 0, HT + 90, zBack + 25, 10);
         const spout = addCyl(11, 11, 120, vSteel, 0, HT + 165, zc + 25, 10);
         spout.rotation.x = Math.PI / 2.3;
-        addSinkWater(0, zc, rTop * 0.62, rTop * 0.62 * zSc, bowlFloorY, HT, 0, zc, HT + 130);
+        addSinkWater(0, zc, bowl.rTop * 0.6, bowl.rTop * 0.6 * bowl.zScale,
+                     bowl.floorY, HT, 0, zc, HT + 130);
         break;
       }
       case 'pedestal_sink': {
@@ -11138,32 +11254,43 @@ export class ThreeDRenderer {
         const colTop = HT - 190;
         addCyl(80, 130, colTop, porcelain, 0, colTop / 2, 0, 14);        // tapered pedestal column
         addCyl(115, 90, 30, porcelain, 0, 15, 0, 14);                    // splayed foot
-        // Flared basin body under the rim (wider than the column).
-        const basinTop = HT, basinBot = colTop;
-        addCyl(W * 0.5, 130, basinTop - basinBot, porcelain, 0, (basinTop + basinBot) / 2, 0, 18);
+        // Flared basin body under the deck — 15 mm narrower than the deck on
+        // every side so the deck reads as an overhanging lip, never flush, and
+        // OPEN-ENDED (a shell, not a capped cylinder): a capped top face sat
+        // above the recessed bowl floor and hid the bowl through the opening.
         const rimH = 34;
-        // Thin porcelain rim ring around the bowl opening (4 bands, hole in the middle).
+        const basinTop = HT - rimH, basinBot = colTop;
+        const shell = this._mat({ color: 0xf5f5f0, roughness: 0.18, metalness: 0.0, side: THREE.DoubleSide });
+        const basinShell = new THREE.Mesh(
+          new THREE.CylinderGeometry(W * 0.47, 130, basinTop - basinBot, 20, 1, true), shell);
+        basinShell.position.set(0, (basinTop + basinBot) / 2, 0);
+        basinShell.userData = { outlineSkip: true };
+        grp.add(basinShell);
+        // ONE oval porcelain deck with the bowl as a real hole (a pedestal
+        // sink's top is a rounded basin, so the outer contour is an ellipse).
         const stone = this._mat({ color: 0xf3f3ee, roughness: 0.18, metalness: 0.0 });
-        const openW = W * 0.62, openD = D * 0.6, zc = -D * 0.02, rimY = HT - rimH / 2;
-        const zBack = zc + openD / 2, zFront = zc - openD / 2;
-        addBox(W, rimH, (D / 2) - zBack, stone, 0, rimY, (zBack + D / 2) / 2);
-        addBox(W, rimH, zFront + D / 2, stone, 0, rimY, (zFront - D / 2) / 2);
-        addBox(W / 2 - openW / 2, rimH, openD, stone, -(openW / 2 + (W / 2 - openW / 2) / 2), rimY, zc);
-        addBox(W / 2 - openW / 2, rimH, openD, stone,  (openW / 2 + (W / 2 - openW / 2) / 2), rimY, zc);
-        const rTop = openW * 0.44, zSc = (openD * 0.9) / (rTop * 2);
-        const bowlFloorY = addOvalBowl(0, zc, rTop, rTop * 0.7, HT, 120, zSc);
+        const openW = W * 0.62, openD = D * 0.6, zc = -D * 0.02;
+        const zBack = zc + openD / 2;
+        addSinkDeck(stone, W, D, rimH, 0, 0, HT,
+                    [{ x: 0, z: zc, hw: openW / 2, hd: openD / 2, round: true }],
+                    { outerRound: true });
+        const bowl = addOvalBowl(0, zc, openW / 2, openD / 2, HT, 120, 0.7);
         const vSteel = this._mat({ color: 0xc2c9ce, metalness: 0.8, roughness: 0.28 });
         addCyl(14, 15, 150, vSteel, 0, HT + 75, zBack + 18, 10);
         const spout = addCyl(10, 10, 110, vSteel, 0, HT + 140, zc + 20, 10);
         spout.rotation.x = Math.PI / 2.3;
-        addSinkWater(0, zc, rTop * 0.6, rTop * 0.6 * zSc, bowlFloorY, HT, 0, zc, HT + 110);
+        addSinkWater(0, zc, bowl.rTop * 0.6, bowl.rTop * 0.6 * bowl.zScale,
+                     bowl.floorY, HT, 0, zc, HT + 110);
         break;
       }
       case 'sink_vanity': {
         // Cabinet base (casework idiom) + overhanging stone counter with a
         // raised rim framing a RECESSED basin bowl + a faucet with running water.
         const carcassTop = HT - 40;
-        addBox(W, carcassTop, D, wood, 0, carcassTop / 2, 0);            // cabinet body
+        const vOpenW = W * 0.5, vOpenD = D * 0.5, vZc = -D * 0.05;
+        const vShaft = sinkShaft(vOpenW / 2, vOpenD / 2);
+        addSinkDeck(wood, W, D, carcassTop, 0, 0, carcassTop,            // cabinet body
+                    [{ x: 0, z: vZc, hw: vShaft.hw, hd: vShaft.hd }], { deck: false });
         // Double door split on the front (-Z).
         const vPanel = this._mat({ color: tint, roughness: 0.55, metalness: 0.05 });
         const vPull = this._mat({ color: 0x3a444d, metalness: 0.8, roughness: 0.35 });
@@ -11173,20 +11300,16 @@ export class ThreeDRenderer {
           addBox(22, Math.min(240, vdh * 0.45), 20, vPull, sx * 40, 50 + vdh * 0.55, -D / 2 - 28);
         }
         const stone = this._mat({ color: 0xeceff1, roughness: 0.2, metalness: 0.05 });
-        // Basin opening: a raised counter rim tiled around a central hole (no
-        // boolean cut — front/back bands span full width, side bands fill the
-        // gaps, so no overlapping coplanar top faces).
-        const openW = W * 0.5, openD = D * 0.5, zc = -D * 0.05;
-        const rimBot = carcassTop, rimTop = HT, rimH = rimTop - rimBot;  // 40 mm
-        const rimY = rimBot + rimH / 2;
-        const zBack = zc + openD / 2, zFront = zc - openD / 2;
-        addBox(W + 40, rimH, (D / 2 + 20) - zBack, stone, 0, rimY, (zBack + D / 2 + 20) / 2);   // back band
-        addBox(W + 40, rimH, zFront - (-D / 2 - 20), stone, 0, rimY, (zFront + (-D / 2 - 20)) / 2); // front band
-        addBox((W + 40) / 2 - openW / 2, rimH, openD, stone, -(openW / 2 + ((W + 40) / 2 - openW / 2) / 2), rimY, zc); // left filler
-        addBox((W + 40) / 2 - openW / 2, rimH, openD, stone,  (openW / 2 + ((W + 40) / 2 - openW / 2) / 2), rimY, zc); // right filler
+        // ONE overhanging stone counter slab with the basin opening as a real
+        // HOLE in the extruded profile (was four abutting rim boxes, whose
+        // shared face planes hatched into seams across the counter).
+        const openW = vOpenW, openD = vOpenD, zc = vZc;
+        const rimH = HT - carcassTop;                                    // 40 mm
+        const zBack = zc + openD / 2;
+        addSinkDeck(stone, W + 40, D + 40, rimH, 0, 0, HT,
+                    [{ x: 0, z: zc, hw: openW / 2, hd: openD / 2, round: true }]);
         // Recessed oval bowl (open cavity, drops 150 mm below the counter).
-        const rTop = openW * 0.44, zSc = (openD * 0.9) / (rTop * 2);
-        const bowlFloorY = addOvalBowl(0, zc, rTop, rTop * 0.68, HT, 150, zSc);
+        const bowl = addOvalBowl(0, zc, openW / 2, openD / 2, HT, 150, 0.68);
         // Faucet at the back edge: vertical body + a spout arm over the bowl. The
         // shared `steel` mat is tinted by the piece color, so use explicit grey.
         const vSteel = this._mat({ color: 0xb8c0c6, metalness: 0.8, roughness: 0.28 });
@@ -11194,35 +11317,42 @@ export class ThreeDRenderer {
         addCyl(16, 18, 200, vSteel, 0, HT + 100, faucetZ, 10);
         const spout = addCyl(12, 12, 140, vSteel, 0, HT + 185, zc + 20, 10);
         spout.rotation.x = Math.PI / 2.3;
-        addSinkWater(0, zc, rTop * 0.62, rTop * 0.62 * zSc, bowlFloorY, HT, 0, zc, HT + 150);
+        addSinkWater(0, zc, bowl.rTop * 0.6, bowl.rTop * 0.6 * bowl.zScale,
+                     bowl.floorY, HT, 0, zc, HT + 150);
         break;
       }
       case 'kitchen_sink': {
         // Counter-matching cabinet base + stone slab (reusing the counter idiom)
         // with a stainless double basin RECESSED into it (two open wells) and a
         // tall arched faucet at the back center + running water in each bowl.
-        addBox(W, HT - 30, D, wood, 0, (HT - 30) / 2, 0);               // cabinet base
         const ksTop = this._mat({ color: 0xcfd8dc, roughness: 0.25, metalness: 0.05 });
         const stainless = this._mat({ color: 0xb8c0c6, metalness: 0.8, roughness: 0.28 });
-        // Counter slab as a raised rim tiled around the sink opening.
+        // ONE counter slab with TWO real holes — the strip of deck between them
+        // IS the divider (a real double-bowl sink's divider is part of the
+        // deck), which retires the separate stainless divider box that used to
+        // meet the four rim bands on coplanar planes.
         const sinkW = W * 0.72, sinkD = D * 0.6, zc = -D * 0.03;
-        const rimBot = HT - 30, rimTop = HT, rimH = rimTop - rimBot, rimY = rimBot + rimH / 2;
-        const zBack = zc + sinkD / 2, zFront = zc - sinkD / 2;
-        addBox(W * 1.02, rimH, (D * 1.02 / 2) - zBack, ksTop, 0, rimY, (zBack + D * 1.02 / 2) / 2);        // back band
-        addBox(W * 1.02, rimH, zFront + D * 1.02 / 2, ksTop, 0, rimY, (zFront - D * 1.02 / 2) / 2);        // front band
-        const sideW = (W * 1.02) / 2 - sinkW / 2;
-        addBox(sideW, rimH, sinkD, ksTop, -(sinkW / 2 + sideW / 2), rimY, zc);   // left filler
-        addBox(sideW, rimH, sinkD, ksTop,  (sinkW / 2 + sideW / 2), rimY, zc);   // right filler
-        // Center divider (stainless) rising to the rim between the two wells.
-        const div = 60, depth = 200;
-        addBox(div, rimH + 10, sinkD, stainless, 0, HT - (rimH + 10) / 2, zc);
+        const rimH = 30;
+        const zBack = zc + sinkD / 2;
+        const div = 90, depth = 200;
         const panW = sinkW / 2 - div / 2;
         const panCx = div / 2 + panW / 2;
+        // Hole half-extents sit LIP inside each well so the deck overhangs the
+        // basin walls; the divider strip stays `div` wide at the deck surface.
+        const holeHW = panW / 2 - SINK_BOWL_LIP, holeHD = sinkD / 2 - SINK_BOWL_LIP;
+        // Cabinet base: a shell with ONE shaft spanning BOTH wells (the divider
+        // walls hang inside it), so the recess is actually visible from above.
+        const kShaft = sinkShaft(panCx + holeHW, holeHD, 22);
+        addSinkDeck(wood, W, D, HT - rimH, 0, 0, HT - rimH,             // cabinet base
+                    [{ x: 0, z: zc, hw: kShaft.hw, hd: kShaft.hd }], { deck: false });
+        addSinkDeck(ksTop, W * 1.02, D * 1.02, rimH, 0, 0, HT,
+                    [-1, 1].map(sx => ({ x: sx * panCx, z: zc, hw: holeHW, hd: holeHD })));
         // Two recessed rectangular wells (open cavities) + running water in each.
         for (const sx of [-1, 1]) {
           const bx = sx * panCx;
-          const bowlFloorY = addRectBasin(bx, zc, panW / 2, sinkD / 2, HT, depth);
-          addSinkWater(bx, zc, panW / 2 - 24, sinkD / 2 - 24, bowlFloorY, HT,
+          const bowlFloorY = addRectBasin(bx, zc, holeHW, holeHD, HT, depth,
+                                          { wallMat: stainless });
+          addSinkWater(bx, zc, holeHW - 14, holeHD - 14, bowlFloorY, HT,
                        bx, zc, HT + 60);
         }
         // Tall arched gooseneck faucet at the back center (stainless).
@@ -11242,25 +11372,27 @@ export class ThreeDRenderer {
           addBox(legT, legH, legT, this._mat({ color: 0x6b7176, metalness: 0.6, roughness: 0.4 }),
                  lx * xo, legH / 2, lz * zo);
         }
-        // Tub body: a solid block from leg top to the rim; the well is cut into
-        // its top as a recessed rectangular basin.
-        const tubBot = legH, tubTop = HT;
-        addBox(W, tubTop - tubBot, D, tub, 0, (tubTop + tubBot) / 2, 0);
-        // Rim band around the opening (thin lip on top of the tub block).
-        const rimH = 30, rimY = tubTop - rimH / 2, wallT = W * 0.09;
-        const openW = W - wallT * 2, openD = D - wallT * 2;
-        addBox(W, rimH, (D - openD) / 2, tub, 0, rimY, (openD / 2 + D / 2) / 2);
-        addBox(W, rimH, (D - openD) / 2, tub, 0, rimY, -(openD / 2 + D / 2) / 2);
-        addBox((W - openW) / 2, rimH, openD, tub, (openW / 2 + W / 2) / 2, rimY, 0);
-        addBox((W - openW) / 2, rimH, openD, tub, -(openW / 2 + W / 2) / 2, rimY, 0);
+        // The tub used to be a SOLID block with a rim frame laid on top and a
+        // basin "recessed" inside it — the block's own top face sat flush with
+        // the rim tops, so the bowl was buried in solid material and the whole
+        // top read as intersecting slabs. It is now a genuine SHELL: one deck
+        // slab with a real hole, and the basin's four walls run all the way
+        // down to the leg tops as the tub's visible outer sides.
+        const tubBot = legH, rimH = 30, wallT = W * 0.09;
+        // Wall OUTER faces land exactly on the footprint (W × D): the walls
+        // stand SINK_BOWL_LIP outside the hole and are wallT thick.
+        const holeHW = W / 2 - wallT - SINK_BOWL_LIP, holeHD = D / 2 - wallT - SINK_BOWL_LIP;
+        addSinkDeck(tub, W, D, rimH, 0, 0, HT,
+                    [{ x: 0, z: 0, hw: holeHW, hd: holeHD }]);
         const depth = HT - tubBot - 40;                  // extra-deep basin
-        const bowlFloorY = addRectBasin(0, 0, openW / 2, openD / 2, HT, depth);
+        const bowlFloorY = addRectBasin(0, 0, holeHW, holeHD, HT, depth,
+                                        { t: wallT, wallBotY: tubBot, wallMat: tub });
         const uSteel = this._mat({ color: 0x9aa2a8, metalness: 0.7, roughness: 0.35 });
-        const uZ = openD / 2 - 20;
+        const uZ = holeHD - 20;
         addCyl(16, 18, 210, uSteel, 0, HT + 95, uZ, 10);
         const uspout = addCyl(12, 12, 130, uSteel, 0, HT + 185, uZ - 70, 10);
         uspout.rotation.x = Math.PI / 2.3;
-        addSinkWater(0, 0, openW / 2 - 28, openD / 2 - 28, bowlFloorY, HT, 0, 0, HT + 130);
+        addSinkWater(0, 0, holeHW - 18, holeHD - 18, bowlFloorY, HT, 0, 0, HT + 130);
         break;
       }
       case 'bathtub': {
@@ -12044,15 +12176,31 @@ export class ThreeDRenderer {
         break;
       }
       case 'exercise_equipment': {
-        // Treadmill: raised running deck + side rails, uprights + console at
-        // the front (-Z), matching the appliance front-faces-camera convention.
+        // Treadmill: raised running deck + side rails, a motor cowl at the
+        // front bridging deck → uprights, and the console at the front (-Z),
+        // matching the appliance front-faces-camera convention.
+        // CONNECTIVITY (2026-08-07 fix — the piece read as two floating
+        // halves): the uprights mount ~290 mm FORWARD of the deck's front
+        // edge, so deck+belt+rails and uprights+bar+console were two AABB
+        // components with nothing between them. The motor cowl is the
+        // genuinely-missing part (every treadmill has one) — it overlaps both,
+        // so the whole rig is one connected body. The deck body is also 8 mm
+        // narrower/shorter than the rails on every shared side, burying its
+        // caps instead of sharing face planes with them (the old build had six
+        // coplanar deck↔rail faces, which hatch under flat toon shading and
+        // z-fight through their inverted-hull outline shells).
         const deckT = 80, deckD = D * 0.72, deckZ = D * 0.12;
-        addBox(W, deckT, deckD, dark, 0, 30 + deckT / 2, deckZ);               // deck body
-        addBox(W * 0.82, 22, deckD * 0.94, screen, 0, 30 + deckT - 5, deckZ);  // dark running belt
         const railT = 70, railH = 130;
+        addBox(W - 8, deckT, deckD - 8, dark, 0, 30 + deckT / 2, deckZ);       // deck body
+        addBox(W * 0.82, 22, deckD * 0.94, screen, 0, 30 + deckT - 5, deckZ);  // dark running belt
         addBox(railT, railH, deckD, steel, -W / 2 + railT / 2, 30 + deckT + railH / 2 - 6, deckZ);
         addBox(railT, railH, deckD, steel,  W / 2 - railT / 2, 30 + deckT + railH / 2 - 6, deckZ);
         const upH = HT, upZ = -D / 2 + 90;
+        // Motor cowl: floor → 200 mm hood spanning from just behind the upright
+        // bases back INTO the deck's front end (z overlap), so it welds the two
+        // former components together and gives the deck a visible support.
+        const cowlZ0 = upZ - 60, cowlZ1 = deckZ - deckD / 2 + 60;
+        addBox(W * 0.94, 200, cowlZ1 - cowlZ0, steel, 0, 100, (cowlZ0 + cowlZ1) / 2);
         addCyl(35, 35, upH, steel, -W / 2 + 70, upH / 2, upZ, 10);             // uprights
         addCyl(35, 35, upH, steel,  W / 2 - 70, upH / 2, upZ, 10);
         addBox(W - 90, 55, 70, steel, 0, upH - 40, upZ + 40);                  // handlebar
@@ -23023,6 +23171,16 @@ export class ThreeDRenderer {
       m.h.group.position.z = m.h.navZ;
     }
 
+    // ── "Real position" markers (Sensor.showRealPositions) ──────────────────
+    // A small glowing ball at each flagged radar target's RAW report. The rig
+    // beside it is nav-smoothed (carrot-chaser, seat/anchor capture) and even the
+    // 2D dot is spring-eased, so the two legitimately diverge — that gap IS the
+    // feature. Snap the ball to the raw coordinate every frame; NEVER ease it,
+    // and never derive it from the rig. Lifecycle is independent of the rigs (a
+    // despawning rig lingers through its 10 s fade; the sensor's report is gone
+    // the moment the target drops), so this pass owns create + prune.
+    this._syncRealPosMarkers(targets);
+
     // Despawn: ease out instead of popping. Brief LD2450 dropouts (a target
     // lost and re-acquired a beat later) barely dent the figure instead of
     // destroying and respawning the rig.
@@ -25824,6 +25982,59 @@ export class ThreeDRenderer {
     }
   }
 
+  // Create / move / prune the raw-radar-position marker balls for this frame's
+  // targets. Called from updateTargets (per frame — no dirty key). Only targets
+  // carrying BOTH `showReal` and finite rawX/rawY get one, so a stale app.js
+  // chunk (no fields) or a sensor with the option off yields nothing at all.
+  private _syncRealPosMarkers(targets: TargetWorld[]): void {
+    const want = new Set<string>();
+    for (const t of targets) {
+      if (!t.showReal) continue;
+      if (!Number.isFinite(t.rawX as number) || !Number.isFinite(t.rawY as number)) continue;
+      want.add(t.key);
+      let m = this._realPosMarkers[t.key];
+      if (!m) {
+        // Per-marker geometry + material (nothing shared → _clearGroup on
+        // _targetGroup and _disposeRealPosMarker both free them cleanly).
+        const geo = new THREE.SphereGeometry(ThreeDRenderer.REAL_POS_R_MM, 14, 10);
+        const mat = this._mat({ color: t.color, emissive: t.color, emissiveIntensity: 0.6 });
+        m = new THREE.Mesh(geo, mat);
+        // No inverted-hull outline shell and no blob shadow: this is an
+        // instrument readout, not a scene prop — it must stay legible against
+        // the rig it is being compared with.
+        m.userData.outlineSkip = true;
+        m.userData.realPos = true;
+        m.userData.tint = t.color;
+        this._realPosMarkers[t.key] = m;
+        this._targetGroup.add(m);
+      } else if (m.userData.tint !== t.color) {
+        // Tint follows the target (sensor recolor / fusion) — in place, no
+        // rebuild. Matches the build above: color pushed through _simsColor by
+        // _mat, emissive left as the raw tint.
+        const mat = m.material as THREE.MeshToonMaterial;
+        mat.color.copy(this._simsColor(t.color));
+        mat.emissive.setHex(t.color);
+        m.userData.tint = t.color;
+      }
+      // SNAP — the honesty of this marker is that it is not smoothed.
+      const sv = this._w(t.rawX as number, t.rawY as number, ThreeDRenderer.REAL_POS_Y_MM);
+      m.position.copy(sv);
+    }
+    for (const key of Object.keys(this._realPosMarkers)) {
+      if (want.has(key)) continue;
+      this._disposeRealPosMarker(key);
+    }
+  }
+
+  private _disposeRealPosMarker(key: string): void {
+    const m = this._realPosMarkers[key];
+    if (!m) return;
+    this._targetGroup.remove(m);
+    m.geometry.dispose();
+    (m.material as THREE.Material).dispose();
+    delete this._realPosMarkers[key];
+  }
+
   private _disposeHumanoid(h: Humanoid): void {
     // Shared-props leak guard: a rig despawning mid-session must free its prop
     // meshes / owned materials first (the traverse below would dispose geometry
@@ -25922,6 +26133,7 @@ export class ThreeDRenderer {
       this._disposeHumanoid(this._humanoids[key]);
     }
     this._humanoids = {};
+    this._realPosMarkers = {};   // meshes went with _targetGroup above
     this._disposeBedCovers();
     if (this._bgTexCache) {
       this._bgTexCache.tex.dispose();

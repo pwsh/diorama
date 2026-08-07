@@ -2249,6 +2249,11 @@ export class ThreeView extends LitElement {
             // avatar/color + a name label. Undefined otherwise (per-sensor pool).
             const key = `${s.id}_${i}`;
             const fusion = p.fusions[key];
+            // Sensor.showRealPositions: also hand the renderer the RAW radar
+            // report (LerpSlot.tx/ty — the spring's GOAL, un-eased) so it can
+            // park a marker ball there beside the nav-smoothed rig. x/y above
+            // comes from the eased cx/cy; the divergence is the whole point.
+            const rawW = s.showRealPositions ? localToWorld(s, sl.tx, sl.ty) : null;
             // avatarKinds pool wins; legacy single avatarKind kept for
             // back-compat (incl. stale-chunk pairings that only read `avatar`).
             targets.push({ key, x: wp.x, y: wp.y, color: tColor, edge,
@@ -2259,6 +2264,8 @@ export class ThreeView extends LitElement {
                            // tColor (the sensor's identity color).
                            plumbobColor: sPlumbob ?? (fusion ? hexToInt(fusion.color) : undefined),
                            noCostumes: noCostumesFor(fusion?.personId),
+                           showReal: rawW ? true : undefined,
+                           rawX: rawW?.x, rawY: rawW?.y,
                            person: fusion ? { name: fusion.name, color: fusion.color,
                              avatarKind: fusion.avatarKind, isPet: fusion.isPet,
                              identified: fusion.personId != null } : undefined });

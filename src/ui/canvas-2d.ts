@@ -118,7 +118,16 @@ export class Canvas2D extends LitElement {
     const dpr = window.devicePixelRatio || 1;
     const w = this._canvas.clientWidth || 600, h = this._canvas.clientHeight || 400;
     if (w < 4 || h < 4) return;  // hidden — skip, don't shrink to default
-    this._canvas.width = w * dpr; this._canvas.height = h * dpr;
+    // SAME-VALUE GUARD (2026-08-07, user-reported rhythmic 2D flicker): per the
+    // HTML spec, ANY assignment to canvas.width/height wipes the bitmap — even
+    // to the unchanged value. _onConfig routes every config emit here, so on a
+    // live instance with periodic emits (the 2 s fusion tick, state churn) the
+    // unconditional assignment blanked the canvas once per emit; when the wipe
+    // landed after that frame's RAF paint, the compositor presented one fully
+    // blank frame (single-frame flashes, frame-diffed from the user's video).
+    const bw = Math.round(w * dpr), bh = Math.round(h * dpr);
+    if (this._canvas.width !== bw) this._canvas.width = bw;
+    if (this._canvas.height !== bh) this._canvas.height = bh;
     this._recomputeView();
   }
 

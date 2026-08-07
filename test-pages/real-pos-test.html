@@ -1,0 +1,349 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>REALPOS …</title>
+<style>
+  body { margin:0; background:#0d1116; color:#cfd8dc; font:13px/1.5 sans-serif; padding:14px; }
+  h1 { font-size:15px; margin:0 0 10px; }
+  #summary { font-size:14px; font-weight:bold; margin:10px 0; padding:8px 10px; border-radius:5px; }
+  .okbg { background:#12331f; color:#69f0ae; } .badbg { background:#3a1414; color:#ff8a80; }
+  .row { display:flex; justify-content:space-between; gap:10px; padding:2px 0; border-bottom:1px solid #1c2530; }
+  .pass { color:#69f0ae; } .fail { color:#ff5252; }
+  .name { color:#90caf9; } .extra { color:#ffd54f; font-size:11px; }
+  h2 { font-size:12px; color:#80cbc4; margin:14px 0 4px; }
+  #stage { width:900px; height:560px; }
+</style>
+<h1>Real radar positions — Sensor.showRealPositions (3D marker ball + 2D hollow ring)</h1>
+<div id="summary">Running…</div>
+<div id="rows"></div>
+<div id="stage"></div>
+
+<!-- Drives the REAL <diorama-three-view> (which stamps TargetWorld.rawX/rawY)
+     and the REAL 2D painter over ONE Planner, and inspects the live renderer.
+
+     What this guards: the marker shows the RAW, UN-SMOOTHED radar report —
+     LerpSlot.tx/ty (the spring's GOAL) mapped through localToWorld — while the
+     rig walks its own nav-smoothed path and the 2D dot rides the eased cx/cy.
+     Every fixture below sets cx/cy FAR from tx/ty so "raw" and "eased" can never
+     be confused, and the marker's lifecycle is asserted to be INDEPENDENT of the
+     rig's (a despawning rig fades for ~10 s; the report is gone at once).
+
+     Build recipe (from repo root; NEVER reuse stale bundles — copy test pages
+     FIRST, dist assets SECOND):
+       npm run build
+       H=/tmp/diorama-harness-realpos; rm -rf "$H"; mkdir -p "$H"
+       cp test-pages/real-pos-test.html "$H"/
+       cp -r dist/* "$H"/
+       T=$(mktemp -d); cp -r src/* "$T"/; cp tsconfig.json "$T"/
+       cp test-pages/fake-avatar-store.ts "$T"/avatar-store.ts
+       cp test-pages/real-pos-entry.ts    "$T"/real-pos-entry.ts
+       npx esbuild "$T"/real-pos-entry.ts --bundle --format=esm --tsconfig="$T"/tsconfig.json \
+         --alias:lit=$PWD/node_modules/lit/index.js \
+         --alias:lit/decorators.js=$PWD/node_modules/lit/decorators.js \
+         --alias:three=$PWD/node_modules/three/build/three.module.js \
+         "--alias:three/examples/jsm/controls/OrbitControls.js=$PWD/node_modules/three/examples/jsm/controls/OrbitControls.js" \
+         "--alias:three/examples/jsm/loaders/OBJLoader.js=$PWD/node_modules/three/examples/jsm/loaders/OBJLoader.js" \
+         "--alias:three/examples/jsm/loaders/MTLLoader.js=$PWD/node_modules/three/examples/jsm/loaders/MTLLoader.js" \
+         --outfile="$H"/realpos.mod.js
+       (cd "$H" && python3 -m http.server 8947 &)
+       google-chrome --headless=new --disable-gpu --use-angle=swiftshader \
+         --enable-unsafe-swiftshader --run-all-compositor-stages-before-draw \
+         --window-size=1200,900 --virtual-time-budget=40000 --dump-dom \
+         "http://localhost:8947/real-pos-test.html" | grep -o "<title>[^<]*"          -->
+<script type="module">
+  const V = '?v=' + Date.now();
+  const M = await import('./realpos.mod.js' + V);
+  const { Planner, drawAll, computeView, mmToPx, localToWorld, sensorColor, hexToInt } = M;
+
+  const results = [];
+  const ok = (name, cond, extra = '') => results.push({ name, pass: !!cond, extra: String(extra) });
+  window.__R = results;
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  async function waitFor(cond, tries = 900) {
+    for (let i = 0; i < tries; i++) { if (cond()) return true; await sleep(6); }
+    return !!cond();
+  }
+  const near = (a, b, tol = 0.5) => Math.abs(a - b) <= tol;
+
+  // ── Fake HaApi (offline shape) ────────────────────────────────────────────
+  const states = {};
+  const api = {
+    offline: true, states,
+    async connect() {}, disconnect() {}, onState() {}, onConn() {},
+    async getUserData() { return null; }, async setUserData() {},
+    async callService() {},
+    async getDevices() { return []; }, async getEntityRegistry() { return []; },
+    async getFloorRegistry() { return []; }, async getAreaRegistry() { return []; },
+    async getHistory() { return {}; }, async getCalendarEvents() { return []; },
+    async getWeatherForecasts() { return null; }, async updateEntityRegistry() {},
+    async subscribePersistentNotifications() { return () => {}; },
+    async listRepairsIssues() { return []; }, async ignoreRepairsIssue() {},
+    async subscribeMqtt() { return () => {}; }, async publishMqtt() {},
+  };
+
+  const FW = 9000, FD = 7000;
+  const perim = [{ x: 300, y: 300 }, { x: 8700, y: 300 }, { x: 8700, y: 6700 },
+                 { x: 300, y: 6700 }, { x: 300, y: 300 }];
+  let fixtureN = 0;
+  const baseFloor = (extra = {}) => ({
+    id: 'f' + (++fixtureN), name: 'RealPos', w: FW, d: FD,
+    walls: [{ id: 'perim', points: perim }],
+    furniture: [], lights: [], switches: [], sensors: [], motionSensors: [],
+    envSensors: [], infoCards: [], actionButtons: [], doors: [], windows: [],
+    rooms: [{ id: 'rm1', name: 'Living Room', anchor: { x: 4500, y: 3500 } }],
+    roamers: [], bleProxies: [], alarmPanels: [], calendarPanels: [], thermostats: [],
+    safetySensors: [], alertBeacons: [], robots: [], cameras: [], projectors: [],
+    valves: [], plugs: [], sprinklerZones: [], flagpoles: [], pools: [],
+    presenceZones: [], groundAreas: [], voidAreas: [], rulers: [], solarPanels: [],
+    bg: null, model3d: null, look3d: null, ...extra,
+  });
+
+  const planner = new Planner();
+  await planner.connectWith(api);
+  const stage = document.getElementById('stage');
+  const view = document.createElement('diorama-three-view');
+  view.planner = planner;
+  stage.appendChild(view);
+  await view.updateComplete;
+  const R = () => view._renderer;
+  ok('renderer mounted', await waitFor(() => R() && R().loaded), '');
+
+  // The element's own rAF is unreliable under headless virtual time — tick by hand.
+  const tick = async (n = 6) => { for (let i = 0; i < n; i++) { view._tickOnce(); await sleep(6); } };
+  const setFloor = async (f) => {
+    planner.store.floors = [f];
+    planner.store.currentFloorId = f.id;
+    planner.emitConfig();
+    await tick(8);
+  };
+
+  // A radar sensor. `showRealPositions` is the feature flag under test.
+  const mmwave = (id, x, y, extra = {}) => ({
+    id, x, y, heading: 0, fov: 120, range: 6000, label: id,
+    deviceSlug: 'ld2450_' + id, ...extra,
+  });
+  // LerpSlot with the EASED position (cx/cy) deliberately far from the RAW
+  // report (tx/ty) — exactly the divergence the marker exists to expose.
+  const slot = (active, cx, cy, tx, ty) => ({ cx, cy, tx, ty, vx: 0, vy: 0, active });
+  const off = () => slot(false, 0, 0, 0, 0);
+  // Minimal discovery record: 2D drawTargets reads speed/resolution entity ids
+  // off it (missing → speed 0, res 500). The radar loop in three-view needs only
+  // deviceSlug + lerpBy.
+  const disc = () => ({
+    devicePrefix: 'ld2450', avgX: [], avgY: [],
+    targets: [0, 1, 2].map(() => ({ x_id: null, y_id: null, speed_id: null, angle_id: null, resolution_id: null })),
+    targetActive: [null, null, null],
+  });
+
+  const markerKeys = () => Object.keys(R()._realPosMarkers).sort();
+
+  // ═══ 1. Flag OFF → no marker at all (negative control) ════════════════════
+  const sOff = mmwave('sOff', 2000, 2000, { color: '#ff3b30' });
+  planner.discBy['sOff'] = disc();
+  planner.lerpBy['sOff'] = [slot(true, 0, 1500, 1400, 2600), off(), off()];
+  await setFloor(baseFloor({ sensors: [sOff] }));
+  ok('1a a live radar target exists (rig built)', !!R()._humanoids['sOff_0'], Object.keys(R()._humanoids).join(','));
+  ok('1b flag absent → ZERO real-position markers', markerKeys().length === 0, markerKeys().join(','));
+  ok('1c no marker mesh in the target group',
+     !R()._targetGroup.children.some(o => o.userData && o.userData.realPos), '');
+
+  // ═══ 2. Flag ON → one marker per active radar target, AT THE RAW POINT ════
+  // Sensor heading 45° so localToWorld actually rotates — a marker placed from
+  // the raw LOCAL coords without the transform would land somewhere else.
+  const sA = mmwave('sA', 2000, 2000, { heading: 45, color: '#ff3b30', showRealPositions: true });
+  const sB = mmwave('sB', 6500, 2000, { color: '#30d5ff' });   // no flag
+  planner.discBy['sA'] = disc(); planner.discBy['sB'] = disc();
+  // sA slot 0: eased at local (0,1500), RAW at local (1400,2600) — ~1.7 m apart.
+  planner.lerpBy['sA'] = [slot(true, 0, 1500, 1400, 2600), slot(true, -900, 2200, -300, 3100), off()];
+  planner.lerpBy['sB'] = [slot(true, 0, 1500, 1400, 2600), off(), off()];
+  await setFloor(baseFloor({ sensors: [sA, sB] }));
+
+  const rawW0 = localToWorld(sA, 1400, 2600);
+  const easedW0 = localToWorld(sA, 0, 1500);
+  ok('2a flag on → a marker for each ACTIVE target of that sensor only',
+     markerKeys().join(',') === 'sA_0,sA_1', markerKeys().join(','));
+  ok('2b the unflagged sensor sB contributes no marker despite a live target',
+     !markerKeys().some(k => k.startsWith('sB')) && !!R()._humanoids['sB_0'], markerKeys().join(','));
+
+  const mk0 = R()._realPosMarkers['sA_0'];
+  const expect0 = R()._w(rawW0.x, rawW0.y, 1000);
+  ok('2c marker sits at the RAW report in scene coords',
+     mk0 && near(mk0.position.x, expect0.x) && near(mk0.position.z, expect0.z),
+     mk0 && `${mk0.position.x.toFixed(1)},${mk0.position.z.toFixed(1)} vs ${expect0.x.toFixed(1)},${expect0.z.toFixed(1)}`);
+  ok('2d marker hovers ~1000 mm off the floor', mk0 && near(mk0.position.y, 1000),
+     mk0 && mk0.position.y);
+  // The whole point: raw ≠ eased. A marker accidentally fed the eased position
+  // would land at easedScene instead.
+  const easedScene = R()._w(easedW0.x, easedW0.y, 1000);
+  const gap = mk0 ? Math.hypot(mk0.position.x - easedScene.x, mk0.position.z - easedScene.z) : 0;
+  ok('2e marker is NOT at the eased (smoothed) position — >1 m away', gap > 1000, Math.round(gap) + ' mm');
+  ok('2f marker is a child of _targetGroup (rides the Avatars layer)',
+     R()._targetGroup.children.includes(mk0), '');
+  ok('2g marker skips outline shells (instrument readout, not scene prop)',
+     mk0 && mk0.userData.outlineSkip === true, mk0 && String(mk0.userData.outlineSkip));
+  ok('2h marker has no child meshes (no blob shadow / hull shell)',
+     mk0 && mk0.children.length === 0, mk0 && mk0.children.length);
+
+  // The rig itself must still be somewhere else (it walks the smoothed path).
+  const rigA = R()._humanoids['sA_0'];
+  const rigGap = rigA ? Math.hypot(rigA.group.position.x - mk0.position.x,
+                                   rigA.group.position.z - mk0.position.z) : 0;
+  ok('2i the avatar rig is NOT co-located with the marker', rigGap > 500, Math.round(rigGap) + ' mm');
+
+  // ═══ 3. Marker colour = the target tint ══════════════════════════════════
+  const tintA = hexToInt(sensorColor(sA, 0));
+  const matA = mk0 && mk0.material;
+  ok('3a marker emissive = the sensor tint', matA && matA.emissive.getHex() === tintA,
+     matA && '0x' + matA.emissive.getHex().toString(16) + ' vs 0x' + tintA.toString(16));
+  const cr = matA ? matA.color.r : 0, cg = matA ? matA.color.g : 0, cb = matA ? matA.color.b : 0;
+  ok('3b marker colour is red-dominant like #ff3b30', matA && cr > cg && cr > cb,
+     matA && [cr, cg, cb].map(v => v.toFixed(2)).join(','));
+  ok('3c marker is toon-material (house style, via _mat)',
+     matA && matA.type === 'MeshToonMaterial', matA && matA.type);
+
+  // ═══ 4. It SNAPS — a new raw report moves it the same frame, unsmoothed ═══
+  planner.lerpBy['sA'][0].tx = -2000; planner.lerpBy['sA'][0].ty = 900;
+  await tick(1);
+  const rawW1 = localToWorld(sA, -2000, 900);
+  const expect1 = R()._w(rawW1.x, rawW1.y, 1000);
+  ok('4a one tick after a new report the marker is EXACTLY there (no easing)',
+     near(mk0.position.x, expect1.x) && near(mk0.position.z, expect1.z),
+     `${mk0.position.x.toFixed(1)},${mk0.position.z.toFixed(1)} vs ${expect1.x.toFixed(1)},${expect1.z.toFixed(1)}`);
+  ok('4b same mesh object (moved, not rebuilt)', R()._realPosMarkers['sA_0'] === mk0, '');
+  // restore
+  planner.lerpBy['sA'][0].tx = 1400; planner.lerpBy['sA'][0].ty = 2600;
+  await tick(1);
+
+  // ═══ 5. Layer gate — Avatars off hides the markers with the rigs ══════════
+  planner.store.layers2d = { ...(planner.store.layers2d || {}), targets: false };
+  planner.emitConfig();
+  await tick(3);
+  ok('5a targets layer off → _targetGroup hidden (markers with it)',
+     R()._targetGroup.visible === false, String(R()._targetGroup.visible));
+  planner.store.layers2d = { ...(planner.store.layers2d || {}), targets: true };
+  planner.emitConfig();
+  await tick(3);
+  ok('5b layer back on → visible again', R()._targetGroup.visible === true, '');
+
+  // ═══ 6. Lifecycle — flag drop disposes, no leak across further frames ═════
+  const mk1 = R()._realPosMarkers['sA_1'];
+  let geoDisposed = 0, matDisposed = 0;
+  mk0.geometry.addEventListener('dispose', () => geoDisposed++);
+  mk0.material.addEventListener('dispose', () => matDisposed++);
+  sA.showRealPositions = false;
+  planner.emitConfig();
+  await tick(3);
+  ok('6a flag off → every marker for that sensor pruned', markerKeys().length === 0, markerKeys().join(','));
+  ok('6b pruned mesh removed from the target group',
+     !R()._targetGroup.children.includes(mk0) && !R()._targetGroup.children.includes(mk1), '');
+  ok('6c its geometry was disposed exactly once', geoDisposed === 1, geoDisposed);
+  ok('6d its material was disposed exactly once', matDisposed === 1, matDisposed);
+  await tick(4);
+  ok('6e still zero markers several frames later (no resurrection / leak)',
+     markerKeys().length === 0 && geoDisposed === 1, markerKeys().join(',') + ' d=' + geoDisposed);
+  ok('6f the avatar rigs are untouched by the flag drop', !!R()._humanoids['sA_0'], '');
+
+  // ═══ 7. Marker lifecycle is INDEPENDENT of the rig's slow despawn fade ════
+  sA.showRealPositions = true;
+  planner.emitConfig();
+  await tick(3);
+  ok('7a flag back on → markers rebuilt', markerKeys().join(',') === 'sA_0,sA_1', markerKeys().join(','));
+  planner.lerpBy['sA'][0].active = false;   // radar dropped this target
+  await tick(2);
+  ok('7b target gone → its marker is gone AT ONCE (report ended)',
+     !R()._realPosMarkers['sA_0'], markerKeys().join(','));
+  ok('7c …while the rig is still fading out (10 s slow despawn)',
+     !!R()._humanoids['sA_0'], '');
+  ok('7d the other target keeps its marker', !!R()._realPosMarkers['sA_1'], markerKeys().join(','));
+  planner.lerpBy['sA'][0].active = true;
+  await tick(2);
+  ok('7e re-acquired target gets its marker back', !!R()._realPosMarkers['sA_0'], markerKeys().join(','));
+
+  // ═══ 8. Synthetic (demo) avatars never get a marker — no radar report ═════
+  const sDemo = mmwave('sD', 4500, 3500, { demo: true, showRealPositions: true, deviceSlug: null });
+  await setFloor(baseFloor({ sensors: [sDemo] }));
+  ok('8a demo rig exists', !!R()._humanoids['ais_sD'], Object.keys(R()._humanoids).join(','));
+  ok('8b no marker for a synthetic avatar even with the flag on',
+     markerKeys().length === 0, markerKeys().join(','));
+
+  // ═══ 9. Floor switch clears the marker bookkeeping ═══════════════════════
+  await setFloor(baseFloor({ sensors: [sA] }));   // sA still flagged, lerp still live
+  ok('9a markers rebuilt on the new floor', markerKeys().length > 0, markerKeys().join(','));
+  await setFloor(baseFloor({ sensors: [] }));
+  ok('9b sensor gone → bookkeeping empty (no stale meshes)',
+     markerKeys().length === 0 &&
+     !R()._targetGroup.children.some(o => o.userData && o.userData.realPos), markerKeys().join(','));
+
+  // ═══ 10. 2D — a hollow ring at the RAW point, absent when the flag is off ═
+  const cv = document.createElement('canvas');
+  cv.width = 900; cv.height = 700;
+  const c2 = cv.getContext('2d', { willReadFrequently: true });
+  const s2 = mmwave('s2', 2000, 2000, { heading: 45, color: '#ff3b30' });
+  planner.discBy['s2'] = disc();
+  planner.lerpBy['s2'] = [slot(true, 0, 1500, 1400, 2600), off(), off()];
+  await setFloor(baseFloor({ sensors: [s2] }));
+  const vw = computeView(cv, FW, FD, null, 1);
+  const rawW2 = localToWorld(s2, 1400, 2600);
+  const easedW2 = localToWorld(s2, 0, 1500);
+  const rp = mmToPx(vw, rawW2.x, rawW2.y);
+  const ep = mmToPx(vw, easedW2.x, easedW2.y);
+  ok('10a raw and eased land well apart on screen (>40 px)',
+     Math.hypot(rp.x - ep.x, rp.y - ep.y) > 40, Math.round(Math.hypot(rp.x - ep.x, rp.y - ep.y)) + ' px');
+
+  // drawAll carries ctx state between calls — paint twice per snapshot.
+  const snap = () => {
+    c2.setTransform(1, 0, 0, 1, 0, 0);
+    c2.clearRect(0, 0, cv.width, cv.height);
+    drawAll(c2, planner, vw, null); drawAll(c2, planner, vw, null);
+    return c2.getImageData(0, 0, cv.width, cv.height);
+  };
+  const diffRing = (a, b, cx, cy, r0, r1) => {
+    let n = 0, best = null, bestD = -1;
+    const R2 = Math.ceil(r1) + 2;
+    for (let dy = -R2; dy <= R2; dy++) for (let dx = -R2; dx <= R2; dx++) {
+      const d = Math.hypot(dx, dy);
+      if (d < r0 || d > r1) continue;
+      const x = Math.round(cx) + dx, y = Math.round(cy) + dy;
+      if (x < 0 || y < 0 || x >= a.width || y >= a.height) continue;
+      const i = (y * a.width + x) * 4;
+      const delta = Math.abs(a.data[i] - b.data[i]) + Math.abs(a.data[i+1] - b.data[i+1]) +
+                    Math.abs(a.data[i+2] - b.data[i+2]);
+      if (delta > 8) { n++; if (delta > bestD) { bestD = delta; best = [b.data[i], b.data[i+1], b.data[i+2]]; } }
+    }
+    return { n, best };
+  };
+
+  s2.showRealPositions = false;
+  const imgOff = snap();
+  s2.showRealPositions = true;
+  const imgOn = snap();
+
+  // The ring is r = 4.5·dpr with a 1.5·dpr stroke, so the painted band is
+  // roughly [3.75, 5.25]·dpr — probe just inside/outside it, and the hole below.
+  const DPR = window.devicePixelRatio || 1;
+  const ring = diffRing(imgOff, imgOn, rp.x, rp.y, 3.4 * DPR, 5.8 * DPR);
+  const core = diffRing(imgOff, imgOn, rp.x, rp.y, 0, 2.2 * DPR);
+  ok('10b flag on paints a ring at the raw position', ring.n >= 8, 'changed=' + ring.n);
+  ok('10c the ring is HOLLOW (centre untouched)', core.n === 0, 'centre changed=' + core.n);
+  ok('10d the ring is drawn in the sensor tint (red-dominant)',
+     ring.best && ring.best[0] > ring.best[1] && ring.best[0] > ring.best[2],
+     ring.best && ring.best.join(','));
+  // Negative control: nothing at the raw spot with the flag off (the whole
+  // change set above is attributable to this feature).
+  const same = diffRing(imgOff, imgOff, rp.x, rp.y, 0, 5.8 * DPR);
+  ok('10e negative control — flag-off frame has nothing there', same.n === 0, same.n);
+  // The smoothed dot is unaffected either way.
+  const dotDiff = diffRing(imgOff, imgOn, ep.x, ep.y, 0, 6 * DPR);
+  ok('10f the existing smoothed dot is untouched by the option', dotDiff.n === 0, dotDiff.n);
+
+  // ── report ────────────────────────────────────────────────────────────────
+  const pass = results.filter(r => r.pass).length;
+  const rowsEl = document.getElementById('rows');
+  rowsEl.innerHTML = results.map(r =>
+    `<div class="row"><span class="name">${r.name}</span>` +
+    `<span class="${r.pass ? 'pass' : 'fail'}">${r.pass ? 'PASS' : 'FAIL'}` +
+    `${r.extra ? ` <span class="extra">${r.extra}</span>` : ''}</span></div>`).join('');
+  const s = document.getElementById('summary');
+  s.textContent = `REALPOS ${pass === results.length ? 'PASS' : 'FAIL'} ${pass}/${results.length}`;
+  s.className = pass === results.length ? 'okbg' : 'badbg';
+  document.title = `REALPOS ${pass === results.length ? 'PASS' : 'FAIL'} ${pass}/${results.length}`;
+</script>

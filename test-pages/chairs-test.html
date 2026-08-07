@@ -348,6 +348,81 @@
     }
   }
 
+  // ══ (H) AABB CONNECTIVITY — a piece must not build as floating islands ═══
+  // 2026-08-07, user-reported: the treadmill (`exercise_equipment`) rendered as
+  // two disconnected halves — deck+belt+rails sat ~290 mm behind the
+  // uprights+handlebar+console, with nothing between them, exactly the
+  // "floating car parts" failure mode from the vehicle-pack cleanup. The fix
+  // was the genuinely-missing motor cowl (never moving a visible face).
+  // Generic rule asserted here for every kind this page builds plus the
+  // treadmill: flood-fill the piece's own meshes by AABB overlap and require
+  // ONE component. Outline shells and blob shadows are excluded (a shell
+  // shares its host's geometry; the blob is a detached ground decal).
+  {
+    const boxOf = (o) => {
+      o.geometry.computeBoundingBox();
+      const bb = o.geometry.boundingBox.clone();
+      bb.applyMatrix4(o.matrixWorld);
+      return bb;
+    };
+    // TOUCHING counts as connected (tol = 1 mm): stacked parts that share a
+    // face plane exactly — a cushion sitting on its plinth — are joined, not
+    // floating. What this catches is a real GAP, like the treadmill's 291 mm
+    // one. Do not tighten this to a strict overlap: it would flag every
+    // flush-stacked composite in the library.
+    const overlap = (a, b, tol = 1) =>
+      a.min.x <= b.max.x + tol && b.min.x <= a.max.x + tol &&
+      a.min.y <= b.max.y + tol && b.min.y <= a.max.y + tol &&
+      a.min.z <= b.max.z + tol && b.min.z <= a.max.z + tol;
+    // Blob shadow: the shared flat alpha quad lying on the floor. It is a
+    // detached decal, never structure — exclude it (and outline shells, which
+    // `bodies()` already drops) before measuring connectivity.
+    const isBlob = (o) => o.geometry.type === 'PlaneGeometry'
+                       && Math.abs(o.rotation.x + Math.PI / 2) < 1e-6;
+    const partsOf = (kind) => {
+      const grp = build(kind);
+      grp.updateMatrixWorld(true);
+      return bodies(grp).filter(o => o.geometry && !isBlob(o)).map(boxOf);
+    };
+    const componentCount = (boxes) => {
+      const seen = new Set(); let comps = 0;
+      for (let i = 0; i < boxes.length; i++) {
+        if (seen.has(i)) continue;
+        comps++; seen.add(i); const q = [i];
+        while (q.length) {
+          const cur = q.pop();
+          for (let j = 0; j < boxes.length; j++)
+            if (!seen.has(j) && overlap(boxes[cur], boxes[j])) { seen.add(j); q.push(j); }
+        }
+      }
+      return comps;
+    };
+    for (const k of ['exercise_equipment', ...CHAIRS]) {
+      const boxes = partsOf(k);
+      const n = boxes ? componentCount(boxes) : -1;
+      ok(`H1:${k} builds as ONE connected body (every part touches a sibling)`,
+         n === 1, `parts=${boxes ? boxes.length : 0} components=${n}`);
+    }
+    // Negative control: the walker really can SEE a split. Take the treadmill's
+    // own parts and shove the front tower 3 m forward — the exact failure the
+    // motor cowl fixed — and require TWO components.
+    {
+      // NB the group carries the floor's world offset, so the cut has to be
+      // relative: "the front tower" = every part starting within 250 mm of the
+      // piece's frontmost point (cowl / uprights / handlebar / console — the
+      // deck starts ~386 mm further back).
+      const boxes = partsOf('exercise_equipment');
+      const zFront = Math.min(...boxes.map(b => b.min.z));
+      const split = boxes.map(b => {
+        const c = b.clone();
+        if (c.min.z < zFront + 250) { c.min.z -= 3000; c.max.z -= 3000; }
+        return c;
+      });
+      ok('H2:negative control — a detached front tower reads as TWO components',
+         componentCount(split) === 2, `components=${componentCount(split)}`);
+    }
+  }
+
   let pass = 0; const fails = [];
   for (const t of tests) { if (t.ok) pass++; else fails.push(t.name); }
   const total = tests.length, allPass = pass === total;

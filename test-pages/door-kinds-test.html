@@ -552,6 +552,96 @@
     }
   }
 
+  // ═══ 14. Sidebar rotation pivots about the SPAN CENTRE ═══════════════════
+  // 2026-08-07, user-reported: "a door should not rotate about an edge — so if
+  // someone rotates a door 180° to flip inside/outside it should end up in the
+  // same position". A door's stored (x, y) is its HINGE, so the sidebar's old
+  // `d.rotation = …` mutation swung the whole panel around that hinge.
+  // `rotateDoorAboutCenter` re-anchors so the span keeps its centre; the canvas
+  // ENDPOINT DRAG deliberately still pivots about the grabbed hinge.
+  {
+    const { rotateDoorAboutCenter, rotateWindowAboutCenter, doorSpanCenter,
+            doorEndpoint, windowEndpoints } = geo;
+    const ctr = d => doorSpanCenter(d);
+    const ends = d => [{ x: d.x, y: d.y }, doorEndpoint(d)];
+    const nearPt = (a, b, t = 1e-9) => Math.abs(a.x - b.x) <= t && Math.abs(a.y - b.y) <= t;
+    const WIDTHS = [800, 900, 1200, 2400, 1500, 833];
+    const XS = [0, 1234, 5678.5, -900, 12345, 777.7];
+    const YS = [0, 987, 4321.25, -3333];
+
+    // (a) 180° round trip restores x / y / rotation. Not bit-exact — `(x+d)-d`
+    // re-associates in doubles — so the pin is a PICOMETRE bound, swept
+    // exhaustively over widths × all 24 snap angles × positions.
+    let worst = 0, rotBad = 0, cases = 0;
+    for (const w of WIDTHS) for (let r0 = 0; r0 < 360; r0 += 15)
+      for (const x of XS) for (const y of YS) {
+        const d0 = { x, y, w, rotation: r0 };
+        const a = rotateDoorAboutCenter(d0, r0 + 180);
+        const b = rotateDoorAboutCenter({ ...a, w }, a.rotation + 180);
+        cases++;
+        worst = Math.max(worst, Math.abs(b.x - x), Math.abs(b.y - y));
+        if (b.rotation !== r0) rotBad++;
+      }
+    ok('rot180_roundtrip_position', worst <= 1e-9, `n=${cases} worst=${worst.toExponential(2)}`);
+    ok('rot180_roundtrip_rotation_exact', rotBad === 0, `bad=${rotBad}`);
+
+    // (b) The span keeps its two endpoints (SWAPPED) across a 180° flip — the
+    // literal user request: the door still occupies the same piece of wall.
+    {
+      const d0 = { x: 3000, y: 2000, w: 900, rotation: 30 };
+      const e0 = ends(d0);
+      const a = rotateDoorAboutCenter(d0, 210);
+      const e1 = ends({ ...a, w: d0.w });
+      ok('rot180_span_endpoints_swap', nearPt(e1[0], e0[1]) && nearPt(e1[1], e0[0]),
+         `${JSON.stringify(e0)} → ${JSON.stringify(e1)}`);
+    }
+    // (c) Centre invariant for ARBITRARY deltas, not just 180.
+    {
+      let cWorst = 0;
+      for (const w of WIDTHS) for (const r0 of [0, 15, 47, 90, 137, 180, 265, 359])
+        for (const dd of [-345, -180, -90, -15, 15, 45, 90, 180, 275]) {
+          const d0 = { x: 4200, y: -1750.5, w, rotation: r0 };
+          const c0 = ctr(d0);
+          const a = rotateDoorAboutCenter(d0, r0 + dd);
+          const c1 = ctr({ ...a, w });
+          cWorst = Math.max(cWorst, Math.abs(c1.x - c0.x), Math.abs(c1.y - c0.y));
+        }
+      ok('rot_center_invariant_any_delta', cWorst <= 1e-9, `worst=${cWorst.toExponential(2)}`);
+    }
+    // (d) Negative control: the OLD behaviour (set rotation only) moves the
+    // centre by a full door width on a 180 flip — proving the pin has teeth.
+    {
+      const d0 = { x: 3000, y: 2000, w: 900, rotation: 0 };
+      const c0 = ctr(d0), cOld = ctr({ ...d0, rotation: 180 });
+      ok('rot180_negative_control_old_path_moved_it',
+         Math.abs(Math.hypot(cOld.x - c0.x, cOld.y - c0.y) - d0.w) < 1e-9,
+         `moved=${Math.hypot(cOld.x - c0.x, cOld.y - c0.y).toFixed(1)}`);
+    }
+    // (e) Rotation normalization: any input lands in [0, 360).
+    ok('rot_normalizes',
+       rotateDoorAboutCenter({ x: 0, y: 0, w: 800, rotation: 0 }, 450).rotation === 90
+       && rotateDoorAboutCenter({ x: 0, y: 0, w: 800, rotation: 0 }, -90).rotation === 270
+       && rotateWindowAboutCenter({ x: 0, y: 0, w: 800, rotation: 0 }, -15).rotation === 345);
+
+    // (f) WINDOWS are already centre-anchored ((x, y) IS the pane centre), so
+    // the helper must leave x / y untouched — bit-exact — and the endpoints
+    // still swap. Pinned so nobody "fixes" the window path like a door.
+    {
+      let wBad = 0;
+      for (const w of WIDTHS) for (let r0 = 0; r0 < 360; r0 += 15) for (const x of XS)
+        for (const y of YS) {
+          const a = rotateWindowAboutCenter({ x, y, w, rotation: r0 }, r0 + 180);
+          if (!(a.x === x && a.y === y)) wBad++;
+        }
+      ok('window_rot_keeps_anchor_bit_exact', wBad === 0, `bad=${wBad}`);
+      const w0 = { x: 3000, y: 2000, w: 1200, rotation: 30 };
+      const E0 = windowEndpoints(w0);
+      const wa = rotateWindowAboutCenter(w0, 210);
+      const E1 = windowEndpoints({ ...wa, w: w0.w });
+      ok('window_rot180_span_endpoints_swap', nearPt(E1.a, E0.b) && nearPt(E1.b, E0.a));
+    }
+  }
+
   const n = results.length, pcount = results.filter(x => x.startsWith('ok')).length;
   const pass = pcount === n;
   document.title = `DOORKINDS ${pass ? 'PASS' : 'FAIL'} ${pcount}/${n} ${results.filter(x => !x.startsWith('ok')).join(' ')}`;

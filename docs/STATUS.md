@@ -404,6 +404,35 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Fix wave + real-position markers: 2D flicker root-caused; doors rotate
+  about center; exercise_equipment reconnected; sink tops rebuilt; mmWave
+  raw-position display** (2026-08-07, four user reports + one feature;
+  unreleased — on main past v0.62.0). (1) FLICKER (user video,
+  frame-diffed: one fully-blank canvas frame every 2.0 s): per the HTML
+  spec ANY canvas.width/height assignment wipes the bitmap even
+  unchanged; canvas-2d `_onConfig` → `_resize` assigned unconditionally
+  on EVERY config emit (their mmWave firmware's number.* slow-path sync
+  emits ≈ every 2 s, legitimately). Same-value guard; verified via CDP
+  screencast (forced 2 s emits → zero wipes, zero blank frames; before:
+  frame-size dips). (2) Sidebar door rotation routes through
+  `rotateDoorAboutCenter` (span-center invariant; 180° flips in place;
+  round-trip ≤1e-9 mm — bit-exact impossible in doubles, documented);
+  windows were already center-anchored; doors were the ONLY end-anchored
+  rotatable of 13; canvas endpoint-drag deliberately keeps hinge pivot.
+  (3) exercise_equipment was TWO disconnected AABB components 291 mm
+  apart — gained its missing motor cowl (connectivity pinned,
+  negative-controlled). (4) Sink tops: the counters were four abutting
+  rim boxes (toon-hatching + shell z-fights) and on 4/5 kinds the body's
+  top face HID the bowl entirely — now ONE ExtrudeGeometry deck with a
+  real hole, basin walls buried 6 mm under deck, bodies shelled;
+  kitchen_sink = one slab with two holes (deck strip = the divider).
+  SINK 48→84, DOORKINDS 123→131, CHAIRS 129→137 + ~17-page collateral
+  sweep green. (5) `Sensor.showRealPositions` — raw LerpSlot.tx/ty
+  (never eased — honesty is the feature) as a 3D tint ball at y 1000 +
+  2D hollow ring; marker lifecycle independent of the rig's despawn
+  fade; synthetic rigs excluded. REALPOS 41 new; DEMOAVATAR 23, PLUMBOB
+  19 green. All re-verified independently on the merged tree.
+
 - **Big furnishing wave: 3 windowed garage styles + garage hardware/height
   + door&window colors; furniture cat split (6 groups); 4 bed sizes;
   wall-magnet fix; 6 chair kinds** (2026-08-07, five user requests, three

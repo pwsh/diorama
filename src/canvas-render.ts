@@ -6419,11 +6419,16 @@ export function drawFurniturePrimitiveLocal(
       break;
     }
     case 'exercise_equipment': {
-      // Treadmill: deck rect + a console band along the front (-Y / top) edge.
+      // Treadmill: deck rect + the motor cowl + a console band along the front
+      // (-Y / top) edge. The cowl band is the plan echo of the 3D hood that
+      // bridges the deck to the upright/console tower — without it the plan
+      // read as a belt and a detached bar, matching the old split 3D build.
       fill('rgba(66,66,66,0.55)');
       stroke('#9e9e9e');
       ctx.fillStyle = '#212121';
       ctx.fillRect(x + w * 0.12, y + h * 0.28, w * 0.76, h * 0.62);  // running belt
+      ctx.fillStyle = '#78868f';
+      ctx.fillRect(x + w * 0.03, y + h * 0.13, w * 0.94, h * 0.17);  // motor cowl
       ctx.fillStyle = '#546e7a';
       ctx.fillRect(x, y, w, Math.max(4, h * 0.16));                  // console band at front
       break;
@@ -7539,6 +7544,21 @@ function drawTargets(ctx: CanvasRenderingContext2D, p: Planner, view: View): voi
         : (i === 0 ? baseColor : lighten(baseColor, i === 1 ? 0.20 : 0.40));
       drawTargetDot(ctx, pt.x, pt.y, tintColor, fusion ? '' : `T${i + 1}`,
         speed, canvasAngle, res * view.scale);
+      // Sensor.showRealPositions: a small hollow ring at the RAW radar report
+      // (sl.tx/ty — the spring's GOAL) alongside the eased dot above, so the
+      // smoothing lag is visible. Drawn AFTER the dot so it stays readable when
+      // the two coincide; deliberately NOT eased (it snaps at push cadence).
+      if (s.showRealPositions) {
+        const rw = localToWorld(s, sl.tx, sl.ty);
+        const rp = mmToPx(view, rw.x, rw.y);
+        ctx.save();
+        ctx.strokeStyle = hexToRgba(tintColor, 0.9);
+        ctx.lineWidth = 1.5 * dpr;
+        ctx.beginPath();
+        ctx.arc(rp.x, rp.y, 4.5 * dpr, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+      }
       if (fusion) {
         const dpr2 = window.devicePixelRatio || 1;
         ctx.save();

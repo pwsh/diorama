@@ -641,6 +641,14 @@ export interface Sensor {
   // of binding — a bound sensor shows its real radar rigs AND the demo rig
   // (their target keys never collide: `ais_<id>` vs `<id>_<i>`).
   demo?: boolean;
+  // Show the RAW radar report alongside the rendered avatar (2D small hollow
+  // circle, 3D floating ball) for every live target of THIS sensor. The avatar
+  // rig is nav-smoothed (carrot-chaser + seat/anchor capture) and the 2D dot is
+  // spring-eased (stepLerp), so both can sit metres from what the radar actually
+  // said. This marker is the un-smoothed truth — it snaps at radar push cadence
+  // BY DESIGN (never ease it), making the report-vs-display gap visible. Item
+  // level, absent = off (no repairFloor entry needed).
+  showRealPositions?: boolean;
   // Last-known-good zone vertices. Persisted so a reload paints zones from
   // store immediately, before HA's first state push completes — protects
   // against the case where firmware re-publishes partial / zeroed values

@@ -740,6 +740,60 @@ export function doorSpanCenter(d: { x: number; y: number; w: number; rotation: n
   return { x: d.x + Math.cos(t) * d.w / 2, y: d.y - Math.sin(t) * d.w / 2 };
 }
 
+// Normalize a degrees value into [0, 360) — shared by the opening-rotation
+// helpers so a round trip (+180 twice) lands on the SAME number, hence the same
+// cos/sin bits, hence a bit-exact anchor restore.
+function normDeg360(deg: number): number {
+  const n = deg % 360;
+  return n < 0 ? n + 360 : n;
+}
+
+// ── Rotating an opening ABOUT ITS SPAN CENTRE ───────────────────────────────
+// A door's stored (x, y) is its HINGE, so mutating `rotation` alone sweeps the
+// whole panel AROUND that hinge: turning a door 180° (to flip which side is
+// "inside") teleports it to the far side of the hinge instead of leaving it on
+// the same wall. Every SIDEBAR rotation edit therefore re-anchors so the span
+// keeps its centre — the panel occupies the SAME two endpoints (swapped).
+// Formulated as an anchor DELTA (`x + (cos t0 − cos t1)·w/2`) rather than
+// "centre, then back off" so a +180/+180 round trip cancels EXACTLY in real
+// arithmetic: the second call normalizes to the same two angles, recomputes
+// the identical cos/sin pair, and adds the exact negation of the first delta.
+// It is NOT bit-exact — `(x + d) − d` re-associates, so the anchor can land
+// one double ULP off (measured max 4.6e-13 mm over an exhaustive
+// width × rotation × position sweep; see door-kinds-test §14). That is a
+// picometre: it can never accumulate into a visible drift, and the SPAN
+// ENDPOINTS + centre are preserved to the same bound. Do not "fix" this by
+// quantizing the output to a grid — real exactness needs compensated
+// (error-free) arithmetic with state we deliberately do not store.
+//
+// NB the CANVAS endpoint drag (`doorRotate` in canvas-interact) deliberately
+// keeps pivoting about the grabbed hinge — that gesture IS "swing this end
+// around", and the grabbed handle must stay under the cursor. Do not unify.
+export function rotateDoorAboutCenter(
+    d: { x: number; y: number; w: number; rotation: number }, newRotationDeg: number)
+    : { x: number; y: number; rotation: number } {
+  const rot = normDeg360(newRotationDeg);
+  const t0 = normDeg360(d.rotation || 0) * Math.PI / 180;
+  const t1 = rot * Math.PI / 180;
+  const h = d.w / 2;
+  return {
+    x: d.x + (Math.cos(t0) - Math.cos(t1)) * h,
+    y: d.y - (Math.sin(t0) - Math.sin(t1)) * h,
+    rotation: rot,
+  };
+}
+
+// Windows are ALREADY centre-anchored ((x, y) is the pane centre — see
+// `windowEndpoints`), so rotating one about its centre only touches
+// `rotation`. The helper exists so both sidebar editors read the same and so
+// the invariant is test-pinned: nobody should "fix" the window path by
+// re-anchoring it like a door.
+export function rotateWindowAboutCenter(
+    w: { x: number; y: number; w: number; rotation: number }, newRotationDeg: number)
+    : { x: number; y: number; rotation: number } {
+  return { x: w.x, y: w.y, rotation: normDeg360(newRotationDeg) };
+}
+
 // Window opening geometry defaults (mm). `sill` = bottom of glass above floor;
 // `height` = glass height (the 3D header derives as sill + height). Shared by the
 // 3D wall cut and the pane builder so the solid runs and the glass line up.
