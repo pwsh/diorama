@@ -2118,16 +2118,23 @@ export class ThreeView extends LitElement {
         const solUv = (typeof solUvRaw === 'number' && isFinite(solUvRaw)) ? solUvRaw : null;
         const solBand = solUv != null ? uvBand(Math.round(solUv)).label : '-';
         const keySolar = `${p.configRev}|${f.id}|${layers.sensors !== false ? 1 : 0}|` +
-          `${Math.round(solSun.azDeg / 3)}:${Math.round(solSun.elevDeg / 3)}:${solBand}|` +
+          `${Math.round(solSun.azDeg / 3)}:${Math.round(solSun.elevDeg / 3)}:${solBand}:` +
+          `${Math.round(solTheta * 100)}|` +
           solarList.map(sp => {
             const pw = sp.powerEntity ? parseFloat(states[sp.powerEntity]?.state ?? '') : NaN;
+            // Per-axis tracking switches + their frozen values + the sun-position
+            // indicator are all BUILD-time inputs. configRev already covers a
+            // settings edit, but the key names them so it stays honest about
+            // everything the mesh actually consumes.
             return `${sp.id}:${Math.round(sp.x)}:${Math.round(sp.y)}:${Math.round(sp.rotation ?? 0)}:` +
-              `${sp.hidden ? 1 : 0}:${isFinite(pw) ? Math.round(pw / 100) : '-'}`;
+              `${sp.hidden ? 1 : 0}:${isFinite(pw) ? Math.round(pw / 100) : '-'}:` +
+              `${sp.trackAzimuth === false ? 0 : 1}${sp.trackTilt === false ? 0 : 1}` +
+              `${sp.showSun ? 1 : 0}:${sp.fixedAzimuthDeg ?? '-'}:${sp.fixedTiltDeg ?? '-'}`;
           }).join(',');
         if (keySolar !== this._keySolar) {
           this._keySolar = keySolar;
           r.updateSolarPanels(solarList, id => states[id] || null,
-            solSun.azDeg, solSun.elevDeg, solUv);
+            solSun.azDeg, solSun.elevDeg, solUv, solTheta);
         }
       }
 

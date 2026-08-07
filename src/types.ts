@@ -1241,6 +1241,15 @@ export interface SolarPanel {
   rotation?: number;             // BASE yaw offset, deg screen-CW (0 = +Y world); tracking composes on top
   label?: string;
   powerEntity?: string | null;   // sensor.* watts (generation; negative = draw) — VISUAL only, LIVE-path
+  // Per-axis tracking switches (absent = true = the motorized tracker). Turning
+  // one off freezes that axis at its `fixed*` value — a real fixed-tilt roof
+  // array is `trackAzimuth:false, trackTilt:false`. Resolution lives in
+  // solar.ts's `solarTrackOpts` so 2D / 3D / sidebar can never fork.
+  trackAzimuth?: boolean;        // absent = true; false → hold `fixedAzimuthDeg`
+  trackTilt?: boolean;           // absent = true; false → hold `fixedTiltDeg`
+  fixedAzimuthDeg?: number;      // COMPASS bearing (° CW from true north), default 180 (due south)
+  fixedTiltDeg?: number;         // degrees from horizontal, default 35, clamped SOLAR_TILT_MIN..MAX
+  showSun?: boolean;             // absent = false; draw the resolved SUN position indicator (2D ray + 3D beam)
   locked?: boolean;              // canvas move/delete disabled
   hidden?: boolean;              // per-fixture hide (plus the whole sensors layer toggle)
 }

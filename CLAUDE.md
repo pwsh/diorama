@@ -1423,8 +1423,26 @@ the face, dimmed arrow-less when parked. Sidebar `_section('solar', …)`:
 label, base rotation, power bind, live aimed-az/tilt readout + a clock-
 fallback note (or a "demo sun" note — the DEMO weather source's authored
 sun overrides the panel aim in 2D, 3D and the readout; see "Demo source"
-under Weather core), lock, delete. Test `solar-test.html`
-(`SOLAR PASS 145/145`, §9 = the demo-sun override pins; the 2D arrow DIRECTION is pixel-pinned (2026-08-07 — a user aim report found presence-only coverage; az 117.67 → arrow centroid 117.67° screen-CW from up)).
+under Weather core), lock, delete. **Per-axis tracking switches + sun-position
+display (2026-08-07, user-requested mid-aim-investigation)**: `SolarPanel.trackAzimuth?`/
+`trackTilt?` (absent = true) + `fixedAzimuthDeg?` (COMPASS, default `SOLAR_FIXED_AZIMUTH_DEG`
+180) / `fixedTiltDeg?` (default 35, clamped) + `showSun?` (absent = false) — all item-level.
+The ONE compass→plan mapping is the pure `solarTrackOpts(sp, thetaRad)` (solar.ts —
+returns `undefined` when both axes track = the byte-identical fast path; `== null`
+treated as absent, `Number(null)===0` trap pinned), consumed by `solarAim`'s optional
+trailing opts at all three call sites (3D via three-view's `solTheta` → `updateSolarPanels`'
+trailing `thetaRad = 0`, 2D, sidebar). **Park rule**: `parked = !sunUp && (trackAzimuth ||
+trackTilt)` — a fully-fixed mount NEVER parks (nothing to stow); a panel with ≥1 live axis
+parks that axis (tilt → SOLAR_PARK_TILT, yaw → base) while the frozen axis HOLDS.
+`showSun` builds an amber sun RAY + bead as a `_solarGroup`-level SIBLING of the head
+(deliberately NOT a child — inheriting the head pose could never show a mis-aim, the whole
+diagnostic; hooks `userData.solarSunRay {azDeg, elevDeg}`/`solarSunBead`; flat MeshBasic
+exemption) + a 2D dotted sun ray + glyph distinct from the panel-aim arrow. Sidebar: the
+two Track checkboxes (unchecking reveals the fixed input), "Show sun position", and a
+**Sun row in COMPASS degrees** (`plan az + θ` — directly comparable to `sun.sun`'s own
+attributes) with the entity/clock/demo source note; defaults stored ABSENT. `_keySolar`
+folds θ + per-panel track/fixed/showSun terms. Test `solar-test.html`
+(`SOLAR PASS 206/206`, §9 = the demo-sun override pins; the 2D arrow DIRECTION is pixel-pinned (2026-08-07 — a user aim report found presence-only coverage; az 117.67 → arrow centroid 117.67° screen-CW from up)).
 NB the identify callout paints over everything — 2D pixel-measuring tests
 must clear `identifyFx` first (this bit the solar test).
 

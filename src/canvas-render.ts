@@ -44,7 +44,7 @@ import { resolveNorth, northMarkerPos, markerScaleOf } from './compass.js';
 import { calendarLines, weatherCardLines, resolveScreenContent, CAL_HEADER_COLOR, type ScreenMode } from './surfaces.js';
 import { CONDITION_GLYPH, uvBand, demoSunAltAz } from './weather.js';
 import {
-  SOLAR_DEFAULTS, resolveSunPlan, solarAim, solarRotation,
+  SOLAR_DEFAULTS, resolveSunPlan, solarAim, solarTrackOpts, solarRotation,
   solarPowerValue, solarPowerColor, solarPowerText,
 } from './solar.js';
 import { ALERT_BEACON_DEFAULTS, alertBeaconState, alertBeaconColor, alertBeaconAlarming, isAlertDomain } from './alerts.js';
@@ -3129,7 +3129,9 @@ function drawFlagpoles(ctx: CanvasRenderingContext2D, p: Planner, view: View): v
 // yaw. The frame stroke carries the WHO UV band color (weather.ts uvBand — the
 // same ladder the weather chip's UV row uses); a bound power sensor adds a
 // wattage chip (amber when NEGATIVE = grid draw on a signed monitor). Parked
-// (sun down) panels dim and lose the sun arrow.
+// (sun down, at least one live axis) panels dim and lose the sun arrow; a fully
+// FIXED array (both tracking switches off) never parks. `showSun` adds a dotted
+// ray to the sun's true position on top — see the indicator block below.
 function drawSolarPanels(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
   const f = p.floor();
   const list = f.solarPanels ?? [];
@@ -3152,7 +3154,7 @@ function drawSolarPanels(ctx: CanvasRenderingContext2D, p: Planner, view: View):
     if (sp.hidden) continue;
     const c = mmToPx(view, sp.x, sp.y);
     const sel = p.activeSolarId === sp.id;
-    const aim = solarAim(sun.azDeg, sun.elevDeg, solarRotation(sp));
+    const aim = solarAim(sun.azDeg, sun.elevDeg, solarRotation(sp), solarTrackOpts(sp, theta));
     const tiltRad = aim.tiltDeg * Math.PI / 180;
     const halfW = Math.max(6, SOLAR_DEFAULTS.panelW * 0.5 * view.scale);
     const halfD = Math.max(2.5, SOLAR_DEFAULTS.panelH * 0.5 * view.scale * Math.cos(tiltRad));
@@ -3210,6 +3212,39 @@ function drawSolarPanels(ctx: CanvasRenderingContext2D, p: Planner, view: View):
     }
     ctx.globalAlpha = 1;
     ctx.restore();
+    // Sun-position indicator (`showSun`): a DOTTED ray from the pedestal toward
+    // where the sun actually is, ending in a small sun glyph. Deliberately NOT
+    // the panel-aim arrow above — its own rotation, its own dash pattern — so a
+    // frozen (or mis-aimed) axis reads as the angle BETWEEN the two. With both
+    // axes tracking they coincide, and the glyph at the tip is the confirmation.
+    if (sp.showSun && sun.elevDeg > 0) {
+      const rLen = halfW * 2 + 8 * dpr;
+      const gx = 0, gy = -(rLen + 4 * dpr);
+      ctx.save();
+      ctx.translate(c.x, c.y);
+      ctx.rotate(sun.azDeg * Math.PI / 180);   // local -Y = the sun's plan azimuth
+      ctx.strokeStyle = hexToRgba('#ffd54f', 0.8);
+      ctx.lineWidth = Math.max(1, dpr);
+      ctx.setLineDash([3 * dpr, 3 * dpr]);
+      ctx.beginPath();
+      ctx.moveTo(0, -Math.max(halfD, halfW * 0.25) - 3 * dpr);
+      ctx.lineTo(gx, gy);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      // Sun glyph: filled disc + a ring of short spokes.
+      const gr = Math.max(3, 3.5 * dpr);
+      ctx.fillStyle = '#ffd54f';
+      ctx.beginPath(); ctx.arc(gx, gy, gr, 0, 2 * Math.PI); ctx.fill();
+      ctx.strokeStyle = hexToRgba('#ffd54f', 0.9);
+      ctx.beginPath();
+      for (let k = 0; k < 8; k++) {
+        const a = (k / 8) * 2 * Math.PI;
+        ctx.moveTo(gx + Math.cos(a) * (gr + 1.5 * dpr), gy + Math.sin(a) * (gr + 1.5 * dpr));
+        ctx.lineTo(gx + Math.cos(a) * (gr + 3.5 * dpr), gy + Math.sin(a) * (gr + 3.5 * dpr));
+      }
+      ctx.stroke();
+      ctx.restore();
+    }
     // Pedestal base dot (screen space).
     ctx.fillStyle = '#90a4ae';
     ctx.beginPath(); ctx.arc(c.x, c.y, Math.max(2.5, 3 * dpr), 0, 2 * Math.PI); ctx.fill();

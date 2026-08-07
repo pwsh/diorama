@@ -50,7 +50,8 @@ import {
 } from '../geometry.js';
 import { solveHomography, homographyResidualsMm } from '../homography.js';
 import {
-  resolveSunPlan, solarAim, solarRotation, solarPowerValue, solarPowerText,
+  resolveSunPlan, solarAim, solarTrackOpts, solarRotation, solarPowerValue, solarPowerText,
+  SOLAR_FIXED_AZIMUTH_DEG, SOLAR_FIXED_TILT_DEG, SOLAR_TILT_MIN, SOLAR_TILT_MAX,
 } from '../solar.js';
 import { demoSunAltAz } from '../weather.js';
 import { CLOCK_PRESETS, DATE_PRESETS, type ValueRule, type RuleOp } from '../value-rules.js';
@@ -3630,21 +3631,26 @@ export class Sidebar extends LitElement {
   }
 
   // Live sun as resolved for the 3D array (solar.ts is the single home for it).
+  // Returns θ alongside, because the per-axis tracking switches need it twice:
+  // to map a frozen azimuth's COMPASS bearing into the plan frame, and to map
+  // the plan-frame sun readout back to compass so the row can be compared
+  // straight against HA's own `sun.sun` attributes.
   private _solarSun() {
     const p = this.planner;
     const fit = p.geoFit();
     const theta = fit && fit.transform.quality !== 'none' ? fit.transform.thetaRad : 0;
     // Demo weather source: the authored sun overrides `sun.sun` for the readout
     // too, so the sidebar never claims a different aim than the drawn array.
-    return resolveSunPlan(p.hass?.states?.['sun.sun'] ?? null, theta, Date.now(),
+    const res = resolveSunPlan(p.hass?.states?.['sun.sun'] ?? null, theta, Date.now(),
       demoSunAltAz(p.store.weather));
+    return { ...res, theta };
   }
 
   private _solarItem(sp: SolarPanel) {
     const p = this.planner;
     const sel = p.activeSolarId === sp.id;
-    const { sun } = this._solarSun();
-    const aim = solarAim(sun.azDeg, sun.elevDeg, solarRotation(sp));
+    const { sun, theta } = this._solarSun();
+    const aim = solarAim(sun.azDeg, sun.elevDeg, solarRotation(sp), solarTrackOpts(sp, theta));
     const watts = sp.powerEntity ? solarPowerValue(p.hass?.states?.[sp.powerEntity] ?? null) : null;
     const wt = solarPowerText(watts);
     const nm = sp.label?.trim() || 'Solar panel';
@@ -3665,9 +3671,15 @@ export class Sidebar extends LitElement {
   private _solarEditor(sp: SolarPanel) {
     const p = this.planner;
     const upd = (mut: () => void) => { mut(); p.save(); p.emitConfig(); };
-    const { sun, source } = this._solarSun();
-    const aim = solarAim(sun.azDeg, sun.elevDeg, solarRotation(sp));
+    const { sun, source, theta } = this._solarSun();
+    const aim = solarAim(sun.azDeg, sun.elevDeg, solarRotation(sp), solarTrackOpts(sp, theta));
     const watts = sp.powerEntity ? solarPowerValue(p.hass?.states?.[sp.powerEntity] ?? null) : null;
+    const trackAz = sp.trackAzimuth !== false;
+    const trackTilt = sp.trackTilt !== false;
+    // The sun row reports a COMPASS bearing (plan az + θ) so it can be read
+    // straight against HA's `sun.sun` azimuth attribute — the diagnostic the
+    // whole "is my array aimed right?" question needs.
+    const sunCompass = ((sun.azDeg + (theta * 180) / Math.PI) % 360 + 360) % 360;
     return html`
       <div style="background:rgba(0,0,0,0.25);border-radius:4px;padding:6px;margin:4px 0">
         <div class="row"><label>Label</label>
@@ -3681,11 +3693,62 @@ export class Sidebar extends LitElement {
                    sp.rotation = isFinite(v) ? v : 0;
                  })}>
         </div>
+        <div class="row"><label>Track azimuth</label>
+          <input type="checkbox" .checked=${trackAz}
+                 @change=${(e: Event) => upd(() => {
+                   const on = (e.target as HTMLInputElement).checked;
+                   // Default-valued fields are stored ABSENT (the modalScale idiom).
+                   if (on) delete sp.trackAzimuth; else sp.trackAzimuth = false;
+                 })}>
+        </div>
+        ${trackAz ? nothing : html`
+          <div class="row"><label>Fixed azimuth (° compass)</label>
+            <input type="number" step="5" .value=${String(sp.fixedAzimuthDeg ?? SOLAR_FIXED_AZIMUTH_DEG)}
+                   @input=${(e: Event) => upd(() => {
+                     const v = parseFloat((e.target as HTMLInputElement).value);
+                     sp.fixedAzimuthDeg = isFinite(v) ? v : SOLAR_FIXED_AZIMUTH_DEG;
+                   })}>
+          </div>`}
+        <div class="row"><label>Track tilt</label>
+          <input type="checkbox" .checked=${trackTilt}
+                 @change=${(e: Event) => upd(() => {
+                   const on = (e.target as HTMLInputElement).checked;
+                   if (on) delete sp.trackTilt; else sp.trackTilt = false;
+                 })}>
+        </div>
+        ${trackTilt ? nothing : html`
+          <div class="row"><label>Fixed tilt (°)</label>
+            <input type="number" step="5" min=${SOLAR_TILT_MIN} max=${SOLAR_TILT_MAX}
+                   .value=${String(sp.fixedTiltDeg ?? SOLAR_FIXED_TILT_DEG)}
+                   @input=${(e: Event) => upd(() => {
+                     const v = parseFloat((e.target as HTMLInputElement).value);
+                     sp.fixedTiltDeg = isFinite(v) ? v : SOLAR_FIXED_TILT_DEG;
+                   })}>
+          </div>`}
+        <div class="row"><label>Show sun position</label>
+          <input type="checkbox" .checked=${sp.showSun === true}
+                 @change=${(e: Event) => upd(() => {
+                   const on = (e.target as HTMLInputElement).checked;
+                   if (on) sp.showSun = true; else delete sp.showSun;
+                 })}>
+        </div>
         <div class="row"><label>Aimed at</label>
           <span style="font-size:11px;color:var(--text);flex:1">
             ${aim.parked
               ? html`<span style="color:var(--text-dim)">parked (sun below the horizon)</span>`
-              : html`${Math.round(aim.yawDeg)}° az · ${Math.round(aim.tiltDeg)}° tilt`}
+              : html`${Math.round(aim.yawDeg)}° az · ${Math.round(aim.tiltDeg)}° tilt${
+                  trackAz && trackTilt ? nothing
+                    : html`<span style="color:var(--text-dim)"> · ${
+                        !trackAz && !trackTilt ? 'fixed' : (trackAz ? 'fixed tilt' : 'fixed azimuth')}</span>`}`}
+          </span>
+        </div>
+        <div class="row"><label>Sun</label>
+          <span style="font-size:11px;color:var(--text);flex:1">
+            ${Math.round(sunCompass)}° az · ${Math.round(sun.elevDeg)}° elev
+            <span style="color:var(--text-dim)">${
+              source === 'entity' ? ' · from sun.sun'
+                : source === 'demo' ? ' · demo sun'
+                : ' · local-clock fallback'}</span>
           </span>
         </div>
         <div class="row"><label>Power entity</label>
@@ -3705,7 +3768,11 @@ export class Sidebar extends LitElement {
         ${this._lockRow(sp)}
         <div style="font-size:10px;color:var(--text-dim);margin-top:4px;line-height:1.3">
           The array tracks the sun's azimuth + elevation all day and parks flat at
-          night. Base rotation offsets the whole assembly. A bound power sensor (W)
+          night. Turn a tracking switch OFF to freeze that axis at a fixed value —
+          both off is an ordinary fixed array, which holds its pose day and night
+          and never parks. Base rotation offsets the whole assembly. "Show sun
+          position" draws a separate ray to where the sun actually is, so the gap
+          between it and the panel's own aim is visible. A bound power sensor (W)
           drives the generation glow — a NEGATIVE reading (grid draw on a signed
           monitor) reads amber. The frame is tinted by the current UV index.
           ${source === 'clock' ? html`<br><span style="color:#ffb74d">No

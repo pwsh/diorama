@@ -404,6 +404,22 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Solar panel: per-axis tracking switches + sun-position display**
+  (2026-08-07, user-requested mid-investigation; unreleased — on main past
+  v0.62.0). `trackAzimuth`/`trackTilt` (absent = true) freeze either axis
+  at `fixedAzimuthDeg` (compass, default 180) / `fixedTiltDeg` (35);
+  `showSun` draws the RESOLVED sun as an amber ray + bead in 3D (a
+  _solarGroup SIBLING of the head — a child would inherit the pose and
+  could never show a mis-aim) and a dotted ray + glyph in 2D, plus a
+  sidebar "Sun" row in COMPASS degrees with the entity/clock/demo source
+  note — the diagnostic for the user's aim report. One shared pure
+  mapping `solarTrackOpts(sp, θ)` (undefined = both-track fast path;
+  `Number(null)` trap pinned). Park rule: `parked = !sunUp &&
+  (trackAzimuth || trackTilt)` — a fully-fixed mount never parks. SOLAR
+  145→206. The aim investigation itself (below) found the fixture CORRECT
+  at every measurable layer with the user's real data; this feature puts
+  the resolved sun on screen so the divergence they see can be localized.
+
 - **Solar-panel aim investigation (user report "looking almost directly
   east at sun az 117.67/elev 49.33") — fixture VERIFIED CORRECT end-to-end
   with the user's real data; 2D arrow direction gains its missing test

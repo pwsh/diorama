@@ -35,8 +35,9 @@
   const near = (a, b, t = 1e-6) => Math.abs(a - b) <= t;
   const {
     compassToPlanDeg, sunAzimuthPlanDeg, sunElevationDeg, sunPlanFromClock, resolveSunPlan,
-    solarAim, solarRotation, solarPowerValue, solarPowerColor, solarPowerText,
+    solarAim, solarTrackOpts, solarRotation, solarPowerValue, solarPowerColor, solarPowerText,
     SOLAR_CLOCK, SOLAR_DEFAULTS, SOLAR_TILT_MIN, SOLAR_TILT_MAX, SOLAR_PARK_TILT,
+    SOLAR_FIXED_AZIMUTH_DEG, SOLAR_FIXED_TILT_DEG,
     SOLAR_GEN_COLOR, SOLAR_DRAW_COLOR,
   } = sol;
   const stOf = (id, s, attrs) => ({ state: s, attributes: attrs || {}, entity_id: id });
@@ -170,6 +171,132 @@
       lastUp.parked === false && lastUp.tiltDeg === SOLAR_TILT_MAX, `${lastUp.tiltDeg}`);
     assert('just before sunrise the array is stowed flat',
       stowed.parked === true && stowed.tiltDeg === SOLAR_PARK_TILT, `${stowed.tiltDeg}`);
+  }
+
+  // ── (3b) per-axis tracking switches ──────────────────────────────────────
+  // A frozen axis holds a user value instead of following the sun. PARK RULE
+  // (the one implemented in solar.ts): parked = !sunUp && (trackAz || trackTilt)
+  // — a fully FIXED mount never parks (it never moves, so nothing stows), any
+  // panel with a live axis parks at night so both renderers dim + drop the arrow.
+  {
+    // (a) opts undefined is BIT-IDENTICAL to the original two-axis tracker.
+    const nd = d => { const m = d % 360; return m < 0 ? m + 360 : m; };
+    const legacyAim = (az, el, base) => {
+      const bRaw = Number(base), b = isFinite(bRaw) ? bRaw : 0;
+      const A = Number(az), E = Number(el);
+      if (!isFinite(A) || !isFinite(E) || E <= 0) return { yawDeg: nd(b), tiltDeg: SOLAR_PARK_TILT, parked: true };
+      return { yawDeg: nd(A + b), tiltDeg: Math.max(SOLAR_TILT_MIN, Math.min(SOLAR_TILT_MAX, 90 - E)), parked: false };
+    };
+    let sameUndef = true, sameOpts = true, n = 0;
+    for (const az of [0, 47, 120, 200, 355, NaN]) {
+      for (const el of [-20, 0, 5, 35, 88, NaN]) {
+        for (const base of [0, 30, -75, NaN]) {
+          const want = legacyAim(az, el, base);
+          const gotU = solarAim(az, el, base);                          // no 4th arg
+          const gotO = solarAim(az, el, base, solarTrackOpts({}, 0));   // opts resolves to undefined
+          n++;
+          const eq = (a, b) => a.yawDeg === b.yawDeg && a.tiltDeg === b.tiltDeg && a.parked === b.parked;
+          if (!eq(gotU, want)) sameUndef = false;
+          if (!eq(gotO, want)) sameOpts = false;
+        }
+      }
+    }
+    assert(`no-opts solarAim is bit-identical to the pre-switch golden (${n} cases)`, sameUndef);
+    assert('both-axes-tracking opts take the same identical path', sameOpts);
+
+    // (b) solarTrackOpts: the ONE compass→plan mapping every call site shares.
+    assert('solarTrackOpts({}) → undefined (the fast path)', solarTrackOpts({}, 0) === undefined);
+    assert('solarTrackOpts(both true) → undefined',
+      solarTrackOpts({ trackAzimuth: true, trackTilt: true }, 0) === undefined);
+    assert('solarTrackOpts(azimuth off) → opts', !!solarTrackOpts({ trackAzimuth: false }, 0));
+    assert('solarTrackOpts(tilt off) → opts', !!solarTrackOpts({ trackTilt: false }, 0));
+    {
+      const o = solarTrackOpts({ trackAzimuth: false }, 0);
+      assert('default frozen azimuth is due SOUTH (compass 180)', near(o.fixedAzimuthPlanDeg, 180, 1e-9)
+        || near(o.fixedAzimuthPlanDeg, -180, 1e-9), `${o.fixedAzimuthPlanDeg}`);
+      assert('default frozen tilt is 35°', o.fixedTiltDeg === 35);
+      assert('the other axis stays tracking', o.trackTilt === true && o.trackAzimuth === false);
+      // The stored bearing is COMPASS, so it maps through the SAME θ the sun does.
+      const th = 30 * Math.PI / 180;
+      const oT = solarTrackOpts({ trackAzimuth: false, fixedAzimuthDeg: 180 }, th);
+      assert('frozen azimuth maps through geo θ exactly like the sun',
+        near(oT.fixedAzimuthPlanDeg, compassToPlanDeg(180, th), 1e-9)
+        && near(oT.fixedAzimuthPlanDeg, 150, 1e-9), `${oT.fixedAzimuthPlanDeg}`);
+      assert('garbage frozen values fall back to the shared defaults', (() => {
+        const g = solarTrackOpts({ trackTilt: false, fixedTiltDeg: NaN, fixedAzimuthDeg: 'x' }, 0);
+        return g.fixedTiltDeg === 35 && near(Math.abs(g.fixedAzimuthPlanDeg), 180, 1e-9);
+      })());
+      // `null` means UNSET, never 0 — Number(null) === 0 would pitch a frozen
+      // array flat at the mechanical minimum and swing a frozen bearing north.
+      assert('null frozen values fall back to the defaults, not 0', (() => {
+        const g = solarTrackOpts({ trackTilt: false, trackAzimuth: false,
+          fixedTiltDeg: null, fixedAzimuthDeg: null }, 0);
+        const a = solarAim(90, 30, 0, g);
+        return g.fixedTiltDeg === SOLAR_FIXED_TILT_DEG && a.tiltDeg === SOLAR_FIXED_TILT_DEG
+          && near(Math.abs(a.yawDeg), 180, 1e-9);
+      })());
+    }
+
+    // (c) frozen AZIMUTH: yaw ignores the sun, tilt still tracks.
+    {
+      const o = { trackAzimuth: false, trackTilt: true, fixedAzimuthPlanDeg: 150, fixedTiltDeg: 35 };
+      const a = solarAim(90, 30, 0, o);
+      assert('frozen azimuth holds its fixed plan bearing', near(a.yawDeg, 150, 1e-9), `${a.yawDeg}`);
+      assert('frozen azimuth still tracks TILT', near(a.tiltDeg, 60, 1e-9), `${a.tiltDeg}`);
+      assert('frozen azimuth is not parked with the sun up', a.parked === false);
+      assert('base rotation composes onto a frozen azimuth', near(solarAim(90, 30, 20, o).yawDeg, 170, 1e-9));
+      const night = solarAim(270, -8, 0, o);
+      assert('at night a frozen azimuth HOLDS (does not go home)', near(night.yawDeg, 150, 1e-9), `${night.yawDeg}`);
+      assert('at night the live tilt axis stows', night.tiltDeg === SOLAR_PARK_TILT);
+      assert('one live axis + sun down → parked', night.parked === true);
+    }
+
+    // (d) frozen TILT: pitch ignores the sun, azimuth still tracks.
+    {
+      const o = { trackAzimuth: true, trackTilt: false, fixedAzimuthPlanDeg: 150, fixedTiltDeg: 35 };
+      const a = solarAim(90, 30, 0, o);
+      assert('frozen tilt holds its fixed pitch', a.tiltDeg === 35);
+      assert('frozen tilt still tracks AZIMUTH', near(a.yawDeg, 90, 1e-9), `${a.yawDeg}`);
+      assert('a frozen tilt is clamped to the mechanical range (90 → MAX)',
+        solarAim(90, 30, 0, { ...o, fixedTiltDeg: 90 }).tiltDeg === SOLAR_TILT_MAX);
+      assert('a frozen tilt is clamped to the mechanical range (0 → MIN)',
+        solarAim(90, 30, 0, { ...o, fixedTiltDeg: 0 }).tiltDeg === SOLAR_TILT_MIN);
+      const night = solarAim(270, -8, 33, o);
+      assert('at night a frozen tilt HOLDS (never stows flat)', night.tiltDeg === 35);
+      assert('at night the live azimuth axis goes home to the base', near(night.yawDeg, 33, 1e-9), `${night.yawDeg}`);
+      assert('one live axis (tilt frozen) + sun down → parked', night.parked === true);
+    }
+
+    // (e) BOTH frozen = an ordinary fixed array: same pose day and night, NEVER parks.
+    {
+      const o = { trackAzimuth: false, trackTilt: false, fixedAzimuthPlanDeg: 150, fixedTiltDeg: 40 };
+      const day = solarAim(90, 30, 0, o);
+      const night = solarAim(270, -10, 0, o);
+      const nul = solarAim(null, null, 0, o);
+      assert('a fixed array holds its authored pose in daylight',
+        near(day.yawDeg, 150, 1e-9) && day.tiltDeg === 40, `${day.yawDeg}/${day.tiltDeg}`);
+      assert('a fixed array holds the SAME pose at night',
+        night.yawDeg === day.yawDeg && night.tiltDeg === day.tiltDeg, `${night.yawDeg}/${night.tiltDeg}`);
+      assert('PARK RULE: a fully fixed array NEVER parks (sun down)', night.parked === false);
+      assert('PARK RULE: a fully fixed array never parks (unresolved sun)',
+        nul.parked === false && near(nul.yawDeg, 150, 1e-9) && nul.tiltDeg === 40);
+      assert('a fixed array is insensitive to the sun sweeping the whole sky', (() => {
+        for (let az = 0; az < 360; az += 17) for (const el of [-30, 5, 45, 89]) {
+          const a = solarAim(az, el, 0, o);
+          if (a.yawDeg !== day.yawDeg || a.tiltDeg !== day.tiltDeg || a.parked !== false) return false;
+        }
+        return true;
+      })());
+    }
+
+    // (f) degenerate opts never produce a NaN pose.
+    {
+      const a = solarAim(90, 30, 25, { trackAzimuth: false, fixedAzimuthPlanDeg: NaN });
+      assert('non-finite frozen azimuth falls back to the base rotation alone',
+        near(a.yawDeg, 25, 1e-9) && isFinite(a.tiltDeg), `${a.yawDeg}`);
+      const b = solarAim(90, 30, 0, { trackTilt: false, fixedTiltDeg: null });
+      assert('non-finite frozen tilt falls back to the 35° default', b.tiltDeg === 35);
+    }
   }
 
   assert('solarRotation defaults to 0', solarRotation({}) === 0);
@@ -400,6 +527,112 @@
     assert('rebuild is byte-identical (no Math.random in the builder)', s1 === s2 && s1.length > 0, `len=${s1.length}`);
   }
 
+  // ── (6b) tracking switches + the sun-position beam in the BUILT mesh ─────
+  const rayOf = (grp) => {
+    let ray = null;
+    grp.traverse(o => { if (o.userData && o.userData.solarSunRay) ray = o; });
+    return ray;
+  };
+  {
+    // Frozen AZIMUTH: the head yaws to the fixed COMPASS bearing (mapped
+    // through θ), not to the sun — while the tilt keeps tracking.
+    const spFa = { id: 'spFa', x: 2000, y: 3000, trackAzimuth: false, fixedAzimuthDeg: 180 };
+    r.updateSolarPanels([spFa], () => null, 120, 35, null, 0);
+    {
+      const { head } = headOf();
+      assert('frozen azimuth builds at the fixed bearing, not the sun',
+        near(head.userData.yawDeg, 180, 1e-9), `${head.userData.yawDeg}`);
+      assert('frozen azimuth still builds the TRACKED tilt', near(head.userData.tiltDeg, 55, 1e-9));
+      const n = normalOf(head);
+      const az = 180 * Math.PI / 180, hlen = Math.hypot(n.x, n.z);
+      assert('frozen-azimuth face normal points at the fixed bearing in WORLD space',
+        near(n.x / hlen, -Math.sin(az), 1e-4) && near(n.z / hlen, Math.cos(az), 1e-4),
+        `n=(${n.x.toFixed(3)},${n.z.toFixed(3)})`);
+    }
+    // θ reaches the fixed bearing: compass 180 under θ=+30° is plan 150.
+    r.updateSolarPanels([spFa], () => null, 120, 35, null, 30 * Math.PI / 180);
+    assert('updateSolarPanels θ param maps the frozen COMPASS bearing',
+      near(headOf().head.userData.yawDeg, 150, 1e-9), `${headOf().head.userData.yawDeg}`);
+    // Stale caller (no θ arg) still resolves — defaults to 0.
+    r.updateSolarPanels([spFa], () => null, 120, 35, null);
+    assert('θ defaults to 0 for a stale caller', near(headOf().head.userData.yawDeg, 180, 1e-9));
+
+    // Frozen TILT: pitch is the authored value, azimuth keeps tracking.
+    const spFt = { id: 'spFt', x: 2000, y: 3000, trackTilt: false, fixedTiltDeg: 45 };
+    r.updateSolarPanels([spFt], () => null, 120, 35, null, 0);
+    {
+      const { head } = headOf();
+      assert('frozen tilt builds at the fixed pitch', head.userData.tiltDeg === 45);
+      assert('frozen tilt still builds the TRACKED yaw', near(head.userData.yawDeg, 120, 1e-9));
+      const n = normalOf(head);
+      const elev = Math.asin(Math.max(-1, Math.min(1, n.y))) * 180 / Math.PI;
+      assert('frozen-tilt face normal sits at 90 − fixedTilt', near(elev, 45, 1e-4), `elev=${elev.toFixed(4)}`);
+    }
+
+    // A fully FIXED array holds its pose at night and never takes the parked look.
+    const spFix = { id: 'spFix', x: 2000, y: 3000, trackAzimuth: false, trackTilt: false,
+                    fixedAzimuthDeg: 180, fixedTiltDeg: 40 };
+    r.updateSolarPanels([spFix], () => null, 120, 35, null, 0);
+    const fixDay = { ...headOf().head.userData };
+    r.updateSolarPanels([spFix], () => null, 270, -12, null, 0);
+    {
+      const { head } = headOf();
+      assert('a fixed array does NOT park at night in 3D', head.userData.parked === false);
+      assert('a fixed array builds the identical pose day and night',
+        head.userData.yawDeg === fixDay.yawDeg && head.userData.tiltDeg === fixDay.tiltDeg,
+        `${head.userData.yawDeg}/${head.userData.tiltDeg}`);
+    }
+
+    // Sun-position beam (`showSun`): aimed at the TRUE sun, independent of the
+    // panel's own pose — that gap is the whole diagnostic.
+    r.updateSolarPanels([{ id: 'spS0', x: 2000, y: 3000 }], () => null, 120, 35, null, 0);
+    assert('no showSun → no sun beam (negative control)', rayOf(r._solarGroup.children[0]) === null);
+    const spSun = { id: 'spS', x: 2000, y: 3000, showSun: true,
+                    trackAzimuth: false, trackTilt: false, fixedAzimuthDeg: 0, fixedTiltDeg: 20 };
+    r.updateSolarPanels([spSun], () => null, 120, 35, null, 0);
+    {
+      const grp = r._solarGroup.children[0];
+      const ray = rayOf(grp);
+      assert('showSun builds a sun beam', !!ray);
+      assert('beam carries the authored sun as a test hook',
+        ray && near(ray.userData.solarSunRay.azDeg, 120, 1e-9)
+        && near(ray.userData.solarSunRay.elevDeg, 35, 1e-9));
+      // The beam's WORLD +Y basis IS its direction (same read as the face normal).
+      const d = normalOf(ray);
+      const azR = 120 * Math.PI / 180, elR = 35 * Math.PI / 180;
+      const want = { x: -Math.sin(azR) * Math.cos(elR), y: Math.sin(elR), z: Math.cos(azR) * Math.cos(elR) };
+      const dot = d.x * want.x + d.y * want.y + d.z * want.z;
+      assert('sun beam aims at the true sun direction (dot ≈ 1)', near(dot, 1, 1e-4), `dot=${dot.toFixed(6)}`);
+      // The panel is frozen facing plan-north at 20° tilt — the beam must NOT
+      // follow it (this is exactly what makes a mis-aim visible).
+      const n = normalOf(headOf().head);
+      const faceDot = n.x * d.x + n.y * d.y + n.z * d.z;
+      assert('sun beam is independent of the frozen panel pose', faceDot < 0.9, `faceDot=${faceDot.toFixed(4)}`);
+      assert('beam carries a bead at its far end',
+        (() => { let b = null; grp.traverse(o => { if (o.userData && o.userData.solarSunBead) b = o; }); return !!b; })());
+      // Flat unlit indicator (documented _mat() exemption) + no outline shells.
+      let flat = true, skipped = true;
+      ray.traverse(o => {
+        if (!o.isMesh) return;
+        if (o.material && o.material.type !== 'MeshBasicMaterial') flat = false;
+        if (!o.userData.outlineSkip) skipped = false;
+      });
+      assert('sun beam is flat MeshBasicMaterial (documented _mat exemption)', flat);
+      assert('sun beam parts are outline-skipped', skipped);
+    }
+    // A fully-tracking panel with showSun: the beam and the face agree.
+    r.updateSolarPanels([{ id: 'spS2', x: 2000, y: 3000, showSun: true }], () => null, 120, 35, null, 0);
+    {
+      const d = normalOf(rayOf(r._solarGroup.children[0]));
+      const n = normalOf(headOf().head);
+      const dot = d.x * n.x + d.y * n.y + d.z * n.z;
+      assert('with both axes tracking the beam and the face coincide', near(dot, 1, 1e-4), `dot=${dot.toFixed(6)}`);
+    }
+    // Sun down → nothing to point at.
+    r.updateSolarPanels([{ id: 'spS3', x: 2000, y: 3000, showSun: true }], () => null, 270, -6, null, 0);
+    assert('sun below the horizon builds no beam', rayOf(r._solarGroup.children[0]) === null);
+  }
+
   // ── (7) real Planner: CRUD, delete, translate/rotate, LIVE-path power ────
   class FakeHa {
     constructor() { this.states = {}; this._s = []; this._c = []; }
@@ -568,6 +801,86 @@
         an > 4 && Math.abs(azScreen - 117.67) < 6, `azScreen=${azScreen.toFixed(1)} n=${an}`);
     }
   }
+  // ── (8b) 2D: the sun-position ray + a frozen-axis panel arrow ────────────
+  // Amber-pixel angular probes about the pedestal. The sun ray + glyph reach far
+  // past the array (halfW·2 + margin) while the panel's own aim arrow dies just
+  // outside the foreshortened face — so a radius split isolates the two.
+  {
+    const dpr = window.devicePixelRatio || 1;
+    const cx = view.ox + 2000 * view.scale, cy = view.oy - 3000 * view.scale;
+    const halfW = Math.max(6, SOLAR_DEFAULTS.panelW * 0.5 * view.scale);
+    const FAR = halfW * 1.6;
+    // Amber-pixel scan about the pedestal. `far` splits by radius (only the sun
+    // ray + glyph reach past FAR); `sector` counts by BEARING, which is how the
+    // two rays are told apart when both are on screen at once.
+    const amberPx = (img) => {
+      const out = [];
+      for (let y = 0; y < img.height; y++) for (let x = 0; x < img.width; x++) {
+        const i = (y * img.width + x) * 4;
+        if (!(img.data[i] > 200 && img.data[i + 1] > 160 && img.data[i + 1] < 235 && img.data[i + 2] < 140)) continue;
+        out.push({ x, y, d: Math.hypot(x - cx, y - cy),
+          az: ((Math.atan2(x - cx, -(y - cy)) * 180 / Math.PI) + 360) % 360 });
+      }
+      return out;
+    };
+    const amber = (img, far) => {
+      const px = amberPx(img).filter(q => far ? q.d > FAR : q.d <= FAR);
+      let sx = 0, sy = 0;
+      for (const q of px) { sx += q.x; sy += q.y; }
+      const n = px.length;
+      const az = n ? ((Math.atan2(sx / n - cx, -(sy / n - cy)) * 180 / Math.PI) + 360) % 360 : NaN;
+      return { n, az };
+    };
+    // Shortest angular distance (deg) between two bearings.
+    const azDist = (a, b) => Math.abs(((a - b + 540) % 360) - 180);
+    const sector = (img, targetAz, half) =>
+      amberPx(img).filter(q => azDist(q.az, targetAz) <= half).length;
+    const drawAt = (azDeg, elDeg) => {
+      p.hass.states['sun.sun'] = stOf('sun.sun', 'above_horizon', { azimuth: azDeg, elevation: elDeg });
+      const cv = document.createElement('canvas'); cv.width = 640; cv.height = 480;
+      const ctx = cv.getContext('2d');
+      cr.drawAll(ctx, p, view, null);
+      return ctx.getImageData(0, 0, 640, 480);
+    };
+    p.store.layers2d = {};
+
+    // Negative control first: no showSun → nothing amber out past the array.
+    p.floor().solarPanels = [{ id: 's2a', x: 2000, y: 3000 }];
+    assert('no showSun → no far-field sun ray in 2D', amber(drawAt(117.67, 49.33), true).n === 0);
+
+    // showSun on a FULLY FIXED panel: the panel points plan-north (compass 0,
+    // θ = 0 with no geo fit) while the sun sits at 117.67° — two distinct rays.
+    p.floor().solarPanels = [{ id: 's2b', x: 2000, y: 3000, showSun: true,
+      trackAzimuth: false, trackTilt: false, fixedAzimuthDeg: 0, fixedTiltDeg: 30 }];
+    {
+      const img = drawAt(117.67, 49.33);
+      const far = amber(img, true);
+      assert('showSun paints a far-field sun ray', far.n > 4, `n=${far.n}`);
+      assert('2D sun ray POINTS at the sun azimuth (117.67° screen-CW from up)',
+        Math.abs(far.az - 117.67) < 8, `az=${far.az.toFixed(1)} n=${far.n}`);
+      // Both rays on screen at once, told apart by BEARING sector: the panel's
+      // own aim arrow sits at the frozen 0°, the sun ray at 117.67°.
+      const panelSec = sector(img, 0, 25), sunSec = sector(img, 117.67, 25);
+      assert('the PANEL arrow follows the FROZEN azimuth (0°), not the sun',
+        panelSec > 4, `n=${panelSec}`);
+      assert('the sun ray occupies its OWN bearing sector (frozen aim is visible)',
+        sunSec > 4 && sector(img, 60, 20) === 0, `sun=${sunSec} between=${sector(img, 60, 20)}`);
+    }
+    // The ray tracks the sun: a different bearing moves it.
+    assert('2D sun ray follows a moved sun', (() => {
+      const a = amber(drawAt(250, 30), true);
+      return a.n > 4 && Math.abs(a.az - 250) < 8;
+    })());
+    // A fully fixed array keeps its FULL-strength look at night (never parked),
+    // and the sun ray disappears because there is no sun to point at.
+    {
+      const img = drawAt(200, -10);
+      assert('a fixed array still paints its face at night (never parks)', pvBox(img).n > 50, `n=${pvBox(img).n}`);
+      assert('sun below the horizon paints no 2D sun ray', amber(img, true).n === 0);
+    }
+    p.floor().solarPanels = [];
+  }
+
   // Hidden panels + the sensors layer gate the painter.
   {
     p.floor().solarPanels = [{ id: 'd2', x: 2000, y: 3000, hidden: true }];

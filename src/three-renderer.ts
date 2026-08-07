@@ -101,7 +101,7 @@ interface RobotRig {
 }
 import { wallCutsForSegment, WINDOW_DEFAULTS, isBayWindowKind, windowSillMm, windowGlassHMm, bayProjectSign, bayPlan, closedWallLoops, wallSegmentInLoops, doorSpanCenter, wallKind, WALL_KINDS, furnitureLocalToWorld, furnitureWorldToLocal, pointInPolygon as pip, centroid, loopContaining, resolveRoomForPoint, roomLabel, roomsByLoop, roomFloorLook, intersectLoopWithRect, polygonArea, heatmapColor, groundAreaSkirtBase, poolWaterColor, poolDepthMm, poolRaisedMm, poolHeaterState, poolPumpOn, poolLightOn, poolRimY, poolBasinFloorY, poolWaterSurfaceY, POOL_COPING_COLOR, POOL_HEAT_GLOW, type RoomTemp } from './geometry.js';
 import { visibilityToFogDensity, moonPhaseFraction, uvBand, type WeatherNow } from './weather.js';
-import { SOLAR_DEFAULTS, solarAim, solarRotation, solarPowerValue, SOLAR_DRAW_COLOR, SOLAR_GEN_COLOR } from './solar.js';
+import { SOLAR_DEFAULTS, solarAim, solarTrackOpts, solarRotation, solarPowerValue, SOLAR_DRAW_COLOR, SOLAR_GEN_COLOR } from './solar.js';
 import { skySnapshot, moonAltAz, capSampleAltAz, satAltAz } from './sky-astro.js';
 // flights.ts is deliberately zero-import (three-free) and shared by BOTH the app
 // graph and this lazy chunk — the avatars.ts precedent. Only the pure compression
@@ -5140,17 +5140,26 @@ export class ThreeDRenderer {
   // `uvIndex` tints the frame accent through the SAME WHO band ladder the weather
   // chip's UV row uses (weather.ts uvBand); `powerEntity` watts drive an emissive
   // generation glow, amber when NEGATIVE (grid draw on a signed monitor).
+  //
+  // `thetaRad` (trailing, stale-caller-safe default 0) is the fitted geo rotation
+  // — needed ONLY to map a frozen axis's stored COMPASS bearing into the plan
+  // frame (solar.ts `solarTrackOpts`). The sun az/elev arrive already plan-frame.
   updateSolarPanels(
     panels: SolarPanel[], stateProvider: StateProvider,
     sunAzDeg: number | null, sunElevDeg: number | null, uvIndex: number | null,
+    thetaRad = 0,
   ): void {
     if (!this._scene) return;
     this._clearGroup(this._solarGroup);
     const band = (typeof uvIndex === 'number' && isFinite(uvIndex)) ? uvBand(Math.round(uvIndex)) : null;
     const accent = band ? parseInt(band.color.slice(1), 16) : 0x8d99a6;
+    // Sun usable for the optional `showSun` indicator (below the horizon there
+    // is nothing to point at — the same gate `parked` uses).
+    const sunAzN = Number(sunAzDeg), sunElN = Number(sunElevDeg);
+    const sunUsable = isFinite(sunAzN) && isFinite(sunElN) && sunElN > 0;
     for (const sp of panels) {
       if (sp.hidden) continue;
-      const aim = solarAim(sunAzDeg, sunElevDeg, solarRotation(sp));
+      const aim = solarAim(sunAzDeg, sunElevDeg, solarRotation(sp), solarTrackOpts(sp, thetaRad));
       const watts = sp.powerEntity ? solarPowerValue(stateProvider(sp.powerEntity)) : null;
       const gen = watts != null && isFinite(watts) ? watts : null;
       const glow = gen != null && Math.abs(gen) > 5 ? powerGlowScale(Math.abs(gen)) : 0;
@@ -5264,6 +5273,49 @@ export class ThreeDRenderer {
         solarPowerColor: glow > 0 ? ((gen != null && gen < 0) ? SOLAR_DRAW_COLOR : SOLAR_GEN_COLOR) : null,
       };
       grp.add(led);
+
+      // ── Sun-position indicator (`showSun`) ─────────────────────────────────
+      // An amber beam from the tilt pivot toward where the sun ACTUALLY is —
+      // independent of where the panel points, which is the whole diagnostic:
+      // with both axes tracking the beam runs straight out of the panel face,
+      // and any divergence is the frozen axis (or a mis-aimed one) made visible.
+      // Sibling of the head, NOT a child — it must not inherit the head's pose.
+      //
+      // Direction: the plan azimuth maps to scene coords through `_w`'s X mirror
+      // exactly like the face normal above — plan (sin az, cos az) → scene
+      // (−sin az, 0, cos az) — scaled by cos(elev), with sin(elev) as the rise.
+      // Flat unlit MeshBasicMaterial: a documented `_mat()` toon exemption (the
+      // weather-particle / info-card-text family) — a self-lit sightline, not a
+      // shaded surface, and toon banding across it would read as a defect.
+      if (sp.showSun && sunUsable) {
+        const azR = (sunAzN * Math.PI) / 180, elR = (sunElN * Math.PI) / 180;
+        const dir = new THREE.Vector3(
+          -Math.sin(azR) * Math.cos(elR),
+          Math.sin(elR),
+          Math.cos(azR) * Math.cos(elR),
+        ).normalize();
+        const rayLen = 2200;
+        const ray = new THREE.Group();
+        ray.position.y = 90 + D.postH;               // the tilt pivot
+        ray.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+        // Test hook: the authored sun this beam was built for. The world +Y
+        // basis of this group IS `dir`, so a test can verify direction the same
+        // way it verifies the panel's face normal.
+        ray.userData = { ...ud, solarSunRay: { azDeg: sunAzN, elevDeg: sunElN }, outlineSkip: true };
+        const beam = new THREE.Mesh(
+          new THREE.CylinderGeometry(16, 16, rayLen, 6),
+          new THREE.MeshBasicMaterial({ color: 0xffd54f, transparent: true, opacity: 0.75 }));
+        beam.position.y = rayLen / 2;                // cylinder axis is local +Y
+        beam.userData = { ...ud, outlineSkip: true };
+        ray.add(beam);
+        const bead = new THREE.Mesh(
+          new THREE.SphereGeometry(95, 12, 10),
+          new THREE.MeshBasicMaterial({ color: 0xffe082 }));
+        bead.position.y = rayLen;
+        bead.userData = { ...ud, outlineSkip: true, solarSunBead: true };
+        ray.add(bead);
+        grp.add(ray);
+      }
 
       this._addOutlines(grp, 6, 120);
       grp.add(this._blobShadow(D.panelW * 0.5, D.panelH * 0.5));

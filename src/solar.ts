@@ -121,28 +121,111 @@ export const SOLAR_PARK_TILT = SOLAR_TILT_MIN;
 export interface SolarAim {
   yawDeg: number;    // plan-frame yaw of the panel face (0 = faces +Y world, CW)
   tiltDeg: number;   // degrees from horizontal
-  parked: boolean;   // true = sun below the horizon (or unresolved) → stowed
+  parked: boolean;   // see the park rule on solarAim
 }
 
 function normDeg(d: number): number { const m = d % 360; return m < 0 ? m + 360 : m; }
+function clampTilt(t: number): number {
+  return Math.max(SOLAR_TILT_MIN, Math.min(SOLAR_TILT_MAX, t));
+}
 
-// Compose the tracked sun aim with the fixture's BASE yaw offset. Sun at or
-// below the horizon (or a non-finite reading) → parked flat at the base yaw.
+// ── Per-axis tracking switches ──────────────────────────────────────────────
+// Each axis can be frozen at a user-set value instead of following the sun —
+// `trackAzimuth:false, trackTilt:false` is an ordinary FIXED roof/ground array.
+// The pure aim function stays dumb: it takes an already-plan-frame fixed
+// azimuth, because mapping the stored COMPASS bearing needs the fitted geo θ,
+// which only the callers have. `solarTrackOpts` below is that one mapping, so
+// the 3D build (via three-view), the 2D draw and the sidebar readout resolve
+// identically and can never fork.
+export interface SolarTrackOpts {
+  trackAzimuth?: boolean;              // absent = true
+  trackTilt?: boolean;                 // absent = true
+  fixedAzimuthPlanDeg?: number | null; // plan-frame degrees (already through θ)
+  fixedTiltDeg?: number | null;        // degrees from horizontal (clamped by solarAim)
+}
+
+// Defaults for a frozen axis: due SOUTH at a 35° pitch — the generic
+// northern-hemisphere fixed-array orientation.
+export const SOLAR_FIXED_AZIMUTH_DEG = 180;
+export const SOLAR_FIXED_TILT_DEG = 35;
+
+// Fixture → aim options, or `undefined` when BOTH axes track (the byte-identical
+// fast path: `solarAim(az, el, base, undefined)` is the original two-axis
+// tracker, expression for expression). The stored `fixedAzimuthDeg` is a COMPASS
+// bearing, so "180" means TRUE south on any calibrated plan — mapped through the
+// SAME `compassToPlanDeg` the sun itself uses.
+export function solarTrackOpts(
+  sp: {
+    trackAzimuth?: boolean; trackTilt?: boolean;
+    fixedAzimuthDeg?: number | null; fixedTiltDeg?: number | null;
+  },
+  thetaRad: number,
+): SolarTrackOpts | undefined {
+  const trackAzimuth = sp.trackAzimuth !== false;
+  const trackTilt = sp.trackTilt !== false;
+  if (trackAzimuth && trackTilt) return undefined;
+  // `null` = unset (never 0 — see the same guard in solarAim).
+  const azRaw = sp.fixedAzimuthDeg == null ? NaN : Number(sp.fixedAzimuthDeg);
+  const tiltRaw = sp.fixedTiltDeg == null ? NaN : Number(sp.fixedTiltDeg);
+  return {
+    trackAzimuth, trackTilt,
+    fixedAzimuthPlanDeg: compassToPlanDeg(
+      isFinite(azRaw) ? azRaw : SOLAR_FIXED_AZIMUTH_DEG, thetaRad),
+    fixedTiltDeg: isFinite(tiltRaw) ? tiltRaw : SOLAR_FIXED_TILT_DEG,
+  };
+}
+
+// Compose the tracked sun aim with the fixture's BASE yaw offset, honouring the
+// per-axis tracking switches.
+//
+// Per axis: a TRACKING axis follows the sun while it is up and goes to its stow
+// value when the sun is down (tilt → SOLAR_PARK_TILT, yaw → the base rotation);
+// a FROZEN axis holds its fixed value day and night.
+//
+// PARK RULE (pinned in solar-test §3b): `parked` = "the sun is unusable AND this
+// panel actually has an axis that went home" —
+//     parked = !sunUp && (trackAzimuth || trackTilt)
+// so a fully FIXED mount (both switches off) is NEVER parked (it never moves, so
+// there is nothing to stow), while any panel with at least one live axis parks at
+// night even if the other axis is frozen. That keeps `parked`'s two consumers
+// honest: both renderers dim the array and drop the "aiming at the sun" arrow
+// exactly when there is no sun to aim at, and a fixed mount keeps its authored
+// pose + full-strength look around the clock.
+//
+// With `opts` absent (or both axes tracking) every expression below reduces to
+// the original two-axis tracker, so existing callers are bit-identical.
 export function solarAim(
   sunAzDeg: number | null | undefined,
   sunElevDeg: number | null | undefined,
   baseRotDeg = 0,
+  opts?: SolarTrackOpts,
 ): SolarAim {
   const baseRaw = Number(baseRotDeg);
   const base = isFinite(baseRaw) ? baseRaw : 0;
   const az = Number(sunAzDeg), el = Number(sunElevDeg);
-  if (!isFinite(az) || !isFinite(el) || el <= 0) {
-    return { yawDeg: normDeg(base), tiltDeg: SOLAR_PARK_TILT, parked: true };
-  }
+  const sunUp = isFinite(az) && isFinite(el) && el > 0;
+
+  const trackAz = opts?.trackAzimuth !== false;
+  const trackTilt = opts?.trackTilt !== false;
+  // A missing / non-finite fixed value is a defined degenerate, never a NaN
+  // pose: the azimuth falls back to 0 (= the base rotation alone — this fn
+  // cannot map a compass bearing without θ) and the tilt to the shared 35°
+  // default. `null` means "unset" here and must NOT coerce to 0 — the fields are
+  // typed `number | null`, and Number(null) === 0 would silently pitch a
+  // tilt-frozen array flat at the mechanical minimum.
+  const fAzRaw = opts?.fixedAzimuthPlanDeg == null ? NaN : Number(opts.fixedAzimuthPlanDeg);
+  const fixedAz = isFinite(fAzRaw) ? fAzRaw : 0;
+  const fTiltRaw = opts?.fixedTiltDeg == null ? NaN : Number(opts.fixedTiltDeg);
+  const fixedTilt = isFinite(fTiltRaw) ? fTiltRaw : SOLAR_FIXED_TILT_DEG;
+
   return {
-    yawDeg: normDeg(az + base),
-    tiltDeg: Math.max(SOLAR_TILT_MIN, Math.min(SOLAR_TILT_MAX, 90 - el)),
-    parked: false,
+    yawDeg: trackAz
+      ? normDeg(sunUp ? az + base : base)
+      : normDeg(fixedAz + base),
+    tiltDeg: trackTilt
+      ? (sunUp ? clampTilt(90 - el) : SOLAR_PARK_TILT)
+      : clampTilt(fixedTilt),
+    parked: !sunUp && (trackAz || trackTilt),
   };
 }
 
