@@ -20,7 +20,12 @@ instance.
   Push **both** on every ship. Private hostnames/IPs live ONLY in the
   gitignored `docs/STATUS.local.md` (and `git remote -v`) — keep them out
   of every tracked file.
-- Release runbook: bump `package.json` version → commit `vX.Y.Z` → tag →
+- Release runbook: bump `package.json` version → **PREPEND a
+  `src/changelog.ts` entry** (version/codename/UTC date + 3–5 terse
+  user-facing bullets condensed from the release notes — feeds the
+  Settings ▸ Connection "Recent releases" scroll list, user-requested
+  2026-08-07; keep all history in the file, the UI shows the first 10;
+  first entry's version must match package.json) → commit `vX.Y.Z` → tag →
   `git push origin main vX.Y.Z && git push github main vX.Y.Z` →
   `gh release create vX.Y.Z --repo pwsh/diorama --title … --notes …` → the
   `release.yml` workflow builds and attaches `diorama.zip` (HACS asset) —
@@ -398,6 +403,18 @@ instance.
   stability in terrain §M).
 
 ### Shipped since the DESIGN-sims arc (reverse order)
+
+- **In-app changelog: "Recent releases" scroll list in Settings**
+  (2026-08-07, user-requested; unreleased — on main past v0.62.0). New
+  `src/changelog.ts` (pure data, zero imports — flags.ts idiom):
+  `ChangelogEntry[]` newest-first, seeded with v0.53.0–v0.62.0 condensed
+  from the GitHub release bodies; `CHANGELOG_DISPLAY_COUNT` 10. The
+  Settings ▸ Connection About block renders a scrollable (~190 px)
+  "Recent releases" list below the Changelog link — bundled, not fetched,
+  so it works offline/kiosk/demo; the GitHub link stays the authority for
+  full notes. RUNBOOK CHANGE: every release now prepends an entry (step
+  added above). Verified via CDP probe: block renders, scrolls (856 px
+  content), all 10 entries in order.
 
 - **Vehicle-pack geometry cleanup: floating parts + coplanar faces, all 8
   packs, audit pinned repo-wide** (2026-08-06, user-requested follow-up;

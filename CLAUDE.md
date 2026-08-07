@@ -2524,7 +2524,13 @@ reference; keep it updated when the schema grows.
   moved off the sidebar; Avatars is the pack manager (path-grouped tree,
   Loaded/Active toggles, per-member subsets with color swatches, Import/
   Export/Remove JSON packs; core row locked). `show(tab?)`; the weather chip's
-  `open-weather` opens the Weather tab.
+  `open-weather` opens the Weather tab. The Connection tab's About block ends
+  with a scrollable **"Recent releases"** list (2026-08-07, user-requested) fed
+  by `src/changelog.ts` (pure data, ZERO imports — `ChangelogEntry[]` newest
+  first + `CHANGELOG_DISPLAY_COUNT` 10; BUNDLED, never fetched, so it works
+  offline/kiosk/demo). **Every release PREPENDS an entry there** — a release
+  runbook step (docs/STATUS.md); keep all history in the file, the UI slices
+  the first 10; the first entry's version should match package.json at release.
 - Test pages: `avatar-pack-test` (registry/config math), `avatar-build-test`
   (declarative builds + rig extensions), `avatar-store-test` (IDB + validator),
   `avatar-content-test` (builds EVERY member of every builtin pack).

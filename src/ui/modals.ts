@@ -1,6 +1,7 @@
 import { LitElement, html, nothing } from 'lit';
 import { property, state } from 'lit/decorators.js';
 import { customElement } from './define.js';
+import { CHANGELOG, CHANGELOG_DISPLAY_COUNT } from '../changelog.js';
 import { finishZoneEdit, cancelZoneEdit } from '../canvas-interact.js';
 import { alarmStateColor, hvacModeColor, climateFeature, CLIMATE_FEATURE, climateTempUnit, fmtTempNum, clampSetpoint, resolvePivotMode, floorsDisplayOrder } from '../geometry.js';
 import { CONDITION_GLYPH, CONDITION_LABEL, tempText, weatherEffectEnabled, worstAlertSeverity } from '../weather.js';
@@ -1354,6 +1355,34 @@ export class SettingsDrawer extends LitElement {
           — source, issue tracker<br>
           📋 ${link('https://github.com/pwsh/diorama/releases', 'Changelog')}
           — release notes for every version
+        </div>
+        ${this._recentReleases()}
+      </div>`;
+  }
+
+  // Scrolling recent-release history under the Changelog link (user-requested
+  // 2026-08-07). Data is BUNDLED (src/changelog.ts — the release runbook
+  // prepends an entry per release) so the list works offline / kiosk / demo;
+  // the GitHub link above stays the authority for full notes + older versions.
+  private _recentReleases() {
+    const entries = CHANGELOG.slice(0, CHANGELOG_DISPLAY_COUNT);
+    if (!entries.length) return nothing;
+    return html`
+      <div style="margin-top:10px">
+        <strong style="font-size:11px;color:var(--text)">Recent releases</strong>
+        <div style="max-height:190px;overflow-y:auto;border:1px solid var(--border);border-radius:5px;padding:8px 10px;margin-top:5px;background:rgba(0,0,0,0.18)">
+          ${entries.map(e => html`
+            <div style="margin-bottom:9px">
+              <div style="font-size:11px;color:var(--text)">
+                <strong>${e.version}</strong>
+                <span style="color:var(--accent)"> — ${e.name}</span>
+                <span style="color:var(--text-dim);font-size:10px"> · ${e.date}</span>
+              </div>
+              <ul style="margin:2px 0 0;padding-left:16px">
+                ${e.notes.map(n => html`
+                  <li style="font-size:10px;color:var(--text-dim);line-height:1.45">${n}</li>`)}
+              </ul>
+            </div>`)}
         </div>
       </div>`;
   }
