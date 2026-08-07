@@ -744,6 +744,12 @@ type BgGrassArea = {
 // total, and absent/garbage → 1, so a stale caller (or a hand-edited config)
 // reproduces the shipped size exactly. The UI clamps to the same window; these
 // are the authoritative guards.
+// Overhead-door lock cutoff: a garage lock bolt only renders while the leaf is
+// still mostly DOWN. Past this fraction the bottom rail is at (or through) the
+// lintel, so the bolt would float near the ceiling with nothing to secure —
+// meaningless as a state readout and visually wrong. The 2D padlock (drawn at
+// the hinge corner, not on the leaf) has no such constraint and always shows.
+const GARAGE_LOCK_MAX_FRAC = 0.6;
 const BG_SCALE_MIN = 0.5, BG_SCALE_MAX = 5;
 function bgModelScale(v: unknown): number {
   const n = typeof v === 'number' ? v : NaN;
@@ -8615,6 +8621,12 @@ export class ThreeDRenderer {
     }));
     const H = 360;  // world-mm text height — reads at room scale without dominating
     sprite.scale.set(H * (cv.width / cv.height), H, 1);
+    // Bottom-anchor the billboard (the thought-bubble tail idiom): the sprite is
+    // placed only ~50 mm above the slab, so a CENTER anchor hung its lower
+    // ~130 mm below floor level — depth-tested against the opaque slab, the
+    // text read as "cut into the floor" at shallow camera angles (user-reported).
+    // Anchoring the bottom edge at the position is exact at every angle.
+    sprite.center.set(0.5, 0);
     return sprite;
   }
 
@@ -8623,6 +8635,11 @@ export class ThreeDRenderer {
   updateDoorsWindows(doors: Door[], windows: WindowType[],
                      stateProvider: StateProvider): void {
     if (!this._scene) return;
+    // Garage doors carry a camera-facing open-% badge (a Sprite with a per-door
+    // CanvasTexture), which _clearGroup does NOT free — pair the sweep, like
+    // every other sprite-bearing group. clearTransientGroups / destroy already
+    // run the pair over _doorGroup.
+    this._disposeSpriteMaps(this._doorGroup);
     this._clearGroup(this._doorGroup);
     if (doors && doors.length) this._buildDoors(doors, stateProvider);
     if (windows && windows.length) this._buildWindows(windows, stateProvider);
@@ -9096,22 +9113,154 @@ export class ThreeDRenderer {
         // arc-distance `a` from the bottom edge: pos = lift + a; pos ≤ H → the
         // slat hangs vertical in the wall plane; pos > H → it lies flat at y = H,
         // set back by (pos − H). frac = 1 lands the whole door on the ceiling.
+        //
+        // `garageStyle` (absent = 'sectional') only changes the LEAF LOOK — the
+        // roll-up parametrization above is shared by every style except
+        // 'roll_up' (coils onto a drum, nothing folds) and 'tilt_up' (one slab
+        // pivoting at the head). Sectional builds exactly the pre-style meshes.
         hinge.rotation.y = rotR;
         const H = GARAGE_DOOR_H, N = 5, GAP = 6;
         const slatH = H / N - GAP;
         const lift = frac * H;
-        for (let i = 0; i < N; i++) {
-          const a = (i + 0.5) * (H / N);   // arc-distance of this slat's center from the bottom edge
+        const gStyle = d.garageStyle ?? 'sectional';
+        const secW = d.w - 40;                 // drawn leaf width (jamb clearance)
+        // Place a section carrier at arc-distance `a` from the bottom edge.
+        const placeSection = (obj: THREE.Object3D, i: number) => {
+          const a = (i + 0.5) * (H / N);
           const pos = lift + a;
-          const slat = new THREE.Mesh(new THREE.BoxGeometry(d.w - 40, slatH, DOOR_T), garageMat);
           if (pos <= H) {
-            slat.position.set(-d.w / 2, pos, 0);
+            obj.position.set(-d.w / 2, pos, 0);
           } else {
-            const overhang = pos - H;
-            slat.position.set(-d.w / 2, H, -overhang);
-            slat.rotation.x = -Math.PI / 2;   // fold flat onto the ceiling track
+            obj.position.set(-d.w / 2, H, -(pos - H));
+            obj.rotation.x = -Math.PI / 2;     // fold flat onto the ceiling track
           }
-          hinge.add(slat);
+        };
+        if (gStyle === 'tilt_up') {
+          // ── One-piece canopy: a single slab hung from a head pivot ─────────
+          // Pivot sits at the lintel; the slab hangs BELOW it (local y −H..0).
+          // Rotating +X by π/2·frac maps the slab's own +Y onto +Z, laying it
+          // flat at ceiling height extending into local −Z — the SAME side the
+          // sectional slats fold to.
+          const pivot = new THREE.Group();
+          pivot.position.set(-d.w / 2, H, 0);
+          pivot.rotation.x = (Math.PI / 2) * frac;
+          pivot.userData.tiltPivot = true;
+          hinge.add(pivot);
+          const slab = new THREE.Mesh(new THREE.BoxGeometry(secW, H, DOOR_T), garageMat);
+          slab.position.set(0, -H / 2, 0);
+          slab.userData.doorPanel = 'tilt';
+          pivot.add(slab);
+          // Pivot hardware at the two jambs (small, proud of the wall face).
+          for (const bx of [-30, -(d.w - 30)])
+            addBox(hinge, 44, 90, DOOR_T + 26, trackMat, bx, H - 45, 0);
+          // Latch on the slab's bottom rail — rides the tilt. Meaningless once
+          // the door is mostly overhead, so it drops out past 60 % open.
+          if (frac < GARAGE_LOCK_MAX_FRAC)
+            addLockBolts(pivot, 0, -H + 90, 0, DOOR_T / 2);
+        } else if (gStyle === 'roll_up') {
+          // ── Coiling steel curtain: narrow slats wind onto an overhead drum ──
+          // Nothing folds onto a track — a slat whose arc position passes the
+          // lintel is simply INSIDE the coil and not drawn. The drum fattens
+          // slightly with frac so the coil reads as growing.
+          const NR = 12, secH = H / NR, curtainT = DOOR_T * 0.55;
+          const coilMat = this._mat({ color: 0xa7adb4, roughness: 0.5, metalness: 0.3 });
+          for (let i = 0; i < NR; i++) {
+            const pos = lift + (i + 0.5) * secH;
+            if (pos > H) continue;             // wound onto the drum
+            addBox(hinge, secW, secH - 5, curtainT, coilMat, -d.w / 2, pos, 0);
+          }
+          const drumR = 160 * (1 + 0.25 * frac);
+          const drum = new THREE.Mesh(
+            new THREE.CylinderGeometry(drumR, drumR, d.w - 20, 16), trackMat);
+          drum.rotation.z = Math.PI / 2;       // cylinder axis Y → along the span
+          drum.position.set(-d.w / 2, H + 170, -40);
+          hinge.add(drum);
+          // Guide rails at both jambs (deeper than the curtain so no coplanar face).
+          for (const bx of [-20, -(d.w - 20)])
+            addBox(hinge, 40, H, curtainT + 40, trackMat, bx, H / 2, 0);
+          if (frac < GARAGE_LOCK_MAX_FRAC)
+            addLockBolts(hinge, -d.w / 2, lift + 90, 0, curtainT / 2);
+        } else if (gStyle === 'glass_panel') {
+          // ── Full-view aluminium: framed sections with translucent glazing ──
+          const railT = 44, stileW = 44, barT = 44;
+          for (let i = 0; i < N; i++) {
+            const sec = new THREE.Group();
+            placeSection(sec, i);
+            hinge.add(sec);
+            addBox(sec, secW, railT, barT, doorFrameMat, 0, (slatH - railT) / 2, 0);
+            addBox(sec, secW, railT, barT, doorFrameMat, 0, -(slatH - railT) / 2, 0);
+            for (let k = 0; k < 4; k++) {
+              const t = (k / 3) - 0.5;                       // −0.5 … +0.5
+              addBox(sec, stileW, slatH, barT, doorFrameMat, t * (secW - stileW), 0, 0);
+            }
+            // Pane THINNER than the bars (20 vs 44) and lapped 8 mm under them,
+            // so no glass face is ever coplanar with a frame face.
+            addBox(sec, secW - 2 * stileW + 8, slatH - 2 * railT + 8, 20, doorGlassMat, 0, 0, 0);
+          }
+          if (frac < GARAGE_LOCK_MAX_FRAC)
+            addLockBolts(hinge, -d.w / 2, lift + 90, 0, barT / 2);
+        } else {
+          // ── Sectional family (sectional / raised_panel / carriage) ─────────
+          // Identical slat geometry + motion; only the dressing differs, and
+          // decorations are CHILDREN of the slat so they ride the fold for free.
+          const carriage = gStyle === 'carriage';
+          const slatMat = carriage
+            ? this._mat({ color: 0x8a6a4d, roughness: 0.75, metalness: 0.05 })
+            : garageMat;
+          const trimMat = carriage
+            ? this._mat({ color: 0x6d5238, roughness: 0.7, metalness: 0.05 })
+            : this._mat({ color: 0xbcc2c8, roughness: 0.55, metalness: 0.2 });
+          const ironMat = carriage
+            ? this._mat({ color: 0x2f3439, roughness: 0.6, metalness: 0.35 })
+            : trimMat;
+          for (let i = 0; i < N; i++) {
+            const slat = new THREE.Mesh(new THREE.BoxGeometry(secW, slatH, DOOR_T), slatMat);
+            placeSection(slat, i);
+            hinge.add(slat);
+            if (gStyle === 'raised_panel') {
+              // Four embossed insets per section. ONE box per inset spanning
+              // DOOR_T + 12 shows 6 mm proud on BOTH faces; it is inset from
+              // every slat edge, so only its z faces are exposed (no coplanar).
+              const pw = secW / 4 - 60, ph = slatH - 60;
+              if (pw > 40 && ph > 30) {
+                for (let k = 0; k < 4; k++) {
+                  const t = (k + 0.5) / 4 - 0.5;
+                  addBox(slat, pw, ph, DOOR_T + 12, trimMat, t * secW, 0, 0);
+                }
+              }
+            } else if (carriage) {
+              // Vertical centre seam (the two-leaf carriage look).
+              addBox(slat, 28, slatH, DOOR_T + 10, trimMat, 0, 0, 0);
+              if (i === 0) {
+                // Crossbuck X braces on the bottom section + two pull handles.
+                const bl = Math.hypot(secW, slatH) * 0.98;
+                const ang = Math.atan2(slatH, secW);
+                for (const s of [1, -1]) {
+                  const brace = addBox(slat, bl, 48, DOOR_T + 8, trimMat, 0, 0, 0);
+                  brace.rotation.z = s * ang;
+                }
+                for (const hx of [-170, 170])
+                  addBox(slat, 66, 38, DOOR_T + 26, ironMat, hx, -slatH * 0.22, 0);
+              } else if (i === N - 2) {
+                // Strap-hinge hints near both jambs of an upper section.
+                for (const s of [-1, 1])
+                  addBox(slat, secW * 0.24, 34, DOOR_T + 8, ironMat,
+                         s * (secW / 2 - secW * 0.14), 0, 0);
+              }
+            }
+          }
+          if (frac < GARAGE_LOCK_MAX_FRAC)
+            addLockBolts(hinge, -d.w / 2, lift + 90, 0, DOOR_T / 2);
+        }
+        // Open-percentage readout above the opening — a camera-facing badge for
+        // every style, shown only while genuinely PARTIAL (a shut or fully open
+        // door needs no number; the geometry already says it). The sprite's
+        // CanvasTexture is freed by the _disposeSpriteMaps pairing in
+        // updateDoorsWindows / clearTransientGroups / destroy.
+        if (frac > 0.02 && frac < 0.98) {
+          const badge = this._makeTextSprite(`${Math.round(frac * 100)}%`, '#90a4ae', 0.85);
+          badge.position.set(-d.w / 2, H + 260, 0);
+          hinge.add(badge);
         }
         this._addOutlines(hinge);
         this._doorGroup.add(hinge);

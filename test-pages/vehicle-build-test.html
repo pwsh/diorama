@@ -139,13 +139,17 @@
     perPack.push(`${pack.id}:${pack.models.filter(m => m.surfaces.includes('ground')).length}` +
                  `(min${packMin === 1e9 ? '-' : packMin})`);
   }
-  eq('sweep covered 26 ground-placeable models', total, 26);
+  eq('sweep covered 37 ground-placeable models', total, 37);
 
   // ── Wheels: 4-wheeled road vehicles carry >= 4 rolled cylinders ───────────
   // A wheel is authored as a cylinder rolled 90° about Z (axis onto local X) —
   // a structural signature the recipe builder preserves verbatim.
   const FOUR_WHEELED = [
     'base-ground-civil/pickup', 'base-ground-civil/suv', 'base-ground-civil/police_cruiser',
+    // Second-wave civil roster (2026-08-06) — every `wheels4` member.
+    'base-ground-civil/sedan', 'base-ground-civil/hatchback', 'base-ground-civil/minivan',
+    'base-ground-civil/delivery_van', 'base-ground-civil/rv_camper',
+    'base-ground-civil/golf_cart',
     'base-ground-military/model_t', 'base-ground-military/beetle',
     'base-ground-military/microbus', 'base-ground-military/jeep_willys',
     'base-ground-military/humvee',
@@ -185,6 +189,41 @@
     ok(`${id}: 6 rolled wheel cylinders`, rolled.length === 6, String(rolled.length));
     const zs = [...new Set(rolled.map(m => Math.round(m.position.z)))].sort((a, b) => a - b);
     ok(`${id}: three distinct axle stations`, zs.length === 3, JSON.stringify(zs));
+  }
+
+  // The tractor's whole silhouette is its MISMATCHED wheels — two big rears,
+  // two small fronts (authored as individual `wheel` calls, so `wheels4`'s one
+  // shared radius can never creep back in).
+  {
+    const id = 'base-ground-civil/tractor';
+    const rec = R.vehicleRecipe(id);
+    ok(`${id}: known model`, !!rec);
+    const grp = buildPiece({ w: rec.w, h: rec.h, kind: 'block', vehicleModelId: id });
+    const rolled = bodyMeshes(grp).filter(m =>
+      m.geometry.type === 'CylinderGeometry' && Math.abs(Math.abs(m.rotation.z) - Math.PI / 2) < 0.02);
+    ok(`${id}: 4 rolled wheel cylinders`, rolled.length === 4, String(rolled.length));
+    const radii = rolled.map(m => m.geometry.parameters.radiusTop).sort((a, b) => a - b);
+    ok(`${id}: rear wheels much bigger than the fronts`,
+       radii.length === 4 && radii[3] / radii[0] >= 1.7, JSON.stringify(radii));
+    ok(`${id}: every wheel rolls on the ground`,
+       rolled.every(m => Math.abs(m.position.y - m.geometry.parameters.radiusTop) < 1), '');
+  }
+
+  // The bicycle: exactly two big thin wheels + a frame of ANGLED slim tubes.
+  {
+    const id = 'base-ground-civil/bicycle';
+    const rec = R.vehicleRecipe(id);
+    ok(`${id}: known model`, !!rec);
+    const grp = buildPiece({ w: rec.w, h: rec.h, kind: 'block', vehicleModelId: id });
+    const body = bodyMeshes(grp);
+    const wheels = body.filter(m => m.geometry.type === 'CylinderGeometry'
+      && Math.abs(Math.abs(m.rotation.z) - Math.PI / 2) < 0.02
+      && m.geometry.parameters.radiusTop >= 300);
+    ok(`${id}: exactly 2 road wheels`, wheels.length === 2, String(wheels.length));
+    ok(`${id}: wheels roll on the ground`,
+       wheels.every(m => Math.abs(m.position.y - m.geometry.parameters.radiusTop) < 1), '');
+    const angled = body.filter(m => m.geometry.type === 'BoxGeometry' && Math.abs(m.rotation.x) > 0.01);
+    ok(`${id}: >= 5 angled frame tubes`, angled.length >= 5, String(angled.length));
   }
 
   // ── Unloaded / deactivated pack → plain-block fallback ────────────────────

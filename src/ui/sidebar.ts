@@ -54,7 +54,7 @@ import {
 } from '../solar.js';
 import { demoSunAltAz } from '../weather.js';
 import { CLOCK_PRESETS, DATE_PRESETS, type ValueRule, type RuleOp } from '../value-rules.js';
-import type { Vec2, InfoCard, InfoCardMount, InfoCardDisplayMode, ActionButton, ActionKind, Ruler, DimensionMode, NeighborhoodConfig, DoorKind } from '../types.js';
+import type { Vec2, InfoCard, InfoCardMount, InfoCardDisplayMode, ActionButton, ActionKind, Ruler, DimensionMode, NeighborhoodConfig, DoorKind, GarageStyle } from '../types.js';
 import { resolveRulerEnds } from '../geometry.js';
 import { floorElevationMm, DOOR_DEFAULT_W, doorDefaultWidth, isSlidingDoorKind,
   isDoubleLeafDoorKind } from '../geometry.js';
@@ -4912,7 +4912,7 @@ export class Sidebar extends LitElement {
       return idx < 0 ? 'wall (deleted)' : `wall ${idx + 1}`;
     }
     const it = f.furniture.find(x => x.id === end.furnitureId);
-    return it ? `${it.label || furnitureKind(it)}` : 'furniture (deleted)';
+    return it ? (it.label || resolveFurnitureDef(it, p.store.customObjects).label) : 'furniture (deleted)';
   }
 
   private _rulersSection() {
@@ -5230,6 +5230,22 @@ export class Sidebar extends LitElement {
             <option value="sliding_glass" ?selected=${d.kind === 'sliding_glass'}>Sliding glass</option>
           </select>
         </div>
+        ${d.kind !== 'garage' ? nothing : html`
+        <div class="row"><label>Style</label>
+          <select @change=${(e: Event) => upd(() => {
+                    const s = (e.target as HTMLSelectElement).value as GarageStyle;
+                    // 'sectional' is the canonical ABSENT default — never write it,
+                    // so an untouched garage door stays byte-identical in the store.
+                    if (s === 'sectional') delete d.garageStyle; else d.garageStyle = s;
+                  })}>
+            <option value="sectional" ?selected=${(d.garageStyle ?? 'sectional') === 'sectional'}>Sectional (default)</option>
+            <option value="raised_panel" ?selected=${d.garageStyle === 'raised_panel'}>Raised panel</option>
+            <option value="carriage" ?selected=${d.garageStyle === 'carriage'}>Carriage house</option>
+            <option value="roll_up" ?selected=${d.garageStyle === 'roll_up'}>Roll-up coil</option>
+            <option value="glass_panel" ?selected=${d.garageStyle === 'glass_panel'}>Full-view glass</option>
+            <option value="tilt_up" ?selected=${d.garageStyle === 'tilt_up'}>One-piece tilt</option>
+          </select>
+        </div>`}
         <div class="row"><label>Width (mm)</label>
           <input type="number" min="200" .value=${String(Math.round(d.w))}
                  @input=${(e: Event) => upd(() => {
@@ -5280,8 +5296,10 @@ export class Sidebar extends LitElement {
           Hinge at (X,Y). Panel extends along rotation (15° snap). Sliding /
           pocket / sliding-glass kinds read "slide side" as the end the panel
           retracts toward; double + french open as a mirrored pair. Bind to a
-          binary_sensor ("on" = open) or a cover.* (garage / position). Optional
-          lock.* padlock + doorbell (event/binary/button) are display only.
+          binary_sensor ("on" = open) or a cover.* (garage / position). Garage
+          doors pick an overhead style and show their open percentage. An
+          optional lock.* padlock is clickable (set "Lock control" to display
+          for a read-only badge); the doorbell binding is display only.
         </div>
       </div>
     `;
@@ -5572,14 +5590,17 @@ export class Sidebar extends LitElement {
   }
 
   private _furnitureItem(piece: Furniture, idx: number) {
-    const kind = furnitureKind(piece);
-    const def = FURNITURE_KINDS[kind];
+    // Resolve through the piece's real identity (vehicle model / custom recipe /
+    // kind def) — a vehicle piece keeps kind 'block' only as its unloaded-pack
+    // fallback, so FURNITURE_KINDS[kind] here would caption every vehicle "Block".
+    const def = resolveFurnitureDef(piece, this.planner.store.customObjects);
     const exp = this._furnExpanded.has(piece.id);
     const display = piece.label?.trim() || def.label;
+    const typeChip = piece.vehicleModelId ? 'Vehicle' : def.label;
     return html`
       <div data-item-row=${piece.id} style="border-bottom:1px solid var(--border)">
         <div class="sensor-item" style="cursor:default">
-          <span style="font-size:11px;color:var(--text-dim);min-width:54px">${def.label}</span>
+          <span style="font-size:11px;color:var(--text-dim);min-width:54px">${typeChip}</span>
           <div class="nm">${display}</div>
           <button class="icon-btn" title=${exp ? 'Hide' : 'Edit'}
                   @click=${() => this._toggleFurnExpanded(piece.id)}>${exp ? '▾' : '▸'}</button>
@@ -5636,7 +5657,7 @@ export class Sidebar extends LitElement {
       <div style="background:rgba(0,0,0,0.25);border-radius:4px;padding:6px;margin:4px 0">
         <div class="row"><label>Label</label>
           <input type="text" data-label-for=${piece.id} .value=${piece.label ?? ''}
-                 placeholder=${FURNITURE_KINDS[curKind].label}
+                 placeholder=${resolveFurnitureDef(piece, p.store.customObjects).label}
                  @input=${(e: Event) => upd(() => {
                    piece.label = (e.target as HTMLInputElement).value;
                  })}>

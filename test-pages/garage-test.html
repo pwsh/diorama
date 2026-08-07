@@ -1,0 +1,527 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>garage test</title>
+<style>html,body{margin:0;background:#111;color:#ccc;font:12px sans-serif}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<!--
+  Garage-door STYLE variants (Door.garageStyle: sectional / raised_panel /
+  carriage / roll_up / glass_panel / tilt_up), the garage LOCK visualization
+  (3D bottom-rail deadbolt + 2D padlock + hitDoorLock), and the OPEN-PERCENTAGE
+  readout (3D camera-facing badge + 2D progress bar).
+
+  The load-bearing pin is §1: `garageStyle` ABSENT must build EXACTLY the
+  pre-feature 5-slat sectional door, mesh-for-mesh.
+
+  Harness build (from the repo root; NEVER reuse stale bundles — the
+  door-kinds-test recipe, one COMBINED canvas-render + canvas-hit bundle so
+  both share a module instance):
+    npm run build
+    H=/tmp/diorama-harness-garage
+    rm -rf "$H"; mkdir -p "$H"
+    cp test-pages/garage-test.html "$H"/          # pages FIRST…
+    cp -r dist/* "$H"/                            # …dist assets SECOND
+    npx esbuild src/geometry.ts --bundle --format=esm --outfile="$H"/geometry.mod.js
+    T=$(mktemp -d); cp -r src/* "$T"/
+    cp test-pages/fake-avatar-store.ts "$T"/avatar-store.ts
+    printf "export * from './canvas-render.js';\nexport * from './canvas-hit.js';\n" > "$T"/canvas2d-entry.ts
+    npx esbuild "$T"/planner.ts        --bundle --format=esm --outfile="$H"/planner.mod.js
+    npx esbuild "$T"/canvas2d-entry.ts --bundle --format=esm --outfile="$H"/canvas-render.mod.js
+  Run headless (serve over http — Chrome blocks dynamic module imports on file://):
+    (cd "$H" && python3 -m http.server 8863 &)
+    chromium --headless=new --disable-gpu --use-angle=swiftshader \
+      --enable-unsafe-swiftshader --run-all-compositor-stages-before-draw \
+      --window-size=1200,900 --virtual-time-budget=20000 \
+      --dump-dom http://localhost:8863/garage-test.html | grep -o '<title>[^<]*'
+-->
+<script type="module">
+ try {
+  const V = '?v=' + Date.now();
+  const geo = await import('./geometry.mod.js' + V);
+  const mod = await import('./assets/three-renderer.js' + V);
+  const { Planner } = await import('./planner.mod.js' + V);
+  const C2D = await import('./canvas-render.mod.js' + V);
+  const { drawAll, computeView, mmToPx, hitDoor, hitDoorLock } = C2D;
+  const { GARAGE_DOOR_H, lockGlyphColor } = geo;
+
+  const results = [];
+  const ok = (name, cond, detail = '') => results.push(`${cond ? 'ok' : 'FAIL'}:${name}${detail ? '(' + detail + ')' : ''}`);
+  const near = (a, b, t = 1e-6) => Math.abs(a - b) <= t;
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  async function waitFor(cond, tries = 600) {
+    for (let i = 0; i < tries; i++) { if (cond()) return true; await sleep(4); }
+    return !!cond();
+  }
+
+  // ═══ Renderer setup (door-kinds-test harness) ═════════════════════════════
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+  const scene3d = { preset: 'day', floorColor: '#8a7860', floorTex: 'none', wallColor: '#cfd2d6' };
+  const wallY = 2500, FW = 12000, FD = 5000;
+  const mkFloor = (doors) => ({
+    id: 'f1', name: 'T', w: FW, d: FD,
+    walls: [{ id: 'w1', points: [{ x: 500, y: wallY }, { x: 11500, y: wallY }] }],
+    furniture: [], lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors, windows: [], bg: null, model3d: null, look3d: null, rooms: [],
+  });
+  const GW = 2400;
+  const mkDoor = (over) => Object.assign(
+    { id: 'g1', x: 4000, y: wallY, w: GW, rotation: 0, kind: 'garage', entity_id: 'cover.g' }, over);
+  const build = (door, frac, extraStates) => {
+    const st = Object.assign({
+      'cover.g': { state: frac <= 0 ? 'closed' : 'open',
+                   attributes: { current_position: Math.round(frac * 100) } },
+    }, extraStates || {});
+    r.updateFloor(mkFloor([door]), scene3d);
+    r.updateDoorsWindows([door], [], id => st[id] || null);
+    return r._doorGroup.children[0];
+  };
+  const realMeshes = (o) => { const a = []; o.traverse(m => { if (m.isMesh && !m.userData?.outline) a.push(m); }); return a; };
+  const sprites = (o) => { const a = []; o.traverse(m => { if (m.isSprite) a.push(m); }); return a; };
+  const locks = (o) => { const a = []; o.traverse(m => { if (m.userData?.kind === 'lock') a.push(m); }); return a; };
+  const transparents = (o) => realMeshes(o).filter(m => m.material && m.material.transparent);
+  const findByData = (o, key, val) => {
+    let f = null; o.traverse(n => { if (!f && n.userData && n.userData[key] === val) f = n; }); return f;
+  };
+  // World position without importing THREE (the renderer chunk doesn't re-export it).
+  const worldPos = (o) => {
+    r._doorGroup.updateMatrixWorld(true);
+    const e = o.matrixWorld.elements;
+    return { x: e[12], y: e[13], z: e[14] };
+  };
+  // A stable structural signature: geometry type + its constructor params +
+  // rounded world-local transform. Order-independent (sorted).
+  const sig = (o) => realMeshes(o).map(m => {
+    const p = m.geometry.parameters || {};
+    return [m.geometry.type, p.width, p.height, p.depth, p.radiusTop, p.radiusBottom,
+            p.radialSegments,
+            Math.round(m.position.x * 100) / 100, Math.round(m.position.y * 100) / 100,
+            Math.round(m.position.z * 100) / 100,
+            m.rotation.x.toFixed(5), m.rotation.y.toFixed(5), m.rotation.z.toFixed(5),
+            m.material.color.getHex()].join(':');
+  }).sort().join('|');
+
+  // ═══ 1. DEFAULT GOLDEN: absent garageStyle === 'sectional' === legacy ══════
+  for (const frac of [0, 0.5, 1]) {
+    const gAbsent = sig(build(mkDoor({}), frac));
+    const gExplicit = sig(build(mkDoor({ garageStyle: 'sectional' }), frac));
+    ok(`golden_absent_eq_sectional_f${frac}`, gAbsent === gExplicit && gAbsent.length > 0,
+       gAbsent === gExplicit ? '' : 'differs');
+  }
+  {
+    const g = build(mkDoor({}), 0);
+    const ms = realMeshes(g);
+    ok('golden_five_slats', ms.length === 5, String(ms.length));
+    ok('golden_all_box', ms.every(m => m.geometry.type === 'BoxGeometry'),
+       ms.map(m => m.geometry.type).join(','));
+    ok('golden_no_cylinder', ms.every(m => m.geometry.type !== 'CylinderGeometry'));
+    ok('golden_no_glass', transparents(g).length === 0, String(transparents(g).length));
+    ok('golden_no_sprite', sprites(g).length === 0, String(sprites(g).length));
+    ok('golden_no_locks', locks(g).length === 0, String(locks(g).length));
+    // Every slat is the full leaf box (no decoration boxes present).
+    const DOOR_T = 60, secW = GW - 40, slatH = GARAGE_DOOR_H / 5 - 6;
+    ok('golden_slat_dims', ms.every(m => {
+      const p = m.geometry.parameters;
+      return near(p.width, secW, 1e-9) && near(p.height, slatH, 1e-9) && near(p.depth, DOOR_T, 1e-9);
+    }), ms.map(m => `${m.geometry.parameters.width}x${m.geometry.parameters.height}x${m.geometry.parameters.depth}`).join(' '));
+  }
+  // An UNKNOWN style string also falls back to the sectional build (a config
+  // hand-edited on a newer version must not break an older renderer chunk).
+  ok('golden_unknown_style_is_sectional',
+     sig(build(mkDoor({ garageStyle: 'brand_new_style' }), 0.5)) ===
+     sig(build(mkDoor({}), 0.5)));
+
+  // ═══ 2. Motion regression: the shipped roll-up parametrization ════════════
+  // pos = frac·H + (i+0.5)·H/N; pos ≤ H → vertical at y = pos, z = 0;
+  // pos > H → flat at y = H, z = −(pos − H), rotation.x = −π/2.
+  {
+    const H = GARAGE_DOOR_H, N = 5;
+    for (const frac of [0, 0.5, 1]) {
+      const ms = realMeshes(build(mkDoor({}), frac));
+      const want = [];
+      for (let i = 0; i < N; i++) {
+        const pos = frac * H + (i + 0.5) * (H / N);
+        want.push(pos <= H ? `${pos.toFixed(2)}:0.00:0.00000`
+                           : `${H.toFixed(2)}:${(-(pos - H)).toFixed(2)}:${(-Math.PI / 2).toFixed(5)}`);
+      }
+      const got = ms.map(m => `${m.position.y.toFixed(2)}:${m.position.z.toFixed(2)}:${m.rotation.x.toFixed(5)}`);
+      want.sort(); got.sort();
+      ok(`motion_sectional_f${frac}`, want.join('|') === got.join('|'),
+         `want=${want.join(',')} got=${got.join(',')}`);
+      ok(`motion_x_centred_f${frac}`, ms.every(m => near(m.position.x, -GW / 2, 1e-9)));
+    }
+  }
+
+  // ═══ 3. Per-style structure ═══════════════════════════════════════════════
+  const DOOR_T = 60, secW = GW - 40;
+  // raised_panel: the same 5 slats PLUS proud panel insets.
+  {
+    const base = realMeshes(build(mkDoor({}), 0)).length;
+    const g = build(mkDoor({ garageStyle: 'raised_panel' }), 0);
+    const ms = realMeshes(g);
+    ok('rp_more_meshes', ms.length > base, `${ms.length} vs ${base}`);
+    const proud = ms.filter(m => m.geometry.parameters.depth > DOOR_T);
+    ok('rp_insets_proud', proud.length === 20, String(proud.length));
+    // Each inset is INSET from the slat edges (only its z faces are exposed).
+    ok('rp_insets_inset', proud.every(m => m.geometry.parameters.width < secW
+                                        && m.geometry.parameters.height < GARAGE_DOOR_H / 5 - 6));
+    // …and they ride the fold: at frac 1 every inset's ancestor slat is folded.
+    const g1 = build(mkDoor({ garageStyle: 'raised_panel' }), 1);
+    const folded = realMeshes(g1).filter(m => near(Math.abs(m.rotation.x), Math.PI / 2, 1e-3)
+                                           || near(Math.abs(m.parent?.rotation?.x ?? 0), Math.PI / 2, 1e-3));
+    ok('rp_insets_ride_fold', folded.length === realMeshes(g1).length, String(folded.length));
+  }
+  // carriage: wood tint + crossbuck diagonals + centre seams.
+  {
+    const gs = build(mkDoor({}), 0);
+    const sectionalColor = realMeshes(gs)[0].material.color.getHex();
+    const g = build(mkDoor({ garageStyle: 'carriage' }), 0);
+    const ms = realMeshes(g);
+    // The 5 full-width slabs carry the wood tone.
+    const slabs = ms.filter(m => near(m.geometry.parameters.width, secW, 1e-9)
+                              && near(m.geometry.parameters.depth, DOOR_T, 1e-9));
+    ok('carriage_five_slabs', slabs.length === 5, String(slabs.length));
+    ok('carriage_wood_tint', slabs.every(m => m.material.color.getHex() !== sectionalColor),
+       `${slabs[0].material.color.getHex().toString(16)} vs ${sectionalColor.toString(16)}`);
+    const diag = ms.filter(m => Math.abs(m.rotation.z) > 0.1);
+    ok('carriage_crossbuck', diag.length === 2 && diag[0].rotation.z * diag[1].rotation.z < 0,
+       diag.map(m => m.rotation.z.toFixed(3)).join(','));
+    const seams = ms.filter(m => near(m.geometry.parameters.width, 28, 1e-9));
+    ok('carriage_centre_seams', seams.length === 5, String(seams.length));
+    ok('carriage_more_than_sectional', ms.length > realMeshes(gs).length,
+       `${ms.length} vs ${realMeshes(gs).length}`);
+  }
+  // roll_up: a drum, NO fold, and fewer visible curtain slats as it coils.
+  {
+    const g0 = build(mkDoor({ garageStyle: 'roll_up' }), 0);
+    const drums = realMeshes(g0).filter(m => m.geometry.type === 'CylinderGeometry');
+    ok('rollup_drum', drums.length === 1, String(drums.length));
+    ok('rollup_drum_axis_along_span', near(drums[0].rotation.z, Math.PI / 2, 1e-6));
+    const curtain = (o) => realMeshes(o).filter(m => m.geometry.type === 'BoxGeometry'
+      && near(m.geometry.parameters.width, secW, 1e-9));
+    ok('rollup_slats_f0', curtain(g0).length === 12, String(curtain(g0).length));
+    const g5 = build(mkDoor({ garageStyle: 'roll_up' }), 0.5);
+    ok('rollup_slats_f05', curtain(g5).length === 6 && curtain(g5).length < curtain(g0).length,
+       String(curtain(g5).length));
+    ok('rollup_no_fold', realMeshes(g5).every(m => near(m.rotation.x, 0, 1e-6)),
+       realMeshes(g5).map(m => m.rotation.x.toFixed(2)).join(','));
+    const g1 = build(mkDoor({ garageStyle: 'roll_up' }), 1);
+    ok('rollup_slats_f1', curtain(g1).length === 0, String(curtain(g1).length));
+    // The coil visibly grows with frac.
+    const d0 = drums[0].geometry.parameters.radiusTop;
+    const d1 = realMeshes(g1).find(m => m.geometry.type === 'CylinderGeometry').geometry.parameters.radiusTop;
+    ok('rollup_coil_grows', d1 > d0, `${d0} → ${d1}`);
+    // Guide rails at BOTH jambs.
+    const rails = realMeshes(g0).filter(m => near(m.geometry.parameters.width, 40, 1e-9)
+                                          && near(m.geometry.parameters.height, GARAGE_DOOR_H, 1e-9));
+    ok('rollup_guide_rails', rails.length === 2, String(rails.length));
+  }
+  // glass_panel: translucent panes lapped under thicker frame bars.
+  {
+    const g = build(mkDoor({ garageStyle: 'glass_panel' }), 0);
+    const panes = transparents(g);
+    ok('glass_has_panes', panes.length === 5, String(panes.length));
+    ok('glass_pane_thinner_than_bars', panes.every(m => m.geometry.parameters.depth === 20),
+       panes.map(m => m.geometry.parameters.depth).join(','));
+    const bars = realMeshes(g).filter(m => !m.material.transparent);
+    ok('glass_bars_deeper', bars.length >= 30 && bars.every(m => m.geometry.parameters.depth === 44),
+       String(bars.length));
+    // A pane laps 8 mm UNDER its outer stiles (no coplanar face).
+    const stileW = 44;
+    ok('glass_pane_lapped', panes.every(m => near(m.geometry.parameters.width, secW - 2 * stileW + 8, 1e-9)),
+       panes[0].geometry.parameters.width);
+    // Sections still fold onto the ceiling track at frac 1.
+    const g1 = build(mkDoor({ garageStyle: 'glass_panel' }), 1);
+    const secs = g1.children.filter(c => c.type === 'Group' && !c.userData?.kind);
+    ok('glass_folds', secs.length === 5 && secs.every(s => near(Math.abs(s.rotation.x), Math.PI / 2, 1e-6)),
+       secs.map(s => s.rotation.x.toFixed(2)).join(','));
+  }
+  // tilt_up: ONE slab whose head pivot angle grows with frac.
+  {
+    let prev = -1;
+    for (const frac of [0, 0.5, 1]) {
+      const g = build(mkDoor({ garageStyle: 'tilt_up' }), frac);
+      const pivot = findByData(g, 'tiltPivot', true);
+      const slab = findByData(g, 'doorPanel', 'tilt');
+      ok(`tilt_pivot_f${frac}`, !!pivot && !!slab);
+      ok(`tilt_angle_f${frac}`, near(pivot.rotation.x, (Math.PI / 2) * frac, 1e-6),
+         pivot.rotation.x.toFixed(4));
+      ok(`tilt_angle_grows_f${frac}`, Math.abs(pivot.rotation.x) > prev);
+      prev = Math.abs(pivot.rotation.x);
+      // Exactly one LARGE panel (the slab); the rest is small pivot hardware.
+      const big = realMeshes(g).filter(m => m.geometry.parameters.width > GW * 0.5
+                                         && m.geometry.parameters.height > GARAGE_DOOR_H * 0.5);
+      ok(`tilt_one_panel_f${frac}`, big.length === 1, String(big.length));
+    }
+    // At frac 1 the slab lies flat at the ceiling (pivot height = GARAGE_DOOR_H),
+    // set back into local −Z — the SAME side the sectional slats fold to.
+    const g1 = build(mkDoor({ garageStyle: 'tilt_up' }), 1);
+    const slab = findByData(g1, 'doorPanel', 'tilt');
+    const wp = worldPos(slab), hingeWp = worldPos(g1);
+    ok('tilt_open_at_ceiling', near(wp.y - hingeWp.y, GARAGE_DOOR_H, 1), (wp.y - hingeWp.y).toFixed(2));
+    ok('tilt_open_sets_back', wp.z - hingeWp.z < -GARAGE_DOOR_H * 0.4, (wp.z - hingeWp.z).toFixed(1));
+    // …and CLOSED it hangs vertically in the wall plane (z ≈ 0, mid-height).
+    const gc = build(mkDoor({ garageStyle: 'tilt_up' }), 0);
+    const wc = worldPos(findByData(gc, 'doorPanel', 'tilt')), hc = worldPos(gc);
+    ok('tilt_closed_in_plane', near(wc.z - hc.z, 0, 1) && near(wc.y - hc.y, GARAGE_DOOR_H / 2, 1),
+       `${(wc.y - hc.y).toFixed(1)}/${(wc.z - hc.z).toFixed(1)}`);
+    const sect1 = realMeshes(build(mkDoor({}), 1));
+    ok('tilt_same_fold_side', sect1.every(m => m.position.z < 0) && (wp.z - hingeWp.z) < 0);
+  }
+
+  // ═══ 4. Lock visualization (3D) ═══════════════════════════════════════════
+  const LOCKED = { 'lock.g': { state: 'locked', attributes: {} } };
+  const UNLOCKED = { 'lock.g': { state: 'unlocked', attributes: {} } };
+  {
+    const g = build(mkDoor({ lockEntity: 'lock.g' }), 0, LOCKED);
+    const bs = locks(g);
+    ok('lock_garage_bolts', bs.length === 2, String(bs.length));
+    ok('lock_garage_tagged', bs.every(b => b.userData.fixtureId === 'g1'
+                                        && b.userData.entity_id === 'lock.g'));
+    ok('lock_garage_both_faces', bs.length === 2 && bs[0].position.z * bs[1].position.z < 0,
+       bs.map(b => b.position.z).join(','));
+    // Colour matches the SHARED resolver — compared against a swing door built
+    // with the same lock state (both go through _mat's saturation push).
+    const sw = build(mkDoor({ id: 'g1', kind: 'swing', w: 900, lockEntity: 'lock.g' }), 0, LOCKED);
+    const ref = locks(sw)[0].material.color.getHex();
+    ok('lock_garage_colour', bs[0].material.color.getHex() === ref,
+       `${bs[0].material.color.getHex().toString(16)} vs ${ref.toString(16)}`);
+    ok('lock_colour_is_locked_hue', ref !== 0 && typeof lockGlyphColor('locked') === 'string');
+    // Unlocked reads a DIFFERENT hue than locked.
+    const gu = build(mkDoor({ lockEntity: 'lock.g' }), 0, UNLOCKED);
+    ok('lock_state_changes_colour',
+       locks(gu)[0].material.color.getHex() !== bs[0].material.color.getHex());
+    // The bolt rides the leaf: it lifts with the door.
+    const g3 = build(mkDoor({ lockEntity: 'lock.g' }), 0.3, LOCKED);
+    ok('lock_rides_leaf', locks(g3)[0].position.y > bs[0].position.y,
+       `${bs[0].position.y.toFixed(0)} → ${locks(g3)[0].position.y.toFixed(0)}`);
+    // Past 60 % open the bolt drops out (nothing left to secure).
+    ok('lock_hidden_when_open', locks(build(mkDoor({ lockEntity: 'lock.g' }), 0.7, LOCKED)).length === 0);
+    ok('lock_shown_below_cutoff', locks(build(mkDoor({ lockEntity: 'lock.g' }), 0.59, LOCKED)).length === 2);
+    // Display-only locks dim the emissive (look-but-don't-touch).
+    const gd = build(mkDoor({ lockEntity: 'lock.g', lockControl: 'display' }), 0, LOCKED);
+    ok('lock_display_dimmed',
+       locks(gd)[0].material.emissiveIntensity < bs[0].material.emissiveIntensity,
+       `${locks(gd)[0].material.emissiveIntensity} vs ${bs[0].material.emissiveIntensity}`);
+    // UNBOUND local lock state still renders bolts.
+    const gl = build(mkDoor({ entity_id: null, lockLocalState: 'unlocked' }), 0);
+    ok('lock_unbound_local', locks(gl).length === 2, String(locks(gl).length));
+    // No lock binding at all → no bolts (the golden case).
+    ok('lock_none_no_bolts', locks(build(mkDoor({}), 0)).length === 0);
+  }
+  // Every style carries the lock, and tilt_up parents it to the tilting slab.
+  for (const s of ['sectional', 'raised_panel', 'carriage', 'roll_up', 'glass_panel', 'tilt_up']) {
+    const g = build(mkDoor({ garageStyle: s, lockEntity: 'lock.g' }), 0, LOCKED);
+    ok(`lock_style_${s}`, locks(g).length === 2, String(locks(g).length));
+  }
+  {
+    const g = build(mkDoor({ garageStyle: 'tilt_up', lockEntity: 'lock.g' }), 0.4, LOCKED);
+    const b = locks(g)[0];
+    let inPivot = false;
+    for (let o = b; o; o = o.parent) if (o.userData?.tiltPivot) { inPivot = true; break; }
+    ok('lock_tilt_rides_pivot', inPivot);
+    const wp = worldPos(b);
+    const wp0 = worldPos(locks(build(mkDoor({ garageStyle: 'tilt_up', lockEntity: 'lock.g' }), 0, LOCKED))[0]);
+    ok('lock_tilt_moves_with_tilt', Math.abs(wp.z - wp0.z) > 50, (wp.z - wp0.z).toFixed(0));
+  }
+
+  // ═══ 5. Open-percentage badge (3D sprite) ═════════════════════════════════
+  {
+    ok('badge_absent_closed', sprites(build(mkDoor({}), 0)).length === 0);
+    ok('badge_absent_full', sprites(build(mkDoor({}), 1)).length === 0);
+    const g = build(mkDoor({}), 0.4);
+    const sp = sprites(g);
+    ok('badge_present_partial', sp.length === 1, String(sp.length));
+    ok('badge_above_opening', sp[0].position.y > GARAGE_DOOR_H, String(sp[0].position.y));
+    // The sprite carries painted text (non-transparent ink on its canvas).
+    const img = sp[0].material.map && sp[0].material.map.image;
+    ok('badge_has_canvas', !!img && img.width > 0 && img.height > 0,
+       img ? `${img.width}x${img.height}` : 'none');
+    let ink = 0;
+    if (img) {
+      const bc = img.getContext('2d').getImageData(0, 0, img.width, img.height).data;
+      for (let i = 3; i < bc.length; i += 4) if (bc[i] > 40) ink++;
+    }
+    ok('badge_painted', ink > 200, String(ink));
+    // Every style shows it while partial.
+    const missing = [];
+    for (const s of ['sectional', 'raised_panel', 'carriage', 'roll_up', 'glass_panel', 'tilt_up'])
+      if (sprites(build(mkDoor({ garageStyle: s }), 0.4)).length !== 1) missing.push(s);
+    ok('badge_every_style', missing.length === 0, missing.join(',') || 'all 6');
+    // Rebuild does not accumulate sprites (the _disposeSpriteMaps pairing).
+    const a = sprites(build(mkDoor({}), 0.4)).length;
+    const b = sprites(build(mkDoor({}), 0.4)).length;
+    ok('badge_no_leak_on_rebuild', a === 1 && b === 1, `${a}/${b}`);
+    // …and the whole _doorGroup holds exactly one sprite after two rebuilds.
+    let total = 0; r._doorGroup.traverse(o => { if (o.isSprite) total++; });
+    ok('badge_group_sprite_count', total === 1, String(total));
+  }
+
+  // ═══ 6. All 8 door kinds still build ══════════════════════════════════════
+  {
+    const bad = [];
+    for (const k of ['swing', 'garage', 'gate', 'sliding', 'pocket', 'double', 'french', 'sliding_glass']) {
+      try {
+        const g = build(mkDoor({ kind: k, w: k === 'garage' ? GW : 1200 }), 0.5);
+        if (!g || realMeshes(g).length === 0) bad.push(k + ':empty');
+      } catch (e) { bad.push(k + ':throw'); }
+    }
+    ok('all_kinds_build', bad.length === 0, bad.join(',') || '8 kinds');
+  }
+
+  // ═══ 2D harness (real Planner + the real drawAll / hit tests) ═════════════
+  class FakeHa {
+    constructor(seed) { this.map = new Map(); for (const [k, v] of Object.entries(seed || {})) this.map.set(k, JSON.parse(JSON.stringify(v))); this.states = {}; this._s = []; this._c = []; }
+    connect() { for (const cb of this._c) cb('connected'); for (const cb of this._s) cb(this.states, undefined); }
+    onState(fn) { this._s.push(fn); } onConn(fn) { this._c.push(fn); }
+    callService() { return Promise.resolve(); }
+    async getHistory() { return {}; } async getWeatherForecasts() { return null; }
+    async getDevices() { return []; } async getEntityRegistry() { return []; } async updateEntityRegistry() { return true; }
+    async getUserData(k) { return this.map.has(k) ? JSON.parse(JSON.stringify(this.map.get(k))) : null; }
+    async setUserData(k, v) { this.map.set(k, JSON.parse(JSON.stringify(v))); return true; }
+    async refreshStates() {} async subscribeMqtt() { return () => {}; } async publishMqtt() {}
+  }
+  const flat2d = (doors) => ({ id: 'f1', name: 'Home', w: 8000, d: 5000,
+    walls: [{ id: 'w1', points: [{ x: 500, y: 2500 }, { x: 7500, y: 2500 }] }],
+    furniture: [], lights: [], switches: [], sensors: [], motionSensors: [],
+    envSensors: [], bleProxies: [], doors, windows: [], rooms: [], bg: null });
+  async function mkPlanner(doors, states) {
+    localStorage.removeItem('diorama:store:v1'); localStorage.removeItem('diorama:configs');
+    const seed = { v: 2, floors: [flat2d(doors)], currentFloorId: 'f1', activeSensorId: null,
+      coverage: true, imperial: false, showDetails: false, useRawTargets: false };
+    const p = new Planner();
+    const ha = new FakeHa({ diorama: seed });
+    ha.states = states || {};
+    p.connectWith(ha);
+    await waitFor(() => p.configIndex !== null);
+    return p;
+  }
+  const cvs = document.createElement('canvas'); cvs.width = 600; cvs.height = 400;
+  const ctx = cvs.getContext('2d', { willReadFrequently: true });
+  const view = computeView(cvs, 8000, 5000, null, 1);
+  const dpr = window.devicePixelRatio || 1;
+  const rectDiff = (base, x0, y0, x1, y1) => {
+    const d = ctx.getImageData(0, 0, cvs.width, cvs.height).data;
+    let n = 0;
+    for (let y = Math.round(y0); y <= Math.round(y1); y++)
+      for (let x = Math.round(x0); x <= Math.round(x1); x++) {
+        const i = (y * cvs.width + x) * 4;
+        if (d[i] !== base[i] || d[i + 1] !== base[i + 1] || d[i + 2] !== base[i + 2]) n++;
+      }
+    return n;
+  };
+  const snap = () => ctx.getImageData(0, 0, cvs.width, cvs.height).data.slice();
+
+  const GD = (over) => Object.assign({ id: 'gg', x: 3000, y: 2500, w: 2400, rotation: 0,
+                                       kind: 'garage', entity_id: null, label: '' }, over);
+  const hp2 = mmToPx(view, 3000, 2500), ep2 = mmToPx(view, 5400, 2500);
+  const midX = (hp2.x + ep2.x) / 2, midY = (hp2.y + ep2.y) / 2;
+
+  // 7. 2D padlock: pixels appear at the hinge-corner offset ONLY with a lock.
+  //    Baseline = an otherwise IDENTICAL garage door with no lock binding, so
+  //    the diff isolates the glyph (a real negative control).
+  {
+    const pNo = await mkPlanner([GD({})]);
+    drawAll(ctx, pNo, view, null);
+    const baseNoLock = snap();
+    // Blank-scene baseline too, to prove the control region really is empty
+    // (the wall stroke + door line live ≥ 7 px below it).
+    const pBlank = await mkPlanner([]);
+    drawAll(ctx, pBlank, view, null);
+    const blank0 = snap();
+    // The padlock lives at (hinge.x − 9·dpr, hinge.y − 11·dpr), radius ~5·dpr.
+    const lx0 = hp2.x - 16 * dpr, lx1 = hp2.x - 2 * dpr;
+    const ly0 = hp2.y - 20 * dpr, ly1 = hp2.y - 7 * dpr;
+    drawAll(ctx, pNo, view, null);
+    ok('padlock_control_empty', rectDiff(blank0, lx0, ly0, lx1, ly1) === 0,
+       String(rectDiff(blank0, lx0, ly0, lx1, ly1)));
+    const pLock = await mkPlanner([GD({ lockLocalState: 'locked' })]);
+    drawAll(ctx, pLock, view, null);
+    const lockPx = rectDiff(baseNoLock, lx0, ly0, lx1, ly1);
+    ok('padlock_garage_paints', lockPx > 20, String(lockPx));
+    // Same region on a swing door with a lock — the shared glyph.
+    const pSwing = await mkPlanner([GD({ kind: 'swing', w: 900, lockLocalState: 'locked' })]);
+    drawAll(ctx, pSwing, view, null);
+    ok('padlock_swing_still_paints', rectDiff(baseNoLock, lx0, ly0, lx1, ly1) > 20,
+       String(rectDiff(baseNoLock, lx0, ly0, lx1, ly1)));
+  }
+
+  // 8. hitDoorLock now RETURNS a garage door (it used to skip the kind).
+  {
+    // The glyph centre in WORLD mm: screen +Y is world −Y.
+    const lockMm = { x: 3000 - (9 * dpr) / view.scale, y: 2500 + (11 * dpr) / view.scale };
+    const pLock = await mkPlanner([GD({ lockLocalState: 'locked' })]);
+    const h = hitDoorLock(pLock, view, lockMm);
+    ok('hitlock_garage', !!h && h.door.id === 'gg', h ? 'hit' : 'miss');
+    // Display-only locks are still skipped (passive indicator).
+    const pDisp = await mkPlanner([GD({ lockLocalState: 'locked', lockControl: 'display' })]);
+    ok('hitlock_display_skipped', hitDoorLock(pDisp, view, lockMm) === null);
+    // No lock binding → nothing to hit.
+    const pNo = await mkPlanner([GD({})]);
+    ok('hitlock_unbound_none', hitDoorLock(pNo, view, lockMm) === null);
+    // Far away → miss; the door PANEL still hits at the span midpoint.
+    ok('hitlock_far_miss', hitDoorLock(pLock, view, { x: 1000, y: 1000 }) === null);
+    ok('hit_garage_panel_still', !!hitDoor(pLock, view, { x: 4200, y: 2500 }));
+  }
+
+  // 9. 2D open-percentage bar under the pill.
+  {
+    const covState = (pct) => ({ 'cover.gg': { state: pct <= 0 ? 'closed' : 'open',
+                                               attributes: { current_position: pct } } });
+    const pShut = await mkPlanner([GD({ entity_id: 'cover.gg' })], covState(0));
+    drawAll(ctx, pShut, view, null);
+    const baseShut = snap();
+    // The bar sits at gy − 11·dpr where gy = midY − 12·dpr → rows midY−23 …
+    // midY−20, i.e. ABOVE the pill plate (which starts at midY−19) and far
+    // clear of the 5 px door stroke at midY. Probe the interior two rows.
+    const bx0 = midX - 15 * dpr, bx1 = midX + 15 * dpr;
+    const by0 = midY - 22 * dpr, by1 = midY - 21 * dpr;
+    ok('bar_absent_closed', rectDiff(baseShut, bx0, by0, bx1, by1) === 0,
+       String(rectDiff(baseShut, bx0, by0, bx1, by1)));
+    const pPart = await mkPlanner([GD({ entity_id: 'cover.gg' })], covState(40));
+    drawAll(ctx, pPart, view, null);
+    const barPx = rectDiff(baseShut, bx0, by0, bx1, by1);
+    ok('bar_present_partial', barPx > 30, String(barPx));
+    const pFull = await mkPlanner([GD({ entity_id: 'cover.gg' })], covState(100));
+    drawAll(ctx, pFull, view, null);
+    ok('bar_absent_full', rectDiff(baseShut, bx0, by0, bx1, by1) === 0,
+       String(rectDiff(baseShut, bx0, by0, bx1, by1)));
+    // The FILL length tracks the fraction: 80 % paints more bright pixels than 20 %.
+    const brightIn = () => {
+      const d = ctx.getImageData(0, 0, cvs.width, cvs.height).data;
+      let n = 0;
+      for (let y = Math.round(by0); y <= Math.round(by1); y++)
+        for (let x = Math.round(bx0); x <= Math.round(bx1); x++) {
+          const i = (y * cvs.width + x) * 4;
+          if (d[i] > 100 && d[i + 1] > 110) n++;     // the solid fill, not the dim track
+        }
+      return n;
+    };
+    const p20 = await mkPlanner([GD({ entity_id: 'cover.gg' })], covState(20));
+    drawAll(ctx, p20, view, null); const n20 = brightIn();
+    const p80 = await mkPlanner([GD({ entity_id: 'cover.gg' })], covState(80));
+    drawAll(ctx, p80, view, null); const n80 = brightIn();
+    ok('bar_fill_tracks_fraction', n80 > n20 && n20 > 0, `${n20} → ${n80}`);
+  }
+
+  // 10. 2D smoke: every style still paints the same kind-level garage glyph
+  //     (2D is deliberately style-agnostic — the plan shows the opening).
+  {
+    const p0 = await mkPlanner([]);
+    drawAll(ctx, p0, view, null);
+    const blank = snap();
+    const sigs = [];
+    for (const s of [undefined, 'sectional', 'raised_panel', 'carriage', 'roll_up', 'glass_panel', 'tilt_up']) {
+      const p = await mkPlanner([GD(s ? { garageStyle: s } : {})]);
+      drawAll(ctx, p, view, null);
+      sigs.push(rectDiff(blank, 0, 0, cvs.width - 1, cvs.height - 1));
+    }
+    ok('draw2d_garage_paints', sigs.every(n => n > 200), sigs.join(','));
+    ok('draw2d_style_agnostic', sigs.every(n => n === sigs[0]), sigs.join(','));
+  }
+
+  const n = results.length, pcount = results.filter(x => x.startsWith('ok')).length;
+  const pass = pcount === n;
+  document.title = `GARAGE ${pass ? 'PASS' : 'FAIL'} ${pcount}/${n} ${results.filter(x => !x.startsWith('ok')).join(' ')}`;
+  r.applyViewPreset('iso');
+ } catch (e) { document.title = 'ERR: ' + (e && e.stack ? e.stack.split('\n').slice(0,4).join(' | ') : e); }
+</script>

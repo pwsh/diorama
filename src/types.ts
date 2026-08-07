@@ -775,6 +775,17 @@ export type DimensionMode = 'off' | 'all' | 'outside' | 'custom';
 export type DoorKind = 'swing' | 'garage' | 'gate'
   | 'sliding' | 'pocket' | 'double' | 'french' | 'sliding_glass';
 
+// Overhead-door STYLING for `kind: 'garage'` — the drawn leaf only; every style
+// shares one span, one open fraction and the same lock/click machinery.
+//   sectional    — the classic 5-panel roll-up (ABSENT = this, byte-identical)
+//   raised_panel — sectional + embossed panel insets on each section
+//   carriage     — sectional in wood tone: centre seam, crossbuck, strap hinges
+//   roll_up      — steel curtain coiling onto an overhead drum (no ceiling fold)
+//   glass_panel  — full-view aluminium frame sections with translucent glazing
+//   tilt_up      — ONE-piece canopy slab pivoting at the head
+export type GarageStyle = 'sectional' | 'raised_panel' | 'carriage'
+  | 'roll_up' | 'glass_panel' | 'tilt_up';
+
 export interface Door {
   id: string;
   x: number; y: number;        // hinge point in world mm
@@ -782,6 +793,10 @@ export interface Door {
   rotation: number;            // panel direction (closed) in degrees, screen-CW; 0 = panel along +X world
   kind?: DoorKind;             // 'swing' (default, hinged panel) | 'garage' (segmented overhead door) | 'gate' (picket-styled swinging panel on a fence/hedge)
                                // | 'sliding' | 'pocket' | 'double' | 'french' | 'sliding_glass' (see DoorKind)
+  garageStyle?: GarageStyle;   // 'garage' kind only — which overhead-door LOOK to build (see GarageStyle).
+                               // Absent = 'sectional' = the classic 5-panel build, byte-identical. Item-level;
+                               // no repairFloor change (door arrays pass through), and style edits ride
+                               // configRev → the existing _keyDoors dirty key. Ignored by every other kind.
   entity_id: string | null;    // binary_sensor ("on" = open) OR cover.* ('open'/'closed', current_position for partial)
   label?: string;
   localState?: string;         // local control when UNBOUND ('on'=open/'off'); inert once bound. See Planner.effectiveState.

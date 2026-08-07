@@ -129,9 +129,9 @@
   }
   const bySurface = (s) => PACKS.reduce(
     (n, p) => n + p.models.filter(m => m.surfaces.includes(s)).length, 0);
-  eq('2l: 60 models across the eight packs', modelCount, 60);
+  eq('2l: 71 models across the eight packs', modelCount, 71);
   eq('2m: 34 of them tow banners', bySurface('banner'), 34);
-  eq('2m2: 26 of them are ground-placeable', bySurface('ground'), 26);
+  eq('2m2: 37 of them are ground-placeable', bySurface('ground'), 37);
   // The Space pack is the only one that carries BOTH surfaces (three launch
   // vehicles that fly, two rovers that drive).
   eq('2m3: the Space ▸ Real pack is the ground/banner crossover',
@@ -537,6 +537,227 @@
     }
     eq('8j2: the Space pack still flies three launch vehicles',
        byId('base-space-real').models.filter(m => m.vertical).length, 3);
+
+    // ═══ 9. Second-wave civil roster (2026-08-06) ═════════════════════════
+    // The eleven everyday street models. Every member already rides §2's
+    // generic sanity sweep; these are the per-member SIGNATURE-CUE pins —
+    // the same "a fix cannot silently revert" contract §8 gives the first
+    // wave, measured off the prim data, never eyeballed.
+    const WAVE2 = ['sedan', 'hatchback', 'minivan', 'delivery_van', 'box_truck',
+      'garbage_truck', 'tow_truck', 'rv_camper', 'tractor', 'golf_cart', 'bicycle'];
+    eq('9z: the civil pack carries 20 members', civil.models.length, 20);
+    eq('9z2: pack version bumped (thumb-cache key)', civil.version, 4);
+    for (const name of WAVE2) {
+      const id = `base-ground-civil/${name}`;
+      const m = mdl(id);
+      ok(`9a ${name}: member exists`, !!m);
+      if (!m) continue;
+      ok(`9b ${name}: resolves through the registry`, !!VEH.resolveVehicleDef(id));
+      const rec = VEH.vehicleRecipe(id);
+      ok(`9c ${name}: recipe converts`, !!rec);
+      if (rec) {
+        eq(`9d ${name}: recipe footprint == dims`,
+           `${rec.w}x${rec.h}x${rec.ht}`, `${m.dims[0]}x${m.dims[1]}x${m.dims[2]}`);
+        eq(`9e ${name}: recipe cat is vehicle`, rec.cat, 'vehicle');
+      }
+      eq(`9f ${name}: lenMm == declared depth`, m.lenMm, m.dims[1]);
+      eq(`9g ${name}: era tagged`, m.era, 'contemporary');
+      // Every part must TOUCH another (no floating trim) and no two parts may
+      // share an axis-aligned face plane (the flat-toon hatching gotcha).
+      const bs = m.prims.map(bb);
+      const ov = (a, b) => [0, 1, 2].every(i =>
+        Math.min(a.max[i], b.max[i]) - Math.max(a.min[i], b.min[i]) > 1);
+      let orphans = 0, coplanar = 0;
+      for (let i = 0; i < bs.length; i++) {
+        let touches = false;
+        for (let j = 0; j < bs.length; j++) {
+          if (i === j) continue;
+          if (!ov(bs[i], bs[j])) continue;
+          touches = true;
+          if (j > i) for (let k = 0; k < 3; k++) {
+            if (Math.abs(bs[i].max[k] - bs[j].max[k]) < 0.5
+                || Math.abs(bs[i].min[k] - bs[j].min[k]) < 0.5) coplanar++;
+          }
+        }
+        if (!touches) orphans++;
+      }
+      eq(`9h ${name}: no floating parts`, orphans, 0);
+      eq(`9i ${name}: no coplanar sibling faces`, coplanar, 0);
+    }
+
+    // Per-model signature cues.
+    {
+      // Sedan: a real THREE-box — the trunk deck sits aft of the cabin and
+      // below its roofline, and the belt trim is proud of the body sides.
+      const m = mdl('base-ground-civil/sedan');
+      const cabin = one(m, p => p.color === 'body' && p.size[2] === 2100, 'sedan-cabin');
+      const trunk = one(m, p => p.color === 'body' && p.pos[2] > 1000, 'sedan-trunk');
+      const trim = one(m, p => p.color === 'accent', 'sedan-trim');
+      const lower = m.prims[0];
+      if (cabin && trunk && trim) {
+        ge('9j: trunk deck is aft of the cabin', bb(trunk).min[2], bb(cabin).max[2] - 10);
+        le('9j2: trunk deck stays below the cabin roof', bb(trunk).max[1], bb(cabin).max[1]);
+        ge('9j3: belt trim is proud of the body sides', trim.size[0], lower.size[0] + 20);
+      }
+    }
+    {
+      // Hatchback: the rear screen is RAKED (rot about X) and lives at the tail.
+      const m = mdl('base-ground-civil/hatchback');
+      const screen = one(m, p => p.color === 'glass' && !!p.rot, 'hatch-screen');
+      const cabin = one(m, p => p.color === 'body' && p.size[2] === 2500, 'hatch-cabin');
+      if (screen && cabin) {
+        ok('9k: rear screen is raked', screen.rot[0] !== 0, String(screen.rot[0]));
+        ge('9k2: rear screen is at the tail', screen.pos[2], cabin.pos[2] + 800);
+        // Two-box: the cabin runs most of the length (no separate trunk box).
+        ge('9k3: cabin spans over half the vehicle', cabin.size[2], m.dims[1] * 0.5);
+      }
+    }
+    {
+      // Minivan: ONE box — a SLOPED short hood feeding a tall greenhouse, plus
+      // the sliding-door rub rail proud of the flanks.
+      const m = mdl('base-ground-civil/minivan');
+      const hood = one(m, p => p.color === 'body' && !!p.rot, 'van-hood');
+      const green = one(m, p => p.color === 'body' && p.size[2] === 3400, 'van-greenhouse');
+      const rail = one(m, p => p.color === 'accent', 'van-rail');
+      if (hood && green && rail) {
+        ok('9l: hood is sloped', hood.rot[0] !== 0, String(hood.rot[0]));
+        le('9l2: hood is short', hood.size[2], 1000);
+        ge('9l3: greenhouse is tall', bb(green).max[1], m.dims[2] * 0.9);
+        ge('9l4: rub rail proud of the body', rail.size[0], 1890);
+      }
+    }
+    {
+      // Delivery van: the cargo box is FLUSH with the cab (same roofline order)
+      // and its front overlaps the cab — one continuous body, not two lumps.
+      const m = mdl('base-ground-civil/delivery_van');
+      const cab = one(m, p => p.color === 'body' && p.size[2] === 1500, 'dv-cab');
+      const cargo = one(m, p => p.color === 'body' && p.size[2] === 4400, 'dv-cargo');
+      if (cab && cargo) {
+        ge('9m: cargo front overlaps the cab', bb(cab).max[2] - bb(cargo).min[2], 100);
+        ge('9m2: cargo box is tall', bb(cargo).max[1], m.dims[2] * 0.9);
+        le('9m3: cargo box is flush with the cab in width',
+           Math.abs(cargo.size[0] - cab.size[0]), 120);
+      }
+    }
+    {
+      // Box truck: a SEPARATE box, strictly taller AND wider than the cab, whose
+      // nose overhangs the cab roof.
+      const m = mdl('base-ground-civil/box_truck');
+      const cab = one(m, p => p.color === 'body' && p.size[1] === 1500, 'bt-cab');
+      const boxb = one(m, p => p.color === 'accent' && p.size[2] === 5050, 'bt-box');
+      const nose = one(m, p => p.color === 'accent' && p.size[1] === 700, 'bt-nose');
+      if (cab && boxb && nose) {
+        ge('9n: box is taller than the cab', bb(boxb).max[1] - bb(cab).max[1], 500);
+        ge('9n2: box is wider than the cab', boxb.size[0] - cab.size[0], 60);
+        ge('9n3: box nose overhangs the cab', bb(cab).max[2] - bb(nose).min[2], 500);
+        ge('9n4: …and sits on the cab roof', bb(nose).max[1], bb(cab).max[1] + 400);
+      }
+    }
+    {
+      // Garbage truck: cab-over (the cab reaches the nose), a SLOPED rear
+      // packer panel, and forks standing ahead of the cab.
+      const m = mdl('base-ground-civil/garbage_truck');
+      const cab = one(m, p => p.color === 'body' && p.size[2] === 1900, 'gt-cab');
+      const packer = one(m, p => p.color === 'body' && !!p.rot, 'gt-packer');
+      const forks = m.prims.filter(p => p.color === 'accent' && p.pos[2] < -4000);
+      if (cab && packer) {
+        le('9o: cab-over — the cab reaches the nose', bb(cab).min[2], -m.dims[1] / 2 + 400);
+        ok('9o2: rear packer is sloped', packer.rot[0] !== 0, String(packer.rot[0]));
+        ge('9o3: packer is at the tail', packer.pos[2], 3000);
+        eq('9o4: three front-loader fork parts', forks.length, 3);
+        le('9o5: forks stand ahead of the cab nose',
+           Math.max(...forks.map(f => bb(f).max[2])), bb(cab).min[2]);
+      }
+    }
+    {
+      // Tow truck: the deck TILTS (rear end lower than the front), an amber bar
+      // is seated on the cab roof, and the boom rises toward the rear.
+      const m = mdl('base-ground-civil/tow_truck');
+      const deck = one(m, p => p.color === 'accent' && p.size[2] === 4200, 'tt-deck');
+      const cab = one(m, p => p.color === 'body' && p.size[1] === 1200, 'tt-cab');
+      const bar = one(m, p => p.size[0] === 1600, 'tt-bar');
+      const boom = one(m, p => p.size[2] === 2800, 'tt-boom');
+      if (deck && cab && bar && boom) {
+        ok('9p: deck tilts rear-down', deck.rot && deck.rot[0] > 0, JSON.stringify(deck.rot));
+        le('9p2: light bar seated on the cab roof', bb(bar).min[1], bb(cab).max[1]);
+        ge('9p3: …and not sunk through it', bb(bar).min[1], bb(cab).max[1] - 120);
+        ok('9p4: boom rises toward the rear', boom.rot && boom.rot[0] < 0, JSON.stringify(boom.rot));
+        ge('9p5: boom tops out above the cab', bb(boom).max[1], bb(cab).max[1] + 400);
+      }
+    }
+    {
+      // RV camper: the class-C tell — a bunk box OVERHANGING the cab nose —
+      // plus the beltline stripe and a roof AC box seated on the coach.
+      const m = mdl('base-ground-civil/rv_camper');
+      const cab = one(m, p => p.color === 'body' && p.size[2] === 1800, 'rv-cab');
+      const bunk = one(m, p => p.color === 'body' && p.size[1] === 800, 'rv-bunk');
+      const coach = one(m, p => p.color === 'body' && p.size[2] === 5400, 'rv-coach');
+      const ac = one(m, p => p.color === 'accent' && p.size[0] === 900, 'rv-ac');
+      if (cab && bunk && coach && ac) {
+        le('9q: bunk overhangs the cab nose', bb(bunk).min[2], bb(cab).min[2] - 100);
+        ge('9q2: bunk sits above the cab', bb(bunk).min[1], bb(cab).max[1] - 120);
+        le('9q3: roof AC seated on the coach roof', bb(ac).min[1], bb(coach).max[1]);
+        ge('9q4: …and not sunk through it', bb(ac).min[1], bb(coach).max[1] - 120);
+      }
+    }
+    {
+      // Tractor: the whole point — BIG rear wheels, small front wheels.
+      const m = mdl('base-ground-civil/tractor');
+      const wheels = m.prims.filter(p => p.shape === 'cylinder' && p.rot && p.rot[2] === 90);
+      eq('9r: four road wheels', wheels.length, 4);
+      const rear = wheels.filter(w => w.pos[2] > 0), front = wheels.filter(w => w.pos[2] < 0);
+      eq('9r2: two rear + two front', `${rear.length}/${front.length}`, '2/2');
+      if (rear.length === 2 && front.length === 2) {
+        ge('9r3: rear wheels are much bigger', rear[0].size[0] / front[0].size[0], 1.7);
+        ok('9r4: every wheel still sits on the ground',
+           wheels.every(w => Math.abs(bb(w).min[1]) < 1), '');
+      }
+      const cab = one(m, p => p.color === 'body' && p.size[2] === 1500, 'tr-cab');
+      if (cab) ge('9r5: cab is set high over the rear axle', bb(cab).min[1], 1400);
+    }
+    {
+      // Golf cart: OPEN sides — no glass at all — under four posts and a flat
+      // canopy, with the bag rack off the tail.
+      const m = mdl('base-ground-civil/golf_cart');
+      eq('9s: no glass anywhere (open sides)', m.prims.filter(p => p.color === 'glass').length, 0);
+      const posts = m.prims.filter(p => p.shape === 'box' && p.size[0] === 80 && p.size[1] === 900);
+      eq('9s2: four canopy posts', posts.length, 4);
+      const roof = one(m, p => p.color === 'accent' && p.size[2] === 1900, 'gc-roof');
+      if (roof && posts.length === 4) {
+        ge('9s3: canopy sits on top of the posts',
+           bb(roof).min[1], Math.max(...posts.map(q => bb(q).max[1])) - 60);
+        le('9s4: canopy stays near the declared height', bb(roof).max[1], m.dims[2]);
+      }
+      const rack = m.prims.filter(p => p.color === 'accent' && p.pos[2] > 800);
+      eq('9s5: two bag-rack parts at the tail', rack.length, 2);
+      const wheels = m.prims.filter(p => p.shape === 'cylinder');
+      ok('9s6: tiny wheels', wheels.length === 4 && wheels.every(w => w.size[0] <= 260),
+         JSON.stringify(wheels.map(w => w.size[0])));
+    }
+    {
+      // Bicycle: two big thin wheels + an angled diamond frame.
+      const m = mdl('base-ground-civil/bicycle');
+      const wheels = m.prims.filter(p => p.shape === 'cylinder' && p.rot && p.rot[2] === 90
+        && p.color === 'dark' && p.size[0] >= 300);
+      eq('9t: exactly two road wheels', wheels.length, 2);
+      if (wheels.length === 2) {
+        ok('9t2: wheels are big and thin',
+           wheels.every(w => w.size[0] >= 300 && w.size[2] <= 80),
+           JSON.stringify(wheels.map(w => [w.size[0], w.size[2]])));
+        ok('9t3: both wheels roll on the ground',
+           wheels.every(w => Math.abs(bb(w).min[1]) < 1), '');
+      }
+      const tubes = m.prims.filter(p => p.shape === 'box' && p.rot && p.rot[0] !== 0);
+      ge('9t4: at least five angled frame tubes', tubes.length, 5);
+      ok('9t5: every frame tube is slim (<= 160 mm across)',
+         tubes.every(t => t.size[0] <= 160), JSON.stringify(tubes.map(t => t.size[0])));
+      const bar = one(m, p => p.shape === 'cylinder' && p.size[2] >= 400, 'bike-bar');
+      const saddle = one(m, p => p.color === 'dark' && p.shape === 'box', 'bike-saddle');
+      if (bar && saddle) {
+        ge('9t6: handlebar is up front', -bar.pos[2], 300);
+        ge('9t7: saddle is behind the handlebar', saddle.pos[2] - bar.pos[2], 600);
+      }
+    }
   }
 
   const passN = checks.filter(c => c.pass).length, total = checks.length;

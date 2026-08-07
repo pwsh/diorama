@@ -315,8 +315,8 @@ function customCards(p: Planner): ToolCard[] {
 // Placeable vehicle models from every LOADED + ACTIVE vehicle pack
 // (src/vehicles.ts). The gate is the declared SURFACE, not the taxonomy
 // category: a craft that only tows banners has no ground placement, while the
-// Space pack's surface rovers legitimately do. Empty when every pack is off,
-// which hides the whole tab.
+// Space pack's surface rovers legitimately do. Empty when every pack is off —
+// the single "Vehicles" tab then shows just its furniture kinds.
 function vehicleCards(): ToolCard[] {
   const out: ToolCard[] = [];
   for (const { def, models } of listActiveVehiclePacks()) {
@@ -338,7 +338,6 @@ function vehicleCards(): ToolCard[] {
 
 // ── The model ──────────────────────────────────────────────────────────────────
 export function buildToolbarModel(p: Planner): ToolCategory[] {
-  const vehModels = vehicleCards();
   return [
     { id: 'furniture', label: 'Furniture', glyph: '🛋', cards: furnitureCards('furniture') },
     { id: 'appliance', label: 'Appliances', glyph: '🔌', cards: furnitureCards('appliance') },
@@ -349,11 +348,16 @@ export function buildToolbarModel(p: Planner): ToolCategory[] {
       // Outdoor furniture kinds + the flagpole fixture (yard decor with its own tool).
       cards: [...furnitureCards('outdoor'), controlCardLike('tool:flagpole', 'Flagpole', '🚩', 'flagpole')],
     },
-    { id: 'vehicle', label: 'Vehicle', glyph: '🚗', cards: furnitureCards('vehicle') },
-    // Vehicle MODEL packs — hidden entirely when every pack is unloaded/inactive.
-    ...(vehModels.length
-      ? [{ id: 'vehicles', label: 'Vehicles', glyph: '🚙', cards: vehModels }]
-      : []),
+    // ONE Vehicles tab: the `vehicle`-cat furniture kinds (car, EV charger)
+    // FIRST, then every placeable vehicle-pack model. There used to be a second
+    // conditional 'vehicles' tab for the pack models — two adjacent car tabs
+    // read as a bug. With no pack loaded+active this is exactly the old
+    // 'vehicle' tab; the tab ID stays 'vehicle' (nothing persists it, but the
+    // stable id keeps external references — tests, docs — working).
+    {
+      id: 'vehicle', label: 'Vehicles', glyph: '🚗',
+      cards: [...furnitureCards('vehicle'), ...vehicleCards()],
+    },
     { id: 'lights', label: 'Lights', glyph: '💡', cards: lightCards() },
     { id: 'controls', label: 'Controls & Sensors', glyph: '🎛', cards: CONTROL_TOOLS.map(controlCard) },
     { id: 'structure', label: 'Structure', glyph: '🧱', cards: structureCards() },

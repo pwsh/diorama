@@ -172,14 +172,15 @@
     const missBolt = [], wrongWalk = [];
     for (const a of asm) {
       const bolts = meshesOf(a).filter(m => m.userData.kind === 'lock');
-      // The GARAGE kind deliberately builds no deadbolt (an overhead door has no
-      // latch stile — its branch returns before addLockBolts). Pre-existing, and
-      // exactly why the door PANEL had to become clickable: a garage door had no
-      // 3D click target at all before this batch.
+      // The GARAGE kind used to build NO deadbolt (its branch returned before
+      // addLockBolts) — that is why the door PANEL had to become clickable.
+      // Since the garage-style batch it carries a bottom-rail T-handle that
+      // rides the leaf, gated to frac < GARAGE_LOCK_MAX_FRAC (a mostly-open
+      // overhead door has nothing left to secure). These fixtures are CLOSED,
+      // so the bolts must be present — and they walk like every other kind.
       if (a.userData.fixtureId === 'd_garage') {
-        ok('3a0 the garage kind has no deadbolt (panel click is its only 3D route)',
-           bolts.length === 0, String(bolts.length));
-        continue;
+        ok('3a0 the garage kind builds a bottom-rail deadbolt while closed',
+           bolts.length === 2, String(bolts.length));
       }
       if (!bolts.length) { missBolt.push(a.userData.fixtureId); continue; }
       for (const b of bolts) {
@@ -190,7 +191,7 @@
       }
     }
     ok('3a every other door kind builds lock deadbolts when a lock state exists',
-       missBolt.length === 0, missBolt.join(',') || 'all 7 latching kinds');
+       missBolt.length === 0, missBolt.join(',') || 'all 8 door kinds');
     ok('3b a deadbolt mesh resolves to kind="lock" (NOT the enclosing door)',
        wrongWalk.length === 0, wrongWalk.join(' ') || 'lock beats panel everywhere');
     // …and the same door still resolves 'door' from a non-bolt mesh.

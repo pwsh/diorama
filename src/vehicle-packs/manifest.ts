@@ -34,7 +34,7 @@ export const VEHICLE_PACK_MANIFEST: VehiclePackManifestRow[] = [
     load: () => import('./base-space-real.js') },
   { id: 'franchise-space-fiction', label: 'Fiction', path: ['Space', 'Fiction'], count: 4,
     franchise: true, load: () => import('./franchise-space-fiction.js') },
-  { id: 'base-ground-civil', label: 'Civil', path: ['Ground Vehicles', 'Civil'], count: 9,
+  { id: 'base-ground-civil', label: 'Civil', path: ['Ground Vehicles', 'Civil'], count: 20,
     load: () => import('./base-ground-civil.js') },
   { id: 'base-ground-military', label: 'Military & Historical',
     path: ['Ground Vehicles', 'Military & Historical'], count: 7,

@@ -412,6 +412,89 @@
       }
       void compOk;
     }
+
+    // ═══ H. ONE merged Vehicles tab (2026-08-06) ═══
+    // The `vehicle`-cat furniture kinds and the vehicle-PACK models used to
+    // live in two adjacent tabs ('vehicle' + a conditional 'vehicles'), which
+    // read as a duplicate. They are now one always-present tab keyed 'vehicle':
+    // furniture kinds first, pack models after, and with every pack off it
+    // degrades to exactly the old furniture-only tab.
+    document.getElementById('rows').insertAdjacentHTML('beforeend', '<h2>H. merged Vehicles tab</h2>');
+    {
+      // Pack bodies hydrate asynchronously on connect (dynamic import).
+      await waitFor(() => cat(buildToolbarModel(p), 'vehicle').cards
+        .some(c => c.thumb.type === 'vehicle'), 900);
+      model = buildToolbarModel(p);
+
+      const vehTabs = model.filter(c => c.id === 'vehicle' || c.id === 'vehicles');
+      ok('H1: exactly one vehicle tab', vehTabs.length === 1,
+        `ids=${vehTabs.map(t => t.id).join(',')}`);
+      ok('H2: the retired "vehicles" tab id is gone',
+        model.every(c => c.id !== 'vehicles'), model.map(c => c.id).join(','));
+      const veh = cat(model, 'vehicle');
+      ok('H3: tab id stays "vehicle", label is "Vehicles"',
+        veh && veh.id === 'vehicle' && veh.label === 'Vehicles', `${veh?.id}/${veh?.label}`);
+
+      const furnKeys = veh.cards.filter(c => c.thumb.type === 'furniture').map(c => c.thumb.kind);
+      ok('H4: the vehicle-cat furniture kinds are in the tab',
+        furnKeys.includes('car') && furnKeys.includes('ev_charger'), furnKeys.join(','));
+      const modelCards = veh.cards.filter(c => c.thumb.type === 'vehicle');
+      ok('H5: pack models are in the SAME tab', modelCards.length > 0, `n=${modelCards.length}`);
+      // No other tab may carry vehicle-model cards.
+      ok('H6: no vehicle-model cards leak into other tabs',
+        model.filter(c => c.id !== 'vehicle').flatMap(c => c.cards)
+             .every(c => c.thumb.type !== 'vehicle'), '');
+      // Ordering: furniture kinds FIRST, then pack models.
+      const lastFurn = veh.cards.map(c => c.thumb.type).lastIndexOf('furniture');
+      const firstModel = veh.cards.map(c => c.thumb.type).indexOf('vehicle');
+      ok('H7: furniture kinds come before the pack models', lastFurn < firstModel,
+        `lastFurn=${lastFurn} firstModel=${firstModel}`);
+
+      // The second wave of civil ground models is reachable from the tab.
+      const ids = modelCards.map(c => c.thumb.id);
+      const WANT = ['sedan', 'hatchback', 'minivan', 'delivery_van', 'box_truck',
+        'garbage_truck', 'tow_truck', 'rv_camper', 'tractor', 'golf_cart', 'bicycle'];
+      const missing = WANT.filter(n => !ids.includes(`base-ground-civil/${n}`));
+      ok('H8: the eleven new civil models are all offered', missing.length === 0,
+        `missing=${missing.join(',')}`);
+      ok('H9: every model card carries a versioned vehicle thumb descriptor',
+        modelCards.every(c => c.thumb.type === 'vehicle' && !!c.thumb.id && !!c.thumb.ver), '');
+
+      // Arming a model card is the armVehicle path (and it un-arms the kinds).
+      const sedan = modelCards.find(c => c.thumb.id === 'base-ground-civil/sedan');
+      sedan.arm(p);
+      ok('H10: model card arms pendingVehicleModelId',
+        p.tool === 'furniture' && p.pendingVehicleModelId === 'base-ground-civil/sedan'
+        && p.pendingCustomObjectId == null,
+        `${p.tool}/${p.pendingVehicleModelId}/${p.pendingCustomObjectId}`);
+      model = buildToolbarModel(p);
+      const veh2 = cat(model, 'vehicle');
+      ok('H11: the armed model card rings',
+        veh2.cards.find(c => c.thumb.id === 'base-ground-civil/sedan').isArmed(p), '');
+      ok('H12: a furniture kind in the same tab does NOT ring',
+        veh2.cards.filter(c => c.thumb.type === 'furniture').every(c => !c.isArmed(p)), '');
+      // Arming a plain kind clears the vehicle model.
+      veh2.cards.find(c => c.thumb.kind === 'car').arm(p);
+      ok('H13: arming a kind clears pendingVehicleModelId',
+        p.pendingVehicleModelId == null && p.pendingFurnitureKind === 'car',
+        `${p.pendingVehicleModelId}/${p.pendingFurnitureKind}`);
+
+      // With every pack deactivated the tab survives with just the kinds.
+      const packIds = [...new Set(ids.map(id => id.split('/')[0]))];
+      for (const id of packIds) p.setVehiclePackActive(id, false);
+      model = buildToolbarModel(p);
+      const veh3 = cat(model, 'vehicle');
+      ok('H14: tab still present with every pack off', !!veh3, '');
+      ok('H15: …and shows exactly the furniture kinds',
+        veh3.cards.length === furnKeys.length
+        && veh3.cards.every(c => c.thumb.type === 'furniture'),
+        `n=${veh3.cards.length} want=${furnKeys.length}`);
+      for (const id of packIds) p.setVehiclePackActive(id, true);
+      model = buildToolbarModel(p);
+      ok('H16: re-activating the packs restores the models',
+        cat(model, 'vehicle').cards.filter(c => c.thumb.type === 'vehicle').length === modelCards.length,
+        `${cat(model, 'vehicle').cards.filter(c => c.thumb.type === 'vehicle').length} vs ${modelCards.length}`);
+    }
   } catch (err) {
     ok('FATAL', false, (err && err.stack) || String(err));
   }

@@ -733,6 +733,12 @@
       ok('L3 …and NOT at the loop centroid',
          s && Math.hypot(s.position.x - (fw / 2 - 5000), s.position.z - (4500 - fd / 2)) > 1000,
          'distinct');
+      // 2026-08-06 (user-reported "labels cut into the floor"): the 360 mm-tall
+      // billboard sits ~50 mm above the slab, so a CENTER anchor hung its lower
+      // half below floor level (depth-clipped at shallow angles). Bottom anchor.
+      ok('L4 the sprite is BOTTOM-anchored (center.y = 0), never dipping below the slab',
+         s && s.center.y === 0 && s.center.x === 0.5,
+         s ? `center ${s.center.x},${s.center.y}` : 'none');
       r.destroy();
     }
 

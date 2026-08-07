@@ -399,6 +399,40 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Garage door styles + garage lock + open-% readout; vehicle toolbar
+  merge + 11 common civil models; vehicle "block" naming fix; room labels
+  bottom-anchored** (2026-08-06, four user requests in one window;
+  unreleased — on main past v0.62.0). (1) `Door.garageStyle?` — six styles
+  (sectional = the pre-feature 5-slat build BIT-identical when absent,
+  golden-pinned; raised_panel / carriage / roll_up coil-drum (no ceiling
+  fold) / glass_panel / tilt_up one-piece canopy), sidebar-only Style
+  dropdown, no new dirty-key input. Garage doors JOIN the lock machinery
+  (the old "garage draws no padlock" exclusion is gone everywhere — 3D
+  bottom-rail T-handle riding the leaf gated frac < 0.6, 2D padlock,
+  hitDoorLock, raycast lock-beats-panel) and every style gets an open-%
+  readout (3D camera-facing badge sprite 0.02<frac<0.98 — _doorGroup
+  gained the _disposeSpriteMaps pairing — + 2D progress bar stacked ABOVE
+  the % pill; below smeared into the door stroke, caught empirically).
+  New `garage-test.html` GARAGE 99/99; opening-click's garage-has-no-
+  deadbolt assertion INVERTED (39/39 preserved); DOORKINDS 97, COVERS 22.
+  (2) Toolbar: ONE always-present "Vehicles" tab (id 'vehicle') = car +
+  ev_charger furniture kinds first, pack models after; the conditional
+  pack tab (id 'vehicles') is retired. base-ground-civil v4: 9 → 20
+  members (sedan, hatchback, minivan, delivery_van, box_truck,
+  garbage_truck, tow_truck, rv_camper, tractor, golf_cart, bicycle) —
+  AABB-audited (parts interpenetrate, no coplanar sibling faces, both
+  test-pinned §9h/§9i; NB the ORIGINAL 9 mildly fail that audit and are
+  shipped-pinned — cheap follow-up). TOOLBAR 54→70, VEHICLEPACK
+  1006→1326, VEHICLEBUILD 388→535, VEHICLECRAFT 483 unaffected.
+  (3) Vehicle pieces no longer display as "Block": sidebar furniture row
+  (+ type chip "Vehicle"), label placeholder and ruler captions resolve
+  through resolveFurnitureDef. (4) 3D room-name sprites BOTTOM-anchored
+  (sprite.center y=0, the bubble-tail idiom) — the 360 mm billboard at
+  y≈50 had its lower half depth-clipped by the slab at shallow angles
+  ("labels cut into the floor"); VERTEXINSERT 109→110 (L4 pin). Both
+  implementation batches ran as parallel Opus agents on disjoint files;
+  all gates re-verified independently on the combined tree.
+
 - **Wall-cutaway ease made frame-rate-independent + demo republish**
   (2026-08-06; v0.62.0). (1) The cutaway
   fade's fixed 0.1/frame factor → exact closed form

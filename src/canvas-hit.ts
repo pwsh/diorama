@@ -266,10 +266,11 @@ export function hitDoor(p: Planner, view: View, mm: Vec2): { door: Door; idx: nu
   return null;
 }
 
-// The small padlock glyph near a swing door's hinge (drawn at screen offset
-// (-9, -11) dpr from the hinge). Only clickable when the door carries a lock
-// binding (bound lockEntity OR unbound lockLocalState). Wins over the door-panel
-// hit within its small radius so a lock toggle doesn't also open the door.
+// The small padlock glyph near a door's hinge (drawn at screen offset
+// (-9, -11) dpr from the hinge, for EVERY kind incl. garage). Only clickable
+// when the door carries a lock binding (bound lockEntity OR unbound
+// lockLocalState). Wins over the door-panel hit within its small radius so a
+// lock toggle doesn't also open the door.
 export function hitDoorLock(p: Planner, view: View, mm: Vec2): { door: Door; idx: number } | null {
   if (!openingsVisible(p)) return null;
   const f = p.floor();
@@ -277,7 +278,6 @@ export function hitDoorLock(p: Planner, view: View, mm: Vec2): { door: Door; idx
   const tol = Math.max(60, (11 * dpr) / Math.max(view.scale, 1e-9));
   for (let i = f.doors.length - 1; i >= 0; i--) {
     const d = f.doors[i];
-    if ((d.kind ?? 'swing') === 'garage') continue;   // garage doors draw no padlock
     if (!d.lockEntity && !d.lockLocalState) continue;
     // Display-only locks are passive indicators: drop them from hit-testing so
     // the padlock loses its click-priority over the door panel (clicks fall

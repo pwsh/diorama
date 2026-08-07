@@ -4649,7 +4649,9 @@ function drawDoors(ctx: CanvasRenderingContext2D, p: Planner, view: View): void 
       ctx.beginPath(); ctx.arc(px.x, px.y, 5 * dpr, 0, 2 * Math.PI); ctx.fill(); ctx.stroke();
     };
     // Lock-state padlock near the hinge (+ low-battery badge). Same click target
-    // as the swing door (hitDoorLock); garage doors deliberately draw none.
+    // as the swing door (hitDoorLock). Drawn for EVERY kind incl. garage — the
+    // glyph sits at the hinge corner, not on the leaf, so it reads at any
+    // open fraction (the 3D deadbolt rides the leaf and hides past 60 % open).
     const lockGlyph = () => {
       if (!d.lockEntity && !d.lockLocalState) return;
       const lst = p.doorLockState(d);
@@ -4693,7 +4695,23 @@ function drawDoors(ctx: CanvasRenderingContext2D, p: Planner, view: View): void 
         ctx.setLineDash([]);
       }
       endHandle(sep);
-      pill((hinge.x + sep.x) / 2, (hinge.y + sep.y) / 2 - 12 * dpr, 'Garage', true);
+      const gx = (hinge.x + sep.x) / 2, gy = (hinge.y + sep.y) / 2 - 12 * dpr;
+      pill(gx, gy, 'Garage', true);
+      // Open-percentage bar stacked with the pill, while genuinely PARTIAL. The
+      // pill already prints the number; the bar makes "a third up" glanceable at
+      // plan zoom where reading 2-digit text is a squint. It sits ABOVE the pill
+      // plate, not below: the plate's bottom edge (gy + 7·dpr) is only 2.5 px
+      // clear of the 5 px-wide door line at the span centre, so a 3 px bar under
+      // it would smear across the opening glyph.
+      const gPct = Math.round(frac * 100);
+      if (gPct >= 1 && gPct <= 99) {
+        const bw = 30 * dpr, bh = 3 * dpr, by = gy - 11 * dpr;
+        ctx.fillStyle = 'rgba(144,164,174,0.35)';
+        ctx.fillRect(gx - bw / 2, by, bw, bh);
+        ctx.fillStyle = color;
+        ctx.fillRect(gx - bw / 2, by, bw * frac, bh);
+      }
+      lockGlyph();
       continue;
     }
 
