@@ -44,10 +44,13 @@
   });
 
   const garageDoor = { id: 'g1', x: 2000, y: wallY, w: 2400, rotation: 0, kind: 'garage', entity_id: 'cover.g' };
-  // slats = direct mesh children of the hinge group (exclude inverted-hull outline shells).
+  // slats = direct mesh children of the hinge group, excluding inverted-hull
+  // outline shells AND the overhead hardware (vertical tracks, ceiling rails,
+  // curve, opener rail, motor head — all tagged userData.garageHw). The
+  // exterior pull is a CHILD of the bottom slat, so it never appears here.
   const slatsOf = () => {
     const hinge = r._doorGroup.children[0];
-    return hinge.children.filter(c => c.isMesh && !c.userData.outline);
+    return hinge.children.filter(c => c.isMesh && !c.userData.outline && !c.userData.garageHw);
   };
   const setGarage = (frac) => {
     const state = frac <= 0 ? 'closed' : 'open';

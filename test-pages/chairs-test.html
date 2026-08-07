@@ -1,0 +1,360 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>chairs test</title>
+<style>html,body{margin:0;background:#111;color:#ccc;font:12px sans-serif}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<!--
+  CHAIR STYLES — armchair / office_chair / bar_stool / wingback_chair /
+  folding_chair / gaming_chair (2026-08, user: "create more styles of chairs
+  for different rooms and uses").
+
+  Modules (transpile into the harness dir before serving):
+    npx esbuild src/geometry.ts      --bundle --format=esm --outfile=<harness>/geometry.mod.js
+    npx esbuild src/canvas-render.ts --bundle --format=esm --outfile=<harness>/canvas-render.mod.js
+    (the built three-renderer chunk + its assets/ siblings are copied next to
+     this file from dist/, like the other 3D renderer pages)
+
+  Asserts:
+   (A) defs: all six exist in the `seating` cat with a real `seat` height below
+       their body height, the authored footprints, and NO `activity` of their
+       own — eat/work must resolve from an adjacent HOST table/desk, exactly
+       like a plain `chair`.
+   (B) the seat predicates pick them up with NO membership list. Both
+       `resolveSeatTableCollision` (tuck limit) and `seatBelongsToTable`
+       (table-carry group move) gate purely on `def.seat` being set, so each new
+       kind rides along; negative-controlled against a `dresser` (no seat).
+   (C) 3D builds, each with its distinguishing feature: 5 star-base spokes +
+       5 casters (office / gaming), 2 wing panels (wingback), a footring and a
+       seat disc whose TOP lands exactly at the 750 mm def seat (bar stool),
+       6 slim frame tubes (folding), thick full-depth arms (armchair), bright
+       accent panels (gaming).
+   (D) each registers EXACTLY ONE SitSpot, at its own def.seat height — the
+       default single-centered-spot path, no per-kind distribution.
+   (E) every one casts a blob shadow (they sit on the floor).
+   (F) host-activity resolution: a bar stool at an ISLAND perches with NO
+       activity (counters/islands are deliberately not eat/work hosts — parity
+       with the existing `stool`), while the same stool at a TABLE resolves
+       eat_at_table + the table top height for the seated arm IK.
+   (G) 2D glyphs: every kind paints something, and all six signatures are
+       pairwise DISTINCT (they must read apart in the plan).
+
+  Toolbar coverage is NOT duplicated here: toolbar-test.html already asserts
+  A1/A3 (every FURNITURE_KINDS kind maps to exactly one card) and I4 (every
+  card in the Seating tab has cat 'seating'), so cat === 'seating' below is
+  the whole hook the toolbar keys off.
+-->
+<script type="module">
+  const G = await import('./geometry.mod.js');
+  const CR = await import('./canvas-render.mod.js');
+  const mod = await import('./assets/three-renderer.js?v=' + Date.now());
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+
+  const tests = [];
+  const ok = (name, cond, detail) => tests.push({ name, ok: !!cond, detail });
+  const near = (a, b, tol = 1e-6) => Number.isFinite(a) && Math.abs(a - b) <= tol;
+
+  const CHAIRS = ['armchair', 'office_chair', 'bar_stool', 'wingback_chair',
+                  'folding_chair', 'gaming_chair'];
+  // Authored spec (w × h footprint, body height, seat height).
+  const SPEC = {
+    armchair:       { w: 900, h: 850, ht: 750,  seat: 420 },
+    office_chair:   { w: 660, h: 660, ht: 1150, seat: 480 },
+    bar_stool:      { w: 420, h: 420, ht: 1000, seat: 750 },
+    wingback_chair: { w: 820, h: 850, ht: 1150, seat: 430 },
+    folding_chair:  { w: 470, h: 500, ht: 800,  seat: 440 },
+    gaming_chair:   { w: 700, h: 700, ht: 1300, seat: 470 },
+  };
+
+  // ══ (A) defs ══════════════════════════════════════════════════════════════
+  for (const k of CHAIRS) {
+    const d = G.FURNITURE_KINDS[k];
+    ok(`A1:${k} is a real FURNITURE_KINDS entry with a label`, !!d && !!d.label, d?.label);
+    if (!d) continue;
+    ok(`A2:${k} is in the seating cat`, d.cat === 'seating', `cat=${d.cat}`);
+    ok(`A3:${k} carries a real seat height below the body height`,
+       Number.isFinite(d.seat) && d.seat > 0 && d.seat < d.ht, `seat=${d.seat} ht=${d.ht}`);
+    const s = SPEC[k];
+    ok(`A4:${k} footprint + heights match the authored spec`,
+       d.w === s.w && d.h === s.h && d.ht === s.ht && d.seat === s.seat,
+       `${d.w}x${d.h} ht=${d.ht} seat=${d.seat}`);
+    // A chair must NOT anchor its own activity — that would make it its own
+    // eat/work surface (the custom-recipe path) and skip the host lookup.
+    ok(`A5:${k} authors no activity of its own`, d.activity == null, `activity=${d.activity}`);
+    ok(`A6:${k} keeps the front chevron (asymmetric seating)`, d.frontArrow !== false, '');
+  }
+  {
+    const dims = CHAIRS.map(k => `${G.FURNITURE_KINDS[k].w}x${G.FURNITURE_KINDS[k].h}x${G.FURNITURE_KINDS[k].ht}`);
+    ok('A7 the six styles have six distinct volumes', new Set(dims).size === 6, dims.join(' '));
+    ok('A8 bar_stool is the only counter-height perch (seat > 600)',
+       CHAIRS.filter(k => G.FURNITURE_KINDS[k].seat > 600).join(',') === 'bar_stool',
+       CHAIRS.map(k => `${k}=${G.FURNITURE_KINDS[k].seat}`).join(' '));
+  }
+
+  // ══ (B) seat predicates ride `def.seat`, not a kind list ══════════════════
+  {
+    // A table at the origin; a chair dropped dead-centre UNDER it must be
+    // pushed back out to the footprint edge + 150 mm (SEAT_TUCK_CLEAR_MM).
+    const tdef = G.FURNITURE_KINDS.table;
+    const table = { id: 't', x: 0, y: 0, w: tdef.w, h: tdef.h, kind: 'table', rotation: 0 };
+    for (const k of CHAIRS) {
+      const chair = { id: 'c', x: 0, y: 0, w: 500, h: 500, kind: k, rotation: 0 };
+      const moved = G.resolveSeatTableCollision(chair, [table, chair]);
+      const outside = Math.abs(chair.x) >= tdef.w / 2 || Math.abs(chair.y) >= tdef.h / 2;
+      ok(`B1:${k} is pushed out from under a table (seat-tuck limit)`,
+         moved && outside, `moved=${moved} at ${chair.x},${chair.y}`);
+      // …and once parked at the tuck distance it still "belongs to" the table,
+      // so a table MOVE carries it (canvas-interact's carryTuckedSeatsWithTable).
+      ok(`B2:${k} still counts as tucked to the table for the group move`,
+         G.seatBelongsToTable(table.x, table.y, table.rotation, table.w, table.h, chair.x, chair.y),
+         `${chair.x},${chair.y}`);
+    }
+    // Negative control: a seat-less piece is invisible to BOTH halves.
+    const dresser = { id: 'd', x: 0, y: 0, w: 500, h: 500, kind: 'dresser', rotation: 0 };
+    ok('B3 a seat-less piece (dresser) is NOT tucked out — the predicate is def.seat',
+       G.resolveSeatTableCollision(dresser, [table, dresser]) === false
+       && dresser.x === 0 && dresser.y === 0, `${dresser.x},${dresser.y}`);
+    // …and a chair far across the room is not carried.
+    ok('B4 a chair across the room does not belong to the table',
+       !G.seatBelongsToTable(0, 0, 0, tdef.w, tdef.h, 6000, 0), '');
+  }
+
+  // ══ (C) 3D builds + distinguishing features ══════════════════════════════
+  const build = (kind, extra = {}) => {
+    const d = G.FURNITURE_KINDS[kind];
+    return r._buildFurniture({ id: 'x_' + kind, x: 0, y: 0, w: d.w, h: d.h, kind, rotation: 0, ...extra });
+  };
+  // Real body meshes only — outline shells share their host's geometry and are
+  // marked userData.outline, so they must never be counted.
+  const bodies = (grp) => {
+    const out = [];
+    grp.traverse(o => { if (o.isMesh && !o.userData.outline) out.push(o); });
+    return out;
+  };
+  const tagged = (grp, tag) => bodies(grp).filter(o => o.userData[tag] === true);
+
+  const built = {};
+  for (const k of CHAIRS) {
+    const grp = build(k);
+    built[k] = grp;
+    grp.updateMatrixWorld(true);
+    const n = bodies(grp).length;
+    ok(`C1:${k} builds a real composite group`, !!grp && n >= 5, `bodies=${n}`);
+  }
+  for (const k of ['office_chair', 'gaming_chair']) {
+    ok(`C2:${k} builds a 5-star caster base`,
+       tagged(built[k], 'chairStarLeg').length === 5, `spokes=${tagged(built[k], 'chairStarLeg').length}`);
+    ok(`C2b:${k} puts a caster at each of the five tips`,
+       tagged(built[k], 'chairCaster').length === 5, `casters=${tagged(built[k], 'chairCaster').length}`);
+    {
+      // The spokes really RADIATE: the five tip casters sit at (near) equal
+      // radius and five distinct bearings.
+      const cs = tagged(built[k], 'chairCaster').map(o => ({ x: o.position.x, z: o.position.z }));
+      const radii = cs.map(p => Math.hypot(p.x, p.z));
+      const spread = Math.max(...radii) - Math.min(...radii);
+      const bearings = new Set(cs.map(p => Math.round(Math.atan2(p.z, p.x) * 180 / Math.PI)));
+      ok(`C2c:${k} casters sit on one circle at five distinct bearings`,
+         spread < 1e-6 && bearings.size === 5 && radii[0] > 150,
+         `r=${radii[0].toFixed(1)} spread=${spread.toExponential(1)} bearings=${bearings.size}`);
+    }
+    ok(`C2d:${k} has a tilted back + a headrest`,
+       tagged(built[k], 'chairBack').length === 1 && tagged(built[k], 'chairHeadrest').length === 1
+       && tagged(built[k], 'chairBack')[0].rotation.x > 0.05, '');
+  }
+  ok('C3 only the racing chair carries bright accent panels',
+     tagged(built.gaming_chair, 'chairAccent').length >= 3
+     && tagged(built.office_chair, 'chairAccent').length === 0,
+     `gaming=${tagged(built.gaming_chair, 'chairAccent').length}`);
+  ok('C3b the racing chair adds bucket bolsters (seat + back)',
+     tagged(built.gaming_chair, 'chairBolster').length === 4
+     && tagged(built.office_chair, 'chairBolster').length === 0,
+     `n=${tagged(built.gaming_chair, 'chairBolster').length}`);
+  ok('C4 the wingback builds exactly two wing panels, one per side',
+     tagged(built.wingback_chair, 'chairWing').length === 2
+     && tagged(built.wingback_chair, 'chairWing').some(o => o.position.x > 0)
+     && tagged(built.wingback_chair, 'chairWing').some(o => o.position.x < 0),
+     `wings=${tagged(built.wingback_chair, 'chairWing').length}`);
+  ok('C4b the wings are yawed inward (angled forward around the sitter)',
+     tagged(built.wingback_chair, 'chairWing').every(o => Math.abs(o.rotation.y) > 0.2), '');
+  ok('C4c the wingback rolls the top of each arm (2 roll cylinders)',
+     tagged(built.wingback_chair, 'chairArmRoll').length === 2, '');
+  {
+    // Bar stool: a footring, four splayed legs, and a seat disc whose TOP is
+    // exactly the def seat height (750) — that's what puts the sitter at a
+    // counter, so it is pinned rather than eyeballed.
+    const fr = tagged(built.bar_stool, 'stoolFootring');
+    ok('C5 the bar stool has exactly one footring, well below the seat',
+       fr.length === 1 && fr[0].position.y > 50 && fr[0].position.y < SPEC.bar_stool.seat * 0.5,
+       `y=${fr[0]?.position.y.toFixed(1)}`);
+    const legs = tagged(built.bar_stool, 'chairLeg');
+    ok('C5b four legs, each SPLAYED (re-aimed off vertical)',
+       legs.length === 4 && legs.every(o => Math.abs(o.quaternion.x) + Math.abs(o.quaternion.z) > 1e-3),
+       `legs=${legs.length}`);
+    const disc = tagged(built.bar_stool, 'stoolSeatDisc')[0];
+    const discTop = disc ? disc.position.y + disc.geometry.parameters.height / 2 : NaN;
+    ok('C5c the round seat disc tops out exactly at the 750 mm def seat',
+       !!disc && disc.geometry.type === 'CylinderGeometry' && near(discTop, SPEC.bar_stool.seat, 1e-6),
+       `top=${discTop}`);
+  }
+  {
+    // Folding chair: six slim frame tubes (two crossing X limbs + a back post
+    // per side) and nothing bulky — it must read as frame, not mass.
+    const tubes = tagged(built.folding_chair, 'chairFrameTube');
+    ok('C6 the folding chair builds six frame tubes (X limbs + back posts)',
+       tubes.length === 6, `tubes=${tubes.length}`);
+    ok('C6b every tube is slim stock (≤ 40 mm across)',
+       tubes.every(o => o.geometry.parameters.radiusTop * 2 <= 40),
+       tubes.map(o => (o.geometry.parameters.radiusTop * 2).toFixed(0)).join(','));
+    ok('C6c the two X limbs per side really cross (opposite Z run)',
+       tubes.filter(o => Math.abs(o.quaternion.x) > 1e-3 || Math.abs(o.quaternion.z) > 1e-3).length >= 4, '');
+    // No single body mesh is a big slab — the whole point of the utility look.
+    const boxVols = bodies(built.folding_chair)
+      .filter(o => o.geometry.type === 'BoxGeometry')
+      .map(o => { const p = o.geometry.parameters; return p.width * p.height * p.depth; });
+    ok('C6d no chunky slab in the folding chair', boxVols.every(v => v < 5e6),
+       `maxVol=${Math.max(...boxVols).toExponential(2)}`);
+  }
+  {
+    // Armchair: thick full-depth padded arms at both outer edges.
+    const d = SPEC.armchair;
+    const arms = bodies(built.armchair).filter(o => {
+      if (o.geometry.type !== 'BoxGeometry') return false;
+      const p = o.geometry.parameters;
+      return Math.abs(o.position.x) > d.w * 0.25 && p.height > 400 && p.depth > d.h * 0.9;
+    });
+    ok('C7 the armchair builds two thick full-depth arms',
+       arms.length === 2 && arms.every(o => o.geometry.parameters.width >= 120),
+       `arms=${arms.length} w=${arms.map(o => o.geometry.parameters.width.toFixed(0)).join('/')}`);
+    ok('C7b …and no star base (that is the office/gaming tell)',
+       tagged(built.armchair, 'chairStarLeg').length === 0, '');
+  }
+
+  // ══ (E) blob shadows ══════════════════════════════════════════════════════
+  for (const k of CHAIRS) {
+    // A blob shadow is a floor-facing PlaneGeometry decal at y ≈ 8 (see _blobShadow).
+    const blob = built[k].children.find(o => o.isMesh && !o.userData.outline
+      && o.geometry.type === 'PlaneGeometry' && near(o.position.y, 8, 1e-6)
+      && near(o.rotation.x, -Math.PI / 2, 1e-6));
+    ok(`E1:${k} casts a blob shadow (it sits on the floor)`, !!blob, '');
+  }
+
+  // ══ (D)+(F) SitSpots via a real floor build ══════════════════════════════
+  const floorOf = (furniture) => ({
+    id: 'f1', name: 'F', w: 12000, d: 12000, sensors: [], motionSensors: [], envSensors: [],
+    walls: [], doors: [], windows: [], furniture, lights: [], switches: [], rooms: [],
+    bleProxies: [], presenceZones: [], groundAreas: [], voidAreas: [], pools: [], rulers: [],
+    cameras: [], robots: [], safetySensors: [], alarmPanels: [], alertBeacons: [],
+    thermostats: [], valves: [], plugs: [], infoCards: [], actionButtons: [],
+    calendarPanels: [], projectors: [], sprinklerZones: [], flagpoles: [], solarPanels: [],
+  });
+  for (const k of CHAIRS) {
+    const d = G.FURNITURE_KINDS[k];
+    r.updateFloor(floorOf([{ id: 's_' + k, x: 6000, y: 6000, w: d.w, h: d.h, kind: k, rotation: 0 }]));
+    const spots = r._sitSpots;
+    ok(`D1:${k} registers exactly one SitSpot (default centered spot)`,
+       spots.length === 1, `n=${spots.length}`);
+    if (spots.length === 1) {
+      ok(`D2:${k} the spot sits at the kind's own seat height`,
+         near(spots[0].seatY, d.seat, 1e-6), `seatY=${spots[0].seatY} want=${d.seat}`);
+      ok(`D3:${k} the spot id is the piece's spot 0`, spots[0].id === `s_${k}:0`, spots[0].id);
+      ok(`D4:${k} a free-standing chair resolves NO host activity`,
+         spots[0].hostActivity == null, `host=${spots[0].hostActivity}`);
+    }
+  }
+  {
+    // (F) A bar stool pulled up to an ISLAND perches with no activity — islands
+    // and counters are `surface` hosts but deliberately NOT eat/work hosts, so
+    // this matches the existing plain `stool` exactly. The SAME stool at a
+    // TABLE does resolve eat_at_table + the tabletop height for the arm IK.
+    const sd = G.FURNITURE_KINDS.bar_stool, idef = G.FURNITURE_KINDS.island;
+    const tdef = G.FURNITURE_KINDS.table;
+    const stoolAt = (seatKind, hostDef, hostKind) => {
+      const skd = G.FURNITURE_KINDS[seatKind];
+      r.updateFloor(floorOf([
+        { id: 'h', x: 6000, y: 6000, w: hostDef.w, h: hostDef.h, kind: hostKind, rotation: 0 },
+        { id: 'st', x: 6000, y: 6000 - hostDef.h / 2 - 300, w: skd.w, h: skd.h, kind: seatKind, rotation: 0 },
+      ]));
+      return r._sitSpots.find(s => s.id.startsWith('st:'));
+    };
+    void sd;
+    const atIsland = stoolAt('bar_stool', idef, 'island');
+    ok('F1 a bar stool at an ISLAND resolves no activity (parity with `stool`)',
+       !!atIsland && atIsland.hostActivity == null, `host=${atIsland?.hostActivity}`);
+    const stoolPlain = stoolAt('stool', idef, 'island');
+    ok('F1b …and the legacy `stool` behaves identically there',
+       !!stoolPlain && stoolPlain.hostActivity == null, `host=${stoolPlain?.hostActivity}`);
+    const atTable = stoolAt('bar_stool', tdef, 'table');
+    ok('F2 the same stool at a TABLE resolves eat_at_table from the host',
+       !!atTable && atTable.hostActivity === 'eat_at_table', `host=${atTable?.hostActivity}`);
+    ok('F2b …and carries the tabletop height for the seated arm IK',
+       !!atTable && near(atTable.hostTopY, tdef.ht, 1e-6), `top=${atTable?.hostTopY}`);
+    // Every new chair resolves the same way at a desk (work_at_desk).
+    const ddef = G.FURNITURE_KINDS.desk;
+    for (const k of CHAIRS) {
+      const kd = G.FURNITURE_KINDS[k];
+      r.updateFloor(floorOf([
+        { id: 'h', x: 6000, y: 6000, w: ddef.w, h: ddef.h, kind: 'desk', rotation: 0 },
+        { id: 'ch', x: 6000, y: 6000 - ddef.h / 2 - 260, w: kd.w, h: kd.h, kind: k, rotation: 0 },
+      ]));
+      const sp = r._sitSpots.find(s => s.id.startsWith('ch:'));
+      ok(`F3:${k} resolves work_at_desk from an adjacent desk`,
+         !!sp && sp.hostActivity === 'work_at_desk', `host=${sp?.hostActivity}`);
+    }
+  }
+  r.clearTransientGroups();
+
+  // ══ (G) 2D glyphs — non-empty and pairwise distinct ══════════════════════
+  {
+    const CW = 320, CH = 320, halfW = 110, halfH = 110, cx = 160, cy = 160;
+    const cv = document.createElement('canvas'); cv.width = CW; cv.height = CH;
+    const ctx = cv.getContext('2d');
+    const sig = {};
+    for (const k of CHAIRS) {
+      ctx.clearRect(0, 0, CW, CH);
+      const d = G.FURNITURE_KINDS[k];
+      ctx.save(); ctx.translate(cx, cy);
+      CR.drawFurniturePrimitiveLocal(ctx, { id: 'p', x: 0, y: 0, w: d.w, h: d.h, kind: k }, halfW, halfH);
+      ctx.restore();
+      const px = ctx.getImageData(0, 0, CW, CH).data;
+      let painted = 0, rSum = 0, gSum = 0, bSum = 0;
+      for (let i = 0; i < CW * CH; i++) {
+        const a = px[i * 4 + 3];
+        if (a < 24) continue;
+        painted++; rSum += px[i * 4]; gSum += px[i * 4 + 1]; bSum += px[i * 4 + 2];
+      }
+      ok(`G1:${k} the 2D glyph paints something`, painted > 400, `px=${painted}`);
+      sig[k] = `${painted}|${rSum}|${gSum}|${bSum}`;
+    }
+    const vals = CHAIRS.map(k => sig[k]);
+    ok('G2 all six glyph signatures are pairwise distinct',
+       new Set(vals).size === 6, vals.map((v, i) => `${CHAIRS[i]}:${v.split('|')[0]}`).join(' '));
+    // And distinct from the plain `chair` / `stool` they extend.
+    for (const legacy of ['chair', 'stool']) {
+      ctx.clearRect(0, 0, CW, CH);
+      const d = G.FURNITURE_KINDS[legacy];
+      ctx.save(); ctx.translate(cx, cy);
+      CR.drawFurniturePrimitiveLocal(ctx, { id: 'p', x: 0, y: 0, w: d.w, h: d.h, kind: legacy }, halfW, halfH);
+      ctx.restore();
+      const px = ctx.getImageData(0, 0, CW, CH).data;
+      let painted = 0, rSum = 0, gSum = 0, bSum = 0;
+      for (let i = 0; i < CW * CH; i++) {
+        const a = px[i * 4 + 3];
+        if (a < 24) continue;
+        painted++; rSum += px[i * 4]; gSum += px[i * 4 + 1]; bSum += px[i * 4 + 2];
+      }
+      const s = `${painted}|${rSum}|${gSum}|${bSum}`;
+      ok(`G3:${legacy} the legacy glyph differs from all six new ones`,
+         !vals.includes(s), s.split('|')[0]);
+    }
+  }
+
+  let pass = 0; const fails = [];
+  for (const t of tests) { if (t.ok) pass++; else fails.push(t.name); }
+  const total = tests.length, allPass = pass === total;
+  const title = allPass ? `CHAIRS PASS ${pass}/${total}` : `CHAIRS FAIL ${pass}/${total} [${fails.join(',')}]`;
+  document.title = title;
+  window.__RESULT__ = { title };
+  document.body.insertAdjacentHTML('beforeend',
+    `<pre style="position:fixed;left:8px;top:8px;color:#8f8">${title}\n` +
+    tests.map(t => `${t.ok ? 'PASS' : 'FAIL'} ${t.name} — ${t.detail ?? ''}`).join('\n') + `</pre>`);
+</script>

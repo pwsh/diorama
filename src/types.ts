@@ -36,11 +36,28 @@ export type FurnitureKind =
   | 'table'         // flat top + 4 legs
   | 'chair'         // seat + backrest
   | 'rocking_chair'
+  // More chair styles for different rooms/uses. Every one carries a real `seat`
+  // height, so the SitSpot machinery (single centered spot), the seat↔table tuck
+  // and the table-carry group-move all pick them up with no membership list —
+  // those predicates test `def.seat` presence, never a kind literal.
+  | 'armchair'        // living-room club chair: deep cushion, thick padded arms
+  | 'office_chair'    // 5-star caster base + gas lift + tall contoured back
+  | 'bar_stool'       // counter-height perch: round seat, footring, splayed legs
+  | 'wingback_chair'  // tall reading chair with forward-angled side wings
+  | 'folding_chair'   // thin tubular utility frame, flat seat + back panel
+  | 'gaming_chair'    // racing bucket: side bolsters + headrest + accent stripes
   | 'chaise'        // long lounger w/ short back
   | 'bench'         // thin seat
   | 'desk'
   | 'sofa'
-  | 'bed'
+  // Beds. `bed` is the legacy id — it KEEPS its dims for back-compat and is
+  // labelled "Bed · queen"; the three sizes below are real mattress footprints
+  // (width × length) and differ by pillow count. Membership tests go through
+  // isBedKind() (geometry.ts) — never a literal list (the isStairsKind rule).
+  | 'bed'           // queen (legacy id/dims), 2 pillows
+  | 'bed_twin'      // 990 × 1910, 1 pillow
+  | 'bed_full'      // 1370 × 1910, 2 pillows
+  | 'bed_king'      // 1930 × 2030, 3 pillows
   | 'rug'           // flat zero-height
   | 'bookshelf'     // tall narrow
   | 'sofa_l_left'   // L sectional, chaise on the plan-left end
@@ -783,8 +800,17 @@ export type DoorKind = 'swing' | 'garage' | 'gate'
 //   roll_up      — steel curtain coiling onto an overhead drum (no ceiling fold)
 //   glass_panel  — full-view aluminium frame sections with translucent glazing
 //   tilt_up      — ONE-piece canopy slab pivoting at the head
+//   sectional_windows_top   — sectional + a row of 4 lites across the TOP section
+//   sectional_windows_left  — sectional + a column of lites down one END of every
+//   sectional_windows_right   section. LEFT/RIGHT are named from OUTSIDE the
+//                             building (the exterior face is door-local +Z — the
+//                             slats fold to −Z, the garage interior): an observer
+//                             standing outside looking at the door has +Z toward
+//                             them, +Y up, so their LEFT is door-local −X. See the
+//                             chirality note at the builder in three-renderer.ts.
 export type GarageStyle = 'sectional' | 'raised_panel' | 'carriage'
-  | 'roll_up' | 'glass_panel' | 'tilt_up';
+  | 'roll_up' | 'glass_panel' | 'tilt_up'
+  | 'sectional_windows_top' | 'sectional_windows_left' | 'sectional_windows_right';
 
 export interface Door {
   id: string;
@@ -797,6 +823,19 @@ export interface Door {
                                // Absent = 'sectional' = the classic 5-panel build, byte-identical. Item-level;
                                // no repairFloor change (door arrays pass through), and style edits ride
                                // configRev → the existing _keyDoors dirty key. Ignored by every other kind.
+  garageHeight?: number;       // 'garage' kind only — OPENING height in mm (absent = GARAGE_DOOR_H 2100,
+                               // clamp 1800..4200 via geometry.garageDoorHeightMm). Drives BOTH the wall
+                               // cut's lintel (`wallCutsForSegment`'s `head`) and the whole 3D leaf build
+                               // (slat span, lift, drum/pivot height, tracks, badge) — the slat COUNT is
+                               // unchanged (5), the sections just scale. Item-level; 2D plan is unaffected
+                               // (height is invisible in plan).
+  color?: string;              // hex tint for the door's PANEL / SLAB / LEAF body across every kind —
+                               // swing panel, garage slats, sliding + pocket slabs, double/french leaves
+                               // and their frame bars, sliding-glass frames, gate pickets/banister members.
+                               // GLASS, lock deadbolts and track/opener hardware are never tinted. In 2D it
+                               // replaces the neutral CLOSED stroke only; the open-green and unavailable-red
+                               // state colours always win. Garbage falls back to the shipped grey (the
+                               // renderer validates, bgHex-style). Item-level; rides configRev → _keyDoors.
   entity_id: string | null;    // binary_sensor ("on" = open) OR cover.* ('open'/'closed', current_position for partial)
   label?: string;
   localState?: string;         // local control when UNBOUND ('on'=open/'off'); inert once bound. See Planner.effectiveState.
@@ -859,6 +898,13 @@ export interface Window {
   kind?: WindowKind;           // glazing style; default 'single' (legacy look)
   sill?: number;               // mm above floor to the bottom of the glass; default 900
   height?: number;             // mm of glass height (header derives as sill+height); default 800
+  frameColor?: string;         // hex tint for the window UNIT's opaque joinery — sashes, mullions,
+                               // meeting rails, casement/sliding mullions and the bay's casework,
+                               // posts and roof. GLASS keeps its own translucent grey, and the SHADE
+                               // (fabric + weight bar) and CURTAIN (fabric + rod) treatments keep
+                               // their own colours. In 2D it replaces the neutral CLOSED stroke only
+                               // (open-green / unavailable-red always win). Garbage falls back to the
+                               // shipped grey. Item-level; rides configRev → _keyDoors.
   locked?: boolean;            // canvas move/rotate/delete disabled
 }
 

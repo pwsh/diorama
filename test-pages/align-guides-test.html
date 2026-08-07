@@ -21,7 +21,7 @@
      over an in-page fake HaApi (the wall-edit-test / undo-test seam). Build:
        T=$(mktemp -d); cp -r src/* "$T"/
        cp test-pages/fake-avatar-store.ts "$T"/avatar-store.ts
-       printf "export { Planner } from './planner.js';\nexport * from './canvas-interact.js';\nexport { drawAll } from './canvas-render.js';\nexport { nearestAlign, bestAlignShift, ALIGN_DRAG_KINDS, ALIGN_POLY_DRAG_KINDS } from './geometry.js';\n" > "$T"/align-entry.ts
+       printf "export { Planner } from './planner.js';\nexport * from './canvas-interact.js';\nexport { drawAll } from './canvas-render.js';\nexport { nearestAlign, bestAlignShift, ALIGN_DRAG_KINDS, ALIGN_POLY_DRAG_KINDS, resolveFurnitureWallCollision } from './geometry.js';\n" > "$T"/align-entry.ts
        npx esbuild "$T"/align-entry.ts --bundle --format=esm --outfile=<harness>/align.mod.js
      Run headless (serve over http — Chrome blocks dynamic module imports on file://):
        (cd <harness> && python3 -m http.server <port> &)
@@ -34,8 +34,9 @@
   const M = await import('./align.mod.js' + V);
   const {
     Planner, drawAll,
-    onCanvasMouseDown, onCanvasMouseMove, onCanvasMouseUp,
+    onCanvasMouseDown, onCanvasMouseMove, onCanvasMouseUp, onCanvasClick,
     nearestAlign, bestAlignShift, ALIGN_DRAG_KINDS, ALIGN_POLY_DRAG_KINDS,
+    resolveFurnitureWallCollision,
   } = M;
 
   const results = [];
@@ -459,6 +460,92 @@
       let lit2 = 0;
       for (let i = 3; i < col2.length; i += 4) if (col2[i] > 0) lit2++;
       ok('16: guide gone after release', lit2 < lit, `${lit2} lit px`);
+    }
+    // ── (17) PLACEMENT vs walls: push-out-only, never a magnet ─────────────
+    // User report: "when placing a bed, it is getting sucked into the wall
+    // instead of being placed near it". resolveFurnitureWallCollision used to
+    // act over a 150 mm magnet reach BEYOND the wall face, teleporting any
+    // deliberately-gapped drop flush. It now acts ONLY inside the keep-out band.
+    // Driven through the REAL drop path (onCanvasClick with a pending kind).
+    {
+      // 1 mm = 0.5 px ⇒ ≤2 mm of client-px rounding, well inside the 10 mm
+      // drop grid, so every target below lands on its exact intended cell.
+      const pview = { ox: 20, oy: 660, scale: 0.5 };
+      const pEvAt = (mx, my) => ({
+        clientX: rect.left + (mx * pview.scale + pview.ox) / dpr,
+        clientY: rect.top + (pview.oy - my * pview.scale) / dpr,
+        altKey: false, shiftKey: false, ctrlKey: false, metaKey: false,
+        button: 0, buttons: 0, preventDefault() {}, stopPropagation() {},
+      });
+      // Vertical wall on the x = 6000 axis; its LEFT face sits at x = 5950,
+      // and a piece rests FLUSH when its near edge is 55 mm off the axis.
+      const WALL_X = 6000, FLUSH = 55;
+      const KIND = 'table';                        // 1500 × 900 ⇒ half-width 750
+      const mkPlan = () => makeStore([floor('f1', 'Home', {
+        walls: [mkWall('w1', [{ x: WALL_X, y: 1000 }, { x: WALL_X, y: 11000 }])],
+      })]);
+      const drop = async (mx, my) => {
+        const p = await freshPlanner(mkPlan());
+        p.setTool('furniture');
+        p.pendingFurnitureKind = KIND;
+        p.pendingCustomObjectId = null; p.pendingVehicleModelId = null;
+        onCanvasClick(p, canvas, pview, pEvAt(mx, my));
+        return p.floor().furniture[0];
+      };
+      const halfW = 750;
+      const flushCx = WALL_X - FLUSH - halfW;      // 5195: the flush resting centre
+
+      // (a) A deliberate 120 mm gap from the FACE is respected verbatim.
+      const gapCx = WALL_X - 50 - 120 - halfW;     // 5080 — near edge 170 mm off axis
+      {
+        const piece = await drop(gapCx, 6000);
+        ok('17a: a piece dropped 120 mm off the wall face STAYS put (no magnet)',
+          piece && piece.x === gapCx, `x=${piece && piece.x} want=${gapCx}`);
+        ok('17a: …and is NOT sitting flush', piece && piece.x !== flushCx,
+          `x=${piece && piece.x} flush=${flushCx}`);
+      }
+
+      // (b) An overlapping drop is still pushed out to EXACTLY flush.
+      {
+        const piece = await drop(5500, 6000);      // near edge 250 mm THROUGH the axis
+        ok('17b: an overlapping drop is pushed out to exactly flush',
+          piece && piece.x === flushCx, `x=${piece && piece.x} want=${flushCx}`);
+        ok('17b: …near edge lands 55 mm off the wall axis',
+          piece && Math.abs((WALL_X - (piece.x + halfW)) - FLUSH) < 1e-6,
+          `edge=${piece && (WALL_X - (piece.x + halfW))}`);
+      }
+
+      // (c) Dropped ON the centerline → flush on the side the centre resolves to,
+      //     so "flush" is still exactly ONE gesture away.
+      {
+        const piece = await drop(WALL_X, 6000);
+        ok('17c: a drop ON the wall centerline lands flush',
+          piece && piece.x === flushCx, `x=${piece && piece.x} want=${flushCx}`);
+      }
+
+      // (d) Just INSIDE the keep-out band still settles out; just outside does not.
+      {
+        const inside = await drop(WALL_X - 40 - halfW, 6000);   // near edge 40 mm off axis
+        ok('17d: inside the 55 mm keep-out band → pushed out to flush',
+          inside && inside.x === flushCx, `x=${inside && inside.x}`);
+        const outside = await drop(WALL_X - 60 - halfW, 6000);  // near edge 60 mm off axis
+        ok('17d: just outside the band → untouched',
+          outside && outside.x === WALL_X - 60 - halfW, `x=${outside && outside.x}`);
+      }
+
+      // (e) The pure resolver agrees (the drop path is not the only consumer —
+      //     the drag-release hook calls it too).
+      {
+        const walls = [{ id: 'w1', kind: 'full', points: [{ x: WALL_X, y: 1000 }, { x: WALL_X, y: 11000 }] }];
+        const gapped = { x: gapCx, y: 6000, w: 1500, h: 900, rotation: 0 };
+        ok('17e: resolver reports NO move for a gapped piece',
+          resolveFurnitureWallCollision(gapped, walls) === false && gapped.x === gapCx,
+          `x=${gapped.x}`);
+        const sunk = { x: 5500, y: 6000, w: 1500, h: 900, rotation: 0 };
+        ok('17e: resolver pushes an overlapping piece out to flush',
+          resolveFurnitureWallCollision(sunk, walls) === true && sunk.x === flushCx,
+          `x=${sunk.x}`);
+      }
     }
   } catch (err) {
     ok('harness: no exception', false, (err && err.stack) || String(err));

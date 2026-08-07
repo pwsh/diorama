@@ -495,6 +495,69 @@
         cat(model, 'vehicle').cards.filter(c => c.thumb.type === 'vehicle').length === modelCards.length,
         `${cat(model, 'vehicle').cards.filter(c => c.thumb.type === 'vehicle').length} vs ${modelCards.length}`);
     }
+    // ═══ I. furniture category SPLIT (2026-08) ═══
+    // The single over-inclusive `furniture` cat became seating / tables /
+    // bedroom / storage / stairs / decor. Five of those are new toolbar TABS;
+    // `stairs` is appended to Structure instead (stairs are structure).
+    document.getElementById('rows').insertAdjacentHTML('beforeend', '<h2>I. category split</h2>');
+    {
+      model = buildToolbarModel(p);
+      const ids = model.map(c => c.id);
+
+      // I1 — every built-in def now carries an EXPLICIT cat; nothing falls back
+      // to the legacy 'furniture' default (which stays only for custom objects).
+      const noCat = Object.entries(FURNITURE_KINDS).filter(([, d]) => d.cat == null).map(([k]) => k);
+      ok('I1: every FURNITURE_KINDS def has an explicit cat', noCat.length === 0,
+        `missing=${noCat.join(',') || 'none'}`);
+      const legacy = Object.entries(FURNITURE_KINDS).filter(([, d]) => d.cat === 'furniture').map(([k]) => k);
+      ok('I1b: no def resolves to the legacy furniture cat', legacy.length === 0,
+        `legacy=${legacy.join(',') || 'none'}`);
+
+      // I2 — the old catch-all tab is gone, the five new ones are present.
+      ok('I2: no Furniture tab', !ids.includes('furniture'), ids.join(','));
+      const NEW_TABS = ['seating', 'tables', 'bedroom', 'storage', 'decor'];
+      const missingTabs = NEW_TABS.filter(t => !ids.includes(t));
+      ok('I3: the five split tabs exist', missingTabs.length === 0, `missing=${missingTabs.join(',')}`);
+      for (const t of NEW_TABS) {
+        const c = cat(model, t);
+        ok(`I4:${t} tab is non-empty + all its cards match the cat`,
+          !!c && c.cards.length > 0
+          && c.cards.every(k => FURNITURE_KINDS[k.thumb.kind]?.cat === t),
+          `n=${c ? c.cards.length : 'no tab'}`);
+      }
+
+      // I5 — the `stairs` cat rides the EXISTING Structure tab, not its own.
+      ok('I5: no standalone stairs tab', !ids.includes('stairs'), ids.join(','));
+      const struct = cat(model, 'structure');
+      const structFurn = struct.cards.filter(c => c.thumb.type === 'furniture').map(c => c.thumb.kind);
+      const stairKinds = Object.keys(FURNITURE_KINDS).filter(k => FURNITURE_KINDS[k].cat === 'stairs');
+      ok('I6: Structure carries exactly the stairs-cat cards',
+        stairKinds.length > 0 && stairKinds.every(k => structFurn.includes(k))
+        && structFurn.length === stairKinds.length,
+        `struct=[${structFurn.join(',')}] want=[${stairKinds.join(',')}]`);
+      ok('I6b: Structure still has its wall/door/window/room cards',
+        ['struct:wall', 'struct:door', 'struct:window', 'struct:room'].every(k =>
+          struct.cards.some(c => c.key === k)), '');
+
+      // I7 — every kind that used to live in the catch-all is now reachable in
+      // EXACTLY ONE tab (A1/A3 cover the whole set; this pins the moved ones).
+      const MOVED = ['chair','sofa','ottoman','stool','table','desk','coffee_table','counter','island',
+        'bed','nightstand','dresser','wardrobe','bookshelf','tv_stand','cabinet',
+        'stairs','stairs_half','stair_landing','ramp','riser_platform',
+        'rug','plant','block','exercise_equipment','theater_recliner','recliner_row3'];
+      const bad = MOVED.filter(k =>
+        model.flatMap(c => c.cards).filter(c => c.thumb.type === 'furniture' && c.thumb.kind === k).length !== 1);
+      ok('I7: every moved kind reachable in exactly one tab', bad.length === 0, `bad=${bad.join(',')}`);
+      ok('I8: recliners moved to the Theater tab',
+        cat(model, 'theater').cards.some(c => c.thumb.kind === 'theater_recliner')
+        && cat(model, 'theater').cards.some(c => c.thumb.kind === 'recliner_row3'), '');
+
+      // I9 — bed sizes surface as their own Bedroom cards.
+      const bedCards = cat(model, 'bedroom').cards.map(c => c.thumb.kind);
+      ok('I9: all four bed sizes are Bedroom cards',
+        ['bed', 'bed_twin', 'bed_full', 'bed_king'].every(k => bedCards.includes(k)),
+        bedCards.join(','));
+    }
   } catch (err) {
     ok('FATAL', false, (err && err.stack) || String(err));
   }

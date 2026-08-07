@@ -166,7 +166,9 @@ const CONTROL_TOOLS: { tool: Tool; label: string; glyph: string }[] = [
 // Category glyph fallbacks per furniture cat (placeholder while the 3D thumb
 // renders / when WebGL is unavailable).
 const CAT_GLYPH: Record<FurnitureCat, string> = {
-  furniture: '🛋', appliance: '🔌', bathroom: '🛁', outdoor: '🌳', theater: '🎬', vehicle: '🚗',
+  furniture: '🛋',
+  seating: '🪑', tables: '🍽️', bedroom: '🛏', storage: '🗄', stairs: '🪜', decor: '🪴',
+  appliance: '🔌', bathroom: '🛁', outdoor: '🌳', theater: '🎬', vehicle: '🚗',
 };
 
 // djb2 hash of a recipe's JSON — the custom-object thumbnail cache key changes
@@ -258,7 +260,10 @@ function structureCards(): ToolCard[] {
   const zone: ToolCard = controlCardLike('struct:pzone', 'Presence zone', '▱', 'pzone');
   const voidC: ToolCard = controlCardLike('struct:void', 'Floor void', '🕳', 'void');
   const ruler: ToolCard = controlCardLike('struct:ruler', 'Ruler', '📏', 'ruler');
-  return [wall, door, win, room, zone, voidC, ruler];
+  // The `stairs` furniture cat (flights, landing, ramp, riser platform) lives
+  // HERE rather than in its own tab — they are structure, and the category
+  // split would otherwise have added a sixth near-empty furniture tab.
+  return [wall, door, win, room, zone, voidC, ruler, ...furnitureCards('stairs')];
 }
 
 function controlCardLike(key: string, label: string, glyph: string, tool: Tool): ToolCard {
@@ -339,7 +344,16 @@ function vehicleCards(): ToolCard[] {
 // ── The model ──────────────────────────────────────────────────────────────────
 export function buildToolbarModel(p: Planner): ToolCategory[] {
   return [
-    { id: 'furniture', label: 'Furniture', glyph: '🛋', cards: furnitureCards('furniture') },
+    // The single Furniture tab is SPLIT five ways (it had grown to 33 cards).
+    // The `stairs` cat is NOT a tab of its own — those cards are appended to
+    // Structure (stairs/ramps/risers ARE structure), which keeps tab growth
+    // sane. The legacy `furniture` cat has no built-in members left, so it gets
+    // no tab; custom objects have their own Custom tab.
+    { id: 'seating', label: 'Seating', glyph: CAT_GLYPH.seating, cards: furnitureCards('seating') },
+    { id: 'tables', label: 'Tables', glyph: CAT_GLYPH.tables, cards: furnitureCards('tables') },
+    { id: 'bedroom', label: 'Bedroom', glyph: CAT_GLYPH.bedroom, cards: furnitureCards('bedroom') },
+    { id: 'storage', label: 'Storage', glyph: CAT_GLYPH.storage, cards: furnitureCards('storage') },
+    { id: 'decor', label: 'Decor', glyph: CAT_GLYPH.decor, cards: furnitureCards('decor') },
     { id: 'appliance', label: 'Appliances', glyph: '🔌', cards: furnitureCards('appliance') },
     { id: 'bathroom', label: 'Bathroom', glyph: '🛁', cards: furnitureCards('bathroom') },
     { id: 'theater', label: 'Theater', glyph: '🎬', cards: furnitureCards('theater') },

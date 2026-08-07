@@ -1049,9 +1049,23 @@ const CRAFT_MIL_SKIN = new Set(['f16', 'a10', 'f22', 'b2', 'b52', 'apache']);
 // Roster craft that spin their discs about the vertical axis (BG_CRAFTS.rotorY).
 const CRAFT_ROTOR = new Set(['apache', 'airwolf', 'news_chopper', 'heli']);
 
-const CAT_PAGE: Record<string, string> = { furniture: 'furniture', appliance: 'appliances', bathroom: 'bathroom', outdoor: 'outdoor' };
+// The 2026-08 category split broke the old single `furniture` cat into
+// seating/tables/bedroom/storage/stairs/decor. They all keep mapping to the ONE
+// `furniture` GALLERY PAGE — `page` feeds the gif path (media/<page>/<kind>.gif),
+// so letting `?? cat` invent six new pages would fragment the published gallery
+// and orphan every existing furniture gif. Only the in-page GROUP heading below
+// splits, which is exactly the intended finer organisation.
+const CAT_PAGE: Record<string, string> = {
+  furniture: 'furniture', appliance: 'appliances', bathroom: 'bathroom', outdoor: 'outdoor',
+  seating: 'furniture', tables: 'furniture', bedroom: 'furniture',
+  storage: 'furniture', stairs: 'furniture', decor: 'furniture',
+};
 const CAT_TITLE: Record<string, string> = {
   furniture: 'Furniture', appliance: 'Appliances', bathroom: 'Bathroom', outdoor: 'Outdoor & yard',
+  // Split-out furniture groups (same page, finer headings — mirrors the phrasing
+  // of sidebar.ts's _kindOptions optgroups).
+  seating: 'Seating', tables: 'Tables & counters', bedroom: 'Bedroom',
+  storage: 'Storage', stairs: 'Stairs & platforms', decor: 'Decor & misc',
   // theater/vehicle fall through to their own page (CAT_PAGE has no entry, so
   // `page = CAT_PAGE[cat] ?? cat` already yields 'theater'/'vehicle') — these
   // just give the in-page group heading the same phrasing sidebar.ts's

@@ -90,7 +90,7 @@ export function blocksNav(fu, geom, customObjects) {
   if (!def) return true;
   if (def.rug) return false;
   if (geom.isStairsKind(fu.kind)) return false;
-  if (fu.kind === 'bed') return false;
+  if (geom.isBedKind(fu.kind)) return false;
   if (geom.isRiserKind(fu.kind)) return false;
   if ((fu.elevation ?? 0) >= 300) return false;
   return true;

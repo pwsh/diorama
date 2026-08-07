@@ -19,10 +19,10 @@ import {
   isRackKind, rackHealth, rackHealthColor, type RackHealth,
   uvParasolWanted,
   plantThirsty, PLANT_MOISTURE_DEFAULT_THRESHOLD,
-  isStairsKind, stairsRiseMm, stairsTreadCount,
+  isStairsKind, stairsRiseMm, stairsTreadCount, isBedKind, bedPillowLayout,
   isTreeKind, treeHeightMm,
   isVehicleKind, evStatusOf, evStatusColor, carChargeState,
-  doorOpenFraction, GARAGE_DOOR_H, doorSlideDir,
+  doorOpenFraction, garageDoorHeightMm, doorSlideDir, lighten,
   alarmHeight, alarmStateColor, ALARM_DEFAULTS, ALARM_PLATE_DEPTH_MM,
   calendarHeight, CALENDAR_DEFAULTS, CALENDAR_PLATE_DEPTH_MM,
   thermostatHeight, THERMO_DEFAULTS, THERMO_PLATE_DEPTH_MM, hvacModeColor, hvacAirflow, HVAC_VENT_COLORS,
@@ -7125,7 +7125,7 @@ export class ThreeDRenderer {
         // Soft lounge pieces a pet curls up on rather than sitting upright.
         const softKind = fu.kind === 'sofa' || fu.kind === 'sofa_l_left' ||
           fu.kind === 'sofa_l_right' || fu.kind === 'sofa_u' || fu.kind === 'chaise' ||
-          fu.kind === 'ottoman' || fu.kind === 'bed';
+          fu.kind === 'ottoman' || isBedKind(fu.kind);
         const facing = -((fu.rotation || 0) * Math.PI / 180);
         const cosF = Math.cos(facing), sinF = Math.sin(facing);
         const fNx = -sinF, fNz = -cosF;   // scene-XZ unit normal out the seat front (local -Z)
@@ -7254,7 +7254,7 @@ export class ThreeDRenderer {
       }
       // Beds captured for the two-in-bed covers effect. Mattress top matches the
       // bed builder: frame HT*0.45 + mattress spanning to HT*1.05.
-      if (fu.kind === 'bed') {
+      if (isBedKind(fu.kind)) {
         const c = this._w(fu.x, fu.y, 0);
         this._beds.push({
           id: fu.id, x: fu.x, y: fu.y, w: fu.w, h: fu.h, rotation: fu.rotation,
@@ -7987,7 +7987,7 @@ export class ThreeDRenderer {
       // Beds are occupiable — people walk in and lie down / get covered. Blocking
       // the footprint makes nav steer settling occupants back OUT (breaking the
       // lie + shared-covers settle), so leave beds walkable like rugs/stairs.
-      if (fu.kind === 'bed') continue;
+      if (isBedKind(fu.kind)) continue;
       // Riser platforms are a walkable deck (terrain) — never block them.
       if (isRiserKind(fu.kind)) continue;
       if ((fu.elevation ?? 0) >= 300) continue;
@@ -8790,6 +8790,15 @@ export class ThreeDRenderer {
       let glassOpacity = 0.16 - 0.08 * openFrac;
       if (w.curtain && !bayKind && curtainFrac < 0.15) glassOpacity = Math.max(glassOpacity, 0.42);
       const mat = glassMat(glassOpacity);
+      // Per-window joinery tint (Window.frameColor). Validated bgHex-style →
+      // null = the shipped grey. It paints the WINDOW UNIT: sashes' frame bars,
+      // mullions, meeting rails and the bay's casework/posts/roof. Glass keeps
+      // its translucent grey, and the SHADE (fabric + weight bar) and CURTAIN
+      // (fabric + rod) treatments keep their own colours — they are dressings
+      // hung on the window, not the window.
+      const wFrameInt = bgHexInt(w.frameColor);
+      const frameMatW = wFrameInt === undefined
+        ? frameMat : this._mat({ color: wFrameInt, roughness: 0.6, metalness: 0.1 });
       const cy = sill + glassH / 2;                     // vertical center of glazing
       // Pane center group at (w.x, w.y); rotation matches wall axis.
       const grp = new THREE.Group();
@@ -8810,7 +8819,7 @@ export class ThreeDRenderer {
       grp.position.set(wp.x, wp.y, wp.z);
       grp.rotation.y = -((w.rotation || 0) * Math.PI / 180);
       const glass = (pw: number, ph: number) => new THREE.Mesh(new THREE.BoxGeometry(pw, ph, PANE_T), mat);
-      const bar = (bw: number, bh: number) => new THREE.Mesh(new THREE.BoxGeometry(bw, bh, PANE_T * 1.6), frameMat);
+      const bar = (bw: number, bh: number) => new THREE.Mesh(new THREE.BoxGeometry(bw, bh, PANE_T * 1.6), frameMatW);
       switch (kind) {
         case 'picture': {
           // Fixed single pane; open state = tint only (no movement).
@@ -8873,7 +8882,7 @@ export class ThreeDRenderer {
           const headY = sill + glassH;
           // Opaque casework: knee wall below the glass, head board above, both
           // THICKER than the panes so no face is ever coplanar with glass.
-          const woodMat = this._mat({ color: 0xbfc6cc, roughness: 0.7, metalness: 0.05 });
+          const woodMat = this._mat({ color: wFrameInt ?? 0xbfc6cc, roughness: 0.7, metalness: 0.05 });
           const CASE_T = 110;
           // One face (knee wall / head board / glass pane) of the three-sided bay.
           const face = (cx: number, cz: number, len: number, ry: number,
@@ -8908,7 +8917,7 @@ export class ThreeDRenderer {
           });
           // Vertical corner posts at the two wall junctions + the two bay corners.
           for (const [px, pz] of [[-W / 2, 0], [-halfC, D], [halfC, D], [W / 2, 0]] as [number, number][]) {
-            const post = new THREE.Mesh(new THREE.BoxGeometry(90, headY + 160, 130), frameMat);
+            const post = new THREE.Mesh(new THREE.BoxGeometry(90, headY + 160, 130), frameMatW);
             post.position.set(px, (headY + 160) / 2, pz);
             grp.add(post);
           }
@@ -8958,6 +8967,7 @@ export class ThreeDRenderer {
           panel.position.set(0, headerY - shadeH / 2, PANE_T * 0.8);  // proud of the glass
           grp.add(panel);
           // Thin bottom weight bar.
+            // Weight bar: part of the SHADE, so frameColor deliberately skips it.
           const barM = new THREE.Mesh(
             new THREE.BoxGeometry(W * 0.98, 36, 40), frameMat);
           barM.position.set(0, headerY - shadeH, PANE_T * 0.8);
@@ -9093,13 +9103,37 @@ export class ThreeDRenderer {
     // coincident-face gotcha — flat toon banding hatches otherwise).
     const doorFrameMat = this._mat({ color: 0x9aa4ad, roughness: 0.6, metalness: 0.1 });
     const trackMat = this._mat({ color: 0x78848c, roughness: 0.5, metalness: 0.3 });
+    // Opener head / exterior pull: dark hardware. Deliberately NEVER tinted by
+    // Door.color — the point of the tracks-inside / handle-outside asymmetry is
+    // that it reads as machinery, not as part of the painted leaf.
+    const motorMat = this._mat({ color: 0x3a4046, roughness: 0.7, metalness: 0.25 });
+    const handleMat = this._mat({ color: 0x2f3439, roughness: 0.6, metalness: 0.35 });
     for (const d of doors) {
       const st = itemState(d, stateOf);
       // Fractional open state (0..1): binary sensors resolve to 0|1; a cover
       // binding drives a partial swing / roll-up via current_position.
       const frac = doorOpenFraction(st);
       const isOpen = frac > 0.02;
-      const mat = isOpen ? openMat : closedMat;
+      // ── Per-door body tint (Door.color) ──────────────────────────────────
+      // Validated bgHex-style: anything that isn't #rgb / #rrggbb resolves to
+      // null = the shipped palette (never a NaN colour). The tint replaces the
+      // neutral CLOSED grey AND the OPEN green base — but an open custom-coloured
+      // door keeps a REDUCED emissive green (0.18 vs the stock 0.35) so "open"
+      // still reads at a glance without repainting the user's chosen colour.
+      // Glass, lock deadbolts and track/opener hardware are never tinted.
+      const customHex = bgHex(d.color);
+      const custom = customHex == null ? null : hexToInt(customHex);
+      const mat = custom == null
+        ? (isOpen ? openMat : closedMat)
+        : this._mat(isOpen
+            ? { color: custom, emissive: 0x1b5e20, emissiveIntensity: 0.18,
+                roughness: 0.5, metalness: 0.1 }
+            : { color: custom, roughness: 0.65, metalness: 0.1 });
+      // Stiles / rails / muntins / bay-style casework on a glazed leaf follow
+      // the same tint (they ARE the leaf); the glass between them never does.
+      const frameMatD = custom == null
+        ? doorFrameMat
+        : this._mat({ color: custom, roughness: 0.6, metalness: 0.1 });
       // Hinge Group at world (d.x, d.y). Closed panel runs along world +X at
       // rotation 0; world +X maps to scene -X via _w's mirror, so the panel
       // child is positioned at scene-local (-w/2, ...). Without this sign
@@ -9170,7 +9204,7 @@ export class ThreeDRenderer {
 
       if (kind === 'garage') {
         // Segmented overhead door: a stack of N horizontal slats filling the
-        // opening (0..GARAGE_DOOR_H). Opening rolls the door UP — the bottom
+        // opening (0..H, where H = garageDoorHeightMm). Opening rolls the door UP — the bottom
         // edge lifts by frac·H, and the portion that passes the lintel folds
         // back HORIZONTAL along a ceiling track (into local -Z). Parametrize by
         // arc-distance `a` from the bottom edge: pos = lift + a; pos ≤ H → the
@@ -9182,11 +9216,19 @@ export class ThreeDRenderer {
         // 'roll_up' (coils onto a drum, nothing folds) and 'tilt_up' (one slab
         // pivoting at the head). Sectional builds exactly the pre-style meshes.
         hinge.rotation.y = rotR;
-        const H = GARAGE_DOOR_H, N = 5, GAP = 6;
+        // Opening height is per-door (Door.garageHeight, absent = GARAGE_DOOR_H).
+        // EVERYTHING below is already parametrized by H — slat span, lift, fold
+        // set-back, roll-up drum, tilt pivot, tracks and the % badge — so the
+        // section COUNT stays 5 and the sections simply scale. The wall's lintel
+        // reads the SAME helper in wallCutsForSegment, so hole and leaf agree.
+        const H = garageDoorHeightMm(d), N = 5, GAP = 6;
         const slatH = H / N - GAP;
         const lift = frac * H;
         const gStyle = d.garageStyle ?? 'sectional';
         const secW = d.w - 40;                 // drawn leaf width (jamb clearance)
+        // Painted leaf material: the custom tint wins over the sectional grey.
+        const gBody = custom == null
+          ? garageMat : this._mat({ color: custom, roughness: 0.55, metalness: 0.2 });
         // Place a section carrier at arc-distance `a` from the bottom edge.
         const placeSection = (obj: THREE.Object3D, i: number) => {
           const a = (i + 0.5) * (H / N);
@@ -9197,6 +9239,46 @@ export class ThreeDRenderer {
             obj.position.set(-d.w / 2, H, -(pos - H));
             obj.rotation.x = -Math.PI / 2;     // fold flat onto the ceiling track
           }
+        };
+        // ── Exterior pull ───────────────────────────────────────────────────
+        // A dark bar at the leaf's bottom centre standing PROUD of the OUTSIDE
+        // face (+Z) only. Together with the interior-side tracks/opener below it
+        // is the front/back cue: the door reads correctly from either side. Its
+        // back 20 mm is BURIED inside the leaf, so no handle face is ever
+        // coplanar with the slab face (the coincident-face gotcha).
+        const HANDLE_PROUD = 40, HANDLE_BURY = 20;
+        const addExteriorHandle = (parent: THREE.Object3D, cx: number, cy: number,
+                                   halfT: number) => {
+          const t = HANDLE_PROUD + HANDLE_BURY;
+          const h = addBox(parent, Math.min(280, secW * 0.35), 46, t, handleMat,
+                           cx, cy, halfT - HANDLE_BURY + t / 2);
+          h.userData.garageHw = 'handle';
+          return h;
+        };
+        // ── Overhead tracks + opener (the interior half of the cue) ─────────
+        // Vertical side channels just inside the jambs, horizontal ceiling rails
+        // the sections fold onto, a 45° curve joining the two runs, and a centre
+        // opener rail with a motor head at its far end. ALL of it sits on
+        // door-local −Z — the same side the sections fold to, i.e. the garage
+        // INTERIOR — so the asymmetry alone tells a viewer which face is outside.
+        const addOverheadTracks = () => {
+          const railL = H * 0.95;              // ≥ the 0.9·H the top section folds back
+          const chW = 34, chT = 48;
+          const zTrack = -(DOOR_T / 2 + 30 + chT / 2);   // clear of the leaf's back face
+          for (const bx of [-26, -(d.w - 26)]) {
+            addBox(hinge, chW, H, chT, trackMat, bx, H / 2, zTrack)
+              .userData.garageHw = 'track';
+            addBox(hinge, chW, chW, railL, trackMat, bx, H + 55, -(railL / 2 + 60))
+              .userData.garageHw = 'rail';
+            const curve = addBox(hinge, chW, 120, chW, trackMat, bx, H - 10, zTrack - 5);
+            curve.rotation.x = Math.PI / 4;
+            curve.userData.garageHw = 'curve';
+          }
+          const openL = railL + 320;
+          addBox(hinge, 48, 48, openL, trackMat, -d.w / 2, H + 130, -(openL / 2 + 60))
+            .userData.garageHw = 'opener';
+          addBox(hinge, 280, 230, 300, motorMat, -d.w / 2, H + 130, -(openL + 210))
+            .userData.garageHw = 'motor';
         };
         if (gStyle === 'tilt_up') {
           // ── One-piece canopy: a single slab hung from a head pivot ─────────
@@ -9209,13 +9291,20 @@ export class ThreeDRenderer {
           pivot.rotation.x = (Math.PI / 2) * frac;
           pivot.userData.tiltPivot = true;
           hinge.add(pivot);
-          const slab = new THREE.Mesh(new THREE.BoxGeometry(secW, H, DOOR_T), garageMat);
+          const slab = new THREE.Mesh(new THREE.BoxGeometry(secW, H, DOOR_T), gBody);
           slab.position.set(0, -H / 2, 0);
           slab.userData.doorPanel = 'tilt';
           pivot.add(slab);
           // Pivot hardware at the two jambs (small, proud of the wall face).
           for (const bx of [-30, -(d.w - 30)])
             addBox(hinge, 44, 90, DOOR_T + 26, trackMat, bx, H - 45, 0);
+          // A one-piece canopy has no ceiling track — its INTERIOR cue is the
+          // pair of pivot arms reaching back into local −Z from each jamb.
+          for (const bx of [-30, -(d.w - 30)])
+            addBox(hinge, 26, 26, H * 0.45, trackMat, bx, H - 90, -(H * 0.225 + 70))
+              .userData.garageHw = 'arm';
+          // Exterior pull on the slab, riding the tilt (pivot-local coords).
+          addExteriorHandle(pivot, 0, -H + 150, DOOR_T / 2);
           // Latch on the slab's bottom rail — rides the tilt. Meaningless once
           // the door is mostly overhead, so it drops out past 60 % open.
           if (frac < GARAGE_LOCK_MAX_FRAC)
@@ -9226,7 +9315,9 @@ export class ThreeDRenderer {
           // lintel is simply INSIDE the coil and not drawn. The drum fattens
           // slightly with frac so the coil reads as growing.
           const NR = 12, secH = H / NR, curtainT = DOOR_T * 0.55;
-          const coilMat = this._mat({ color: 0xa7adb4, roughness: 0.5, metalness: 0.3 });
+          const coilMat = custom == null
+            ? this._mat({ color: 0xa7adb4, roughness: 0.5, metalness: 0.3 })
+            : this._mat({ color: custom, roughness: 0.5, metalness: 0.3 });
           for (let i = 0; i < NR; i++) {
             const pos = lift + (i + 0.5) * secH;
             if (pos > H) continue;             // wound onto the drum
@@ -9241,6 +9332,12 @@ export class ThreeDRenderer {
           // Guide rails at both jambs (deeper than the curtain so no coplanar face).
           for (const bx of [-20, -(d.w - 20)])
             addBox(hinge, 40, H, curtainT + 40, trackMat, bx, H / 2, 0);
+          // Tube-motor head on one drum end, set back INTO the garage (−Z) —
+          // a coiling door has no ceiling track, so this is its interior cue.
+          addBox(hinge, 200, 190, 200, motorMat, -60, H + 170, -190)
+            .userData.garageHw = 'motor';
+          // Exterior pull, riding the curtain's bottom edge like the latch does.
+          if (frac < 0.99) addExteriorHandle(hinge, -d.w / 2, lift + 110, curtainT / 2);
           if (frac < GARAGE_LOCK_MAX_FRAC)
             addLockBolts(hinge, -d.w / 2, lift + 90, 0, curtainT / 2);
         } else if (gStyle === 'glass_panel') {
@@ -9250,32 +9347,68 @@ export class ThreeDRenderer {
             const sec = new THREE.Group();
             placeSection(sec, i);
             hinge.add(sec);
-            addBox(sec, secW, railT, barT, doorFrameMat, 0, (slatH - railT) / 2, 0);
-            addBox(sec, secW, railT, barT, doorFrameMat, 0, -(slatH - railT) / 2, 0);
+            addBox(sec, secW, railT, barT, frameMatD, 0, (slatH - railT) / 2, 0);
+            addBox(sec, secW, railT, barT, frameMatD, 0, -(slatH - railT) / 2, 0);
             for (let k = 0; k < 4; k++) {
               const t = (k / 3) - 0.5;                       // −0.5 … +0.5
-              addBox(sec, stileW, slatH, barT, doorFrameMat, t * (secW - stileW), 0, 0);
+              addBox(sec, stileW, slatH, barT, frameMatD, t * (secW - stileW), 0, 0);
             }
             // Pane THINNER than the bars (20 vs 44) and lapped 8 mm under them,
             // so no glass face is ever coplanar with a frame face.
             addBox(sec, secW - 2 * stileW + 8, slatH - 2 * railT + 8, 20, doorGlassMat, 0, 0, 0);
+            if (i === 0) addExteriorHandle(sec, 0, -slatH * 0.3, barT / 2);
           }
           if (frac < GARAGE_LOCK_MAX_FRAC)
             addLockBolts(hinge, -d.w / 2, lift + 90, 0, barT / 2);
         } else {
-          // ── Sectional family (sectional / raised_panel / carriage) ─────────
-          // Identical slat geometry + motion; only the dressing differs, and
-          // decorations are CHILDREN of the slat so they ride the fold for free.
+          // ── Sectional family ───────────────────────────────────────────────
+          // sectional / raised_panel / carriage / sectional_windows_{top,left,
+          // right}: identical slat geometry + motion, only the dressing differs,
+          // and decorations are CHILDREN of the slat so they ride the fold free.
           const carriage = gStyle === 'carriage';
-          const slatMat = carriage
-            ? this._mat({ color: 0x8a6a4d, roughness: 0.75, metalness: 0.05 })
+          // A custom Door.color REPLACES the carriage wood tone too (the user
+          // asked for this leaf to be that colour); the trim derives from it so
+          // seams/braces still read against the field instead of vanishing.
+          const slatMat = custom != null ? gBody
+            : carriage ? this._mat({ color: 0x8a6a4d, roughness: 0.75, metalness: 0.05 })
             : garageMat;
-          const trimMat = carriage
-            ? this._mat({ color: 0x6d5238, roughness: 0.7, metalness: 0.05 })
+          const trimMat = customHex != null
+            ? this._mat({ color: hexToInt(lighten(customHex, 0.2)), roughness: 0.6, metalness: 0.1 })
+            : carriage ? this._mat({ color: 0x6d5238, roughness: 0.7, metalness: 0.05 })
             : this._mat({ color: 0xbcc2c8, roughness: 0.55, metalness: 0.2 });
           const ironMat = carriage
             ? this._mat({ color: 0x2f3439, roughness: 0.6, metalness: 0.35 })
             : trimMat;
+          // ── Windowed sectionals: LEFT / RIGHT are named from OUTSIDE ───────
+          // CHIRALITY — reason in DOOR-LOCAL coords only; do not "fix" one side
+          // in isolation (the mailbox-flag trap). The leaf's EXTERIOR face is
+          // door-local +Z: the sections fold to −Z, which is the garage interior,
+          // and the tracks/opener above live there too. A person standing OUTSIDE
+          // looks along −Z with +Y up — the same frame a THREE camera uses — so
+          // their RIGHT is door-local +X and their LEFT is door-local −X. A slat
+          // is an unrotated child of the hinge, so slat-local x shares that axis:
+          //   sideSign −1 ⇒ exterior LEFT, +1 ⇒ exterior RIGHT.
+          const winStyle = gStyle === 'sectional_windows_top' ? 'top'
+            : gStyle === 'sectional_windows_left' ? 'left'
+            : gStyle === 'sectional_windows_right' ? 'right' : null;
+          // One glazed band inside a slat: `cols` cells of translucent glass in a
+          // proud muntin grid. THREE distinct depths — slab 60, glass 84, bars
+          // 100 — so no face is coplanar, and each pane is 8 mm wider/taller than
+          // its clear opening so its edges die INSIDE the flanking bars.
+          const LITE_T = DOOR_T + 24, LITE_BAR_T = DOOR_T + 40, LITE_BAR_W = 40;
+          const addLiteBand = (slat: THREE.Object3D, cx: number,
+                               bw: number, bh: number, cols: number) => {
+            const cellW = bw / cols;
+            for (const s of [-1, 1])
+              addBox(slat, bw + LITE_BAR_W, LITE_BAR_W, LITE_BAR_T, trimMat, cx, s * bh / 2, 0);
+            for (let k = 0; k <= cols; k++)
+              addBox(slat, LITE_BAR_W, bh + LITE_BAR_W, LITE_BAR_T, trimMat,
+                     cx - bw / 2 + k * cellW, 0, 0);
+            for (let k = 0; k < cols; k++)
+              addBox(slat, cellW - LITE_BAR_W + 8, bh - LITE_BAR_W + 8, LITE_T,
+                     doorGlassMat, cx - bw / 2 + (k + 0.5) * cellW, 0, 0)
+                .userData.garageLite = true;
+          };
           for (let i = 0; i < N; i++) {
             const slat = new THREE.Mesh(new THREE.BoxGeometry(secW, slatH, DOOR_T), slatMat);
             placeSection(slat, i);
@@ -9310,11 +9443,34 @@ export class ThreeDRenderer {
                   addBox(slat, secW * 0.24, 34, DOOR_T + 8, ironMat,
                          s * (secW / 2 - secW * 0.14), 0, 0);
               }
+            } else if (winStyle === 'top') {
+              // A row of 4 lites across the TOP section only. With N = 5 that
+              // section spans 0.8·H..1.0·H, so the band — inset inside it —
+              // starts comfortably above four fifths of the door's height,
+              // which is the classic top-lite garage door.
+              if (i === N - 1) {
+                const bw = secW - 180, bh = slatH - 110;
+                if (bw > 200 && bh > 60) addLiteBand(slat, 0, bw, bh, 4);
+              }
+            } else if (winStyle) {
+              // A COLUMN of lites — one per section, all N — down one END of the
+              // leaf. See the chirality note above: −1 = exterior left, +1 = right.
+              const sideSign = winStyle === 'left' ? -1 : 1;
+              const colW = Math.max(220, Math.min(560, secW * 0.22));
+              const bh = slatH - 110;
+              if (bh > 60 && colW * 1.4 < secW)
+                addLiteBand(slat, sideSign * (secW / 2 - 90 - colW / 2), colW, bh, 1);
             }
+            // Exterior pull on the bottom section (rides the fold with it).
+            if (i === 0) addExteriorHandle(slat, 0, -slatH * 0.28, DOOR_T / 2);
           }
           if (frac < GARAGE_LOCK_MAX_FRAC)
             addLockBolts(hinge, -d.w / 2, lift + 90, 0, DOOR_T / 2);
         }
+        // Every style that FOLDS onto a ceiling track gets the vertical channels,
+        // horizontal rails and centre opener. roll_up (drum + tube motor) and
+        // tilt_up (head pivot + arms) carry their own interior mechanism above.
+        if (gStyle !== 'roll_up' && gStyle !== 'tilt_up') addOverheadTracks();
         // Open-percentage readout above the opening — a camera-facing badge for
         // every style, shown only while genuinely PARTIAL (a shut or fully open
         // door needs no number; the geometry already says it). The sprite's
@@ -9361,6 +9517,8 @@ export class ThreeDRenderer {
           slab.userData.doorPanel = 'slide';
           // Pocket mouth jamb: a slim strip at the retracting end so the kind
           // still reads when the slab is fully closed (the cavity is invisible).
+          // (The mouth jamb stays untinted: it belongs to the WALL cavity, not
+          //  the leaf, so Door.color must not repaint it.)
           addBox(hinge, 30, DOOR_H, DOOR_T + 24, doorFrameMat, dir > 0 ? 0 : -w, DOOR_H / 2, 0);
           // Edge pull (a pocket slab has no room for a proud deadbolt).
           addLockBolts(hinge, slabX + dir * (w / 2 - 90), DOOR_H * 0.5, 0, SLAB_T / 2,
@@ -9378,10 +9536,10 @@ export class ThreeDRenderer {
             g.position.set(cx, 0, z);
             g.userData.doorPanel = moving ? 'slide' : 'fixed';
             const railT = 80, stileW = 70, panelT = 44;
-            addBox(g, pw, railT, panelT, doorFrameMat, 0, DOOR_H - railT / 2, 0);
-            addBox(g, pw, railT, panelT, doorFrameMat, 0, railT / 2, 0);
+            addBox(g, pw, railT, panelT, frameMatD, 0, DOOR_H - railT / 2, 0);
+            addBox(g, pw, railT, panelT, frameMatD, 0, railT / 2, 0);
             for (const s of [-1, 1])
-              addBox(g, stileW, DOOR_H, panelT, doorFrameMat, s * (pw - stileW) / 2, DOOR_H / 2, 0);
+              addBox(g, stileW, DOOR_H, panelT, frameMatD, s * (pw - stileW) / 2, DOOR_H / 2, 0);
             // Glass inset into the frame: THINNER in z (20 vs 44) and lapped
             // 8 mm under the stiles/rails, so no face is coplanar with a bar.
             addBox(g, pw - 2 * stileW + 8, DOOR_H - 2 * railT + 8, 20, doorGlassMat,
@@ -9427,15 +9585,15 @@ export class ThreeDRenderer {
           // bars are DEEPER than the pane (42 vs 20) so they read as proud
           // grid lines instead of hatching against a coplanar glass face.
           const railT = 90, stileW = 80;
-          addBox(g, leafW, railT, DOOR_T, doorFrameMat, cx, DOOR_H - railT / 2, 0);
-          addBox(g, leafW, railT, DOOR_T, doorFrameMat, cx, railT / 2, 0);
+          addBox(g, leafW, railT, DOOR_T, frameMatD, cx, DOOR_H - railT / 2, 0);
+          addBox(g, leafW, railT, DOOR_T, frameMatD, cx, railT / 2, 0);
           for (const s of [-1, 1])
-            addBox(g, stileW, DOOR_H, DOOR_T, doorFrameMat, cx + s * (leafW - stileW) / 2, DOOR_H / 2, 0);
+            addBox(g, stileW, DOOR_H, DOOR_T, frameMatD, cx + s * (leafW - stileW) / 2, DOOR_H / 2, 0);
           const gw = leafW - 2 * stileW, gh = DOOR_H - 2 * railT;
           addBox(g, gw + 8, gh + 8, 20, doorGlassMat, cx, DOOR_H / 2, 0);
-          addBox(g, 26, gh, DOOR_T * 0.7, doorFrameMat, cx, DOOR_H / 2, 0);   // 2 columns
+          addBox(g, 26, gh, DOOR_T * 0.7, frameMatD, cx, DOOR_H / 2, 0);   // 2 columns
           for (const s of [-1, 1])                                            // 3 rows
-            addBox(g, gw, 26, DOOR_T * 0.7, doorFrameMat, cx, DOOR_H / 2 + s * gh / 6, 0);
+            addBox(g, gw, 26, DOOR_T * 0.7, frameMatD, cx, DOOR_H / 2 + s * gh / 6, 0);
         };
         buildLeaf(leafA, -1);
         buildLeaf(leafB, +1);
@@ -9819,6 +9977,209 @@ export class ThreeDRenderer {
         }
         break;
       }
+      // ── Chair styles (2026-08) ──────────────────────────────────────────
+      // Every one is a plain seat-bearing kind: the SitSpot machinery registers
+      // its single centered spot straight off `def.seat`, and an eat/work
+      // activity resolves from an ADJACENT table/desk (never authored here), so
+      // none of them needs a membership list anywhere. Sibling boxes always
+      // interpenetrate or stagger — never exactly coplanar visible faces.
+      case 'armchair': {
+        // Living-room club chair: deep cushion on a plinth, thick padded arms,
+        // low padded back tucked BETWEEN the arms (its ends bury inside them, so
+        // no side face lines up with an arm's outer face).
+        const seatH = def.seat ?? 420;
+        const seatT = 130, seatY = seatH - seatT / 2;
+        const armW = Math.min(170, W * 0.19), armH = HT * 0.76;
+        const backT = Math.min(170, D * 0.2), backH = HT - seatH;
+        const plinthH = Math.max(40, seatY - seatT / 2);
+        // Plinth is narrower than the arms in BOTH axes (coincident-face gotcha).
+        addBox(Math.max(80, W - 2 * armW - 40), plinthH, D * 0.86, dark, 0, plinthH / 2, 0);
+        addBox(W - 2 * armW + 40, seatT, D * 0.74, cushion, 0, seatY, -D * 0.06);
+        addBox(W - 2 * armW + 80, backH, backT, cushion, 0, seatH + backH / 2, D / 2 - backT / 2);
+        for (const sx of [-1, 1])
+          addBox(armW, armH, D, cushion, sx * (W / 2 - armW / 2), armH / 2, 0);
+        break;
+      }
+      case 'office_chair':
+      case 'gaming_chair': {
+        // Task / racing chair: a 5-star caster base + gas-lift column carrying a
+        // contoured seat and a rearward-tilted back. The racing variant adds
+        // bucket bolsters, a headrest pillow and bright accent stripes.
+        const racing = kind === 'gaming_chair';
+        const seatH = def.seat ?? 470;
+        const metal = this._mat({ color: 0x8a9099, metalness: 0.7, roughness: 0.35 });
+        // 5-star base — five spokes at 72° with a caster ball at each tip.
+        const spokeLen = Math.max(200, W * 0.44), spokeY = 34;
+        for (let i = 0; i < 5; i++) {
+          const a = (i * 2 * Math.PI) / 5;
+          // rotation.y = a maps local +X onto (cos a, 0, −sin a), so the spoke
+          // centre must sit at half that vector for the arm to radiate outward.
+          const sp = addBox(spokeLen, 28, 52, dark,
+                            Math.cos(a) * spokeLen / 2, spokeY, -Math.sin(a) * spokeLen / 2);
+          sp.rotation.y = a;
+          sp.userData.chairStarLeg = true;
+          const cas = new THREE.Mesh(new THREE.SphereGeometry(26, 12, 10), dark);
+          cas.position.set(Math.cos(a) * spokeLen, 24, -Math.sin(a) * spokeLen);
+          cas.userData.chairCaster = true;
+          grp.add(cas);
+        }
+        // Hub disc buries the spokes' inner end caps; column reaches the seat.
+        addCyl(72, 78, 60, metal, 0, 54, 0, 16);
+        const seatT = racing ? 110 : 90;
+        const seatY = seatH - seatT / 2, colTop = seatY - seatT / 2;
+        addCyl(38, 44, Math.max(60, colTop - 60), metal, 0, (60 + colTop) / 2, 0, 14);
+        addBox(W * 0.86, seatT, D * 0.8, cushion, 0, seatY, -D * 0.02);
+        if (racing) {
+          // Seat bolsters, tipped so their outer edges rise (a bucket).
+          for (const sx of [-1, 1]) {
+            const b = addBox(W * 0.14, seatT * 1.5, D * 0.7, cushion,
+                             sx * W * 0.4, seatY + seatT * 0.28, -D * 0.02);
+            b.rotation.z = -sx * 0.22;
+            b.userData.chairBolster = true;
+          }
+        }
+        // Tilt-back mechanism block, then the back shell (rotation.x tips the
+        // top toward +Z = rearward).
+        addBox(W * 0.2, 150, D * 0.2, dark, 0, seatH + 30, D * 0.22);
+        const backH = HT - seatH - (racing ? 170 : 90);
+        const backT = racing ? 110 : 80;
+        const backY = seatH + backH / 2;
+        const backZ = D / 2 - backT / 2 - (racing ? 40 : 60);
+        const back = addBox(W * (racing ? 0.62 : 0.66), backH, backT, cushion, 0, backY, backZ);
+        back.rotation.x = 0.13;
+        back.userData.chairBack = true;
+        // Headrest: a slim hint bar on the task chair, a real pillow on the racer.
+        const hrH = racing ? 150 : 90;
+        const hr = addBox(racing ? W * 0.44 : W * 0.5, hrH, backT * (racing ? 1.05 : 0.8),
+                          racing ? pillow : cushion,
+                          0, HT - hrH / 2 - 10, backZ + (racing ? 30 : 20));
+        hr.rotation.x = 0.13;
+        hr.userData.chairHeadrest = true;
+        if (racing) {
+          const accent = this._mat({ color: 0xe53935, roughness: 0.6, metalness: 0.05 });
+          // Back bolsters standing proud of the shell's front (−Z) face.
+          for (const sx of [-1, 1]) {
+            const wing = addBox(W * 0.11, backH * 0.9, backT * 1.15, cushion,
+                                sx * W * 0.28, backY, backZ - backT * 0.18);
+            wing.rotation.x = 0.13;
+            wing.rotation.y = -sx * 0.16;
+            wing.userData.chairBolster = true;
+          }
+          // Racing stripes: thin bright panels proud of the shell front.
+          for (const sx of [-1, 1]) {
+            const st = addBox(Math.max(24, W * 0.045), backH * 0.8, 26, accent,
+                              sx * W * 0.14, backY, backZ - backT * 0.5 - 10);
+            st.rotation.x = 0.13;
+            st.userData.chairAccent = true;
+          }
+          addBox(W * 0.5, 24, D * 0.06, accent, 0, seatY + seatT / 2 + 6, -D * 0.3)
+            .userData.chairAccent = true;
+        }
+        break;
+      }
+      case 'bar_stool': {
+        // Counter-height perch: round seat disc, four splayed legs, footring.
+        // The 750 mm seat puts the sitter at a counter / island top — the seated
+        // shoulder-clearance IK (seatYeff) generalizes to any seat height.
+        const seatH = def.seat ?? 750;
+        const seatT = 80, seatBotY = Math.max(120, seatH - seatT);
+        const metal = this._mat({ color: 0x8a9099, metalness: 0.7, roughness: 0.35 });
+        const span = Math.min(W, D);
+        const topR = span * 0.22, botR = span * 0.48;
+        // Splayed legs: a Y-axis cylinder re-aimed onto each top→bottom vector.
+        const up = new THREE.Vector3(0, 1, 0), dir = new THREE.Vector3();
+        for (let i = 0; i < 4; i++) {
+          const a = Math.PI / 4 + (i * Math.PI) / 2;
+          const tx = Math.cos(a) * topR, tz = Math.sin(a) * topR;
+          const bx = Math.cos(a) * botR, bz = Math.sin(a) * botR;
+          dir.set(bx - tx, -seatBotY, bz - tz);
+          const leg = addCyl(20, 24, dir.length(), metal,
+                             (tx + bx) / 2, seatBotY / 2, (tz + bz) / 2, 12);
+          leg.quaternion.setFromUnitVectors(up, dir.normalize());
+          leg.userData.chairLeg = true;
+        }
+        // Footring at ~1/3 height, its radius interpolated onto the leg splay.
+        const ringY = seatBotY * 0.34;
+        const ringR = botR + (topR - botR) * (ringY / seatBotY);
+        const ring = new THREE.Mesh(new THREE.TorusGeometry(ringR, 16, 8, 24), metal);
+        ring.rotation.x = Math.PI / 2;
+        ring.position.set(0, ringY, 0);
+        ring.userData.stoolFootring = true;
+        grp.add(ring);
+        // Seat: a padded disc on a SLIMMER under-plate, so the plate's rim never
+        // lands coplanar with the cushion rim.
+        addCyl(botR * 0.9, botR * 0.86, 26, metal, 0, seatBotY + 13, 0, 20);
+        addCyl(botR * 0.96, botR * 0.92, seatT - 20, cushion,
+               0, seatH - (seatT - 20) / 2, 0, 20).userData.stoolSeatDisc = true;
+        break;
+      }
+      case 'wingback_chair': {
+        // Classic reading chair: tall back, rolled arms, short legs, and two
+        // wing panels at the back corners angled forward around the sitter.
+        const seatH = def.seat ?? 430;
+        const legH = 130, seatT = 120, seatY = seatH - seatT / 2;
+        const armW = Math.min(150, W * 0.17), armH = seatH + 230;
+        const backT = Math.min(150, D * 0.17);
+        const legT = 55, xo = W / 2 - legT / 2 - 40, zo = D / 2 - legT / 2 - 40;
+        for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]] as const)
+          addBox(legT, legH, legT, dark, sx * xo, legH / 2, sz * zo);
+        const skirtH = Math.max(30, seatY - seatT / 2 - legH);
+        addBox(Math.max(80, W - 2 * armW - 30), skirtH, D * 0.8, dark, 0, legH + skirtH / 2, 0);
+        addBox(W - 2 * armW + 40, seatT, D * 0.72, cushion, 0, seatY, -D * 0.05);
+        // Tall back: pulled 10 mm forward of the arms' rear faces so the two
+        // rear planes never coincide over the strip where they overlap in x.
+        const backH2 = HT - seatH + seatT;
+        addBox(W - 2 * armW + 70, backH2, backT, cushion,
+               0, (seatH - seatT) + backH2 / 2, D / 2 - backT / 2 - 10);
+        for (const sx of [-1, 1]) {
+          addBox(armW, armH, D, cushion, sx * (W / 2 - armW / 2), armH / 2, 0);
+          const roll = addCyl(armW / 2, armW / 2, D * 0.92, cushion,
+                              sx * (W / 2 - armW / 2), armH, 0, 16);
+          roll.rotation.x = Math.PI / 2;
+          roll.userData.chairArmRoll = true;
+        }
+        // Wings: flat panels at the top back corners, yawed so their FRONT ends
+        // curl inward over the sitter (the wingback silhouette).
+        for (const sx of [-1, 1]) {
+          const wing = addBox(70, HT - armH + 60, D * 0.44, cushion,
+                              sx * (W / 2 - 55), armH + (HT - armH) / 2 - 30, D * 0.14);
+          wing.rotation.y = sx * 0.34;
+          wing.userData.chairWing = true;
+        }
+        break;
+      }
+      case 'folding_chair': {
+        // Utility folding chair: an X-fold tubular side frame (each side is two
+        // crossing limbs — front foot → seat rear, rear foot → seat front — plus
+        // a back post), a thin flat seat pan and a thin back rail. All slim
+        // stock, so the silhouette reads as frame rather than mass.
+        const seatH = def.seat ?? 440;
+        const up = new THREE.Vector3(0, 1, 0), dir = new THREE.Vector3();
+        const addTube = (x0: number, y0: number, z0: number,
+                         x1: number, y1: number, z1: number, r: number) => {
+          dir.set(x1 - x0, y1 - y0, z1 - z0);
+          const m = addCyl(r, r, dir.length(), steel,
+                           (x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2, 10);
+          m.quaternion.setFromUnitVectors(up, dir.normalize());
+          m.userData.chairFrameTube = true;
+          return m;
+        };
+        const sxo = W / 2 - 22, zF = -D / 2 + 40, zB = D / 2 - 40;
+        const pivotY = Math.max(80, seatH - 20);
+        for (const sx of [-1, 1]) {
+          addTube(sx * sxo, 0, zF, sx * sxo, pivotY, zB - 25, 16);   // X limb A
+          addTube(sx * sxo, 0, zB, sx * sxo, pivotY, zF + 25, 16);   // X limb B
+          addTube(sx * sxo, pivotY - 60, zB - 30, sx * sxo, HT - 20, zB - 6, 15);  // back post
+        }
+        // Foot rails tying the two side frames together.
+        addBox(W - 30, 22, 22, dark, 0, 22, zF);
+        addBox(W - 30, 22, 22, dark, 0, 22, zB);
+        addBox(W - 44, 24, D * 0.6, wood, 0, seatH - 12, -D * 0.1);
+        const bpH = Math.max(60, HT - seatH - 130);
+        const bp = addBox(W - 70, bpH, 24, wood, 0, HT - 40 - bpH / 2, zB + 4);
+        bp.rotation.x = 0.1;
+        break;
+      }
       case 'chaise': {
         const seatT = 80, seatY = (def.seat ?? 400) - seatT / 2;
         addBox(W, seatT, D, cushion, 0, seatY, 0);
@@ -9899,8 +10260,12 @@ export class ThreeDRenderer {
         addBox(armW, HT * 0.85, D, cushion,  W / 2 - armW / 2, HT * 0.85 / 2, 0);
         break;
       }
+      case 'bed_twin':
+      case 'bed_full':
+      case 'bed_king':
       case 'bed': {
-        // Frame + mattress + blanket + pillows.
+        // Frame + mattress + blanket + pillows. One branch for the whole bed
+        // family — the sizes differ only in their def dims and pillow count.
         addBox(W + 60, HT * 0.45, D + 60, dark, 0, HT * 0.45 / 2, 0);  // frame/box spring
         addBox(W, HT * 0.6, D, pillow, 0, HT * 0.45 + HT * 0.3, 0);   // mattress (white)
         // Blanket draped over the foot 2/3 of the bed, slightly wider AND
@@ -9914,10 +10279,14 @@ export class ThreeDRenderer {
         // Headboard on +Z side.
         const hbH = 800, hbT = 60;
         addBox(W, hbH, hbT, dark, 0, hbH / 2, D / 2 + hbT / 2);
-        // Two pillows.
-        const pw = W * 0.42, pd = D * 0.18, ph = 90;
-        addBox(pw, ph, pd, pillow, -W * 0.22, HT * 1.05 + ph / 2, D / 2 - pd / 2 - 50);
-        addBox(pw, ph, pd, pillow,  W * 0.22, HT * 1.05 + ph / 2, D / 2 - pd / 2 - 50);
+        // Pillow row across the head end — 1 / 2 / 3 by kind, widths scaling
+        // with the bed. The 2-pillow case is today's queen build exactly.
+        const lay = bedPillowLayout(fu.kind, W);
+        const pd = D * 0.18, ph = 90;
+        for (let i = 0; i < lay.count; i++) {
+          const px = (i - (lay.count - 1) / 2) * lay.pitch;
+          addBox(lay.pw, ph, pd, pillow, px, HT * 1.05 + ph / 2, D / 2 - pd / 2 - 50);
+        }
         break;
       }
       case 'bookshelf': {

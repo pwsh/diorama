@@ -450,6 +450,108 @@
     ok('hit_unbound_open_double_leafA', !!hitDoor(pDbl, view, { x: 3000, y: 3300 }));
   }
 
+  // ═══ 15. Door.color — leaf tint in 3D, closed-stroke tint in 2D ═══════════
+  {
+    const RED = '#c62828';
+    // 3D: the swing panel and the sliding slab take the tint while SHUT.
+    // The LEAF's material: prefer the mesh the builder tags as the panel/slab
+    // (a sliding door's first mesh is its TRACK, which is hardware and must
+    // stay untinted), else the first opaque non-lock mesh.
+    const bodyMat = (over, frac) => {
+      const g = build(mkDoor(Object.assign({ w: 900 }, over)), frac);
+      const ms = realMeshes(g).filter(m => !m.material.transparent && m.userData?.kind !== 'lock');
+      return (ms.find(m => m.userData?.doorPanel) ?? ms[0]).material;
+    };
+    for (const kind of ['swing', 'sliding', 'pocket', 'double', 'gate']) {
+      const plain = bodyMat({ kind }, 0), red = bodyMat({ kind, color: RED }, 0);
+      ok(`col3d_${kind}_tinted`, red.color.getHex() !== plain.color.getHex(),
+         `${red.color.getHex().toString(16)} vs ${plain.color.getHex().toString(16)}`);
+      ok(`col3d_${kind}_shut_no_glow`, red.emissive.getHex() === 0);
+    }
+    // A sliding door's top TRACK is hardware — never repainted by Door.color.
+    {
+      const trackOf = (over) => {
+        const g = build(mkDoor(Object.assign({ kind: 'sliding', w: 900 }, over)), 0);
+        return realMeshes(g).filter(m => !m.material.transparent && !m.userData?.doorPanel
+                                      && m.userData?.kind !== 'lock')[0].material.color.getHex();
+      };
+      ok('col3d_slide_track_untinted', trackOf({}) === trackOf({ color: RED }),
+         trackOf({ color: RED }).toString(16));
+    }
+    // OPEN + custom colour: the tint holds, and a REDUCED green emissive keeps
+    // the open state readable (the documented compromise — see three-renderer).
+    {
+      const openPlain = bodyMat({ kind: 'swing' }, 1);
+      const openRed = bodyMat({ kind: 'swing', color: RED }, 1);
+      const shutRed = bodyMat({ kind: 'swing', color: RED }, 0);
+      ok('col3d_open_keeps_tint', openRed.color.getHex() === shutRed.color.getHex()
+                               && openRed.color.getHex() !== openPlain.color.getHex());
+      ok('col3d_open_green_reduced',
+         openRed.emissive.getHex() === openPlain.emissive.getHex()
+         && openRed.emissiveIntensity > 0
+         && openRed.emissiveIntensity < openPlain.emissiveIntensity,
+         `${openRed.emissiveIntensity} vs ${openPlain.emissiveIntensity}`);
+    }
+    // GLASS is never tinted — french muntin grid + sliding-glass panes.
+    for (const kind of ['french', 'sliding_glass']) {
+      const a = transparentMats(build(mkDoor({ kind, w: 1500 }), 0)).map(m => m.material.color.getHex());
+      const b = transparentMats(build(mkDoor({ kind, w: 1500, color: RED }), 0)).map(m => m.material.color.getHex());
+      ok(`col3d_${kind}_glass_untinted`, a.length > 0 && a.join() === b.join(), `${a[0]} vs ${b[0]}`);
+      // …while the leaf's own stiles/rails DO move.
+      const bars = (o) => realMeshes(o).filter(m => !m.material.transparent)
+                            .map(m => m.material.color.getHex());
+      ok(`col3d_${kind}_frame_tinted`,
+         bars(build(mkDoor({ kind, w: 1500, color: RED }), 0))[0] !== bars(build(mkDoor({ kind, w: 1500 }), 0))[0]);
+    }
+    // Garbage hex falls back to the shipped grey (never a NaN colour).
+    {
+      const grey = bodyMat({ kind: 'swing' }, 0).color.getHex();
+      for (const bad of ['', 'red', '#12', 'rgb(1,2,3)', null])
+        ok(`col3d_garbage_${String(bad) || 'empty'}`,
+           bodyMat({ kind: 'swing', color: bad }, 0).color.getHex() === grey);
+    }
+
+    // ── 2D: the CLOSED stroke adopts the tint; state colours always win ──────
+    // Hue-census probes over the whole canvas: the plan is grey/blue-grey, so a
+    // red leaf and a green (open) leaf are each unambiguous.
+    const census = (pred) => {
+      const d = ctx.getImageData(0, 0, cvs.width, cvs.height).data;
+      let n = 0;
+      for (let i = 0; i < d.length; i += 4) if (pred(d[i], d[i + 1], d[i + 2])) n++;
+      return n;
+    };
+    const redish = () => census((r2, g2) => r2 > g2 + 40);
+    const greenish = () => census((r2, g2) => g2 > r2 + 40);
+    const paint = async (over) => {
+      const p = await mkPlanner([D2(Object.assign({ kind: 'swing', w: 1200 }, over))]);
+      drawAll(ctx, p, view, null);
+    };
+    await paint({});                     const redPlainShut = redish();
+    await paint({ color: RED });         const redTintShut = redish();
+    ok('col2d_closed_adopts_tint', redTintShut > redPlainShut + 20,
+       `${redPlainShut} → ${redTintShut}`);
+    // OPEN: the stroke must stay GREEN — the tint may not override state.
+    await paint({ localState: 'on' });               const grnPlainOpen = greenish();
+    await paint({ localState: 'on', color: RED });
+    const grnTintOpen = greenish(), redTintOpen = redish();
+    ok('col2d_open_stays_green', grnTintOpen > 20 && Math.abs(grnTintOpen - grnPlainOpen) < grnPlainOpen * 0.5,
+       `${grnPlainOpen} vs ${grnTintOpen}`);
+    ok('col2d_open_not_repainted_red', redTintOpen < redTintShut,
+       `${redTintOpen} < ${redTintShut}`);
+    // UNAVAILABLE also wins (it is already red — assert the tint cannot make a
+    // DIFFERENT-hued door hide the alarm state: a green tint still reads red).
+    await paint({ entity_id: 'binary_sensor.d', color: '#00e676' });
+    const grnTinted = greenish();
+    {
+      const p = await mkPlanner([D2({ kind: 'swing', w: 1200, entity_id: 'binary_sensor.d',
+                                      color: '#00e676' })],
+                                { 'binary_sensor.d': { state: 'unavailable', attributes: {} } });
+      drawAll(ctx, p, view, null);
+      ok('col2d_unavailable_wins', greenish() < grnTinted && redish() > redPlainShut,
+         `${greenish()} < ${grnTinted}`);
+    }
+  }
+
   const n = results.length, pcount = results.filter(x => x.startsWith('ok')).length;
   const pass = pcount === n;
   document.title = `DOORKINDS ${pass ? 'PASS' : 'FAIL'} ${pcount}/${n} ${results.filter(x => !x.startsWith('ok')).join(' ')}`;

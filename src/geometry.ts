@@ -809,7 +809,8 @@ export function bayProjectSign(
 // A window cut also carries its sill/height so the 3D wall builder can size the
 // sub-sill and header runs per-window (doors leave these undefined). A door cut
 // may carry `head` — the opening-top height where its lintel starts (garage doors
-// use the taller GARAGE_DOOR_H; swing doors leave it undefined → the DOOR_HEAD default).
+// use their own garageDoorHeightMm — GARAGE_DOOR_H unless Door.garageHeight overrides
+// it; swing doors leave it undefined → the DOOR_HEAD default).
 export interface WallOpeningCut { t0: number; t1: number; kind: 'door' | 'window'; sill?: number; height?: number; head?: number; }
 
 // Merge a sorted-by-t0 opening list into the solid complement of [0, len].
@@ -848,7 +849,8 @@ function solidComplement(cuts: { t0: number; t1: number }[], len: number): { t0:
 //                With no windows on the segment this is === `solids` by value.
 export function wallCutsForSegment(
   a: Vec2, b: Vec2,
-  doors: { x: number; y: number; w: number; rotation: number; kind?: DoorKind }[],
+  doors: { x: number; y: number; w: number; rotation: number; kind?: DoorKind;
+           garageHeight?: number }[],
   windows: { x: number; y: number; w: number; sill?: number; height?: number; kind?: WindowKind }[],
   tol = 150,
 ): { solids: { t0: number; t1: number }[]; openings: WallOpeningCut[];
@@ -869,7 +871,10 @@ export function wallCutsForSegment(
   };
   for (const d of doors) {
     const c = doorSpanCenter(d);
-    collect(c.x, c.y, d.w, 'door', d.kind === 'garage' ? { head: GARAGE_DOOR_H } : undefined);
+    // A garage cut's lintel follows the door's OWN opening height (absent =
+    // GARAGE_DOOR_H, so untouched doors cut exactly the same hole as before).
+    collect(c.x, c.y, d.w, 'door',
+            d.kind === 'garage' ? { head: garageDoorHeightMm(d) } : undefined);
   }
   // Resolve sill/height through the KIND-AWARE helpers (a bay is cut lower and
   // taller than a punched opening) so the wall cut can never disagree with the
@@ -2709,7 +2714,21 @@ export function logicLightState(logic: { rules?: ValueRule[]; offColor?: string 
 
 // Furniture kind defaults: footprint (mm) + 3D height (mm) + tint.
 // `back` flags whether the kind has an implied backrest on the +Y edge.
-export type FurnitureCat = 'furniture' | 'appliance' | 'bathroom' | 'outdoor' | 'theater' | 'vehicle';
+// Sidebar / toolbar grouping. The original single `furniture` bucket grew to
+// 33 kinds (user: "the 'furniture' category has grown too inclusive"), so it is
+// SPLIT into seating / tables / bedroom / storage / stairs / decor. `furniture`
+// itself stays in the union as the LEGACY FALLBACK — `furnitureCat()` still
+// defaults to it, so a user ObjectRecipe carrying no `cat` (or an older one
+// carrying `cat:'furniture'`) keeps resolving. Every built-in def now sets its
+// cat explicitly (pinned by toolbar-test).
+// NB every consumer outside the pickers tests `=== 'appliance'` / `!== 'appliance'`
+// (layer gating, the three-view appliance-state hash, ghost-floor gates), so the
+// new cats fall through to the FURNITURE side automatically. Never write a
+// positive `cat === 'furniture'` test — it would silently drop the new cats.
+export type FurnitureCat =
+  | 'furniture'   // legacy / custom-object fallback (furnitureCat's default)
+  | 'seating' | 'tables' | 'bedroom' | 'storage' | 'stairs' | 'decor'
+  | 'appliance' | 'bathroom' | 'outdoor' | 'theater' | 'vehicle';
 
 export interface FurnitureKindDef {
   label: string;
@@ -2729,42 +2748,63 @@ export interface FurnitureKindDef {
 }
 
 export const FURNITURE_KINDS: Record<FurnitureKind, FurnitureKindDef> = {
-  block:         { label: 'Block',         w: 600,  h: 600,  ht: 600,  back: 'none', color: 0x8d6e63, frontArrow: false },
-  table:         { label: 'Table',         w: 1500, h: 900,  ht: 750,  back: 'none', color: 0x8d6e63, activity: 'eat_at_table' },
-  chair:         { label: 'Chair',         w: 500,  h: 500,  ht: 900,  seat: 450, back: 'tall', color: 0x6d4c41 },
-  rocking_chair: { label: 'Rocking chair', w: 600,  h: 800,  ht: 1000, seat: 450, back: 'tall', color: 0x5d4037 },
-  chaise:        { label: 'Chaise',        w: 1800, h: 750,  ht: 600,  seat: 400, back: 'low',  color: 0x795548 },
-  bench:         { label: 'Bench',         w: 1500, h: 400,  ht: 450,  seat: 440, back: 'none', color: 0x6d4c41 },
-  desk:          { label: 'Desk',          w: 1400, h: 700,  ht: 750,  back: 'none', color: 0x4e342e, surface: true, activity: 'work_at_desk' },
-  sofa:          { label: 'Sofa',          w: 2000, h: 900,  ht: 850,  seat: 450, back: 'tall', color: 0x37474f },
-  sofa_l_left:   { label: 'Sofa · L (left)',  w: 2600, h: 1800, ht: 850, seat: 450, back: 'tall', color: 0x37474f },
-  sofa_l_right:  { label: 'Sofa · L (right)', w: 2600, h: 1800, ht: 850, seat: 450, back: 'tall', color: 0x37474f },
-  sofa_u:        { label: 'Sofa · U',         w: 3200, h: 2000, ht: 850, seat: 450, back: 'tall', color: 0x37474f },
-  bed:           { label: 'Bed',           w: 2000, h: 1500, ht: 500,  back: 'low',  color: 0x546e7a, activity: 'sleep_shared' },
-  rug:           { label: 'Rug',           w: 2000, h: 1400, ht: 5,    back: 'none', color: 0x5d4037, rug: true, frontArrow: false },
-  bookshelf:     { label: 'Bookshelf',     w: 800,  h: 350,  ht: 1800, back: 'none', color: 0x3e2723, activity: 'browse_bookshelf' },
+  block:         { label: 'Block',         w: 600,  h: 600,  ht: 600,  back: 'none', color: 0x8d6e63, cat: 'decor', frontArrow: false },
+  table:         { label: 'Table',         w: 1500, h: 900,  ht: 750,  back: 'none', color: 0x8d6e63, cat: 'tables', activity: 'eat_at_table' },
+  chair:         { label: 'Chair',         w: 500,  h: 500,  ht: 900,  seat: 450, back: 'tall', color: 0x6d4c41, cat: 'seating' },
+  rocking_chair: { label: 'Rocking chair', w: 600,  h: 800,  ht: 1000, seat: 450, back: 'tall', color: 0x5d4037, cat: 'seating' },
+  // Chair styles for different rooms/uses. All plain seat-bearing kinds: the
+  // seat↔table tuck (resolveSeatTableCollision), the table group-move
+  // (seatBelongsToTable) and the renderer's SitSpot registration all gate on
+  // `def.seat` being set, so these ride along with no membership list. None
+  // carries its own `activity` — an eat/work activity is resolved from the
+  // ADJACENT host table/desk exactly like a plain `chair` (counters/islands are
+  // deliberately not hosts, so a bar_stool at an island perches without one).
+  armchair:      { label: 'Armchair',      w: 900,  h: 850,  ht: 750,  seat: 420, back: 'low',  color: 0x96685c, cat: 'seating' },
+  office_chair:  { label: 'Office chair',  w: 660,  h: 660,  ht: 1150, seat: 480, back: 'tall', color: 0x3a3d43, cat: 'seating' },
+  bar_stool:     { label: 'Bar stool',     w: 420,  h: 420,  ht: 1000, seat: 750, back: 'none', color: 0x6d4c41, cat: 'seating' },
+  wingback_chair:{ label: 'Wingback chair',w: 820,  h: 850,  ht: 1150, seat: 430, back: 'tall', color: 0x4a5d52, cat: 'seating' },
+  folding_chair: { label: 'Folding chair', w: 470,  h: 500,  ht: 800,  seat: 440, back: 'tall', color: 0x8b9199, cat: 'seating' },
+  gaming_chair:  { label: 'Gaming chair',  w: 700,  h: 700,  ht: 1300, seat: 470, back: 'tall', color: 0x26282e, cat: 'seating' },
+  chaise:        { label: 'Chaise',        w: 1800, h: 750,  ht: 600,  seat: 400, back: 'low',  color: 0x795548, cat: 'seating' },
+  bench:         { label: 'Bench',         w: 1500, h: 400,  ht: 450,  seat: 440, back: 'none', color: 0x6d4c41, cat: 'seating' },
+  desk:          { label: 'Desk',          w: 1400, h: 700,  ht: 750,  back: 'none', color: 0x4e342e, cat: 'tables', surface: true, activity: 'work_at_desk' },
+  sofa:          { label: 'Sofa',          w: 2000, h: 900,  ht: 850,  seat: 450, back: 'tall', color: 0x37474f, cat: 'seating' },
+  sofa_l_left:   { label: 'Sofa · L (left)',  w: 2600, h: 1800, ht: 850, seat: 450, back: 'tall', color: 0x37474f, cat: 'seating' },
+  sofa_l_right:  { label: 'Sofa · L (right)', w: 2600, h: 1800, ht: 850, seat: 450, back: 'tall', color: 0x37474f, cat: 'seating' },
+  sofa_u:        { label: 'Sofa · U',         w: 3200, h: 2000, ht: 850, seat: 450, back: 'tall', color: 0x37474f, cat: 'seating' },
+  // Beds. `bed` keeps its legacy id AND dims (existing plans must not move);
+  // the three sized kinds carry real mattress footprints (width × length) and
+  // differ visually by pillow count — see bedPillowLayout(). Everything
+  // downstream (lie lanes floor(w/700), shared covers, the nav-occupiable
+  // exemption) keys off dimensions or isBedKind(), never a literal.
+  bed:           { label: 'Bed · queen',   w: 2000, h: 1500, ht: 500,  back: 'low',  color: 0x546e7a, cat: 'bedroom', activity: 'sleep_shared' },
+  bed_twin:      { label: 'Bed · twin',    w: 990,  h: 1910, ht: 500,  back: 'low',  color: 0x546e7a, cat: 'bedroom', activity: 'sleep_shared' },
+  bed_full:      { label: 'Bed · full',    w: 1370, h: 1910, ht: 500,  back: 'low',  color: 0x546e7a, cat: 'bedroom', activity: 'sleep_shared' },
+  bed_king:      { label: 'Bed · king',    w: 1930, h: 2030, ht: 500,  back: 'low',  color: 0x546e7a, cat: 'bedroom', activity: 'sleep_shared' },
+  rug:           { label: 'Rug',           w: 2000, h: 1400, ht: 5,    back: 'none', color: 0x5d4037, cat: 'decor', rug: true, frontArrow: false },
+  bookshelf:     { label: 'Bookshelf',     w: 800,  h: 350,  ht: 1800, back: 'none', color: 0x3e2723, cat: 'storage', activity: 'browse_bookshelf' },
   // Stairs rise toward the piece's back (plan-top); rotate to aim. Full run
   // climbs a 9 ft storey; half run + landing + rotated half run composes an
   // L or U staircase.
-  stairs:        { label: 'Stairs (full flight)', w: 1000, h: 3600, ht: 2743, back: 'none', color: 0x8d6e63 },
-  stairs_half:   { label: 'Stairs (half flight)', w: 1000, h: 1800, ht: 1372, back: 'none', color: 0x8d6e63 },
-  stair_landing: { label: 'Stair landing',        w: 1000, h: 1000, ht: 1372, back: 'none', color: 0x8d6e63 },
+  stairs:        { label: 'Stairs (full flight)', w: 1000, h: 3600, ht: 2743, back: 'none', color: 0x8d6e63, cat: 'stairs' },
+  stairs_half:   { label: 'Stairs (half flight)', w: 1000, h: 1800, ht: 1372, back: 'none', color: 0x8d6e63, cat: 'stairs' },
+  stair_landing: { label: 'Stair landing',        w: 1000, h: 1000, ht: 1372, back: 'none', color: 0x8d6e63, cat: 'stairs' },
   // Ramp: the no-tread member of the stairs family (STAIRS_KINDS), rising
   // toward local +Z exactly like a flight. Default 400 mm rise over 2400 mm of
   // run (~1:6) — a short accessible slope; use the per-piece Rise override /
   // "Fit between levels" to bridge any real level change.
-  ramp:          { label: 'Ramp',                 w: 1000, h: 2400, ht: 400,  back: 'none', color: 0x8d6e63 },
-  coffee_table:  { label: 'Coffee table',  w: 1100, h: 600,  ht: 450,  back: 'none', color: 0x795548 },
-  tv_stand:      { label: 'TV stand',      w: 1600, h: 450,  ht: 550,  back: 'none', color: 0x4e342e, surface: true },
-  dresser:       { label: 'Dresser',       w: 1200, h: 500,  ht: 900,  back: 'none', color: 0x6d4c41, surface: true },
-  nightstand:    { label: 'Nightstand',    w: 500,  h: 400,  ht: 600,  back: 'none', color: 0x6d4c41, surface: true },
-  wardrobe:      { label: 'Wardrobe',      w: 1200, h: 600,  ht: 2000, back: 'none', color: 0x5d4037 },
-  ottoman:       { label: 'Ottoman',       w: 700,  h: 700,  ht: 400,  seat: 380, back: 'none', color: 0x607d8b, frontArrow: false },
-  stool:         { label: 'Stool',         w: 400,  h: 400,  ht: 650,  seat: 620, back: 'none', color: 0x6d4c41, frontArrow: false },
-  plant:         { label: 'Plant',         w: 400,  h: 400,  ht: 1400, back: 'none', color: 0x33691e, frontArrow: false, activity: 'tend_plant' },
-  counter:       { label: 'Counter',       w: 1800, h: 650,  ht: 900,  back: 'none', color: 0x8d6e63, surface: true },
-  island:        { label: 'Island',        w: 2000, h: 1000, ht: 900,  back: 'none', color: 0x8d6e63, surface: true, frontArrow: false },
-  cabinet:       { label: 'Cabinet',       w: 900,  h: 400,  ht: 2000, back: 'none', color: 0x5d4037 },
+  ramp:          { label: 'Ramp',                 w: 1000, h: 2400, ht: 400,  back: 'none', color: 0x8d6e63, cat: 'stairs' },
+  coffee_table:  { label: 'Coffee table',  w: 1100, h: 600,  ht: 450,  back: 'none', color: 0x795548, cat: 'tables' },
+  tv_stand:      { label: 'TV stand',      w: 1600, h: 450,  ht: 550,  back: 'none', color: 0x4e342e, cat: 'storage', surface: true },
+  dresser:       { label: 'Dresser',       w: 1200, h: 500,  ht: 900,  back: 'none', color: 0x6d4c41, cat: 'bedroom', surface: true },
+  nightstand:    { label: 'Nightstand',    w: 500,  h: 400,  ht: 600,  back: 'none', color: 0x6d4c41, cat: 'bedroom', surface: true },
+  wardrobe:      { label: 'Wardrobe',      w: 1200, h: 600,  ht: 2000, back: 'none', color: 0x5d4037, cat: 'bedroom' },
+  ottoman:       { label: 'Ottoman',       w: 700,  h: 700,  ht: 400,  seat: 380, back: 'none', color: 0x607d8b, cat: 'seating', frontArrow: false },
+  stool:         { label: 'Stool',         w: 400,  h: 400,  ht: 650,  seat: 620, back: 'none', color: 0x6d4c41, cat: 'seating', frontArrow: false },
+  plant:         { label: 'Plant',         w: 400,  h: 400,  ht: 1400, back: 'none', color: 0x33691e, cat: 'decor', frontArrow: false, activity: 'tend_plant' },
+  counter:       { label: 'Counter',       w: 1800, h: 650,  ht: 900,  back: 'none', color: 0x8d6e63, cat: 'tables', surface: true },
+  island:        { label: 'Island',        w: 2000, h: 1000, ht: 900,  back: 'none', color: 0x8d6e63, cat: 'tables', surface: true, frontArrow: false },
+  cabinet:       { label: 'Cabinet',       w: 900,  h: 400,  ht: 2000, back: 'none', color: 0x5d4037, cat: 'storage' },
   // Appliances — footprints follow common US spec sizes.
   fridge:        { label: 'Refrigerator',  w: 910,  h: 760,  ht: 1780, back: 'none', color: 0x9fa8b3, cat: 'appliance', activity: 'forage_fridge' },
   stove:         { label: 'Stove / range', w: 760,  h: 660,  ht: 910,  back: 'none', color: 0x90979e, cat: 'appliance' },
@@ -2803,7 +2843,7 @@ export const FURNITURE_KINDS: Record<FurnitureKind, FurnitureKindDef> = {
   // cat, so the appliance-state hash predicate is extended for it in three-view.
   towel_warmer:  { label: 'Towel warmer',  w: 600,  h: 120,  ht: 800,  back: 'none', color: 0xb0bec5, cat: 'bathroom', frontArrow: false },
   // Fitness
-  exercise_equipment: { label: 'Exercise equipment', w: 700, h: 1600, ht: 1300, back: 'none', color: 0x424242, cat: 'furniture', activity: 'exercise' },
+  exercise_equipment: { label: 'Exercise equipment', w: 700, h: 1600, ht: 1300, back: 'none', color: 0x424242, cat: 'decor', activity: 'exercise' },
   // Home theater — speakers/sub/center are a new `theater` cat (own optgroup).
   // Sizes are illustrative real-world defaults (ELAC DF52 tower, Klipsch R-12SW
   // sub); every field stays per-fixture editable like all other kinds. Speakers
@@ -2813,15 +2853,17 @@ export const FURNITURE_KINDS: Record<FurnitureKind, FurnitureKindDef> = {
   speaker_bookshelf: { label: 'Speaker (bookshelf)', w: 200, h: 280, ht: 350,  back: 'none', color: 0x1c1c1c, cat: 'theater', mountable: true },
   subwoofer:         { label: 'Subwoofer',           w: 400, h: 450, ht: 450,  back: 'none', color: 0x111111, cat: 'theater' },
   center_channel:    { label: 'Center channel',      w: 450, h: 160, ht: 180,  back: 'none', color: 0x161616, cat: 'theater', mountable: true, frontArrow: false },
-  // Recliners + riser ride the default `furniture` cat (grouped with sofas).
+  // Recliners moved to the `theater` cat in the 2026-08 category split (they had
+  // ridden the default `furniture` cat, grouped with sofas); the riser platform
+  // joined `stairs` (it is a walkable deck, and Structure hosts that cat).
   // Recliner leaves `activity` undefined so `watch_tv` resolves from the room's
   // TV via the seated-context SitSpot path (never a standing anchor).
-  theater_recliner:  { label: 'Theater recliner',    w: 950,  h: 1000, ht: 1050, seat: 450, back: 'tall', color: 0x2b2320, cat: 'furniture' },
-  recliner_row3:     { label: 'Recliner row (3)',    w: 2900, h: 1000, ht: 1050, seat: 450, back: 'tall', color: 0x2b2320, cat: 'furniture' },
+  theater_recliner:  { label: 'Theater recliner',    w: 950,  h: 1000, ht: 1050, seat: 450, back: 'tall', color: 0x2b2320, cat: 'theater' },
+  recliner_row3:     { label: 'Recliner row (3)',    w: 2900, h: 1000, ht: 1050, seat: 450, back: 'tall', color: 0x2b2320, cat: 'theater' },
   // Walkable tiered-seating deck. Low (220 mm) flat platform — does NOT block
   // nav (see isRiserKind in three-renderer's _buildNav skip + _groundYAt); place
   // recliners on top with their `elevation` set to the riser height.
-  riser_platform:    { label: 'Riser platform',      w: 3600, h: 1800, ht: 220,  back: 'none', color: 0x2a2622, cat: 'furniture', frontArrow: false },
+  riser_platform:    { label: 'Riser platform',      w: 3600, h: 1800, ht: 220,  back: 'none', color: 0x2a2622, cat: 'stairs', frontArrow: false },
   // Outdoor — wheeled curbside bins. Entity 'on'/'full' = FULL (lid propped, overflow
   // hint); unbound → localState click-toggle. Front (lid hinge, wheels at back = +Z).
   trash_bin:     { label: 'Trash bin',     w: 600,  h: 700,  ht: 1100, back: 'none', color: 0x3a3f45, cat: 'outdoor', frontArrow: false },
@@ -3472,6 +3514,38 @@ export function isRiserKind(kind: FurnitureKind | undefined): boolean {
   return kind === 'riser_platform';
 }
 
+// ── Beds ─────────────────────────────────────────────────────────────────────
+// THE canonical bed-family membership test (the isStairsKind precedent — never
+// scatter literal `kind === 'bed'` lists). Membership grants the whole bed
+// contract: the occupiable nav-footprint exemption, the `_beds` registry that
+// drives lie lanes (capacity floor(w / 700)) + the two-in-bed shared-covers
+// effect, the soft-lounge pet curl, and the sized 3D/2D pillow row.
+export const BED_KINDS = new Set<FurnitureKind>(['bed', 'bed_twin', 'bed_full', 'bed_king']);
+export function isBedKind(kind?: FurnitureKind): kind is FurnitureKind {
+  return kind != null && BED_KINDS.has(kind);
+}
+// Pillows across the head end, per kind. Unknown/absent → 2 (the legacy build).
+export const BED_PILLOWS: Partial<Record<FurnitureKind, number>> = {
+  bed_twin: 1, bed_full: 2, bed: 2, bed_king: 3,
+};
+export function bedPillowCount(kind?: FurnitureKind): number {
+  return (kind && BED_PILLOWS[kind]) ?? 2;
+}
+// Pillow row geometry, shared by the 3D builder and the 2D glyph so the two can
+// never disagree. `pitch` is the centre-to-centre spacing; the row is centred on
+// the bed, so pillow i sits at x = (i − (n−1)/2)·pitch. The 2-pillow case
+// reproduces today's queen build EXACTLY (pitch 0.44·W ⇒ centres ±0.22·W,
+// pw 0.42·W); a single pillow occupies a narrower 0.60·W span so a twin gets a
+// realistic standard pillow rather than a bolster.
+export function bedPillowLayout(kind: FurnitureKind | undefined, widthMm: number):
+    { count: number; pitch: number; pw: number } {
+  const count = bedPillowCount(kind);
+  const pitch = widthMm * (count === 1 ? 0.60 : 0.88) / count;
+  // 21/22 is the EXACT legacy ratio: at count 2 the pitch is 0.44·W, so this
+  // yields pw = 0.42·W bit-for-bit (a rounded 0.9545 would not).
+  return { count, pitch, pw: pitch * 21 / 22 };
+}
+
 export function furnitureKind(f: { kind?: FurnitureKind }): FurnitureKind {
   return f.kind ?? 'block';
 }
@@ -3650,6 +3724,31 @@ export function doorDefaultWidth(kind?: DoorKind): number {
 // taller than the swing-door lintel (DOOR_HEAD 2050) — a garage is ~7 ft.
 export const GARAGE_DOOR_H = 2100;
 
+// Per-door opening-height override (Door.garageHeight). Absent / non-finite →
+// GARAGE_DOOR_H, so an untouched garage door is byte-identical everywhere. The
+// clamp spans a low single-car head (1800) up to an RV bay (4200); the slat
+// COUNT never changes (5) — the sections simply scale with H. Consumed by BOTH
+// wallCutsForSegment (the lintel `head`) and the 3D leaf builder, so the wall
+// opening and the drawn door can never disagree about how tall the hole is.
+export const GARAGE_HEIGHT_MIN = 1800;
+export const GARAGE_HEIGHT_MAX = 4200;
+export function garageDoorHeightMm(d: { garageHeight?: number }): number {
+  const v = d.garageHeight;
+  return typeof v === 'number' && isFinite(v)
+    ? Math.max(GARAGE_HEIGHT_MIN, Math.min(GARAGE_HEIGHT_MAX, v))
+    : GARAGE_DOOR_H;
+}
+
+// Shared hex-colour validator for optional user-set tints (Door.color,
+// Window.frameColor). Anything that isn't a literal `#rgb` / `#rrggbb` resolves
+// to null = "use the shipped default", so a hand-edited config can never hand a
+// canvas a garbage fillStyle (which silently keeps the previous fill) nor THREE
+// a NaN colour. Mirrors the renderer's private bgHex for the bg-text palette.
+const VALID_HEX_RE = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i;
+export function validHexColor(v: unknown): string | null {
+  return typeof v === 'string' && VALID_HEX_RE.test(v.trim()) ? v.trim() : null;
+}
+
 // Shared open-state → 0..1 resolver for doors AND window covers/blinds. Takes the
 // already-RESOLVED state (from Planner.effectiveState / itemState — which fold a
 // local unbound state into a synthetic {state}), so `localState: 'on'` arrives
@@ -3714,15 +3813,23 @@ export function furnitureCorners(piece: { x: number; y: number; w: number; h: nu
 // Walls are 100 mm thick, so each face sits 50 mm off the polyline axis.
 // A dropped / moved piece whose rotated footprint straddles a wall segment is
 // pushed out perpendicular to that segment so its near edge sits flush against
-// the wall face (+5 mm clearance). The same push also acts "magnetically":
-// when the piece isn't overlapping but its near edge is within 150 mm of the
-// wall face, it snaps flush. Doors/windows are ON walls and never call this;
+// the wall face (+5 mm clearance).
+//
+// PUSH-OUT ONLY — this is NOT a magnet (user: "when placing a bed, it is getting
+// sucked into the wall instead of being placed near it"). It used to act
+// "magnetically" over a 150 mm WALL_MAGNET_MM reach beyond the face, so a piece
+// deliberately dropped with a small gap was yanked flush — the drop teleported.
+// Now it acts only when the near edge is INSIDE the keep-out band (overlapping
+// the slab or within the 5 mm clearance), pushing out to exactly FLUSH. A piece
+// placed with a gap stays exactly where the user put it, and flush is still ONE
+// gesture away: drop the piece ON the wall and the push-out settles it flush.
+// Doors/windows are ON walls and never call this;
 // invisible walls (planning boundaries) are skipped. Two passes resolve the
 // common case where clearing one wall creates a small overlap with a
 // perpendicular neighbour. Mutates piece.x / piece.y; returns whether it moved.
 const WALL_FACE_MM = 50;      // half of the 100 mm wall thickness
 const WALL_CLEAR_MM = 5;      // small gap so the edge isn't exactly coincident
-const WALL_MAGNET_MM = 150;   // pull-to-flush range measured from the wall face
+// (WALL_MAGNET_MM is GONE — see the push-out-only note above.)
 
 export function resolveFurnitureWallCollision(
   piece: { x: number; y: number; w: number; h: number; rotation?: number },
@@ -3730,7 +3837,6 @@ export function resolveFurnitureWallCollision(
   passes = 2,
 ): boolean {
   const FLUSH = WALL_FACE_MM + WALL_CLEAR_MM;   // 55: resting distance of the near edge
-  const REACH = WALL_FACE_MM + WALL_MAGNET_MM;  // 200: act when the near edge is closer than this
   let movedAny = false;
   for (let pass = 0; pass < passes; pass++) {
     let passMoved = false;
@@ -3761,16 +3867,17 @@ export function resolveFurnitureWallCollision(
         // Which side is the piece's center on? That side wins (push outward).
         const cpp = (piece.x - a.x) * nx + (piece.y - a.y) * ny;
         if (cpp >= 0) {
-          // Near edge is pmin; act if it's overlapping the slab or within magnet
-          // range of the +face, then set it flush at +FLUSH.
-          if (pmin < REACH) {
+          // Near edge is pmin; act ONLY when it has entered the keep-out band
+          // (pmin < FLUSH — overlapping the slab or inside the clearance), then
+          // push out to exactly +FLUSH. A gap of 56 mm or more is left alone.
+          if (pmin < FLUSH) {
             const delta = FLUSH - pmin;
             piece.x += nx * delta; piece.y += ny * delta;
             passMoved = true; movedAny = true;
           }
         } else {
           // Symmetric on the − side: near edge is pmax.
-          if (pmax > -REACH) {
+          if (pmax > -FLUSH) {
             const delta = -FLUSH - pmax;
             piece.x += nx * delta; piece.y += ny * delta;
             passMoved = true; movedAny = true;

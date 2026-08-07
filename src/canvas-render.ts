@@ -27,6 +27,7 @@ import {
   isDroopPlant, plantThirsty, PLANT_MOISTURE_DEFAULT_THRESHOLD,
   isVehicleKind, evStatusOf, evStatusColor, evChargePercent, carChargeState,
   isStairsKind, stairChipArrow, stairsRiseMm, stairsTreadCount, FURNITURE_KINDS,
+  bedPillowLayout,
   doorEndpoint, doorOpenDeltaDeg, doorOpenFraction, doorSpanCenter, doorSlideDir,
   windowEndpoints, wallCutsForSegment, wallKind, isBayWindowKind, bayProjectSign, bayPlan,
   ENV_KINDS, envKindOf, envColor, envValueText, envScale,
@@ -38,6 +39,7 @@ import {
   peekFloors,
   midpointHandles, POLY_VERTEX_CAP_GROUND, POLY_VERTEX_CAP_POOL, POLY_VERTEX_CAP_VOID,
   POLY_VERTEX_CAP_PATH, POLY_VERTEX_CAP_PZONE,
+  validHexColor,
 } from './geometry.js';
 import { compass8, fmtDistanceM, fmtAccuracyM } from './geo.js';
 import { resolveNorth, northMarkerPos, markerScaleOf } from './compass.js';
@@ -4650,7 +4652,10 @@ function drawDoors(ctx: CanvasRenderingContext2D, p: Planner, view: View): void 
     const frac = doorOpenFraction(st);
     const isOpen = frac > 0.02;
     const unavail = st && (st.state === 'unavailable' || st.state === 'unknown');
-    const closedColor = unavail ? '#c62828' : '#90a4ae';
+    // Door.color repaints the NEUTRAL closed stroke only. In 2D colour is STATE
+    // language first — open-green and unavailable-red must never be overridden
+    // by a decorative tint, or the plan stops reporting what the house is doing.
+    const closedColor = unavail ? '#c62828' : (validHexColor(d.color) ?? '#90a4ae');
     const openColor = '#66bb6a';
     const color = isOpen ? openColor : closedColor;
     const hinge = mmToPx(view, d.x, d.y);
@@ -4993,7 +4998,9 @@ function drawWindows(ctx: CanvasRenderingContext2D, p: Planner, view: View): voi
     const st = p.effectiveState(w);
     const isOpen = st?.state === 'on';
     const unavail = st && (st.state === 'unavailable' || st.state === 'unknown');
-    const closedColor = unavail ? '#c62828' : '#64b5f6';
+    // Window.frameColor repaints the NEUTRAL closed stroke only — same rule as
+    // doors: state colours (open green / unavailable red) always win in 2D.
+    const closedColor = unavail ? '#c62828' : (validHexColor(w.frameColor) ?? '#64b5f6');
     const openColor = '#66bb6a';
     const color = isOpen ? openColor : closedColor;
     const ends = windowEndpoints(w);
@@ -5719,6 +5726,111 @@ export function drawFurniturePrimitiveLocal(
       }
       break;
     }
+    // ── Chair styles (2026-08). Each glyph carries ONE distinguishing plan cue
+    // so the six read apart at a glance: arm bands (armchair), the 5-star caster
+    // base (office / gaming), a footring (bar stool), corner wings (wingback),
+    // a hairline X-fold frame (folding).
+    case 'armchair': {
+      fill(bodyFill('rgba(150,104,92,0.6)', 0.6));
+      stroke('#c0a094');
+      const armW3 = Math.max(3, w * 0.19);
+      ctx.fillStyle = '#6d4a40';
+      ctx.fillRect(x, y, armW3, h);                                   // left arm
+      ctx.fillRect(x + w - armW3, y, armW3, h);                       // right arm
+      ctx.fillRect(x, y, w, Math.max(3, h * 0.22));                   // low back band
+      ctx.strokeStyle = '#e0c0b4'; ctx.lineWidth = 1;                 // cushion seam
+      ctx.beginPath();
+      ctx.moveTo(x + armW3 + 3, y + h * 0.62); ctx.lineTo(x + w - armW3 - 3, y + h * 0.62);
+      ctx.stroke();
+      break;
+    }
+    case 'office_chair':
+    case 'gaming_chair': {
+      // From above the 5-star caster base radiates PAST the seat — that splayed
+      // star is the tell that separates these from a plain chair.
+      const racing = kind === 'gaming_chair';
+      const spokeR = Math.min(halfW, halfH) * 0.94;
+      ctx.strokeStyle = '#6b7178'; ctx.lineWidth = Math.max(1.5, spokeR * 0.09);
+      ctx.fillStyle = '#6b7178';
+      for (let i = 0; i < 5; i++) {
+        const a = (i * 2 * Math.PI) / 5 - Math.PI / 2;
+        const ex = Math.cos(a) * spokeR, ey = Math.sin(a) * spokeR;
+        ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(ex, ey); ctx.stroke();
+        ctx.beginPath(); ctx.arc(ex, ey, Math.max(1.2, spokeR * 0.1), 0, 2 * Math.PI); ctx.fill();
+      }
+      const sw = w * 0.66, sh = h * 0.62;
+      ctx.fillStyle = bodyFill(racing ? 'rgba(38,40,46,0.85)' : 'rgba(58,61,67,0.82)', 0.82);
+      ctx.beginPath(); ctx.roundRect(-sw / 2, -sh / 2, sw, sh, Math.min(sw, sh) * 0.22);
+      ctx.fill();
+      ctx.strokeStyle = '#9aa3ab'; ctx.lineWidth = 1; ctx.stroke();
+      ctx.fillStyle = racing ? '#15161a' : '#22242a';
+      ctx.fillRect(-sw / 2, -sh / 2, sw, Math.max(3, sh * 0.3));      // back band (+Y edge)
+      if (racing) {
+        ctx.fillStyle = '#e53935';                                    // racing stripes
+        const stw = Math.max(1, sw * 0.05);
+        for (const sx of [-1, 1])
+          ctx.fillRect(sx * sw * 0.16 - stw / 2, -sh / 2, stw, Math.max(3, sh * 0.44));
+      }
+      break;
+    }
+    case 'bar_stool': {
+      const rr = Math.min(halfW, halfH);
+      ctx.fillStyle = bodyFill('rgba(109,76,65,0.62)', 0.62);
+      ctx.beginPath(); ctx.arc(0, 0, rr * 0.92, 0, 2 * Math.PI); ctx.fill();
+      ctx.strokeStyle = '#a1887f'; ctx.lineWidth = 1; ctx.stroke();
+      // Footring — the bar-stool tell (a plain `stool` has none).
+      ctx.strokeStyle = '#9aa3ab'; ctx.lineWidth = Math.max(1.5, rr * 0.09);
+      ctx.beginPath(); ctx.arc(0, 0, rr * 0.6, 0, 2 * Math.PI); ctx.stroke();
+      ctx.fillStyle = '#6b7178';
+      for (let i = 0; i < 4; i++) {
+        const a = Math.PI / 4 + (i * Math.PI) / 2;
+        ctx.beginPath();
+        ctx.arc(Math.cos(a) * rr * 0.96, Math.sin(a) * rr * 0.96,
+                Math.max(1.2, rr * 0.1), 0, 2 * Math.PI);
+        ctx.fill();
+      }
+      break;
+    }
+    case 'wingback_chair': {
+      fill(bodyFill('rgba(74,93,82,0.6)', 0.6));
+      stroke('#8fae9d');
+      const armW4 = Math.max(3, w * 0.17);
+      ctx.fillStyle = '#38473f';
+      ctx.fillRect(x, y, armW4, h);
+      ctx.fillRect(x + w - armW4, y, armW4, h);
+      ctx.fillRect(x, y, w, Math.max(4, h * 0.2));                    // tall back band
+      // Wings: wedges off the two BACK corners, curling toward the front.
+      ctx.fillStyle = '#2c3a33';
+      const wd = Math.max(5, h * 0.34);
+      for (const sx of [-1, 1]) {
+        const ex = sx * (w / 2);
+        ctx.beginPath();
+        ctx.moveTo(ex, y);
+        ctx.lineTo(ex, y + wd);
+        ctx.lineTo(ex - sx * armW4 * 1.6, y + wd * 0.5);
+        ctx.closePath(); ctx.fill();
+      }
+      break;
+    }
+    case 'folding_chair': {
+      // Deliberately the sparsest glyph — hairline frame, slim pan, back rail.
+      ctx.fillStyle = bodyFill('rgba(139,145,153,0.22)', 0.22);
+      ctx.fillRect(x, y, w, h);
+      ctx.strokeStyle = '#aeb6bd'; ctx.lineWidth = 1;
+      ctx.setLineDash([4, 3]);
+      ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+      ctx.setLineDash([]);
+      ctx.fillStyle = 'rgba(174,182,189,0.5)';
+      ctx.fillRect(x + w * 0.08, y + h * 0.32, w * 0.84, h * 0.48);   // seat pan
+      ctx.fillStyle = '#78818a';
+      ctx.fillRect(x + w * 0.1, y, w * 0.8, Math.max(2, h * 0.12));   // back rail
+      ctx.strokeStyle = '#78818a'; ctx.lineWidth = 1;                 // X-fold hint
+      ctx.beginPath();
+      ctx.moveTo(x + 2, y + h - 2); ctx.lineTo(x + w - 2, y + h * 0.32);
+      ctx.moveTo(x + w - 2, y + h - 2); ctx.lineTo(x + 2, y + h * 0.32);
+      ctx.stroke();
+      break;
+    }
     case 'chaise':
       fill('rgba(121,85,72,0.55)');
       stroke('#a1887f');
@@ -5765,19 +5877,27 @@ export function drawFurniturePrimitiveLocal(
       ctx.fillRect(x, y, Math.min(w, w * 0.10), h);
       ctx.fillRect(x + w - Math.min(w, w * 0.10), y, Math.min(w, w * 0.10), h);
       break;
-    case 'bed':
+    case 'bed_twin':
+    case 'bed_full':
+    case 'bed_king':
+    case 'bed': {
       fill(bodyFill('rgba(84,110,122,0.55)', 0.55));
       stroke('#b0bec5');
       // Headboard on +Y edge.
       ctx.fillStyle = '#37474f';
       ctx.fillRect(x, y, w, Math.max(6, h * 0.12));
-      // Two pillows just below headboard.
+      // Pillow row just below the headboard — 1 / 2 / 3 by kind, through the
+      // SAME shared layout the 3D builder uses so the views can't disagree.
       ctx.fillStyle = '#eceff1';
       const pillowH = Math.max(8, h * 0.16), pillowY = y + h * 0.14;
-      const pillowW = w * 0.42, gap = w * 0.05;
-      ctx.fillRect(x + (w - 2 * pillowW - gap) / 2, pillowY, pillowW, pillowH);
-      ctx.fillRect(x + (w - 2 * pillowW - gap) / 2 + pillowW + gap, pillowY, pillowW, pillowH);
+      const lay = bedPillowLayout(kind, w);
+      const cx0 = x + w / 2;
+      for (let i = 0; i < lay.count; i++) {
+        const pcx = cx0 + (i - (lay.count - 1) / 2) * lay.pitch;
+        ctx.fillRect(pcx - lay.pw / 2, pillowY, lay.pw, pillowH);
+      }
       break;
+    }
     case 'bookshelf':
       fill('rgba(62,39,35,0.7)');
       stroke('#a1887f');

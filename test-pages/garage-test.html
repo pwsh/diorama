@@ -41,7 +41,8 @@
   const { Planner } = await import('./planner.mod.js' + V);
   const C2D = await import('./canvas-render.mod.js' + V);
   const { drawAll, computeView, mmToPx, hitDoor, hitDoorLock } = C2D;
-  const { GARAGE_DOOR_H, lockGlyphColor } = geo;
+  const { GARAGE_DOOR_H, GARAGE_HEIGHT_MIN, GARAGE_HEIGHT_MAX, garageDoorHeightMm,
+          wallCutsForSegment, lockGlyphColor } = geo;
 
   const results = [];
   const ok = (name, cond, detail = '') => results.push(`${cond ? 'ok' : 'FAIL'}:${name}${detail ? '(' + detail + ')' : ''}`);
@@ -76,6 +77,14 @@
     return r._doorGroup.children[0];
   };
   const realMeshes = (o) => { const a = []; o.traverse(m => { if (m.isMesh && !m.userData?.outline) a.push(m); }); return a; };
+  // The PAINTED LEAF only. Overhead tracks / rails / curve / opener / motor and
+  // the exterior pull are tagged userData.garageHw — they are hardware, present
+  // on every garage door, and would otherwise swamp the per-style structural
+  // pins below (which are about the door leaf, not the mechanism).
+  const leafMeshes = (o) => realMeshes(o).filter(m => !m.userData?.garageHw);
+  const hardware = (o, kind) => realMeshes(o).filter(m => m.userData?.garageHw
+                                     && (!kind || m.userData.garageHw === kind));
+  const lites = (o) => { const a = []; o.traverse(m => { if (m.userData?.garageLite) a.push(m); }); return a; };
   const sprites = (o) => { const a = []; o.traverse(m => { if (m.isSprite) a.push(m); }); return a; };
   const locks = (o) => { const a = []; o.traverse(m => { if (m.userData?.kind === 'lock') a.push(m); }); return a; };
   const transparents = (o) => realMeshes(o).filter(m => m.material && m.material.transparent);
@@ -109,7 +118,7 @@
   }
   {
     const g = build(mkDoor({}), 0);
-    const ms = realMeshes(g);
+    const ms = leafMeshes(g);
     ok('golden_five_slats', ms.length === 5, String(ms.length));
     ok('golden_all_box', ms.every(m => m.geometry.type === 'BoxGeometry'),
        ms.map(m => m.geometry.type).join(','));
@@ -136,7 +145,7 @@
   {
     const H = GARAGE_DOOR_H, N = 5;
     for (const frac of [0, 0.5, 1]) {
-      const ms = realMeshes(build(mkDoor({}), frac));
+      const ms = leafMeshes(build(mkDoor({}), frac));
       const want = [];
       for (let i = 0; i < N; i++) {
         const pos = frac * H + (i + 0.5) * (H / N);
@@ -153,11 +162,14 @@
 
   // ═══ 3. Per-style structure ═══════════════════════════════════════════════
   const DOOR_T = 60, secW = GW - 40;
+  const ALL_STYLES = ['sectional', 'raised_panel', 'carriage', 'roll_up', 'glass_panel',
+                      'tilt_up', 'sectional_windows_top', 'sectional_windows_left',
+                      'sectional_windows_right'];
   // raised_panel: the same 5 slats PLUS proud panel insets.
   {
-    const base = realMeshes(build(mkDoor({}), 0)).length;
+    const base = leafMeshes(build(mkDoor({}), 0)).length;
     const g = build(mkDoor({ garageStyle: 'raised_panel' }), 0);
-    const ms = realMeshes(g);
+    const ms = leafMeshes(g);
     ok('rp_more_meshes', ms.length > base, `${ms.length} vs ${base}`);
     const proud = ms.filter(m => m.geometry.parameters.depth > DOOR_T);
     ok('rp_insets_proud', proud.length === 20, String(proud.length));
@@ -166,16 +178,16 @@
                                         && m.geometry.parameters.height < GARAGE_DOOR_H / 5 - 6));
     // …and they ride the fold: at frac 1 every inset's ancestor slat is folded.
     const g1 = build(mkDoor({ garageStyle: 'raised_panel' }), 1);
-    const folded = realMeshes(g1).filter(m => near(Math.abs(m.rotation.x), Math.PI / 2, 1e-3)
+    const folded = leafMeshes(g1).filter(m => near(Math.abs(m.rotation.x), Math.PI / 2, 1e-3)
                                            || near(Math.abs(m.parent?.rotation?.x ?? 0), Math.PI / 2, 1e-3));
-    ok('rp_insets_ride_fold', folded.length === realMeshes(g1).length, String(folded.length));
+    ok('rp_insets_ride_fold', folded.length === leafMeshes(g1).length, String(folded.length));
   }
   // carriage: wood tint + crossbuck diagonals + centre seams.
   {
     const gs = build(mkDoor({}), 0);
-    const sectionalColor = realMeshes(gs)[0].material.color.getHex();
+    const sectionalColor = leafMeshes(gs)[0].material.color.getHex();
     const g = build(mkDoor({ garageStyle: 'carriage' }), 0);
-    const ms = realMeshes(g);
+    const ms = leafMeshes(g);
     // The 5 full-width slabs carry the wood tone.
     const slabs = ms.filter(m => near(m.geometry.parameters.width, secW, 1e-9)
                               && near(m.geometry.parameters.depth, DOOR_T, 1e-9));
@@ -187,8 +199,8 @@
        diag.map(m => m.rotation.z.toFixed(3)).join(','));
     const seams = ms.filter(m => near(m.geometry.parameters.width, 28, 1e-9));
     ok('carriage_centre_seams', seams.length === 5, String(seams.length));
-    ok('carriage_more_than_sectional', ms.length > realMeshes(gs).length,
-       `${ms.length} vs ${realMeshes(gs).length}`);
+    ok('carriage_more_than_sectional', ms.length > leafMeshes(gs).length,
+       `${ms.length} vs ${leafMeshes(gs).length}`);
   }
   // roll_up: a drum, NO fold, and fewer visible curtain slats as it coils.
   {
@@ -202,8 +214,8 @@
     const g5 = build(mkDoor({ garageStyle: 'roll_up' }), 0.5);
     ok('rollup_slats_f05', curtain(g5).length === 6 && curtain(g5).length < curtain(g0).length,
        String(curtain(g5).length));
-    ok('rollup_no_fold', realMeshes(g5).every(m => near(m.rotation.x, 0, 1e-6)),
-       realMeshes(g5).map(m => m.rotation.x.toFixed(2)).join(','));
+    ok('rollup_no_fold', leafMeshes(g5).every(m => near(m.rotation.x, 0, 1e-6)),
+       leafMeshes(g5).map(m => m.rotation.x.toFixed(2)).join(','));
     const g1 = build(mkDoor({ garageStyle: 'roll_up' }), 1);
     ok('rollup_slats_f1', curtain(g1).length === 0, String(curtain(g1).length));
     // The coil visibly grows with frac.
@@ -222,7 +234,7 @@
     ok('glass_has_panes', panes.length === 5, String(panes.length));
     ok('glass_pane_thinner_than_bars', panes.every(m => m.geometry.parameters.depth === 20),
        panes.map(m => m.geometry.parameters.depth).join(','));
-    const bars = realMeshes(g).filter(m => !m.material.transparent);
+    const bars = leafMeshes(g).filter(m => !m.material.transparent);
     ok('glass_bars_deeper', bars.length >= 30 && bars.every(m => m.geometry.parameters.depth === 44),
        String(bars.length));
     // A pane laps 8 mm UNDER its outer stiles (no coplanar face).
@@ -248,7 +260,7 @@
       ok(`tilt_angle_grows_f${frac}`, Math.abs(pivot.rotation.x) > prev);
       prev = Math.abs(pivot.rotation.x);
       // Exactly one LARGE panel (the slab); the rest is small pivot hardware.
-      const big = realMeshes(g).filter(m => m.geometry.parameters.width > GW * 0.5
+      const big = leafMeshes(g).filter(m => m.geometry.parameters.width > GW * 0.5
                                          && m.geometry.parameters.height > GARAGE_DOOR_H * 0.5);
       ok(`tilt_one_panel_f${frac}`, big.length === 1, String(big.length));
     }
@@ -264,7 +276,7 @@
     const wc = worldPos(findByData(gc, 'doorPanel', 'tilt')), hc = worldPos(gc);
     ok('tilt_closed_in_plane', near(wc.z - hc.z, 0, 1) && near(wc.y - hc.y, GARAGE_DOOR_H / 2, 1),
        `${(wc.y - hc.y).toFixed(1)}/${(wc.z - hc.z).toFixed(1)}`);
-    const sect1 = realMeshes(build(mkDoor({}), 1));
+    const sect1 = leafMeshes(build(mkDoor({}), 1));
     ok('tilt_same_fold_side', sect1.every(m => m.position.z < 0) && (wp.z - hingeWp.z) < 0);
   }
 
@@ -309,7 +321,7 @@
     ok('lock_none_no_bolts', locks(build(mkDoor({}), 0)).length === 0);
   }
   // Every style carries the lock, and tilt_up parents it to the tilting slab.
-  for (const s of ['sectional', 'raised_panel', 'carriage', 'roll_up', 'glass_panel', 'tilt_up']) {
+  for (const s of ALL_STYLES) {
     const g = build(mkDoor({ garageStyle: s, lockEntity: 'lock.g' }), 0, LOCKED);
     ok(`lock_style_${s}`, locks(g).length === 2, String(locks(g).length));
   }
@@ -344,9 +356,9 @@
     ok('badge_painted', ink > 200, String(ink));
     // Every style shows it while partial.
     const missing = [];
-    for (const s of ['sectional', 'raised_panel', 'carriage', 'roll_up', 'glass_panel', 'tilt_up'])
+    for (const s of ALL_STYLES)
       if (sprites(build(mkDoor({ garageStyle: s }), 0.4)).length !== 1) missing.push(s);
-    ok('badge_every_style', missing.length === 0, missing.join(',') || 'all 6');
+    ok('badge_every_style', missing.length === 0, missing.join(',') || `all ${ALL_STYLES.length}`);
     // Rebuild does not accumulate sprites (the _disposeSpriteMaps pairing).
     const a = sprites(build(mkDoor({}), 0.4)).length;
     const b = sprites(build(mkDoor({}), 0.4)).length;
@@ -366,6 +378,311 @@
       } catch (e) { bad.push(k + ':throw'); }
     }
     ok('all_kinds_build', bad.length === 0, bad.join(',') || '8 kinds');
+  }
+
+  // ═══ 11. Windowed sectionals (top / left / right lite bands) ══════════════
+  {
+    const H = GARAGE_DOOR_H, N = 5, slatH = H / N - 6;
+    // ── top: ONE row of 4 lites, in the TOP section, above four fifths of H ──
+    {
+      const g = build(mkDoor({ garageStyle: 'sectional_windows_top' }), 0);
+      const ps = lites(g);
+      ok('wtop_four_panes', ps.length === 4, String(ps.length));
+      ok('wtop_panes_transparent', ps.every(m => m.material && m.material.transparent === true));
+      // Every pane hangs off the SAME (top) slat.
+      const hosts = new Set(ps.map(m => m.parent));
+      ok('wtop_one_host_slat', hosts.size === 1, String(hosts.size));
+      const hostY = [...hosts][0].position.y;
+      const topSlatY = (N - 1 + 0.5) * (H / N);
+      ok('wtop_host_is_top_slat', near(hostY, topSlatY, 1e-6), `${hostY} vs ${topSlatY}`);
+      // The row's LOWER EDGE starts at/above 4/5 of the door height.
+      const lowest = Math.min(...ps.map(m => hostY + m.position.y - m.geometry.parameters.height / 2));
+      ok('wtop_row_above_four_fifths', lowest >= 0.8 * H, `${lowest.toFixed(1)} >= ${0.8 * H}`);
+      ok('wtop_row_inside_door', Math.max(...ps.map(m =>
+        hostY + m.position.y + m.geometry.parameters.height / 2)) <= H, 'top edge');
+      // Distinct x positions across the slat = a ROW, not a stack.
+      ok('wtop_is_a_row', new Set(ps.map(m => Math.round(m.position.x))).size === 4
+                       && new Set(ps.map(m => Math.round(m.position.y))).size === 1);
+      // Coincident-face discipline: glass 84 (proud of the 60 slab) under 100 bars.
+      ok('wtop_pane_depth', ps.every(m => m.geometry.parameters.depth === DOOR_T + 24),
+         String(ps[0].geometry.parameters.depth));
+      const bandBars = leafMeshes(g).filter(m => m.geometry.parameters.depth === DOOR_T + 40);
+      ok('wtop_bars_deeper_than_glass', bandBars.length === 2 + 5, String(bandBars.length));
+      ok('wtop_three_depths_distinct',
+         new Set([DOOR_T, DOOR_T + 24, DOOR_T + 40]).size === 3);
+      // The 5 slabs are untouched (still the plain sectional leaf).
+      const slabs = leafMeshes(g).filter(m => near(m.geometry.parameters.width, secW, 1e-9)
+                                           && near(m.geometry.parameters.depth, DOOR_T, 1e-9));
+      ok('wtop_slabs_intact', slabs.length === 5, String(slabs.length));
+      // Panes ride the fold: at frac 0.5 the top sections are folded and the
+      // panes' own ancestors carry that rotation.
+      const g5 = build(mkDoor({ garageStyle: 'sectional_windows_top' }), 0.5);
+      const p5 = lites(g5);
+      ok('wtop_rides_fold', p5.length === 4
+        && p5.every(m => near(Math.abs(m.parent.rotation.x), Math.PI / 2, 1e-3)),
+        p5.map(m => m.parent.rotation.x.toFixed(2)).join(','));
+    }
+    // ── left / right: ONE lite per section (all 5), at one END of the leaf ───
+    const col = (style, frac = 0) => {
+      const g = build(mkDoor({ garageStyle: style }), frac);
+      return { g, ps: lites(g) };
+    };
+    {
+      const L = col('sectional_windows_left'), R = col('sectional_windows_right');
+      ok('wcol_left_five', L.ps.length === N, String(L.ps.length));
+      ok('wcol_right_five', R.ps.length === N, String(R.ps.length));
+      ok('wcol_transparent', L.ps.concat(R.ps).every(m => m.material.transparent === true));
+      // One pane per DISTINCT slat = a column.
+      ok('wcol_one_per_slat', new Set(L.ps.map(m => m.parent)).size === N);
+      ok('wcol_is_a_column', new Set(L.ps.map(m => Math.round(m.position.x))).size === 1
+                          && new Set(L.ps.map(m => Math.round(m.parent.position.y))).size === N);
+      // WORLD-SPACE mirror + chirality. Both doors are built into the SAME
+      // scene (a detached group from an earlier build has a stale matrixWorld),
+      // and every number below comes out of matrixWorld — not local positions.
+      // At rotation 0 the hinge group is unrotated, so scene +X === door-local
+      // +X, and an observer OUTSIDE (scene +Z, looking −Z, +Y up) has scene −X
+      // on their left. So the LEFT style must sit at negative scene dx.
+      const stPair = { 'cover.g': { state: 'closed', attributes: { current_position: 0 } } };
+      const dL = mkDoor({ id: 'gl', x: 3000, garageStyle: 'sectional_windows_left' });
+      const dR = mkDoor({ id: 'gr', x: 8000, garageStyle: 'sectional_windows_right' });
+      r.updateFloor(mkFloor([dL, dR]), scene3d);
+      r.updateDoorsWindows([dL, dR], [], id => stPair[id] || null);
+      const gL = r._doorGroup.children[0], gR = r._doorGroup.children[1];
+      ok('wcol_pair_ids', gL.userData.fixtureId === 'gl' && gR.userData.fixtureId === 'gr');
+      const pL = lites(gL)[0], pR = lites(gR)[0];
+      // dx = pane centre − its own leaf's span centre, both read from matrixWorld.
+      const dxL = worldPos(pL).x - worldPos(pL.parent).x;
+      const dxR = worldPos(pR).x - worldPos(pR.parent).x;
+      ok('wcol_mirrored_world_x', near(dxL, -dxR, 1e-6) && Math.abs(dxL) > 100,
+         `${dxL.toFixed(1)} vs ${dxR.toFixed(1)}`);
+      ok('wcol_left_world_negative_x', dxL < 0, dxL.toFixed(1));
+      ok('wcol_right_world_positive_x', dxR > 0, dxR.toFixed(1));
+      // …and each column really sits at an END of the leaf, not the middle.
+      ok('wcol_off_centre', Math.abs(dxL) > secW * 0.25, Math.abs(dxL).toFixed(0));
+      ok('wcol_inside_leaf', L.ps.every(m =>
+        Math.abs(m.position.x) + m.geometry.parameters.width / 2 < secW / 2));
+      // CHIRALITY, asserted in DOOR-LOCAL coords (the invariant the builder
+      // documents): the exterior face is local +Z, an exterior observer looks
+      // along −Z with +Y up, so their LEFT is local −X. The pane's slat-local x
+      // shares the door's X axis, hence left < 0 and right > 0.
+      ok('wcol_left_is_local_negative_x', L.ps.every(m => m.position.x < 0),
+         L.ps[0].position.x.toFixed(0));
+      ok('wcol_right_is_local_positive_x', R.ps.every(m => m.position.x > 0),
+         R.ps[0].position.x.toFixed(0));
+      // Panes ride the fold with their own slat at frac 0.5 (some folded, some not).
+      const L5 = col('sectional_windows_left', 0.5);
+      const foldedHosts = L5.ps.filter(m => near(Math.abs(m.parent.rotation.x), Math.PI / 2, 1e-3));
+      ok('wcol_rides_fold', foldedHosts.length > 0 && foldedHosts.length < N,
+         `${foldedHosts.length}/${N}`);
+      ok('wcol_pane_follows_host', L5.ps.every(m => m.parent.userData?.garageHw === undefined));
+    }
+    // A windowed style is otherwise the SECTIONAL door — same slat motion.
+    for (const style of ['sectional_windows_top', 'sectional_windows_left',
+                         'sectional_windows_right']) {
+      const slabs = (o) => leafMeshes(o).filter(m => near(m.geometry.parameters.width, secW, 1e-9)
+                                                  && near(m.geometry.parameters.depth, DOOR_T, 1e-9))
+                             .map(m => `${m.position.y.toFixed(2)}:${m.position.z.toFixed(2)}`).sort().join('|');
+      ok(`wstyle_motion_matches_sectional_${style}`,
+         slabs(build(mkDoor({ garageStyle: style }), 0.5)) === slabs(build(mkDoor({}), 0.5)));
+    }
+  }
+
+  // ═══ 12. Front/back cue: interior tracks + opener, exterior handle ════════
+  // Door-local −Z is the garage INTERIOR (the side the sections fold to); +Z is
+  // the exterior. Everything is asserted in WORLD (scene) coordinates at
+  // rotation 0, where the hinge group is unrotated so local sign === world sign.
+  {
+    const FOLDING = ['sectional', 'raised_panel', 'carriage', 'glass_panel',
+                     'sectional_windows_top', 'sectional_windows_left',
+                     'sectional_windows_right'];
+    for (const style of FOLDING) {
+      const g = build(mkDoor(style === 'sectional' ? {} : { garageStyle: style }), 0);
+      const hz = worldPos(g).z;
+      ok(`hw_tracks_${style}`, hardware(g, 'track').length === 2, String(hardware(g, 'track').length));
+      ok(`hw_rails_${style}`, hardware(g, 'rail').length === 2);
+      ok(`hw_curve_${style}`, hardware(g, 'curve').length === 2);
+      ok(`hw_opener_${style}`, hardware(g, 'opener').length === 1);
+      ok(`hw_motor_${style}`, hardware(g, 'motor').length === 1);
+      // EVERY hardware piece except the pull sits on the interior (−Z) side.
+      const inside = hardware(g).filter(m => m.userData.garageHw !== 'handle');
+      ok(`hw_all_interior_${style}`, inside.every(m => worldPos(m).z - hz < 0),
+         inside.map(m => (worldPos(m).z - hz).toFixed(0)).join(','));
+      // …and the pull sits on the EXTERIOR (+Z) side, at the bottom of the leaf.
+      const pull = hardware(g, 'handle');
+      ok(`hw_handle_${style}`, pull.length === 1, String(pull.length));
+      ok(`hw_handle_exterior_${style}`, worldPos(pull[0]).z - hz > 0,
+         (worldPos(pull[0]).z - hz).toFixed(1));
+      ok(`hw_handle_low_${style}`, worldPos(pull[0]).y - worldPos(g).y < GARAGE_DOOR_H * 0.35,
+         (worldPos(pull[0]).y - worldPos(g).y).toFixed(0));
+      // The pull is PROUD of, not flush with, the leaf face (no coplanar pair).
+      const pz = pull[0].position.z, pd = pull[0].geometry.parameters.depth;
+      ok(`hw_handle_not_coplanar_${style}`, pz - pd / 2 < DOOR_T / 2 && pz + pd / 2 > DOOR_T / 2,
+         `${(pz - pd / 2).toFixed(0)}..${(pz + pd / 2).toFixed(0)}`);
+    }
+    // roll_up has NO ceiling track — a tube motor on the drum end instead.
+    {
+      const g = build(mkDoor({ garageStyle: 'roll_up' }), 0);
+      const hz = worldPos(g).z;
+      ok('hw_rollup_no_track', hardware(g, 'track').length === 0 && hardware(g, 'rail').length === 0);
+      ok('hw_rollup_motor', hardware(g, 'motor').length === 1);
+      ok('hw_rollup_motor_interior', worldPos(hardware(g, 'motor')[0]).z - hz < 0);
+      const pull = hardware(g, 'handle');
+      ok('hw_rollup_handle_exterior', pull.length === 1 && worldPos(pull[0]).z - hz > 0);
+    }
+    // tilt_up gets interior pivot ARMS and an exterior pull that rides the tilt.
+    {
+      const g = build(mkDoor({ garageStyle: 'tilt_up' }), 0);
+      const hz = worldPos(g).z;
+      ok('hw_tilt_no_track', hardware(g, 'track').length === 0);
+      ok('hw_tilt_arms', hardware(g, 'arm').length === 2, String(hardware(g, 'arm').length));
+      ok('hw_tilt_arms_interior', hardware(g, 'arm').every(m => worldPos(m).z - hz < 0));
+      const pull = hardware(g, 'handle');
+      ok('hw_tilt_handle_exterior', pull.length === 1 && worldPos(pull[0]).z - hz > 0,
+         pull.length ? (worldPos(pull[0]).z - hz).toFixed(1) : 'none');
+      // Riding the tilt: at frac 1 the pull has swung overhead with the slab.
+      const g1 = build(mkDoor({ garageStyle: 'tilt_up' }), 1);
+      const p1 = hardware(g1, 'handle')[0];
+      ok('hw_tilt_handle_rides', worldPos(p1).y - worldPos(g1).y > GARAGE_DOOR_H * 0.5,
+         (worldPos(p1).y - worldPos(g1).y).toFixed(0));
+    }
+    // Hardware is never tinted by Door.color (it must read as machinery).
+    {
+      const g = build(mkDoor({ color: '#c62828' }), 0);
+      const plain = build(mkDoor({}), 0);
+      const hxKey = (o) => hardware(o).map(m => m.material.color.getHex()).sort().join(',');
+      ok('hw_never_tinted', hxKey(g) === hxKey(plain), hxKey(g));
+    }
+    // The whole ceiling run reaches at least as far back as the folded leaf.
+    {
+      const g = build(mkDoor({}), 1);
+      const backmost = Math.min(...leafMeshes(g).map(m => m.position.z));
+      const rail = hardware(g, 'rail')[0];
+      const railBack = rail.position.z - rail.geometry.parameters.depth / 2;
+      ok('hw_rail_covers_fold', railBack <= backmost, `${railBack.toFixed(0)} <= ${backmost.toFixed(0)}`);
+    }
+  }
+
+  // ═══ 13. Opening-height modifier (Door.garageHeight) ══════════════════════
+  {
+    // Pure clamp + default.
+    ok('gh_default_absent', garageDoorHeightMm({}) === GARAGE_DOOR_H);
+    ok('gh_passthrough', garageDoorHeightMm({ garageHeight: 2600 }) === 2600);
+    ok('gh_clamp_low', garageDoorHeightMm({ garageHeight: 10 }) === GARAGE_HEIGHT_MIN);
+    ok('gh_clamp_high', garageDoorHeightMm({ garageHeight: 99999 }) === GARAGE_HEIGHT_MAX);
+    ok('gh_nan_default', garageDoorHeightMm({ garageHeight: NaN }) === GARAGE_DOOR_H
+                      && garageDoorHeightMm({ garageHeight: Infinity }) === GARAGE_DOOR_H);
+    ok('gh_bounds_sane', GARAGE_HEIGHT_MIN < GARAGE_DOOR_H && GARAGE_DOOR_H < GARAGE_HEIGHT_MAX);
+    // ABSENT is bit-identical to explicitly writing the default (the golden).
+    for (const frac of [0, 0.5, 1])
+      ok(`gh_absent_eq_default_f${frac}`,
+         sig(build(mkDoor({}), frac)) === sig(build(mkDoor({ garageHeight: GARAGE_DOOR_H }), frac)));
+    // wallCutsForSegment's lintel follows the door's own height.
+    {
+      const A = { x: 0, y: 0 }, B = { x: 10000, y: 0 };
+      const dr = (over) => Object.assign({ x: 4000, y: 0, w: 2400, rotation: 0, kind: 'garage' }, over);
+      const headOf = (over) => wallCutsForSegment(A, B, [dr(over)], []).openings[0].head;
+      ok('gh_cut_default', headOf({}) === GARAGE_DOOR_H, String(headOf({})));
+      ok('gh_cut_tall', headOf({ garageHeight: 3000 }) === 3000, String(headOf({ garageHeight: 3000 })));
+      ok('gh_cut_clamped', headOf({ garageHeight: 100 }) === GARAGE_HEIGHT_MIN);
+      // A swing door still carries no head at all.
+      ok('gh_cut_swing_none',
+         wallCutsForSegment(A, B, [dr({ kind: 'swing', w: 900 })], []).openings[0].head === undefined);
+    }
+    // The 3D leaf scales: 5 sections either way, but taller ones and a higher badge.
+    for (const HH of [1800, 3000, 4200]) {
+      const g = build(mkDoor({ garageHeight: HH }), 0);
+      const slabs = leafMeshes(g).filter(m => near(m.geometry.parameters.width, secW, 1e-9)
+                                            && near(m.geometry.parameters.depth, DOOR_T, 1e-9));
+      ok(`gh_still_five_${HH}`, slabs.length === 5, String(slabs.length));
+      ok(`gh_slat_height_${HH}`, slabs.every(m => near(m.geometry.parameters.height, HH / 5 - 6, 1e-6)),
+         slabs[0].geometry.parameters.height.toFixed(2));
+      // The stack fills exactly 0..HH.
+      const top = Math.max(...slabs.map(m => m.position.y + m.geometry.parameters.height / 2));
+      const bot = Math.min(...slabs.map(m => m.position.y - m.geometry.parameters.height / 2));
+      ok(`gh_span_${HH}`, near(top, HH - 3, 1e-6) && near(bot, 3, 1e-6),
+         `${bot.toFixed(1)}..${top.toFixed(1)}`);
+      // Badge, tracks and rails all follow H.
+      const sp = sprites(build(mkDoor({ garageHeight: HH }), 0.4));
+      ok(`gh_badge_y_${HH}`, sp.length === 1 && near(sp[0].position.y, HH + 260, 1e-6),
+         sp.length ? sp[0].position.y.toFixed(0) : 'none');
+      const tr = hardware(g, 'track')[0];
+      ok(`gh_track_height_${HH}`, near(tr.geometry.parameters.height, HH, 1e-6),
+         tr.geometry.parameters.height.toFixed(0));
+    }
+    // Roll-up drum + tilt pivot ride it too.
+    {
+      const gr = build(mkDoor({ garageStyle: 'roll_up', garageHeight: 3000 }), 0);
+      const drum = realMeshes(gr).find(m => m.geometry.type === 'CylinderGeometry');
+      ok('gh_rollup_drum_y', near(drum.position.y, 3000 + 170, 1e-6), drum.position.y.toFixed(0));
+      const gt = build(mkDoor({ garageStyle: 'tilt_up', garageHeight: 3000 }), 0);
+      ok('gh_tilt_pivot_y', near(findByData(gt, 'tiltPivot', true).position.y, 3000, 1e-6));
+    }
+    // A clamped-out-of-range height builds the SAME door as the clamp value.
+    ok('gh_clamped_build_matches',
+       sig(build(mkDoor({ garageHeight: 50 }), 0)) === sig(build(mkDoor({ garageHeight: GARAGE_HEIGHT_MIN }), 0)));
+  }
+
+  // ═══ 14. Door.color (leaf tint) ═══════════════════════════════════════════
+  {
+    const RED = '#c62828';
+    const slabColor = (o) => leafMeshes(o).filter(m => near(m.geometry.parameters.width, secW, 1e-9)
+                                                    && near(m.geometry.parameters.depth, DOOR_T, 1e-9))
+                               .map(m => m.material.color.getHex());
+    const plain = slabColor(build(mkDoor({}), 0));
+    const tinted = slabColor(build(mkDoor({ color: RED }), 0));
+    ok('col_slats_change', tinted.length === 5 && tinted.every(h => h !== plain[0]),
+       tinted.map(h => h.toString(16)).join(','));
+    ok('col_slats_uniform', new Set(tinted).size === 1);
+    // Garbage / missing hex falls back to the shipped grey, byte-for-byte.
+    for (const bad of ['', 'red', '#12', 'rgb(1,2,3)', '#xyzxyz', 'javascript:x', null, 5])
+      ok(`col_garbage_${String(bad).slice(0, 8) || 'empty'}`,
+         sig(build(mkDoor({ color: bad }), 0)) === sig(build(mkDoor({}), 0)));
+    // Glass is NEVER tinted (windowed + full-view styles).
+    for (const style of ['glass_panel', 'sectional_windows_top']) {
+      const a = transparents(build(mkDoor({ garageStyle: style }), 0)).map(m => m.material.color.getHex());
+      const b = transparents(build(mkDoor({ garageStyle: style, color: RED }), 0)).map(m => m.material.color.getHex());
+      ok(`col_glass_untinted_${style}`, a.length > 0 && a.join(',') === b.join(','), `${a[0]} vs ${b[0]}`);
+    }
+    // Lock deadbolts keep their STATE colour.
+    {
+      const a = locks(build(mkDoor({ lockEntity: 'lock.g' }), 0, LOCKED))[0].material.color.getHex();
+      const b = locks(build(mkDoor({ lockEntity: 'lock.g', color: RED }), 0, LOCKED))[0].material.color.getHex();
+      ok('col_lock_untinted', a === b, `${a.toString(16)} vs ${b.toString(16)}`);
+    }
+    // The tint survives OPENING — but an open custom door keeps a REDUCED green
+    // emissive so state still reads (the documented compromise).
+    {
+      const openTinted = leafMeshes(build(mkDoor({ color: RED }), 0.3))
+        .filter(m => near(m.geometry.parameters.width, secW, 1e-9))[0];
+      ok('col_open_keeps_tint', openTinted.material.color.getHex() === tinted[0]);
+      // A swing door is the family that carries the open-green base.
+      const sw = (over, f) => realMeshes(build(mkDoor(Object.assign(
+        { kind: 'swing', w: 900, entity_id: 'cover.g' }, over)), f))[0].material;
+      const openPlain = sw({}, 1), openRed = sw({ color: RED }, 1), shutRed = sw({ color: RED }, 0);
+      ok('col_swing_open_plain_green', openPlain.emissiveIntensity > 0.3);
+      ok('col_swing_open_tinted', openRed.color.getHex() === shutRed.color.getHex()
+                               && openRed.color.getHex() !== openPlain.color.getHex());
+      ok('col_swing_open_reduced_green',
+         openRed.emissiveIntensity > 0 && openRed.emissiveIntensity < openPlain.emissiveIntensity,
+         `${openRed.emissiveIntensity} vs ${openPlain.emissiveIntensity}`);
+      // A SHUT custom door glows not at all: its emissive colour is black
+      // (MeshToonMaterial's default emissiveIntensity is 1, so the COLOUR is
+      // the thing to assert), while the open one carries the green.
+      ok('col_swing_shut_no_emissive', shutRed.emissive.getHex() === 0,
+         shutRed.emissive.getHex().toString(16));
+      ok('col_swing_open_has_green_emissive', openRed.emissive.getHex() !== 0);
+    }
+    // All 9 styles accept a tint without throwing, and every leaf mesh moves.
+    {
+      const bad = [];
+      for (const st of ALL_STYLES) {
+        try {
+          const g = build(mkDoor({ garageStyle: st, color: RED }), 0);
+          if (!g || leafMeshes(g).length === 0) bad.push(st);
+        } catch (e) { bad.push(st + ':throw'); }
+      }
+      ok('col_all_styles_build', bad.length === 0, bad.join(',') || `${ALL_STYLES.length} styles`);
+    }
   }
 
   // ═══ 2D harness (real Planner + the real drawAll / hit tests) ═════════════
@@ -510,7 +827,7 @@
     drawAll(ctx, p0, view, null);
     const blank = snap();
     const sigs = [];
-    for (const s of [undefined, 'sectional', 'raised_panel', 'carriage', 'roll_up', 'glass_panel', 'tilt_up']) {
+    for (const s of [undefined, ...ALL_STYLES]) {
       const p = await mkPlanner([GD(s ? { garageStyle: s } : {})]);
       drawAll(ctx, p, view, null);
       sigs.push(rectDiff(blank, 0, 0, cvs.width - 1, cvs.height - 1));

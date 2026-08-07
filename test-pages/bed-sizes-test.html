@@ -1,0 +1,252 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>bed sizes test</title>
+<style>html,body{margin:0;background:#111;color:#ccc;font:12px sans-serif}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<!--
+  BED SIZES — twin / full / queen (legacy `bed`) / king.
+
+  Modules (transpile into the harness dir before serving):
+    npx esbuild src/geometry.ts     --bundle --format=esm --outfile=<harness>/geometry.mod.js
+    npx esbuild src/canvas-render.ts --bundle --format=esm --outfile=<harness>/canvas-render.mod.js
+    (the built three-renderer chunk + its assets/ siblings are copied next to
+     this file from dist/, like the other 3D renderer pages)
+
+  Asserts:
+   (A) pure isBedKind / BED_KINDS: all four true, everything else false, and the
+       set is DISJOINT from the stairs family (both are nav-exempt, but for
+       different reasons and via different resolvers).
+   (B) pure bedPillowLayout: counts 1 / 2 / 2 / 3, the row fits inside the
+       mattress at every size, pillow width scales with bed width, and the
+       2-pillow case reproduces the LEGACY queen geometry EXACTLY (pitch 0.44·W,
+       pw 0.42·W) — the refactor must not move today's build.
+   (C) all four kinds BUILD in 3D through the one shared bed branch, each with
+       the right number of pillow boxes at the head end, above the mattress.
+   (D) lie-lane capacity (the renderer's floor(w / 700) rule, driven purely by
+       the def width): twin = 1, full = 1, queen = 2, king = 2.
+   (E) nav: every bed kind is exempt from footprint blocking (beds are
+       occupiable — people walk in and lie down), negative-controlled against a
+       dresser of the same footprint, which DOES block.
+   (F) the 2D glyph paints the same pillow count as the 3D build.
+   (G) category: all four sit in the `bedroom` cat with sleep_shared + real
+       mattress footprints.
+-->
+<script type="module">
+  const G = await import('./geometry.mod.js');
+  const CR = await import('./canvas-render.mod.js');
+  const mod = await import('./assets/three-renderer.js?v=' + Date.now());
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+
+  const tests = [];
+  const ok = (name, cond, detail) => tests.push({ name, ok: !!cond, detail });
+  const near = (a, b, tol = 1e-6) => Number.isFinite(a) && Math.abs(a - b) <= tol;
+
+  const BEDS = ['bed', 'bed_twin', 'bed_full', 'bed_king'];
+  const WANT_PILLOWS = { bed: 2, bed_twin: 1, bed_full: 2, bed_king: 3 };
+
+  // ══ (A) pure membership ═══════════════════════════════════════════════════
+  ok('A1 all four bed kinds are beds', BEDS.every(k => G.isBedKind(k) === true), BEDS.join(','));
+  ok('A2 BED_KINDS has exactly the four', G.BED_KINDS.size === 4, `size=${G.BED_KINDS.size}`);
+  ok('A3 non-bed kinds are not beds',
+     !G.isBedKind('sofa') && !G.isBedKind('nightstand') && !G.isBedKind('chaise')
+     && !G.isBedKind('rug') && !G.isBedKind('stairs'));
+  ok('A4 absent / garbage kind is not a bed',
+     !G.isBedKind(undefined) && !G.isBedKind(null) && !G.isBedKind('nope'));
+  {
+    const overlap = [...G.BED_KINDS].filter(k => G.STAIRS_KINDS.has(k));
+    ok('A5 BED_KINDS ∩ STAIRS_KINDS = ∅', overlap.length === 0, `overlap=${overlap}`);
+  }
+  ok('A6 every bed kind is a real FURNITURE_KINDS entry', BEDS.every(k => !!G.FURNITURE_KINDS[k]));
+
+  // ══ (B) pure pillow layout ════════════════════════════════════════════════
+  for (const k of BEDS) {
+    ok(`B1:${k} pillow count = ${WANT_PILLOWS[k]}`,
+       G.bedPillowCount(k) === WANT_PILLOWS[k], `got=${G.bedPillowCount(k)}`);
+  }
+  ok('B2 unknown kind falls back to 2 pillows',
+     G.bedPillowCount('nope') === 2 && G.bedPillowCount(undefined) === 2);
+  {
+    // LEGACY GOLDEN: the pre-split queen build placed two 0.42·W pillows at
+    // ±0.22·W. The generic rule must reproduce that bit-for-bit.
+    const W = G.FURNITURE_KINDS.bed.w;              // 2000
+    const lay = G.bedPillowLayout('bed', W);
+    ok('B3 queen layout is the legacy build exactly (pitch 0.44·W, pw 0.42·W)',
+       lay.count === 2 && near(lay.pitch, W * 0.44, 1e-9) && near(lay.pw, W * 0.42, 1e-9),
+       `pitch=${lay.pitch} pw=${lay.pw}`);
+    const x0 = (0 - (lay.count - 1) / 2) * lay.pitch;
+    ok('B3b …so the two centres land at ∓0.22·W',
+       near(x0, -W * 0.22, 1e-9), `x0=${x0} want=${-W * 0.22}`);
+  }
+  for (const k of BEDS) {
+    const W = G.FURNITURE_KINDS[k].w;
+    const lay = G.bedPillowLayout(k, W);
+    // Outermost pillow's far edge must stay on the mattress.
+    const outer = ((lay.count - 1) / 2) * lay.pitch + lay.pw / 2;
+    ok(`B4:${k} the pillow row fits inside the mattress width`,
+       outer <= W / 2, `outer=${outer.toFixed(1)} halfW=${W / 2}`);
+    ok(`B5:${k} pillow width is realistic (300–900 mm)`,
+       lay.pw >= 300 && lay.pw <= 900, `pw=${lay.pw.toFixed(1)}`);
+  }
+  {
+    // Width scaling: same pillow count, wider bed ⇒ wider pillows.
+    const a = G.bedPillowLayout('bed_full', 1370), b = G.bedPillowLayout('bed', 2000);
+    ok('B6 pillow width scales with bed width at equal count',
+       a.count === b.count && b.pw > a.pw, `full=${a.pw.toFixed(1)} queen=${b.pw.toFixed(1)}`);
+  }
+
+  // ══ (C) 3D builds ═════════════════════════════════════════════════════════
+  const build = (kind, extra = {}) => {
+    const d = G.FURNITURE_KINDS[kind];
+    return r._buildFurniture({ id: 'x_' + kind, x: 0, y: 0, w: d.w, h: d.h, kind, rotation: 0, ...extra });
+  };
+  // A pillow is a small flat box sitting ABOVE the mattress top (HT*1.05) at the
+  // head (+Z) end. Count boxes whose world centre clears the mattress plane.
+  const pillowBoxes = (grp, def) => {
+    grp.updateMatrixWorld(true);
+    const top = def.ht * 1.05;
+    // The group sits at the floor-frame offset (_w maps the piece centre into
+    // scene coords), so measure RELATIVE to the group origin — the local frame
+    // the builder authors in (+Z = head end, y = 0 at the floor).
+    const g = grp.matrixWorld.elements, gx = g[12], gy = g[13], gz = g[14];
+    const out = [];
+    grp.traverse(o => {
+      if (!o.isMesh || o.userData.outline) return;
+      if (o.geometry.type !== 'BoxGeometry') return;
+      const p = o.geometry.parameters;
+      if (p.height > 200) return;                       // slabs / frame / headboard
+      const m = o.matrixWorld.elements;
+      const cx = m[12] - gx, cy = m[13] - gy, cz = m[14] - gz;
+      if (cy <= top) return;                            // must sit on the mattress
+      if (cz <= 0) return;                              // head end is +Z
+      out.push({ x: cx, y: cy, z: cz, w: p.width });
+    });
+    return out;
+  };
+  for (const k of BEDS) {
+    const def = G.FURNITURE_KINDS[k];
+    const grp = build(k);
+    let bodies = 0;
+    grp.traverse(o => { if (o.isMesh && !o.userData.outline) bodies++; });
+    ok(`C1:${k} builds a real group with body meshes`, !!grp && bodies >= 5, `bodies=${bodies}`);
+    const pb = pillowBoxes(grp, def);
+    ok(`C2:${k} builds ${WANT_PILLOWS[k]} pillow(s)`,
+       pb.length === WANT_PILLOWS[k], `got=${pb.length}`);
+    if (pb.length) {
+      const lay = G.bedPillowLayout(k, def.w);
+      ok(`C3:${k} pillow width matches the shared layout`,
+         pb.every(b => near(b.w, lay.pw, 1e-6)), `w=${pb[0].w.toFixed(1)} want=${lay.pw.toFixed(1)}`);
+      // Row is centred on the bed's own axis (local x = 0).
+      const xs = pb.map(b => b.x).sort((a, b2) => a - b2);
+      const mid = (xs[0] + xs[xs.length - 1]) / 2;
+      ok(`C4:${k} the pillow row is centred on the bed`,
+         Math.abs(mid) < 1e-6, `mid=${mid.toFixed(3)}`);
+      if (pb.length > 1) {
+        ok(`C5:${k} adjacent pillows are spaced by the layout pitch`,
+           near(Math.abs(xs[1] - xs[0]), lay.pitch, 1e-6),
+           `gap=${Math.abs(xs[1] - xs[0]).toFixed(2)} want=${lay.pitch.toFixed(2)}`);
+      }
+    }
+  }
+  {
+    // The four sizes are visually DISTINCT (footprints differ), which is the
+    // whole point of shipping them as separate kinds.
+    const dims = BEDS.map(k => `${G.FURNITURE_KINDS[k].w}x${G.FURNITURE_KINDS[k].h}`);
+    ok('C6 the four sizes have four distinct footprints',
+       new Set(dims).size === 4, dims.join(' '));
+  }
+
+  // ══ (D) lie-lane capacity — the renderer rule floor(w / 700), min 1 ═══════
+  const lanes = (k) => Math.max(1, Math.floor(G.FURNITURE_KINDS[k].w / 700));
+  ok('D1 twin holds one sleeper', lanes('bed_twin') === 1, `w=${G.FURNITURE_KINDS.bed_twin.w}`);
+  ok('D2 full holds one sleeper', lanes('bed_full') === 1, `w=${G.FURNITURE_KINDS.bed_full.w}`);
+  ok('D3 queen holds two', lanes('bed') === 2, `w=${G.FURNITURE_KINDS.bed.w}`);
+  ok('D4 king holds two', lanes('bed_king') === 2, `w=${G.FURNITURE_KINDS.bed_king.w}`);
+
+  // ══ (E) nav — beds stay walkable (occupiable) ════════════════════════════
+  const floorOf = (furniture) => ({
+    id: 'f1', name: 'F', w: 8000, d: 8000, sensors: [], motionSensors: [], envSensors: [],
+    walls: [], doors: [], windows: [], furniture, lights: [], switches: [], rooms: [],
+    bleProxies: [], presenceZones: [], groundAreas: [], voidAreas: [], pools: [], rulers: [],
+    cameras: [], robots: [], safetySensors: [], alarmPanels: [], alertBeacons: [],
+    thermostats: [], valves: [], plugs: [], infoCards: [], actionButtons: [],
+    calendarPanels: [], projectors: [], sprinklerZones: [], flagpoles: [], solarPanels: [],
+  });
+  // Blocked-cell count with the piece present, vs an empty floor.
+  const blockedWith = (piece) => {
+    r.updateFloor(floorOf(piece ? [piece] : []));
+    return r._nav ? r._nav.blockedCount : -1;
+  };
+  const base = blockedWith(null);
+  ok('E0 an empty floor has a nav grid', base >= 0, `blocked=${base}`);
+  for (const k of BEDS) {
+    const d = G.FURNITURE_KINDS[k];
+    const n = blockedWith({ id: 'b1', x: 4000, y: 4000, w: d.w, h: d.h, kind: k, rotation: 0 });
+    ok(`E1:${k} blocks no nav cells (occupiable)`, n === base, `blocked=${n} base=${base}`);
+  }
+  {
+    // Negative control: a dresser at the KING footprint blocks plenty of cells,
+    // so E1 is not passing because the rasteriser is inert.
+    const d = G.FURNITURE_KINDS.bed_king;
+    const n = blockedWith({ id: 'b1', x: 4000, y: 4000, w: d.w, h: d.h, kind: 'dresser', rotation: 0 });
+    ok('E2 a dresser of the same footprint DOES block', n > base, `blocked=${n} base=${base}`);
+  }
+  r.clearTransientGroups();
+
+  // ══ (F) 2D glyph ══════════════════════════════════════════════════════════
+  {
+    // Paint each kind into an offscreen canvas and count the near-white pillow
+    // runs along the pillow row — the 2D glyph must show the same count as 3D.
+    const CW = 400, CH = 400;
+    const cv = document.createElement('canvas'); cv.width = CW; cv.height = CH;
+    const ctx = cv.getContext('2d');
+    for (const k of BEDS) {
+      ctx.clearRect(0, 0, CW, CH);
+      // The painter draws in a LOCAL frame centred on the origin, so translate.
+      const halfW = 150, halfH = 150, cx = 200, cy = 200;
+      const d = G.FURNITURE_KINDS[k];
+      ctx.save(); ctx.translate(cx, cy);
+      CR.drawFurniturePrimitiveLocal(ctx, { id: 'p', x: 0, y: 0, w: d.w, h: d.h, kind: k }, halfW, halfH);
+      ctx.restore();
+      // Pillow band: the row starts at localY + h*0.14 and is h*0.16 tall.
+      const x = cx - halfW, w = halfW * 2, h = halfH * 2;
+      const scanY = Math.round(cy - halfH + h * 0.20);
+      const row = ctx.getImageData(x, scanY, w, 1).data;
+      let runs = 0, inRun = false;
+      for (let i = 0; i < w; i++) {
+        const R = row[i * 4], Gg = row[i * 4 + 1], B = row[i * 4 + 2], A = row[i * 4 + 3];
+        const white = A > 200 && R > 220 && Gg > 220 && B > 220;   // #eceff1 pillows
+        if (white && !inRun) { runs++; inRun = true; } else if (!white) inRun = false;
+      }
+      ok(`F1:${k} 2D glyph paints ${WANT_PILLOWS[k]} pillow(s)`,
+         runs === WANT_PILLOWS[k], `runs=${runs}`);
+    }
+  }
+
+  // ══ (G) category + data ═══════════════════════════════════════════════════
+  ok('G1 all four beds are in the bedroom cat',
+     BEDS.every(k => G.FURNITURE_KINDS[k].cat === 'bedroom'),
+     BEDS.map(k => G.FURNITURE_KINDS[k].cat).join(','));
+  ok('G2 all four anchor sleep_shared',
+     BEDS.every(k => G.FURNITURE_KINDS[k].activity === 'sleep_shared'));
+  ok('G3 the legacy `bed` keeps its dims (back-compat) and is relabelled queen',
+     G.FURNITURE_KINDS.bed.w === 2000 && G.FURNITURE_KINDS.bed.h === 1500
+     && /queen/i.test(G.FURNITURE_KINDS.bed.label),
+     `${G.FURNITURE_KINDS.bed.w}x${G.FURNITURE_KINDS.bed.h} "${G.FURNITURE_KINDS.bed.label}"`);
+  ok('G4 the sized kinds carry real mattress footprints',
+     G.FURNITURE_KINDS.bed_twin.w === 990 && G.FURNITURE_KINDS.bed_twin.h === 1910
+     && G.FURNITURE_KINDS.bed_full.w === 1370 && G.FURNITURE_KINDS.bed_full.h === 1910
+     && G.FURNITURE_KINDS.bed_king.w === 1930 && G.FURNITURE_KINDS.bed_king.h === 2030);
+  ok('G5 none of the beds is sittable (no seat spot on a mattress)',
+     BEDS.every(k => G.FURNITURE_KINDS[k].seat == null));
+
+  let pass = 0; const fails = [];
+  for (const t of tests) { if (t.ok) pass++; else fails.push(t.name); }
+  const total = tests.length, allPass = pass === total;
+  const title = allPass ? `BEDSIZES PASS ${pass}/${total}` : `BEDSIZES FAIL ${pass}/${total} [${fails.join(',')}]`;
+  document.title = title;
+  window.__RESULT__ = { title };
+  document.body.insertAdjacentHTML('beforeend',
+    `<pre style="position:fixed;left:8px;top:8px;color:#8f8">${title}\n` +
+    tests.map(t => `${t.ok ? 'PASS' : 'FAIL'} ${t.name} — ${t.detail ?? ''}`).join('\n') + `</pre>`);
+</script>

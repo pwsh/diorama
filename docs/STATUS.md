@@ -404,6 +404,42 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Big furnishing wave: 3 windowed garage styles + garage hardware/height
+  + door&window colors; furniture cat split (6 groups); 4 bed sizes;
+  wall-magnet fix; 6 chair kinds** (2026-08-07, five user requests, three
+  parallel Opus agents on fenced regions; unreleased — on main past
+  v0.62.0). (1) GARAGE: `GarageStyle` grows to NINE
+  (sectional_windows_top — the 4/5-up top-lite row — /left/right side-lite
+  columns; chirality = observer OUTSIDE, local −X = their left,
+  world-pinned); interior tracks + opener motor (local −Z) + exterior
+  handle (+Z) make front/back readable; `Door.garageHeight?` (1800–4200,
+  per-door `wallCutsForSegment` head); `Door.color?` (all door kinds,
+  open keeps reduced green emissive 0.18) + `Window.frameColor?` (glass/
+  shades/curtains/hardware never tinted); hardware tagged
+  `userData.garageHw` so leaf goldens filter it while equality goldens
+  compare whole assemblies. GARAGE 99→264, DOORKINDS 97→123, WINDOW
+  53→73, curtain 36, covers 22, opening-click 39. (2) FURNITURE CATS:
+  seating/tables/bedroom/storage/stairs/decor (+ recliners → theater);
+  toolbar Furniture tab → 5 tabs + stairs cards into Structure (16 tabs);
+  audit found ZERO positive cat==='furniture' gates (all appliance-keyed);
+  gallery CAT_PAGE maps the six back to ONE furniture page (six new pages
+  would have orphaned every published GIF URL). TOOLBAR 70→85. (3) BEDS:
+  bed_twin/full/king + queen relabel (id `bed` back-compat, 1/2/2/3
+  pillows, legacy queen bit-exact via the 21/22 pillow ratio);
+  `isBedKind` replaces every literal-'bed' predicate. BEDSIZES 61 new.
+  (4) `resolveFurnitureWallCollision` PUSH-OUT-ONLY (user: "bed sucked
+  into the wall") — the ~150 mm attract magnet is gone, overlap still
+  resolves to flush; lib.mjs settle unaffected (own replica); floorplans
+  regen exportedAt-only. ALIGNGUIDES 116→125 (§17 placement matrix).
+  (5) CHAIRS: armchair/office_chair/bar_stool/wingback_chair/
+  folding_chair/gaming_chair (cat seating, no activity — host capture
+  keys on `def.seat`, no kind lists anywhere, verified; counters
+  deliberately not activity hosts, stool parity pinned). CHAIRS 129 new.
+  Final combined sweep re-verified independently on the merged tree
+  (7 suites). NB agent B overwrote the pre-existing MANUAL
+  `bed-test.html` harness before noticing — restored from HEAD; the
+  assertion suite lives in bed-sizes-test.
+
 - **SOLAR AIM SAGA RESOLVED: the sky sun disc was the liar — now
   camera-relative (parallax-free)** (2026-08-07, root-caused from the
   user's annotated top-down screenshot; unreleased — on main past

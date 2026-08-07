@@ -321,6 +321,71 @@
        String(bandPainted(single, none, OUT_Y)));
   }
 
+  // === N. Window.frameColor: joinery only ==================================
+  // Tints the window UNIT (sashes' bars, mullions, meeting rails, bay casework
+  // / posts / roof). Glass keeps its translucent grey; the SHADE and CURTAIN
+  // treatments keep their own colours — they hang ON the window, they are not it.
+  {
+    const RED = 0xc62828, REDHEX = '#c62828';
+    const opaque = grp => { const a = []; grp.traverse(o => {
+      if (o.isMesh && !o.userData?.outline && o.material && !o.material.transparent) a.push(o); }); return a; };
+    const build1 = (over, states) => {
+      const w = Object.assign({ id: 'fc', x: 3000, y: wallY, w: 1600, rotation: 0,
+                                entity_id: null, kind: 'double_hung' }, over);
+      r.updateFloor(mkFloor([w]), scene3d);
+      r.updateDoorsWindows([], [w], id => (states || {})[id] || null);
+      return r._doorGroup.children[0];
+    };
+    const hexes = grp => opaque(grp).map(m => m.material.color.getHex()).sort().join(',');
+    // Every framed kind moves its opaque joinery; nothing else does.
+    for (const k of ['double_hung', 'casement_pair', 'sliding', 'bay', 'bay_bench']) {
+      const a = hexes(build1({ kind: k }));
+      const b = hexes(build1({ kind: k, frameColor: REDHEX }));
+      ok(`fc_${k}_frame_tinted`, a !== b && opaque(build1({ kind: k })).length > 0, `${a} vs ${b}`);
+      // GLASS is untouched.
+      const ga = paneMeshes(build1({ kind: k })).map(m => m.material.color.getHex()).join();
+      const gb = paneMeshes(build1({ kind: k, frameColor: REDHEX })).map(m => m.material.color.getHex()).join();
+      ok(`fc_${k}_glass_untouched`, ga.length > 0 && ga === gb, `${ga} vs ${gb}`);
+    }
+    // The bay's CASEWORK (knee wall / head board / roof / posts) follows too —
+    // every opaque mesh in a tinted bay shares one hue.
+    {
+      const b = opaque(build1({ kind: 'bay', frameColor: REDHEX }));
+      ok('fc_bay_casework_uniform', b.length >= 8 && new Set(b.map(m => m.material.color.getHex())).size === 1,
+         `${b.length} meshes / ${new Set(b.map(m => m.material.color.getHex())).size} hues`);
+    }
+    // A ROLLER SHADE keeps its fabric colour (and its weight bar rides with it).
+    {
+      const covSt = { 'cover.s': { state: 'closed', attributes: { current_position: 0 } } };
+      const plain = build1({ kind: 'picture', coverEntity: 'cover.s' }, covSt);
+      const tint = build1({ kind: 'picture', coverEntity: 'cover.s', frameColor: REDHEX }, covSt);
+      const shadeOf = g2 => opaque(g2).filter(m => m.geometry.parameters.depth === 24)
+                              .map(m => m.material.color.getHex());
+      ok('fc_shade_present', shadeOf(plain).length === 1, String(shadeOf(plain).length));
+      ok('fc_shade_untinted', shadeOf(plain).join() === shadeOf(tint).join()
+                           && shadeOf(tint)[0] !== RED, shadeOf(tint).join());
+    }
+    // CURTAINS (fabric + rod) keep their own colours.
+    {
+      const cur = { style: 'split', color: '#b9a58c' };
+      const plain = build1({ kind: 'picture', curtain: cur, curtainPos: 0 });
+      const tint = build1({ kind: 'picture', curtain: cur, curtainPos: 0, frameColor: REDHEX });
+      const drapes = g2 => { const a = []; g2.traverse(o => {
+        if (o.userData?.kind === 'curtain' || o.userData?.kind === 'curtainRod') a.push(o); }); return a; };
+      const hueOf = g2 => { const h = []; for (const d2 of drapes(g2))
+        d2.traverse(o => { if (o.isMesh && !o.userData?.outline) h.push(o.material.color.getHex()); }); return h.sort().join(); };
+      ok('fc_curtains_present', drapes(plain).length >= 3, String(drapes(plain).length));
+      ok('fc_curtains_untinted', hueOf(plain) === hueOf(tint) && !hueOf(tint).split(',').includes(String(RED)),
+         hueOf(tint));
+    }
+    // Garbage hex falls back to the shipped grey, byte-for-byte.
+    {
+      const grey = hexes(build1({}));
+      for (const bad of ['', 'blue', '#12', 'rgb(1,2,3)', null])
+        ok(`fc_garbage_${String(bad) || 'empty'}`, hexes(build1({ frameColor: bad })) === grey);
+    }
+  }
+
   const pass = results.every(x => x.startsWith('ok'));
   const n = results.length, p = results.filter(x => x.startsWith('ok')).length;
   document.title = `WINDOW ${pass ? 'PASS' : 'FAIL'} ${p}/${n} ${results.join(' ')}`;

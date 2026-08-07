@@ -39,7 +39,7 @@ import {
   envKindOf, envColor, envValueText, envHeight, envScale,
   INFO_CARD_MOUNT_DEFAULTS, INFO_CARD_SCALE_MIN, INFO_CARD_SCALE_MAX,
   infoCardText, infoCardMount, infoCardHeight, infoCardW, infoCardH, infoCardScale,
-  furnitureCat, type FurnitureCat, isBinKind, isWetBathKind, isVehicleKind, isStairsKind, STAIRS_MIN_RISE_MM, isClimateApplianceKind, isBladedFanKind,
+  furnitureCat, type FurnitureCat, isBinKind, isWetBathKind, isVehicleKind, isStairsKind, isBedKind, STAIRS_MIN_RISE_MM, isClimateApplianceKind, isBladedFanKind,
   isTreeKind, TREE_MIN_HEIGHT_MM, TREE_MAX_HEIGHT_MM,
   isMechanicalApplianceKind, mechanicalBindDomains, mechanicalRun,
   isRackKind, rackHealth, rackHealthColor,
@@ -58,7 +58,8 @@ import { CLOCK_PRESETS, DATE_PRESETS, type ValueRule, type RuleOp } from '../val
 import type { Vec2, InfoCard, InfoCardMount, InfoCardDisplayMode, ActionButton, ActionKind, Ruler, DimensionMode, NeighborhoodConfig, DoorKind, GarageStyle } from '../types.js';
 import { resolveRulerEnds } from '../geometry.js';
 import { floorElevationMm, DOOR_DEFAULT_W, doorDefaultWidth, isSlidingDoorKind,
-  isDoubleLeafDoorKind } from '../geometry.js';
+  isDoubleLeafDoorKind, GARAGE_DOOR_H, GARAGE_HEIGHT_MIN, GARAGE_HEIGHT_MAX,
+  garageDoorHeightMm } from '../geometry.js';
 
 // Compact relative-age label for a GPS fix timestamp (ms epoch).
 function gpsAgeText(ts: number): string {
@@ -1162,22 +1163,35 @@ export class Sidebar extends LitElement {
   // Furniture kind options grouped by category. `selected` is either a
   // FurnitureKind or `custom:<recipeId>` for a custom object.
   private _kindOptions(selected: string) {
+    // The old single "Furniture" optgroup is SPLIT six ways (it had grown to 33
+    // kinds). The legacy `furniture` cat stays last and renders ONLY if some
+    // built-in def still resolves to it — today none do, but furnitureCat()'s
+    // default keeps it reachable, so the group must never disappear silently.
     const cats: { cat: FurnitureCat; label: string }[] = [
-      { cat: 'furniture', label: 'Furniture' },
+      { cat: 'seating', label: 'Seating' },
+      { cat: 'tables', label: 'Tables & counters' },
+      { cat: 'bedroom', label: 'Bedroom' },
+      { cat: 'storage', label: 'Storage' },
+      { cat: 'stairs', label: 'Stairs & platforms' },
+      { cat: 'decor', label: 'Decor & misc' },
       { cat: 'appliance', label: 'Appliances' },
       { cat: 'bathroom', label: 'Bathroom' },
       { cat: 'outdoor', label: 'Outdoor' },
       { cat: 'theater', label: 'Home theater' },
       { cat: 'vehicle', label: 'Vehicle / garage' },
+      { cat: 'furniture', label: 'Furniture (other)' },
     ];
     const kinds = Object.keys(FURNITURE_KINDS) as FurnitureKind[];
     const custom = this.planner.store.customObjects ?? [];
     return html`
-      ${cats.map(c => html`
+      ${cats.map(c => {
+        const ks = kinds.filter(k => furnitureCat(FURNITURE_KINDS[k]) === c.cat);
+        return ks.length === 0 ? nothing : html`
         <optgroup label=${c.label}>
-          ${kinds.filter(k => furnitureCat(FURNITURE_KINDS[k]) === c.cat).map(k => html`
+          ${ks.map(k => html`
             <option value=${k} ?selected=${selected === k}>${FURNITURE_KINDS[k].label}</option>`)}
-        </optgroup>`)}
+        </optgroup>`;
+      })}
       ${custom.length ? html`
         <optgroup label="Custom">
           ${custom.map(o => html`
@@ -5261,6 +5275,25 @@ export class Sidebar extends LitElement {
     }));
   }
 
+  // Optional-tint row: a swatch + a ✕ that clears back to undefined (the bg-text
+  // colour-row idiom). `dflt` is only the swatch's STARTING value — it is never
+  // written to the store, so an untouched item serializes exactly as before and
+  // the picker still opens on the real shipped hue.
+  private _colorRow(label: string, cur: string | undefined, dflt: string,
+                    title: string, set: (v: string | undefined) => void) {
+    return html`
+      <div class="row">
+        <label title=${title}>${label}</label>
+        <input type="color" style="width:44px;padding:0;height:22px"
+               .value=${cur ?? dflt}
+               @change=${(e: Event) => set((e.target as HTMLInputElement).value || undefined)}>
+        ${cur
+          ? html`<button class="btn" style="font-size:10px;padding:2px 6px"
+                         title="Use the default colour" @click=${() => set(undefined)}>✕</button>`
+          : html`<span style="font-size:10px;color:var(--text-dim)">default</span>`}
+      </div>`;
+  }
+
   private _doorEditor(d: Door) {
     const p = this.planner;
     const upd = (mut: () => void) => { mut(); p.save(); p.emitConfig(); };
@@ -5311,8 +5344,29 @@ export class Sidebar extends LitElement {
             <option value="roll_up" ?selected=${d.garageStyle === 'roll_up'}>Roll-up coil</option>
             <option value="glass_panel" ?selected=${d.garageStyle === 'glass_panel'}>Full-view glass</option>
             <option value="tilt_up" ?selected=${d.garageStyle === 'tilt_up'}>One-piece tilt</option>
+            <option value="sectional_windows_top" ?selected=${d.garageStyle === 'sectional_windows_top'}>Sectional · top windows</option>
+            <option value="sectional_windows_left" ?selected=${d.garageStyle === 'sectional_windows_left'}>Sectional · left windows</option>
+            <option value="sectional_windows_right" ?selected=${d.garageStyle === 'sectional_windows_right'}>Sectional · right windows</option>
           </select>
+        </div>
+        <div class="row">
+          <label title="Opening height in mm (1800–4200). Sets the wall opening's lintel AND the drawn leaf; blank uses the 2100 mm default.">Opening height (mm)</label>
+          <input type="number" min=${GARAGE_HEIGHT_MIN} max=${GARAGE_HEIGHT_MAX} step="50"
+                 placeholder=${String(GARAGE_DOOR_H)}
+                 .value=${d.garageHeight == null ? '' : String(Math.round(d.garageHeight))}
+                 @change=${(e: Event) => upd(() => {
+                   const raw = (e.target as HTMLInputElement).value.trim();
+                   const v = parseFloat(raw);
+                   // Blank OR exactly the default → clear the field, so an
+                   // untouched garage door serializes byte-identically.
+                   if (!raw || !isFinite(v) || garageDoorHeightMm({ garageHeight: v }) === GARAGE_DOOR_H) delete d.garageHeight;
+                   else d.garageHeight = garageDoorHeightMm({ garageHeight: v });
+                 })}>
         </div>`}
+        ${this._colorRow(
+          'Color', d.color, '#90a4ae',
+          'Tints the door panel / slab / leaf. Glass, locks and garage track hardware keep their own colours; in the 2D plan it replaces the closed-state stroke only.',
+          v => upd(() => { if (v == null) delete d.color; else d.color = v; }))}
         <div class="row"><label>Width (mm)</label>
           <input type="number" min="200" .value=${String(Math.round(d.w))}
                  @input=${(e: Event) => upd(() => {
@@ -5364,7 +5418,9 @@ export class Sidebar extends LitElement {
           pocket / sliding-glass kinds read "slide side" as the end the panel
           retracts toward; double + french open as a mirrored pair. Bind to a
           binary_sensor ("on" = open) or a cover.* (garage / position). Garage
-          doors pick an overhead style and show their open percentage. An
+          doors pick an overhead style + opening height and show their open
+          percentage; their tracks and opener sit on the INSIDE face while the
+          pull handle sits outside, so front and back always read. An
           optional lock.* padlock is clickable (set "Lock control" to display
           for a read-only badge); the doorbell binding is display only.
         </div>
@@ -5540,6 +5596,10 @@ export class Sidebar extends LitElement {
                    w.height = isFinite(v) ? Math.max(200, Math.min(2600, v)) : windowGlassHMm({ kind: w.kind });
                  })}>
         </div>
+        ${this._colorRow(
+          'Frame color', w.frameColor, '#9aa4ad',
+          'Tints the sashes, mullions, meeting rails and bay casework. Glass, blinds and curtains keep their own colours; in the 2D plan it replaces the closed-state stroke only.',
+          v => upd(() => { if (v == null) delete w.frameColor; else w.frameColor = v; }))}
         <div class="row"><label>HA entity</label>
           <span style="font-size:11px;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
             ${w.entity_id || '— unbound —'}
@@ -5791,7 +5851,7 @@ export class Sidebar extends LitElement {
                   title="Reset to the kind's default color"
                   @click=${() => upd(() => { piece.color = undefined; })}>✕</button>
         </div>
-        ${curKind === 'bed' ? html`
+        ${isBedKind(curKind as FurnitureKind) ? html`
           <div class="row"><label title="Two occupants hide under a shared blanket (the lump breathes). Off: they lie side by side, no blanket.">Two-person covers</label>
             <input type="checkbox" .checked=${piece.sharedBedCovers !== false}
                    @change=${(e: Event) => upd(() => {
