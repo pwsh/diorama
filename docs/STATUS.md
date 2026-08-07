@@ -404,6 +404,27 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **SOLAR AIM SAGA RESOLVED: the sky sun disc was the liar — now
+  camera-relative (parallax-free)** (2026-08-07, root-caused from the
+  user's annotated top-down screenshot; unreleased — on main past
+  v0.62.0). The disc is a sprite at R = 26000 mm that was anchored at the
+  SCENE ORIGIN — on the user's 32×52 m property it hung *inside* the
+  yard, so from their north-yard panel (24 m off-center) its apparent
+  direction read ~195° when the true sun azimuth was 169° (their blue
+  arrow measured ~190° — match), and in the MORNING ~174° vs true
+  117.67° — exactly reproducing every report ("panel points east, sun
+  looks south"). The PANEL was correct all day (bit-exact world normal,
+  their θ = 0.4°, 2D arrow 117.5°, tilt tracking live). Fix: sun sprite
+  (+ decorative moon) position = camera.position + eased OFFSET
+  (`_sunOffsetCur`/`_moonOffsetCur`) — the dome/starfield/catalog/
+  real-moon were ALREADY camera-recentered; these two were the last
+  origin-anchored sky objects. `_skySunTarget` semantics unchanged.
+  weather-fx `?c=sky` 69→70 (parallax pin: sprite-minus-camera direction
+  ≡ sun az/elev from a far-yard viewpoint), SKYREAL 32/32 unchanged.
+  Lesson: "verified correct at every layer" missed that the REFERENCE
+  the user compared against was itself a scene object with its own bug —
+  the annotated-screenshot request is what cracked it.
+
 - **Solar panel: per-axis tracking switches + sun-position display**
   (2026-08-07, user-requested mid-investigation; unreleased — on main past
   v0.62.0). `trackAzimuth`/`trackTilt` (absent = true) freeze either axis

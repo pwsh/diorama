@@ -2468,6 +2468,17 @@ export class ThreeDRenderer {
   private _skyDaynessSeeded = false;
   private _skySunTarget = new THREE.Vector3(0, 20000, 0);
   private _skyMoonTarget = new THREE.Vector3(0, 14000, 0);
+  // Eased CAMERA-RELATIVE offsets for the sun/moon sprites (2026-08-07,
+  // user-reported: on a 52 m-deep property the sun disc — a sprite only 26 m
+  // from the SCENE ORIGIN — read ~55° off the sun's true azimuth from a
+  // north-yard solar panel, so the correctly-aimed panel looked wrong against
+  // it). Every other sky object (dome, starfield, catalog group, real-mode
+  // moon) was already camera-recentered per frame; these two were the last
+  // origin-anchored ones. The sprite position is camera.position + eased
+  // offset, so sky direction is parallax-free from ANY viewpoint; the
+  // _skySunTarget/_skyMoonTarget vectors keep their exact direction semantics.
+  private _sunOffsetCur = new THREE.Vector3(0, 20000, 0);
+  private _moonOffsetCur = new THREE.Vector3(0, 14000, 0);
   private _sunWantOpacity = 0; private _sunOpacityCur = 0;
   private _moonWantOpacity = 0; private _moonOpacityCur = 0;
   private _skyStormDir = new THREE.Vector2(1, 0); // upwind (scene x,z) for horizon darkening
@@ -19243,9 +19254,14 @@ export class ThreeDRenderer {
       this._moonOpacityCur += (this._moonWantOpacity - this._moonOpacityCur) * k;
       if (this._sunSprite) {
         (this._sunSprite.material as THREE.SpriteMaterial).opacity = this._sunOpacityCur;
-        // Snap into place while invisible (avoids a swoop from the last position).
-        if (this._sunOpacityCur < 0.02) this._sunSprite.position.copy(this._skySunTarget);
-        else this._sunSprite.position.lerp(this._skySunTarget, k);
+        // Ease the camera-relative OFFSET (never the absolute position — an
+        // origin-anchored sun disc reads a wrong direction from anywhere but
+        // the plan centre; see the _sunOffsetCur field note). Snap while
+        // invisible (avoids a swoop from the last direction).
+        if (this._sunOpacityCur < 0.02) this._sunOffsetCur.copy(this._skySunTarget);
+        else this._sunOffsetCur.lerp(this._skySunTarget, k);
+        if (this._camera) this._sunSprite.position.copy(this._camera.position).add(this._sunOffsetCur);
+        else this._sunSprite.position.copy(this._sunOffsetCur);
         this._sunSprite.visible = this._skyVisible && this._sunOpacityCur > 0.01;
       }
       if (this._moonSprite) {
@@ -19254,10 +19270,12 @@ export class ThreeDRenderer {
           // Real ephemeris: pin the moon at its true direction, camera-recentered
           // (like the catalog group) so it holds among the real stars.
           this._moonSprite.position.copy(this._camera.position).add(this._moonRealDir);
-        } else if (this._moonOpacityCur < 0.02) {
-          this._moonSprite.position.copy(this._skyMoonTarget);
         } else {
-          this._moonSprite.position.lerp(this._skyMoonTarget, k);
+          // Decorative arc: same camera-relative offset idiom as the sun disc.
+          if (this._moonOpacityCur < 0.02) this._moonOffsetCur.copy(this._skyMoonTarget);
+          else this._moonOffsetCur.lerp(this._skyMoonTarget, k);
+          if (this._camera) this._moonSprite.position.copy(this._camera.position).add(this._moonOffsetCur);
+          else this._moonSprite.position.copy(this._moonOffsetCur);
         }
         this._moonSprite.visible = this._skyVisible && this._moonOpacityCur > 0.01;
       }

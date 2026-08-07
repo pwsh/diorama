@@ -720,7 +720,18 @@ integration) drives the moon phase.
   effect, larger radius). Visible only when `elevation > 0` AND preset ≠ night AND
   `skyBackdrop`; opacity ramps in over the first ~6° above the horizon, dims under
   overcast. Eased opacity + position (snaps into place while invisible to avoid a
-  swoop-in). **Look (user-reported "purposeless white ball", fixed)**: `_sunGlowTexture`
+  swoop-in). **CAMERA-RELATIVE since 2026-08-07 (user-reported, the solar-panel
+  "aim" saga's root cause)**: the sprite position = `camera.position + eased
+  OFFSET` (`_sunOffsetCur`; decorative moon likewise via `_moonOffsetCur`) — the
+  old scene-origin anchor at R = 26000 put the disc INSIDE a large property
+  (their yard is 52 m deep), so from a north-yard solar panel the disc's
+  apparent direction read up to ~55° off the sun's true azimuth and the
+  correctly-aimed panel "looked wrong" against it. Every other sky object
+  (dome/starfield/catalog group/real-mode moon) was already camera-recentered;
+  these two were the last origin-anchored ones. `_skySunTarget`/`_skyMoonTarget`
+  keep their exact direction semantics (weather-fx `?c=sky` 70/70 — incl. the
+  parallax pin: sprite-minus-camera direction ≡ sun az/elev from a far-yard
+  viewpoint, dot > 0.999). **Look (user-reported "purposeless white ball", fixed)**: `_sunGlowTexture`
   is a small hot core + a long soft WARM tail (warm `r>g>b` at every gradient stop),
   sprite 5000 mm (mostly halo), **AdditiveBlending** — a sun ADDS light to its sky;
   NormalBlending pasted a hard-edged white ball over the dome. Tint stays warm at every

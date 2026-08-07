@@ -286,6 +286,21 @@
     step(240);   // ~4 s ease
     ok('sun disc visible by day', r._sunSprite.visible && r._sunSprite.material.opacity > 0.5,
        `op=${r._sunSprite.material.opacity.toFixed(2)}`);
+    // PARALLAX pin (2026-08-07, user-reported: on a 52 m property the
+    // origin-anchored sun disc read ~55° off the true azimuth from a north-yard
+    // solar panel, so the correctly-aimed panel looked wrong against it). The
+    // sprite must be CAMERA-relative — its direction from the camera equals the
+    // sun direction no matter where the camera stands, like every other sky
+    // object (dome/starfield/catalog/real-moon were already recentered).
+    {
+      r._camera.position.set(-11870, 9000, 24270);   // a far-north-yard viewpoint
+      step(30);
+      const d = r._sunSprite.position.clone().sub(r._camera.position).normalize();
+      const w2 = sunVec(120, 35, 26000); const wl = Math.hypot(w2.x, w2.y, w2.z);
+      const dot = (d.x * w2.x + d.y * w2.y + d.z * w2.z) / wl;
+      ok('sun sprite is CAMERA-relative (direction ≡ sun az/elev from ANY viewpoint)',
+         dot > 0.999, `dot=${dot.toFixed(5)}`);
+    }
     ok('moon hidden by day', !r._moonSprite.visible, `mvis=${r._moonSprite.visible}`);
     ok('stars faded out by day', r._starField.material.opacity < 0.15, `s=${r._starField.material.opacity.toFixed(2)}`);
     ok('starfield hidden outright by day', !r._starField.visible, `vis=${r._starField.visible}`);
