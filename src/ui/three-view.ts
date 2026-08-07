@@ -2254,6 +2254,11 @@ export class ThreeView extends LitElement {
             // park a marker ball there beside the nav-smoothed rig. x/y above
             // comes from the eased cx/cy; the divergence is the whole point.
             const rawW = s.showRealPositions ? localToWorld(s, sl.tx, sl.ty) : null;
+            // Sensor.confineToRoom: hand the renderer the SENSOR's own world
+            // position and let it resolve + cache the wall loop from `_wallLoops`
+            // (it already owns them; shipping geometry per target would be a
+            // second source of truth). Absent when off → unconfined, byte-identical.
+            const confine = s.confineToRoom === true;
             // avatarKinds pool wins; legacy single avatarKind kept for
             // back-compat (incl. stale-chunk pairings that only read `avatar`).
             targets.push({ key, x: wp.x, y: wp.y, color: tColor, edge,
@@ -2266,6 +2271,9 @@ export class ThreeView extends LitElement {
                            noCostumes: noCostumesFor(fusion?.personId),
                            showReal: rawW ? true : undefined,
                            rawX: rawW?.x, rawY: rawW?.y,
+                           confine: confine ? true : undefined,
+                           srcX: confine ? s.x : undefined,
+                           srcY: confine ? s.y : undefined,
                            person: fusion ? { name: fusion.name, color: fusion.color,
                              avatarKind: fusion.avatarKind, isPet: fusion.isPet,
                              identified: fusion.personId != null } : undefined });

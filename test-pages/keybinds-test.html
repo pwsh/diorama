@@ -1,0 +1,220 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>KEYBINDS …</title>
+  <style>
+    body { margin:0; background:#0d1116; color:#cfd8dc; font:13px/1.4 sans-serif; padding:14px; }
+    h1 { font-size:15px; margin:0 0 10px; }
+    h2 { font-size:12px; color:#80cbc4; margin:14px 0 4px; }
+    .row { display:flex; justify-content:space-between; gap:10px; padding:2px 0; border-bottom:1px solid #1c2530; }
+    .pass { color:#69f0ae; } .fail { color:#ff5252; }
+    .name { color:#90caf9; } .extra { color:#ffd54f; font-size:11px; }
+    #summary { font-size:14px; font-weight:bold; margin:10px 0; padding:8px 10px; border-radius:5px; }
+    .okbg { background:#12331f; color:#69f0ae; } .badbg { background:#3a1414; color:#ff8a80; }
+  </style>
+</head>
+<body>
+  <h1>keybinds.ts — rebindable plain-key shortcuts (pure)</h1>
+  <div id="summary">Running…</div>
+  <div id="rows"></div>
+
+  <!-- Pure, dependency-free module (the value-rules recipe). Transpile
+       standalone into the harness dir — NO --bundle:
+         npx esbuild src/keybinds.ts --format=esm --outfile=<harness>/keybinds.mod.js
+       Serve + run headless:
+         (cd <harness> && python3 -m http.server <port> &)
+         google-chrome --headless=new --disable-gpu --virtual-time-budget=15000 --dump-dom \
+           "http://localhost:<port>/keybinds-test.html" | grep -o "<title>[^<]*" -->
+  <script type="module">
+    import {
+      KEYBIND_ACTIONS, KEYBINDS_PREF, normalizeKey, keyLabel, isModifierKey,
+      keybindDef, defaultKeybinds, resolveKeybind, resolveKeyAction,
+      keybindConflict, parseKeybinds, serializeKeybinds, loadKeybinds, saveKeybinds,
+    } from './keybinds.mod.js';
+
+    const results = [];
+    const ok = (name, cond, extra = '') => results.push({ name, pass: !!cond, extra: String(extra) });
+    const eq = (name, got, want) =>
+      ok(name, JSON.stringify(got) === JSON.stringify(want), `got=${JSON.stringify(got)} want=${JSON.stringify(want)}`);
+
+    // In-memory Storage stand-in (the module takes an injected store, so the
+    // persistence tests never touch the page's real localStorage).
+    const mkStore = () => {
+      const m = new Map();
+      return {
+        getItem: k => (m.has(k) ? m.get(k) : null),
+        setItem: (k, v) => m.set(k, String(v)),
+        removeItem: k => m.delete(k),
+        _map: m,
+      };
+    };
+
+    try {
+      // ── 1. Catalog shape ────────────────────────────────────────────────
+      ok('1: catalog is non-empty', KEYBIND_ACTIONS.length > 0, KEYBIND_ACTIONS.length);
+      ok('1: every action id is unique',
+        new Set(KEYBIND_ACTIONS.map(a => a.action)).size === KEYBIND_ACTIONS.length);
+      ok('1: every default key is unique (no shipped shadowing)',
+        new Set(KEYBIND_ACTIONS.map(a => a.defaultKey)).size === KEYBIND_ACTIONS.length,
+        KEYBIND_ACTIONS.map(a => a.defaultKey).join(','));
+      ok('1: every action has a label', KEYBIND_ACTIONS.every(a => !!a.label));
+      ok('1: every default key is already normalized',
+        KEYBIND_ACTIONS.every(a => normalizeKey(a.defaultKey) === a.defaultKey));
+      ok('1: keybindDef finds a known action', keybindDef('tool.wall')?.defaultKey === '2');
+      ok('1: keybindDef on garbage → null', keybindDef('nope') === null);
+
+      // The exact shipped keymap (pins the catalogue against silent drift).
+      eq('1: shipped defaults', defaultKeybinds(), {
+        'tool.select': '1', 'tool.wall': '2', 'tool.sensor': '3', 'tool.motion': '4',
+        'tool.furniture': '5', 'tool.light': '6', 'tool.switch': '7', 'tool.delete': '8',
+        'tool.motionAlt': 'm',
+        deleteSelection: 'Delete', deleteSelectionAlt: 'Backspace',
+      });
+      // Both motion rows arm the SAME tool; the delete rows carry no tool.
+      ok('1: tool.motionAlt arms the motion tool', keybindDef('tool.motionAlt').toolId === 'motion');
+      ok('1: delete actions carry no toolId',
+        !keybindDef('deleteSelection').toolId && !keybindDef('deleteSelectionAlt').toolId);
+
+      // ── 2. Key normalization + labels ───────────────────────────────────
+      ok('2: single chars fold case', normalizeKey('M') === 'm' && normalizeKey('m') === 'm');
+      ok('2: named keys keep their spelling', normalizeKey('Delete') === 'Delete');
+      ok('2: digits are untouched', normalizeKey('5') === '5');
+      ok('2: keyLabel uppercases a letter', keyLabel('m') === 'M');
+      ok('2: keyLabel passes a named key through', keyLabel('Backspace') === 'Backspace');
+      ok('2: keyLabel(null) = disabled', keyLabel(null) === 'disabled');
+      ok('2: modifier keys are rejected as bindings',
+        ['Shift', 'Control', 'Alt', 'Meta'].every(isModifierKey) && !isModifierKey('m'));
+
+      // ── 3. Defaults resolve ─────────────────────────────────────────────
+      ok('3: "1" → select tool (no overrides)', resolveKeyAction('1') === 'tool.select');
+      ok('3: "m" → motion (alt)', resolveKeyAction('m', {}) === 'tool.motionAlt');
+      ok('3: "M" (shifted) resolves the same', resolveKeyAction('M', {}) === 'tool.motionAlt');
+      ok('3: "Delete" → deleteSelection', resolveKeyAction('Delete', {}) === 'deleteSelection');
+      ok('3: "Backspace" → deleteSelectionAlt', resolveKeyAction('Backspace', {}) === 'deleteSelectionAlt');
+      ok('3: unknown key → null', resolveKeyAction('q', {}) === null);
+      ok('3: empty key → null', resolveKeyAction('', {}) === null);
+      ok('3: a modifier press resolves to nothing', resolveKeyAction('Shift', {}) === null);
+      ok('3: resolveKeybind falls back to the default',
+        resolveKeybind('tool.wall', {}) === '2' && resolveKeybind('tool.wall', null) === '2');
+
+      // ── 4. Rebinding ────────────────────────────────────────────────────
+      {
+        const binds = { 'tool.wall': 'w' };
+        ok('4: the new key resolves', resolveKeyAction('w', binds) === 'tool.wall');
+        ok('4: the OLD key no longer resolves to it', resolveKeyAction('2', binds) === null);
+        ok('4: other actions are unaffected', resolveKeyAction('3', binds) === 'tool.sensor');
+        ok('4: resolveKeybind reports the override', resolveKeybind('tool.wall', binds) === 'w');
+        // A rebind is stored normalized even if handed an upper-case key.
+        ok('4: an upper-case override still matches', resolveKeyAction('w', { 'tool.wall': 'W' }) === 'tool.wall');
+      }
+      // Swapping two actions' keys resolves both ways with no shadowing.
+      {
+        const binds = { 'tool.select': '2', 'tool.wall': '1' };
+        ok('4: swapped pair — "2" is select', resolveKeyAction('2', binds) === 'tool.select');
+        ok('4: swapped pair — "1" is wall', resolveKeyAction('1', binds) === 'tool.wall');
+      }
+
+      // ── 5. Disabling ────────────────────────────────────────────────────
+      {
+        const binds = { deleteSelectionAlt: null };
+        ok('5: a null binding resolves to null', resolveKeybind('deleteSelectionAlt', binds) === null);
+        ok('5: the disabled key triggers nothing', resolveKeyAction('Backspace', binds) === null);
+        ok('5: the sibling Delete still works', resolveKeyAction('Delete', binds) === 'deleteSelection');
+      }
+      {
+        // Disabling EVERY action leaves no plain key live.
+        const all = {};
+        for (const a of KEYBIND_ACTIONS) all[a.action] = null;
+        ok('5: all-disabled → no key resolves',
+          KEYBIND_ACTIONS.every(a => resolveKeyAction(a.defaultKey, all) === null));
+      }
+
+      // ── 6. Conflict detection (the rebind UI's rejection) ───────────────
+      ok('6: a shipped key clashes with its owner',
+        keybindConflict('tool.wall', '3', {}) === 'tool.sensor');
+      ok('6: an unused key is free', keybindConflict('tool.wall', 'w', {}) === null);
+      ok('6: an action never clashes with itself',
+        keybindConflict('tool.wall', '2', {}) === null);
+      ok('6: a DISABLED action frees its key',
+        keybindConflict('tool.wall', '3', { 'tool.sensor': null }) === null);
+      ok('6: a rebound owner releases its old key',
+        keybindConflict('tool.wall', '3', { 'tool.sensor': 'z' }) === null);
+      ok('6: …and claims the new one',
+        keybindConflict('tool.wall', 'z', { 'tool.sensor': 'z' }) === 'tool.sensor');
+
+      // ── 7. Parse / serialize tolerance ─────────────────────────────────
+      eq('7: parse a valid map', parseKeybinds('{"tool.wall":"w","deleteSelection":null}'),
+        { 'tool.wall': 'w', deleteSelection: null });
+      eq('7: unknown actions are dropped', parseKeybinds('{"tool.nope":"x","tool.wall":"w"}'), { 'tool.wall': 'w' });
+      eq('7: non-string values are dropped', parseKeybinds('{"tool.wall":7}'), {});
+      eq('7: garbage JSON → {}', parseKeybinds('{not json'), {});
+      eq('7: an array → {}', parseKeybinds('[1,2,3]'), {});
+      eq('7: null/empty → {}', parseKeybinds(null), {});
+      eq('7: parse normalizes case', parseKeybinds('{"tool.wall":"W"}'), { 'tool.wall': 'w' });
+      eq('7: serialize drops default-valued entries',
+        JSON.parse(serializeKeybinds({ 'tool.wall': '2', 'tool.sensor': 'z' })), { 'tool.sensor': 'z' });
+      ok('7: serialize keeps an explicit disable',
+        JSON.parse(serializeKeybinds({ deleteSelection: null })).deleteSelection === null);
+
+      // ── 8. Persistence round-trip (injected storage) ────────────────────
+      {
+        const st = mkStore();
+        eq('8: empty storage → {}', loadKeybinds(st), {});
+        saveKeybinds({ 'tool.wall': 'w', deleteSelectionAlt: null }, st);
+        eq('8: round-trip', loadKeybinds(st), { 'tool.wall': 'w', deleteSelectionAlt: null });
+        ok('8: it wrote under the documented key', st.getItem(KEYBINDS_PREF) !== null, KEYBINDS_PREF);
+        ok('8: the reloaded map still resolves',
+          resolveKeyAction('w', loadKeybinds(st)) === 'tool.wall' &&
+          resolveKeyAction('Backspace', loadKeybinds(st)) === null);
+        // "Reset all" = an empty map, which REMOVES the key (no stale row left).
+        saveKeybinds({}, st);
+        ok('8: reset removes the stored key', st.getItem(KEYBINDS_PREF) === null);
+        eq('8: after reset the defaults are back', loadKeybinds(st), {});
+        ok('8: …and the shipped key resolves again', resolveKeyAction('2', loadKeybinds(st)) === 'tool.wall');
+        // An all-default map is likewise stored as nothing.
+        saveKeybinds(defaultKeybinds(), st);
+        ok('8: an all-default map stores nothing', st.getItem(KEYBINDS_PREF) === null);
+      }
+      {
+        // A throwing storage (private-mode Safari) must never propagate.
+        const boom = {
+          getItem() { throw new Error('nope'); },
+          setItem() { throw new Error('nope'); },
+          removeItem() { throw new Error('nope'); },
+        };
+        let threw = false;
+        try { loadKeybinds(boom); saveKeybinds({ 'tool.wall': 'w' }, boom); } catch { threw = true; }
+        ok('8: a throwing Storage is swallowed', !threw);
+        eq('8: …and load degrades to defaults', loadKeybinds(boom), {});
+        ok('8: a null storage is inert', JSON.stringify(loadKeybinds(null)) === '{}');
+      }
+
+      // ── 9. Corrupted stored data can never break resolution ─────────────
+      {
+        const st = mkStore();
+        st.setItem(KEYBINDS_PREF, '{"tool.wall":"w","junk":true,"tool.select":null}');
+        const binds = loadKeybinds(st);
+        ok('9: junk dropped, valid kept',
+          binds['tool.wall'] === 'w' && binds['tool.select'] === null && !('junk' in binds),
+          JSON.stringify(binds));
+        ok('9: resolution still works on the survivors',
+          resolveKeyAction('w', binds) === 'tool.wall' && resolveKeyAction('1', binds) === null);
+      }
+    } catch (err) {
+      ok('harness: no exception', false, (err && (err.stack || err.message)) || String(err));
+    }
+
+    const passed = results.filter(r => r.pass).length;
+    const total = results.length;
+    document.getElementById('rows').innerHTML = results.map(r =>
+      `<div class="row"><span class="name">${r.name}</span>
+       <span class="${r.pass ? 'pass' : 'fail'}">${r.pass ? 'PASS' : 'FAIL'}
+       <span class="extra">${r.extra}</span></span></div>`).join('');
+    const sum = document.getElementById('summary');
+    sum.textContent = `${passed}/${total} passed`;
+    sum.className = passed === total ? 'okbg' : 'badbg';
+    document.title = `KEYBINDS ${passed === total ? 'PASS' : 'FAIL'} ${passed}/${total}`;
+  </script>
+</body>
+</html>

@@ -2,6 +2,7 @@ import { LitElement, html, nothing } from 'lit';
 import { property, query } from 'lit/decorators.js';
 import { customElement } from './define.js';
 import { isEditableTarget } from '../dom-utils.js';
+import { resolveKeyAction, keybindDef } from '../keybinds.js';
 import { computeView, drawAll, pxToMm, type View } from '../canvas-render.js';
 import {
   onCanvasMouseDown, onCanvasMouseMove, onCanvasMouseUp,
@@ -9,6 +10,12 @@ import {
 } from '../canvas-interact.js';
 import { browserViewStorage, saveView2d } from '../view-persist.js';
 import type { Planner } from '../planner.js';
+
+// How long after focus leaves a text field the PLAIN-key bindings stay dead.
+// Long enough to absorb a "click out of the field, keep typing for a moment"
+// spill; short enough that a deliberate shortcut right after an edit still
+// lands on the second try.
+export const HOTKEY_BLUR_GRACE_MS = 1000;
 
 @customElement('diorama-canvas-2d')
 export class Canvas2D extends LitElement {
@@ -75,6 +82,7 @@ export class Canvas2D extends LitElement {
       window.addEventListener('keydown', this._onKey);
       window.addEventListener('keyup', this._onKeyUp);
       window.addEventListener('focusin', this._onFocusIn);
+      window.addEventListener('focusout', this._onFocusOut);
       this.planner.addEventListener('config', this._onConfig);
       requestAnimationFrame(() => this._resize());
       this._startRaf();
@@ -90,6 +98,7 @@ export class Canvas2D extends LitElement {
     window.removeEventListener('keydown', this._onKey);
     window.removeEventListener('keyup', this._onKeyUp);
     window.removeEventListener('focusin', this._onFocusIn);
+    window.removeEventListener('focusout', this._onFocusOut);
     this.planner.removeEventListener('config', this._onConfig);
   }
 
@@ -103,8 +112,31 @@ export class Canvas2D extends LitElement {
   // the canvas or a sidebar row re-heats via the setActive* markSelectionHot
   // paths; the delete TOOL and the sidebar Delete buttons bypass the gate.
   private _onFocusIn = (e: FocusEvent) => {
-    if (isEditableTarget(e.target)) this.planner.selectionHot = false;
+    if (!isEditableTarget(e.target)) return;
+    const p = this.planner;
+    p.selectionHot = false;
+    // "The tooling should revert to select mode while typing" (user-reported):
+    // an ARMED placement tool + a typing session is the shape of every stray
+    // placement — the user types a label, clicks a non-focusable surface (focus
+    // silently falls to <body>), then clicks the canvas and plants a fixture.
+    // Reverting on focus fixes both halves: no armed tool survives into the
+    // typing session, and because setTool persists, it stays Select after blur
+    // too. setTool ALSO clears every draw latch (wall / polygon / path / ruler)
+    // and the room / landmark / cam-calib placement latches; the pending
+    // furniture / vehicle / custom-object KIND is gated by `tool === 'furniture'`
+    // and so is inert the moment the tool changes — nothing else to clear.
+    if (p.uiMode === 'edit' && p.tool !== 'select') p.setTool('select');
   };
+
+  // Post-typing grace (b): the moment focus LEAVES an editable, plain keys stay
+  // dead for a beat. Keys typed / buffered right as the user clicks out of a
+  // field would otherwise land on <body> and switch tools or delete the
+  // selection. Modifier combos, Escape, Enter and the Space pan-hold are
+  // resolved ABOVE the grace check in _onKey and stay live throughout.
+  private _onFocusOut = (e: FocusEvent) => {
+    if (isEditableTarget(e.target)) this._lastEditableBlurAt = Date.now();
+  };
+  private _lastEditableBlurAt = -Infinity;
 
   private _onConfig = () => {
     if (this.planner.view === '2d') {
@@ -254,6 +286,7 @@ export class Canvas2D extends LitElement {
     window.addEventListener('keydown', this._onKey);
     window.addEventListener('keyup', this._onKeyUp);
     window.addEventListener('focusin', this._onFocusIn);
+    window.addEventListener('focusout', this._onFocusOut);
 
     // Touch — 1 finger uses mouse path; 2 fingers do pinch+pan.
     const toEvt = (t: Touch): MouseEvent => new MouseEvent('mousemove', {
@@ -503,6 +536,16 @@ export class Canvas2D extends LitElement {
     // this line and stay live either way — none of them can fire a tool pick or
     // a deletion from a stray keystroke.
     if (!p.hotkeysEnabled) return;
+    // Post-typing grace: keys arriving within HOTKEY_BLUR_GRACE_MS of focus
+    // LEAVING an editable are treated as spill from that typing session, not as
+    // commands (user-reported: "tool behavior changes as a result of typing,
+    // especially after typing labels"). Clicking a non-focusable surface drops
+    // focus to <body> where plain keys are legitimately live and structurally
+    // indistinguishable from an intentional shortcut — the grace is the time-
+    // based half of that fix, the revert-to-Select in _onFocusIn is the other.
+    // Everything above this line (Ctrl/Cmd combos, Escape, Enter, Space) is
+    // unaffected.
+    if (Date.now() - this._lastEditableBlurAt < HOTKEY_BLUR_GRACE_MS) return;
     // Arrow keys nudge the ACTIVE furniture piece by 25 mm (100 with Shift) in
     // world mm. This is the manual escape hatch to fine-position a piece (e.g.
     // away from a wall), so it deliberately does NOT run the drag-time
@@ -524,22 +567,25 @@ export class Canvas2D extends LitElement {
         return;
       }
     }
-    if ((e.key === 'Delete' || e.key === 'Backspace') && p.selectionHot) {
+    // ── Rebindable actions (src/keybinds.ts) ──────────────────────────────
+    // Bare keys only — Ctrl/Cmd/Alt combos are browser shortcuts, not commands.
+    // The user's per-action overrides live device-local on the planner; an
+    // action bound to null is DISABLED and resolves to nothing.
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    const action = resolveKeyAction(e.key, p.keybinds);
+    if (!action) return;
+    if (action === 'deleteSelection' || action === 'deleteSelectionAlt') {
       // Delete the highest-priority current selection (vertex → furniture →
       // sensor → fixtures → zones/areas). Respects locked items. Only swallow
       // the keystroke when something was actually removed. Gated on selectionHot
       // so a persisted-but-untouched selection (activeSensorId survives across
       // sessions) can't be deleted by a stray keypress at body focus — e.g.
       // Backspace while typing a just-placed fixture's name before clicking in.
-      if (p.deleteSelection()) { e.preventDefault(); return; }
+      if (p.selectionHot && p.deleteSelection()) e.preventDefault();
+      return;
     }
-    const tk: Record<string, import('../planner.js').Tool> = {
-      '1': 'select', '2': 'wall', '3': 'sensor', '4': 'motion',
-      '5': 'furniture', '6': 'light', '7': 'switch', '8': 'delete',
-      'm': 'motion',
-    };
-    // Bare keys only — Ctrl/Cmd/Alt combos are browser shortcuts, not tool picks.
-    if (tk[e.key] && !e.ctrlKey && !e.metaKey && !e.altKey) p.setTool(tk[e.key]);
+    const toolId = keybindDef(action)?.toolId;
+    if (toolId) p.setTool(toolId as import('../planner.js').Tool);
   };
 
   private _onKeyUp = (e: KeyboardEvent) => {

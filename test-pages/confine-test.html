@@ -1,0 +1,528 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>CONFINE …</title>
+<style>
+  body { margin:0; background:#0d1116; color:#cfd8dc; font:13px/1.5 sans-serif; padding:14px; }
+  h1 { font-size:15px; margin:0 0 10px; }
+  #summary { font-size:14px; font-weight:bold; margin:10px 0; padding:8px 10px; border-radius:5px; }
+  .okbg { background:#12331f; color:#69f0ae; } .badbg { background:#3a1414; color:#ff8a80; }
+  .row { display:flex; justify-content:space-between; gap:10px; padding:2px 0; border-bottom:1px solid #1c2530; }
+  .pass { color:#69f0ae; } .fail { color:#ff5252; }
+  .name { color:#90caf9; } .extra { color:#ffd54f; font-size:11px; }
+  h2 { font-size:12px; color:#80cbc4; margin:14px 0 4px; }
+  #stage { width:900px; height:560px; }
+</style>
+<h1>Keep avatars in this room — Sensor.confineToRoom (radar overshoot clamp)</h1>
+<div id="summary">Running…</div>
+<div id="rows"></div>
+<div id="stage"></div>
+
+<!-- The reported bug: mmWave reports THROUGH drywall (multipath / range
+     overshoot), so a person leaning on a wall is reported a metre or two past
+     it and the avatar is built in the NEXT ROOM. The nav wall-LOS snap only
+     rescues points inside the wall band, not ones fully beyond it — so every
+     downstream system does exactly the right thing with the wrong truth.
+
+     This page drives the REAL <diorama-three-view> (which stamps confine/srcX/
+     srcY) and the REAL 2D painter over ONE Planner, plus the pure clamp.
+
+     FIXTURE: one 9 × 7 m floor split by a full-height divider wall at x = 4500
+     into a LEFT and a RIGHT room, with NO door — so the two rooms are separate
+     nav REGIONS as well as separate loops. That is deliberately the hard case:
+     a clamped point rests on the wall band where `_regionOfWorld` may answer
+     with the FAR side's region, and the room must still win.
+
+     Build recipe (from repo root; NEVER reuse stale bundles — copy test pages
+     FIRST, dist assets SECOND):
+       npm run build
+       H=/tmp/diorama-harness-confine; rm -rf "$H"; mkdir -p "$H"
+       cp test-pages/confine-test.html "$H"/
+       cp -r dist/* "$H"/
+       T=$(mktemp -d); cp -r src/* "$T"/; cp tsconfig.json "$T"/
+       cp test-pages/fake-avatar-store.ts "$T"/avatar-store.ts
+       cp test-pages/confine-entry.ts     "$T"/confine-entry.ts
+       npx esbuild "$T"/confine-entry.ts --bundle --format=esm --tsconfig="$T"/tsconfig.json \
+         --alias:lit=$PWD/node_modules/lit/index.js \
+         --alias:lit/decorators.js=$PWD/node_modules/lit/decorators.js \
+         --alias:three=$PWD/node_modules/three/build/three.module.js \
+         "--alias:three/examples/jsm/controls/OrbitControls.js=$PWD/node_modules/three/examples/jsm/controls/OrbitControls.js" \
+         "--alias:three/examples/jsm/loaders/OBJLoader.js=$PWD/node_modules/three/examples/jsm/loaders/OBJLoader.js" \
+         "--alias:three/examples/jsm/loaders/MTLLoader.js=$PWD/node_modules/three/examples/jsm/loaders/MTLLoader.js" \
+         --outfile="$H"/confine.mod.js
+       (cd "$H" && python3 -m http.server 8951 &)
+       google-chrome --headless=new --disable-gpu --use-angle=swiftshader \
+         --enable-unsafe-swiftshader --run-all-compositor-stages-before-draw \
+         --window-size=1200,900 --virtual-time-budget=60000 --dump-dom \
+         "http://localhost:8951/confine-test.html" | grep -o "<title>[^<]*"          -->
+<script type="module">
+  const V = '?v=' + Date.now();
+  const M = await import('./confine.mod.js' + V);
+  const { Planner, drawAll, computeView, mmToPx, localToWorld, sensorColor,
+          clampPointToLoop, pointInPolygon, closedWallLoops, loopContaining } = M;
+
+  const results = [];
+  const ok = (name, cond, extra = '') => results.push({ name, pass: !!cond, extra: String(extra) });
+  window.__R = results;
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  async function waitFor(cond, tries = 900) {
+    for (let i = 0; i < tries; i++) { if (cond()) return true; await sleep(6); }
+    return !!cond();
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  //  PART A — the pure clamp (geometry.clampPointToLoop), no renderer involved
+  // ═══════════════════════════════════════════════════════════════════════════
+  const sq = [{x:0,y:0},{x:1000,y:0},{x:1000,y:1000},{x:0,y:1000}];
+
+  const inA = clampPointToLoop(sq, 400, 600);
+  ok('A1 point INSIDE the loop is returned unchanged',
+     inA.x === 400 && inA.y === 600, `${inA.x},${inA.y}`);
+  ok('A2 …and is still inside by pointInPolygon', pointInPolygon(inA.x, inA.y, sq), '');
+
+  // 1.5 m past the right wall — the reported overshoot, at plan scale.
+  const outA = clampPointToLoop(sq, 2500, 600);
+  ok('A3 point OUTSIDE lands INSIDE the loop', pointInPolygon(outA.x, outA.y, sq),
+     `${outA.x.toFixed(1)},${outA.y.toFixed(1)}`);
+  ok('A4 …at the nearest boundary point, inset 60 mm (x = 1000 − 60)',
+     Math.abs(outA.x - 940) < 1e-6 && Math.abs(outA.y - 600) < 1e-6,
+     `${outA.x},${outA.y}`);
+  ok('A5 …i.e. it never overshoots the wall inward (moved by exactly the excess + inset)',
+     Math.abs((2500 - outA.x) - 1560) < 1e-6, (2500 - outA.x).toFixed(1));
+
+  // Every side + a corner: the answer must always be inside.
+  const probes = [[-900, 500], [500, -900], [500, 2400], [-700, -700], [1900, 1900], [1000, 500]];
+  let allIn = true, worst = '';
+  for (const [px, py] of probes) {
+    const c = clampPointToLoop(sq, px, py);
+    if (!pointInPolygon(c.x, c.y, sq)) { allIn = false; worst = `${px},${py} → ${c.x},${c.y}`; }
+  }
+  ok('A6 every side + corner + an ON-EDGE point clamps inside', allIn, worst);
+
+  // Concave "L": the straight push-back from some outside points exits again —
+  // the centroid fallback is what rescues those.
+  const L = [{x:0,y:0},{x:2000,y:0},{x:2000,y:800},{x:800,y:800},{x:800,y:2000},{x:0,y:2000}];
+  let concaveIn = true, cBad = '';
+  for (let a = 0; a < 360; a += 7) {
+    const px = 1000 + 3000 * Math.cos(a * Math.PI / 180);
+    const py = 1000 + 3000 * Math.sin(a * Math.PI / 180);
+    const c = clampPointToLoop(L, px, py);
+    if (!pointInPolygon(c.x, c.y, L)) { concaveIn = false; cBad = `${a}° → ${c.x.toFixed(0)},${c.y.toFixed(0)}`; }
+  }
+  ok('A7 concave (L-shaped) room: 52 outside bearings ALL clamp inside', concaveIn, cBad);
+  const notch = clampPointToLoop(L, 1600, 1600);   // in the L's missing quadrant
+  ok('A8 a point in the L\'s notch (outside, surrounded on two sides) clamps inside',
+     pointInPolygon(notch.x, notch.y, L), `${notch.x.toFixed(0)},${notch.y.toFixed(0)}`);
+
+  const deg2 = clampPointToLoop([{x:0,y:0},{x:10,y:0}], 500, 500);
+  ok('A9 degenerate loop (<3 verts) → input unchanged',
+     deg2.x === 500 && deg2.y === 500, `${deg2.x},${deg2.y}`);
+  const degN = clampPointToLoop(sq, NaN, 5);
+  ok('A10 non-finite input → passed through, never NaN-propagating math',
+     Number.isNaN(degN.x) && degN.y === 5, `${degN.x},${degN.y}`);
+  const tiny = clampPointToLoop([{x:0,y:0},{x:40,y:0},{x:40,y:40},{x:0,y:40}], 900, 20);
+  ok('A11 room smaller than the inset still yields a point inside it',
+     pointInPolygon(tiny.x, tiny.y, [{x:0,y:0},{x:40,y:0},{x:40,y:40},{x:0,y:40}]),
+     `${tiny.x.toFixed(1)},${tiny.y.toFixed(1)}`);
+  const zeroInset = clampPointToLoop(sq, 2500, 600, 0);
+  ok('A12 insetMm 0 → exactly the boundary point (no nudge)',
+     zeroInset.x === 1000 && zeroInset.y === 600, `${zeroInset.x},${zeroInset.y}`);
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  //  PART B — the live renderer + 2D painter
+  // ═══════════════════════════════════════════════════════════════════════════
+  const states = {};
+  const api = {
+    offline: true, states,
+    async connect() {}, disconnect() {}, onState() {}, onConn() {},
+    async getUserData() { return null; }, async setUserData() {},
+    async callService() {},
+    async getDevices() { return []; }, async getEntityRegistry() { return []; },
+    async getFloorRegistry() { return []; }, async getAreaRegistry() { return []; },
+    async getHistory() { return {}; }, async getCalendarEvents() { return []; },
+    async getWeatherForecasts() { return null; }, async updateEntityRegistry() {},
+    async subscribePersistentNotifications() { return () => {}; },
+    async listRepairsIssues() { return []; }, async ignoreRepairsIssue() {},
+    async subscribeMqtt() { return () => {}; }, async publishMqtt() {},
+  };
+
+  const FW = 9000, FD = 7000;
+  const perim = [{ x: 300, y: 300 }, { x: 8700, y: 300 }, { x: 8700, y: 6700 },
+                 { x: 300, y: 6700 }, { x: 300, y: 300 }];
+  const divider = [{ x: 4500, y: 300 }, { x: 4500, y: 6700 }];
+  let fixtureN = 0;
+  const baseFloor = (extra = {}) => ({
+    id: 'f' + (++fixtureN), name: 'Confine', w: FW, d: FD,
+    walls: [{ id: 'perim', points: perim }, { id: 'div', points: divider }],
+    furniture: [], lights: [], switches: [], sensors: [], motionSensors: [],
+    envSensors: [], infoCards: [], actionButtons: [], doors: [], windows: [],
+    rooms: [], roamers: [], bleProxies: [], alarmPanels: [], calendarPanels: [],
+    thermostats: [], safetySensors: [], alertBeacons: [], robots: [], cameras: [],
+    projectors: [], valves: [], plugs: [], sprinklerZones: [], flagpoles: [],
+    pools: [], presenceZones: [], groundAreas: [], voidAreas: [], rulers: [],
+    solarPanels: [], bg: null, model3d: null, look3d: null, ...extra,
+  });
+
+  // Sanity on the fixture itself before anything depends on it.
+  const fLoops = closedWallLoops([{ id: 'perim', points: perim }, { id: 'div', points: divider }]);
+  const LEFT = loopContaining(fLoops, 2000, 3500);
+  const RIGHT = loopContaining(fLoops, 6500, 3500);
+  ok('B0a fixture traces TWO rooms', fLoops.length === 2, fLoops.length);
+  ok('B0b sensor point resolves to the LEFT room', !!LEFT, '');
+  ok('B0c the overshoot point (6500, 3500) resolves to the RIGHT room, not the left',
+     !!RIGHT && RIGHT !== LEFT && !pointInPolygon(6500, 3500, LEFT || []), '');
+
+  const planner = new Planner();
+  await planner.connectWith(api);
+  const stage = document.getElementById('stage');
+  const view = document.createElement('diorama-three-view');
+  view.planner = planner;
+  stage.appendChild(view);
+  await view.updateComplete;
+  const R = () => view._renderer;
+  ok('B0d renderer mounted', await waitFor(() => R() && R().loaded), '');
+
+  // Spy on the target list three-view hands the renderer, so the stamping
+  // (confine / srcX / srcY) is asserted at the seam, not inferred from motion.
+  // Snapshot BEFORE updateTargets runs — the confinement pre-pass mutates x/y.
+  let lastTargets = [];
+  const realUT = R().updateTargets.bind(R());
+  R().updateTargets = (targets, ctx) => {
+    lastTargets = (targets || []).map(t => ({ ...t }));
+    return realUT(targets, ctx);
+  };
+  const spy = (key) => lastTargets.find(t => t.key === key) || null;
+
+  const tick = async (n = 6) => { for (let i = 0; i < n; i++) { view._tickOnce(); await sleep(6); } };
+  const setFloor = async (f) => {
+    planner.store.floors = [f];
+    planner.store.currentFloorId = f.id;
+    planner.emitConfig();
+    await tick(10);
+  };
+
+  const mmwave = (id, x, y, extra = {}) => ({
+    id, x, y, heading: 0, fov: 120, range: 9000, label: id,
+    deviceSlug: 'ld2450_' + id, ...extra,
+  });
+  const slot = (active, cx, cy, tx, ty) => ({ cx, cy, tx, ty, vx: 0, vy: 0, active });
+  const off = () => slot(false, 0, 0, 0, 0);
+  const disc = () => ({
+    devicePrefix: 'ld2450', avgX: [], avgY: [],
+    targets: [0, 1, 2].map(() => ({ x_id: null, y_id: null, speed_id: null, angle_id: null, resolution_id: null })),
+    targetActive: [null, null, null],
+  });
+
+  // Rig position in WORLD mm (the renderer mirrors X and centres Z).
+  const rigWorld = (key) => {
+    const h = R()._humanoids[key];
+    if (!h) return null;
+    return R()._sceneToWorld(h.group.position.x, h.group.position.z);
+  };
+  const inLeft = (pt) => !!pt && pointInPolygon(pt.x, pt.y, LEFT);
+  const inRight = (pt) => !!pt && pointInPolygon(pt.x, pt.y, RIGHT);
+
+  // Sensor sits in the LEFT room; the radar reports the person 2 m PAST the
+  // divider (world 6500, 3500 — squarely in the right room).
+  const OVERSHOOT = [4500, 0];           // sensor-local; heading 0 ⇒ world (6500, 3500)
+  const overWorld = localToWorld({ x: 2000, y: 3500, heading: 0 }, OVERSHOOT[0], OVERSHOOT[1]);
+  ok('B0e the fixture report really is 2 m past the wall',
+     Math.round(overWorld.x) === 6500 && Math.round(overWorld.y) === 3500,
+     `${overWorld.x},${overWorld.y}`);
+
+  // ═══ 1. Flag OFF — today's behavior: the rig materialises NEXT DOOR ═══════
+  const sOff = mmwave('sOff', 2000, 3500, { color: '#ff3b30' });
+  planner.discBy['sOff'] = disc();
+  planner.lerpBy['sOff'] = [slot(true, OVERSHOOT[0], OVERSHOOT[1], OVERSHOOT[0], OVERSHOOT[1]), off(), off()];
+  await setFloor(baseFloor({ sensors: [sOff] }));
+  ok('1a a rig exists for the overshot target', !!R()._humanoids['sOff_0'],
+     Object.keys(R()._humanoids).join(','));
+  const pOff = rigWorld('sOff_0');
+  ok('1b NEGATIVE CONTROL — unconfined, the rig lands in the WRONG room',
+     inRight(pOff) && !inLeft(pOff), pOff && `${pOff.x.toFixed(0)},${pOff.y.toFixed(0)}`);
+  const tOff = spy('sOff_0');
+  ok('1c the target three-view stamped carries NO confine flag (absent, not false)',
+     tOff && tOff.confine === undefined && tOff.srcX === undefined, tOff && String(tOff.confine));
+  ok('1d …and its x/y is the raw overshoot, untouched by any pre-pass',
+     tOff && Math.round(tOff.x) === 6500 && Math.round(tOff.y) === 3500,
+     tOff && `${tOff.x},${tOff.y}`);
+
+  // ═══ 2. Flag ON — the rig is clamped into the sensor's own room ═══════════
+  const sOn = mmwave('sOn', 2000, 3500, { color: '#30d5ff', confineToRoom: true });
+  planner.discBy['sOn'] = disc();
+  planner.lerpBy['sOn'] = [slot(true, OVERSHOOT[0], OVERSHOOT[1], OVERSHOOT[0], OVERSHOOT[1]), off(), off()];
+  await setFloor(baseFloor({ sensors: [sOn] }));
+  ok('2a a rig exists', !!R()._humanoids['sOn_0'], Object.keys(R()._humanoids).join(','));
+  const tOn = spy('sOn_0');
+  ok('2a1 three-view stamps confine + the SENSOR position (not the target\'s)',
+     tOn && tOn.confine === true && tOn.srcX === 2000 && tOn.srcY === 3500,
+     tOn && `${tOn.confine} ${tOn.srcX},${tOn.srcY}`);
+  ok('2a2 the stamped x/y is still the RAW report — the clamp happens renderer-side',
+     tOn && Math.round(tOn.x) === 6500, tOn && tOn.x);
+  let pOn = rigWorld('sOn_0');
+  ok('2b the rig spawns INSIDE the sensor\'s room', inLeft(pOn),
+     pOn && `${pOn.x.toFixed(0)},${pOn.y.toFixed(0)}`);
+  ok('2c …and NOT in the room the radar reported', !inRight(pOn), '');
+
+  // Let it settle: the clamped goal sits at the wall, so it walks toward it —
+  // and must never cross. 300 ticks ≈ several seconds of virtual time, which is
+  // also past the 3 s stuck-respawn threshold.
+  let strayed = '';
+  for (let i = 0; i < 300; i++) {
+    view._tickOnce(); await sleep(4);
+    const q = rigWorld('sOn_0');
+    if (q && !inLeft(q) && !strayed) strayed = `frame ${i}: ${q.x.toFixed(0)},${q.y.toFixed(0)}`;
+  }
+  ok('2d over 300 frames the rig NEVER leaves the room (no crossing, no respawn next door)',
+     strayed === '', strayed);
+  pOn = rigWorld('sOn_0');
+  ok('2e still confined at the end of the run', inLeft(pOn),
+     pOn && `${pOn.x.toFixed(0)},${pOn.y.toFixed(0)}`);
+  ok('2f the rig stayed alive (confinement is a clamp, not a despawn)',
+     !!R()._humanoids['sOn_0'], '');
+
+  // The nav GOAL itself must be in-room, not just the rendered body.
+  const hOn = R()._humanoids['sOn_0'];
+  const gc = hOn.goalCell;
+  const nav = R()._nav;
+  let goalW = null;
+  if (nav && gc >= 0) {
+    const cx = gc % nav.nx, cy = (gc / nav.nx) | 0;
+    goalW = { x: (cx + 0.5) * nav.cell, y: (cy + 0.5) * nav.cell };
+  }
+  ok('2g the nav goal cell resolves inside the room', goalW && inLeft(goalW),
+     goalW ? `${goalW.x.toFixed(0)},${goalW.y.toFixed(0)}` : 'no goal cell');
+  ok('2h the nav goal cell is walkable (free)', nav && gc >= 0 && !nav.blocked[gc], gc);
+  // The carrot (the actual pathfinding walker) too.
+  const carrotW = R()._sceneToWorld(hOn.carrotX, hOn.carrotZ);
+  ok('2i the pathfinding carrot is inside the room too', inLeft(carrotW),
+     `${carrotW.x.toFixed(0)},${carrotW.y.toFixed(0)}`);
+
+  // ═══ 3. Toggling the flag live flips the behavior (no reload / rebuild) ═══
+  // The rooms have no door, so "walking out" is not available to the rig — the
+  // observable difference is the STUCK detector: unconfined, the goal really is
+  // in a region nav cannot reach, so it accumulates and (eventually) respawns the
+  // rig next door (that path is exercised end-to-end in section 5). Confined, the
+  // goal region is read off the in-room goal cell, so it must stay pinned at 0 —
+  // which is what stops a 3 s fade/respawn flicker loop.
+  ok('3a0 baseline: while confined the stuck timer never accumulated',
+     hOn.stuckT === 0, hOn.stuckT);
+  sOn.confineToRoom = false;
+  planner.emitConfig();
+  await tick(30);
+  const tFree = spy('sOn_0');
+  ok('3a flag off at runtime → three-view stops stamping confine',
+     tFree && tFree.confine === undefined && tFree.srcX === undefined,
+     tFree && String(tFree.confine));
+  ok('3b …the renderer resolves no confinement room for it either',
+     R()._confineLoopFor({ confine: false, srcX: 2000, srcY: 3500 }) === null, '');
+  ok('3c …and the unreachable-goal timer starts running (the escape hatch arms)',
+     R()._humanoids['sOn_0'].stuckT > 0, R()._humanoids['sOn_0'].stuckT.toFixed(2));
+  sOn.confineToRoom = true;
+  planner.emitConfig();
+  await tick(40);
+  const tRe = spy('sOn_0');
+  ok('3d flag back on → stamping returns', tRe && tRe.confine === true, tRe && String(tRe.confine));
+  ok('3e …the stuck timer is back at rest', R()._humanoids['sOn_0'].stuckT === 0,
+     R()._humanoids['sOn_0'].stuckT);
+  const pBack = rigWorld('sOn_0');
+  ok('3f …and the rig is (still) in the sensor\'s room',
+     inLeft(pBack), pBack && `${pBack.x.toFixed(0)},${pBack.y.toFixed(0)}`);
+
+  // ═══ 4. Sensor OUTSIDE every wall loop → confinement is a no-op ═══════════
+  // Same overshoot geometry, but the sensor is parked in the "yard" strip
+  // outside the perimeter, so there is no room to clamp to.
+  const sYard = mmwave('sYard', 150, 150, { color: '#ffd54f', confineToRoom: true });
+  planner.discBy['sYard'] = disc();
+  // Report at world (5000, 3500) — inside the right room, 4850 mm ahead.
+  planner.lerpBy['sYard'] = [slot(true, 4850, 3350, 4850, 3350), off(), off()];
+  await setFloor(baseFloor({ sensors: [sYard] }));
+  ok('4a the yard sensor really is outside every loop',
+     loopContaining(fLoops, 150, 150) === null, '');
+  ok('4b a rig is still built (no-op, never a suppression)', !!R()._humanoids['sYard_0'],
+     Object.keys(R()._humanoids).join(','));
+  ok('4c the renderer resolves NO confinement room for it',
+     R()._confineLoopFor({ confine: true, srcX: 150, srcY: 150 }) === null, '');
+  const pYard = rigWorld('sYard_0');
+  ok('4d the rig is placed at the report, unclamped', inRight(pYard),
+     pYard && `${pYard.x.toFixed(0)},${pYard.y.toFixed(0)}`);
+
+  // ═══ 5. Respawn (stuck path) lands in-room ═══════════════════════════════
+  // Force the stuck-respawn by putting the RIG in the wrong room while the
+  // confined goal is in the sensor's room — the escape hatch. It must land back
+  // inside the loop, never in the goal's raw region.
+  const sResp = mmwave('sR', 2000, 3500, { color: '#b388ff', confineToRoom: true });
+  planner.discBy['sR'] = disc();
+  planner.lerpBy['sR'] = [slot(true, OVERSHOOT[0], OVERSHOOT[1], OVERSHOOT[0], OVERSHOOT[1]), off(), off()];
+  await setFloor(baseFloor({ sensors: [sResp] }));
+  const hR = R()._humanoids['sR_0'];
+  ok('5a rig built', !!hR, '');
+  if (hR) {
+    // Teleport the rig into the RIGHT room by hand (a stranded rig — e.g. built
+    // before the box was ticked) and let the stuck detector do its job.
+    const sc = R()._w(7000, 3500, 0);
+    hR.navX = sc.x; hR.navZ = sc.z; hR.carrotX = sc.x; hR.carrotZ = sc.z;
+    hR.lastX = sc.x; hR.lastZ = sc.z; hR.path = null; hR.pathRev = -1;
+    const stranded = R()._sceneToWorld(hR.navX, hR.navZ);
+    ok('5b …stranded in the wrong room to start', inRight(stranded),
+       `${stranded.x.toFixed(0)},${stranded.y.toFixed(0)}`);
+    let recovered = false, sawRespawn = false;
+    for (let i = 0; i < 600; i++) {
+      view._tickOnce(); await sleep(4);
+      if (hR.respawnPhase !== 0) sawRespawn = true;
+      const q = R()._sceneToWorld(hR.navX, hR.navZ);
+      if (inLeft(q)) { recovered = true; break; }
+    }
+    const fin = R()._sceneToWorld(hR.navX, hR.navZ);
+    ok('5c the stranded rig recovers into the sensor\'s room', recovered,
+       `${fin.x.toFixed(0)},${fin.y.toFixed(0)} respawned=${sawRespawn}`);
+    // …and then STAYS (no 3 s flicker loop: the stuck check reads the confined
+    // goal cell's region, which now matches).
+    let flick = 0, left = '';
+    for (let i = 0; i < 400; i++) {
+      view._tickOnce(); await sleep(4);
+      if (hR.respawnPhase !== 0) flick++;
+      const q = R()._sceneToWorld(hR.navX, hR.navZ);
+      if (!inLeft(q) && !left) left = `${q.x.toFixed(0)},${q.y.toFixed(0)}`;
+    }
+    ok('5d …with NO repeating respawn flicker afterwards (0 respawn frames)', flick === 0, flick);
+    ok('5e …and never leaves the room again', left === '', left);
+  }
+
+  // ═══ 6. 2D — the dot is clamped, the RAW ring is not ══════════════════════
+  const cv = document.createElement('canvas');
+  cv.width = 900; cv.height = 700;
+  const c2 = cv.getContext('2d', { willReadFrequently: true });
+  const s2 = mmwave('s2', 2000, 3500, { color: '#ff3b30', showRealPositions: true });
+  planner.discBy['s2'] = disc();
+  planner.lerpBy['s2'] = [slot(true, OVERSHOOT[0], OVERSHOOT[1], OVERSHOOT[0], OVERSHOOT[1]), off(), off()];
+  await setFloor(baseFloor({ sensors: [s2] }));
+  const vw = computeView(cv, FW, FD, null, 1);
+  const DPR = window.devicePixelRatio || 1;
+
+  const rawPx = mmToPx(vw, overWorld.x, overWorld.y);
+  const clampedW = clampPointToLoop(LEFT, overWorld.x, overWorld.y);
+  const clampedPx = mmToPx(vw, clampedW.x, clampedW.y);
+  ok('6a the clamped and raw plan points are far apart on screen (>40 px)',
+     Math.hypot(rawPx.x - clampedPx.x, rawPx.y - clampedPx.y) > 40,
+     Math.round(Math.hypot(rawPx.x - clampedPx.x, rawPx.y - clampedPx.y)) + ' px');
+
+  // drawAll carries ctx state between calls — paint twice per snapshot.
+  const snap = () => {
+    c2.setTransform(1, 0, 0, 1, 0, 0);
+    c2.clearRect(0, 0, cv.width, cv.height);
+    drawAll(c2, planner, vw, null); drawAll(c2, planner, vw, null);
+    return c2.getImageData(0, 0, cv.width, cv.height);
+  };
+  const diffDisc = (a, b, cx, cy, r) => {
+    let n = 0;
+    const R2 = Math.ceil(r) + 1;
+    for (let dy = -R2; dy <= R2; dy++) for (let dx = -R2; dx <= R2; dx++) {
+      if (Math.hypot(dx, dy) > r) continue;
+      const x = Math.round(cx) + dx, y = Math.round(cy) + dy;
+      if (x < 0 || y < 0 || x >= a.width || y >= a.height) continue;
+      const i = (y * a.width + x) * 4;
+      if (Math.abs(a.data[i] - b.data[i]) + Math.abs(a.data[i+1] - b.data[i+1]) +
+          Math.abs(a.data[i+2] - b.data[i+2]) > 8) n++;
+    }
+    return n;
+  };
+
+  s2.confineToRoom = false;
+  const imgOff = snap();
+  s2.confineToRoom = true;
+  const imgOn = snap();
+
+  ok('6b confinement moves the 2D dot: pixels appear at the CLAMPED point',
+     diffDisc(imgOff, imgOn, clampedPx.x, clampedPx.y, 7 * DPR) >= 10,
+     diffDisc(imgOff, imgOn, clampedPx.x, clampedPx.y, 7 * DPR));
+  // The dot vacates the raw spot — but the showRealPositions RING stays, so the
+  // probe is the DOT-sized core only (the ring is r ≈ 4.5·dpr, hollow).
+  ok('6c …and the filled dot vacates the reported point (its core clears)',
+     diffDisc(imgOff, imgOn, rawPx.x, rawPx.y, 2.2 * DPR) >= 4,
+     diffDisc(imgOff, imgOn, rawPx.x, rawPx.y, 2.2 * DPR));
+
+  // The showRealPositions ring must STILL be painted at the reported spot with
+  // confinement on — that unclamped-raw / clamped-avatar pairing is the design.
+  // Isolate the ring by diffing ring-on against ring-off with confinement held
+  // ON in BOTH frames: comparing against the confine-OFF frame would also count
+  // the filled dot, which is the same tint and sits in the same place.
+  const annulus = (a, b, cx, cy, r0, r1) => {
+    let n = 0;
+    const RR = Math.ceil(r1) + 2;
+    for (let dy = -RR; dy <= RR; dy++) for (let dx = -RR; dx <= RR; dx++) {
+      const d = Math.hypot(dx, dy);
+      if (d < r0 || d > r1) continue;
+      const x = Math.round(cx) + dx, y = Math.round(cy) + dy;
+      if (x < 0 || y < 0 || x >= a.width || y >= a.height) continue;
+      const i = (y * a.width + x) * 4;
+      if (Math.abs(a.data[i] - b.data[i]) + Math.abs(a.data[i+1] - b.data[i+1]) +
+          Math.abs(a.data[i+2] - b.data[i+2]) > 8) n++;
+    }
+    return n;
+  };
+  s2.showRealPositions = false;             // confineToRoom stays ON
+  const imgNoRing = snap();
+  s2.showRealPositions = true;
+  const imgRing = snap();
+  ok('6d the RAW-report ring is still painted OUTSIDE the room under confinement',
+     annulus(imgNoRing, imgRing, rawPx.x, rawPx.y, 3.2 * DPR, 6.0 * DPR) >= 8,
+     annulus(imgNoRing, imgRing, rawPx.x, rawPx.y, 3.2 * DPR, 6.0 * DPR));
+  ok('6e …still hollow (it is the report marker, not a second avatar dot)',
+     annulus(imgNoRing, imgRing, rawPx.x, rawPx.y, 0, 2.0 * DPR) === 0,
+     annulus(imgNoRing, imgRing, rawPx.x, rawPx.y, 0, 2.0 * DPR));
+  ok('6e2 …and it is NEVER drawn at the clamped point (raw stays raw)',
+     diffDisc(imgNoRing, imgRing, clampedPx.x, clampedPx.y, 8 * DPR) === 0,
+     diffDisc(imgNoRing, imgRing, clampedPx.x, clampedPx.y, 8 * DPR));
+
+  // A sensor with no confinement must paint identically to before the feature.
+  const s3 = mmwave('s3', 2000, 3500, { color: '#ff3b30' });
+  planner.discBy['s3'] = disc();
+  planner.lerpBy['s3'] = [slot(true, 1200, 900, 1200, 900), off(), off()];
+  await setFloor(baseFloor({ sensors: [s3] }));
+  const easedIn = localToWorld(s3, 1200, 900);
+  const inPx = mmToPx(vw, easedIn.x, easedIn.y);
+  const imgPlain = snap();
+  s3.confineToRoom = true;
+  const imgConf = snap();
+  ok('6f a target ALREADY inside the room paints identically with the flag on '
+     + '(clamp is identity inside)',
+     diffDisc(imgPlain, imgConf, inPx.x, inPx.y, 12 * DPR) === 0,
+     diffDisc(imgPlain, imgConf, inPx.x, inPx.y, 12 * DPR));
+
+  // ═══ 7. Multi-target + multi-sensor: confinement is PER SENSOR ════════════
+  const sL = mmwave('sL', 2000, 3500, { color: '#30d5ff', confineToRoom: true });
+  const sRr = mmwave('sRr', 6500, 3500, { color: '#ffab40' });  // right room, unconfined
+  planner.discBy['sL'] = disc(); planner.discBy['sRr'] = disc();
+  // sL: two overshooting targets. sRr: one target reported back in the LEFT room.
+  planner.lerpBy['sL'] = [slot(true, 4500, 0, 4500, 0), slot(true, 4200, 1500, 4200, 1500), off()];
+  planner.lerpBy['sRr'] = [slot(true, -4000, 0, -4000, 0), off(), off()];
+  await setFloor(baseFloor({ sensors: [sL, sRr] }));
+  await tick(60);
+  const p70 = rigWorld('sL_0'), p71 = rigWorld('sL_1'), p72 = rigWorld('sRr_0');
+  ok('7a confined sensor: target 0 in-room', inLeft(p70), p70 && `${p70.x.toFixed(0)},${p70.y.toFixed(0)}`);
+  ok('7b confined sensor: target 1 in-room too', inLeft(p71), p71 && `${p71.x.toFixed(0)},${p71.y.toFixed(0)}`);
+  ok('7c the UNCONFINED sensor next door is unaffected (its own overshoot stands)',
+     inLeft(p72), p72 && `${p72.x.toFixed(0)},${p72.y.toFixed(0)}`);
+
+  // ═══ 8. Cache hygiene — the sensor→room memo dies with the wall loops ═════
+  ok('8a a memo exists after the confined frames above',
+     Object.keys(R()._confineLoops).length > 0, Object.keys(R()._confineLoops).join(','));
+  await setFloor(baseFloor({ sensors: [] }));
+  ok('8b floor rebuild clears the memo (a wall edit can never leave a stale room)',
+     Object.keys(R()._confineLoops).length === 0, Object.keys(R()._confineLoops).join(','));
+  R().clearTransientGroups();
+  ok('8c clearTransientGroups clears it too',
+     Object.keys(R()._confineLoops).length === 0, '');
+
+  // ── report ────────────────────────────────────────────────────────────────
+  const pass = results.filter(r => r.pass).length;
+  const rowsEl = document.getElementById('rows');
+  rowsEl.innerHTML = results.map(r =>
+    `<div class="row"><span class="name">${r.name}</span>` +
+    `<span class="${r.pass ? 'pass' : 'fail'}">${r.pass ? 'PASS' : 'FAIL'}` +
+    `${r.extra ? ` <span class="extra">${r.extra}</span>` : ''}</span></div>`).join('');
+  const sEl = document.getElementById('summary');
+  sEl.textContent = `CONFINE ${pass === results.length ? 'PASS' : 'FAIL'} ${pass}/${results.length}`;
+  sEl.className = pass === results.length ? 'okbg' : 'badbg';
+  document.title = `CONFINE ${pass === results.length ? 'PASS' : 'FAIL'} ${pass}/${results.length}`;
+</script>

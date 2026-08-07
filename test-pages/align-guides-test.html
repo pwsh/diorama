@@ -21,7 +21,7 @@
      over an in-page fake HaApi (the wall-edit-test / undo-test seam). Build:
        T=$(mktemp -d); cp -r src/* "$T"/
        cp test-pages/fake-avatar-store.ts "$T"/avatar-store.ts
-       printf "export { Planner } from './planner.js';\nexport * from './canvas-interact.js';\nexport { drawAll } from './canvas-render.js';\nexport { nearestAlign, bestAlignShift, ALIGN_DRAG_KINDS, ALIGN_POLY_DRAG_KINDS, resolveFurnitureWallCollision } from './geometry.js';\n" > "$T"/align-entry.ts
+       printf "export { Planner } from './planner.js';\nexport * from './canvas-interact.js';\nexport { drawAll, furnRotateHandlePx, FURN_ROTATE_OFFSET_PX } from './canvas-render.js';\nexport { nearestAlign, bestAlignShift, ALIGN_DRAG_KINDS, ALIGN_POLY_DRAG_KINDS, resolveFurnitureWallCollision } from './geometry.js';\n" > "$T"/align-entry.ts
        npx esbuild "$T"/align-entry.ts --bundle --format=esm --outfile=<harness>/align.mod.js
      Run headless (serve over http — Chrome blocks dynamic module imports on file://):
        (cd <harness> && python3 -m http.server <port> &)
@@ -33,7 +33,7 @@
   const V = '?v=' + Date.now();
   const M = await import('./align.mod.js' + V);
   const {
-    Planner, drawAll,
+    Planner, drawAll, furnRotateHandlePx, FURN_ROTATE_OFFSET_PX,
     onCanvasMouseDown, onCanvasMouseMove, onCanvasMouseUp, onCanvasClick,
     nearestAlign, bestAlignShift, ALIGN_DRAG_KINDS, ALIGN_POLY_DRAG_KINDS,
     resolveFurnitureWallCollision,
@@ -545,6 +545,210 @@
         ok('17e: resolver pushes an overlapping piece out to flush',
           resolveFurnitureWallCollision(sunk, walls) === true && sunk.x === flushCx,
           `x=${sunk.x}`);
+      }
+    }
+    // ── (18) Furniture ROTATE handle ───────────────────────────────────────
+    // The only canvas rotation furniture has ever had (the sidebar number field
+    // was it). The chip is a pure SCREEN anchor published by the painter, so
+    // every case here paints a frame first, exactly like the room-label /
+    // vertex-handle sections above.
+    {
+      const ctx = canvas.getContext('2d');
+      const paint = p => { drawAll(ctx, p, view); };
+      // px → world mm (the inverse of the harness's evAt mapping).
+      const handleMm = id => {
+        const h = furnRotateHandlePx.get(id);
+        return h ? { x: (h.x - view.ox) / view.scale, y: (view.oy - h.y) / view.scale } : null;
+      };
+      // A world point at `deg` (screen-CW, 0 = +Y) and `r` mm from the centre.
+      const atBearing = (c, deg, r) => ({
+        x: c.x + Math.sin(deg * Math.PI / 180) * r,
+        y: c.y + Math.cos(deg * Math.PI / 180) * r,
+      });
+      const bearing = (c, q) => Math.atan2(q.x - c.x, q.y - c.y) * 180 / Math.PI;
+      const mkFloor = (extra = {}) => floor('f1', 'Home', {
+        furniture: [mkFurn('fu1', 6000, 6000, extra)],
+      });
+      const C = { x: 6000, y: 6000 };
+
+      // (a) Publication gating: selected + unlocked + edit + select only.
+      {
+        const p = await freshPlanner(makeStore([mkFloor()]));
+        paint(p);
+        ok('18a: no handle without a selection', !furnRotateHandlePx.get('fu1'));
+        p.activeFurnitureId = 'fu1';
+        paint(p);
+        const h = furnRotateHandlePx.get('fu1');
+        ok('18a: the selected piece publishes a handle', !!h, h && `${Math.round(h.x)},${Math.round(h.y)}`);
+        // It floats OUTSIDE the rotated top-right corner (world +X / +Y at rot 0).
+        const mm = handleMm('fu1');
+        ok('18a: it sits beyond the +X/+Y corner',
+          mm && mm.x > C.x + 600 && mm.y > C.y + 400, mm && `${Math.round(mm.x)},${Math.round(mm.y)}`);
+        // Tool / mode gates (a kiosk view must not offer an editing affordance).
+        p.tool = 'wall'; paint(p);
+        ok('18a: no handle outside the Select tool', !furnRotateHandlePx.get('fu1'));
+        p.tool = 'select'; p.uiMode = 'kiosk'; paint(p);
+        ok('18a: no handle outside edit mode', !furnRotateHandlePx.get('fu1'));
+        p.uiMode = 'edit';
+      }
+
+      // (b) Locked pieces expose nothing (the handle-refuses-locked rule).
+      {
+        const p = await freshPlanner(makeStore([mkFloor({ locked: true })]));
+        p.activeFurnitureId = 'fu1';
+        paint(p);
+        ok('18b: a locked piece publishes no handle', !furnRotateHandlePx.get('fu1'));
+        onCanvasMouseDown(p, canvas, view, evAt(C.x + 1000, C.y + 800));
+        ok('18b: …and pressing there starts no furnRotate drag',
+          !p.drag || p.drag.kind !== 'furnRotate', p.drag && p.drag.kind);
+        onCanvasMouseUp(p, canvas, evAt(0, 0));
+      }
+
+      // (c) Grab → drag 90° → snapped rotation, no jump on grab.
+      {
+        const p = await freshPlanner(makeStore([mkFloor()]));
+        p.activeFurnitureId = 'fu1';
+        paint(p);
+        const grab = handleMm('fu1');
+        const b0 = bearing(C, grab);
+        onCanvasMouseDown(p, canvas, view, evAt(grab.x, grab.y));
+        ok('18c: pressing the handle starts furnRotate',
+          p.drag && p.drag.kind === 'furnRotate', p.drag && p.drag.kind);
+        ok('18c: the grab offset is the handle bearing (no jump)',
+          p.drag && near(p.drag.grabOffsetDeg, b0, 1e-6), p.drag && p.drag.grabOffsetDeg);
+        // Moving to the SAME bearing must leave the piece exactly where it was.
+        onCanvasMouseMove(p, canvas, view, evAt(grab.x, grab.y));
+        ok('18c: no rotation before the pointer moves', p.floor().furniture[0].rotation === 0,
+          p.floor().furniture[0].rotation);
+        // …then a quarter turn.
+        const q = atBearing(C, b0 + 90, 2000);
+        onCanvasMouseMove(p, canvas, view, evAt(q.x, q.y));
+        ok('18c: a quarter turn gives rotation 90', near(p.floor().furniture[0].rotation, 90, 1e-6),
+          p.floor().furniture[0].rotation);
+        ok('18c: the centre never moves',
+          p.floor().furniture[0].x === C.x && p.floor().furniture[0].y === C.y,
+          `${p.floor().furniture[0].x},${p.floor().furniture[0].y}`);
+        // 15° snap: 82° of pointer travel lands on 75, not 82.
+        const s = atBearing(C, b0 + 82, 2000);
+        onCanvasMouseMove(p, canvas, view, evAt(s.x, s.y));
+        ok('18c: rotation snaps to 15° steps', near(p.floor().furniture[0].rotation, 75, 1e-6),
+          p.floor().furniture[0].rotation);
+        // Wrapping stays in [0, 360).
+        const w = atBearing(C, b0 - 90, 2000);
+        onCanvasMouseMove(p, canvas, view, evAt(w.x, w.y));
+        ok('18c: negative angles wrap to [0,360)', near(p.floor().furniture[0].rotation, 270, 1e-6),
+          p.floor().furniture[0].rotation);
+        onCanvasMouseUp(p, canvas, evAt(w.x, w.y));
+      }
+
+      // (d) Alt = free angle (the wall-edit Alt convention).
+      {
+        const p = await freshPlanner(makeStore([mkFloor()]));
+        p.activeFurnitureId = 'fu1';
+        paint(p);
+        const grab = handleMm('fu1');
+        const b0 = bearing(C, grab);
+        onCanvasMouseDown(p, canvas, view, evAt(grab.x, grab.y, { alt: true }));
+        const t = atBearing(C, b0 + 37, 2000);
+        onCanvasMouseMove(p, canvas, view, evAt(t.x, t.y, { alt: true }));
+        const rot = p.floor().furniture[0].rotation;
+        ok('18d: Alt gives the free angle', near(rot, 37, 0.05), rot);
+        ok('18d: …which is NOT on a 15° step', Math.abs(rot % 15) > 0.5, rot % 15);
+        // Release WITHOUT Alt so the drop isn't read as an Alt-identify gesture.
+        onCanvasMouseUp(p, canvas, evAt(t.x, t.y));
+        ok('18d: the free angle survives release', near(p.floor().furniture[0].rotation, 37, 0.05),
+          p.floor().furniture[0].rotation);
+      }
+
+      // (e) One gesture = one undo step.
+      {
+        const p = await freshPlanner(makeStore([mkFloor()]));
+        p.activeFurnitureId = 'fu1';
+        paint(p);
+        ok('18e: clean undo history before the drag', p.canUndo === false, p.canUndo);
+        const grab = handleMm('fu1');
+        const b0 = bearing(C, grab);
+        onCanvasMouseDown(p, canvas, view, evAt(grab.x, grab.y));
+        // Several intermediate frames — they must NOT each record a snapshot.
+        for (const d of [20, 45, 90]) {
+          const q = atBearing(C, b0 + d, 2000);
+          onCanvasMouseMove(p, canvas, view, evAt(q.x, q.y));
+        }
+        const end = atBearing(C, b0 + 90, 2000);
+        onCanvasMouseUp(p, canvas, evAt(end.x, end.y));
+        ok('18e: rotation committed', near(p.floor().furniture[0].rotation, 90, 1e-6),
+          p.floor().furniture[0].rotation);
+        ok('18e: the gesture is undoable', p.canUndo === true, p.canUndo);
+        p.undo();
+        ok('18e: ONE undo restores the original rotation',
+          p.floor().furniture[0].rotation === 0, p.floor().furniture[0].rotation);
+        ok('18e: …and nothing is left to undo', p.canUndo === false, p.canUndo);
+        p.redo();
+        ok('18e: redo re-applies it', near(p.floor().furniture[0].rotation, 90, 1e-6),
+          p.floor().furniture[0].rotation);
+      }
+
+      // (f) Precedence: the handle only wins where it is drawn.
+      {
+        const p = await freshPlanner(makeStore([mkFloor()]));
+        p.activeFurnitureId = 'fu1';
+        paint(p);
+        onCanvasMouseDown(p, canvas, view, evAt(C.x, C.y));
+        ok('18f: pressing the BODY still starts furnMove',
+          p.drag && p.drag.kind === 'furnMove', p.drag && p.drag.kind);
+        onCanvasMouseUp(p, canvas, evAt(C.x, C.y));
+        paint(p);
+        // The +X/+Y corner itself (600, 400 from the centre for a 1200×800).
+        onCanvasMouseDown(p, canvas, view, evAt(C.x + 600, C.y + 400));
+        ok('18f: pressing the CORNER still starts furnCorner',
+          p.drag && p.drag.kind === 'furnCorner', p.drag && p.drag.kind);
+        onCanvasMouseUp(p, canvas, evAt(C.x + 600, C.y + 400));
+      }
+
+      // (g) A hidden furniture layer publishes nothing (the flightHitPx rule).
+      {
+        const p = await freshPlanner(makeStore([mkFloor()], { layers2d: { furniture: false, appliances: false } }));
+        p.activeFurnitureId = 'fu1';
+        paint(p);
+        ok('18g: a hidden furniture layer is un-rotatable', !furnRotateHandlePx.get('fu1'));
+      }
+
+      // (h) Rotation is not translation — it must stay OUT of the align system.
+      ok('18h: furnRotate is not an alignment drag', !ALIGN_DRAG_KINDS.has('furnRotate'));
+      ok('18h: …nor a polygon drag', !ALIGN_POLY_DRAG_KINDS.has('furnRotate'));
+      {
+        const p = await freshPlanner(makeStore([floor('f1', 'Home', {
+          furniture: [mkFurn('fu1', 6000, 6000)],
+          walls: [mkWall('w1', [{ x: 6100, y: 2000 }, { x: 6100, y: 9000 }])],
+        })]));
+        p.activeFurnitureId = 'fu1';
+        paint(p);
+        const grab = handleMm('fu1');
+        const b0 = bearing(C, grab);
+        onCanvasMouseDown(p, canvas, view, evAt(grab.x, grab.y));
+        const q = atBearing(C, b0 + 45, 2000);
+        onCanvasMouseMove(p, canvas, view, evAt(q.x, q.y));
+        ok('18h: a rotate drag draws no guides', p.alignGuides.length === 0,
+          JSON.stringify(p.alignGuides));
+        ok('18h: …and never nudges the centre toward one',
+          p.floor().furniture[0].x === 6000, p.floor().furniture[0].x);
+        onCanvasMouseUp(p, canvas, evAt(q.x, q.y));
+      }
+
+      // (i) The chip ORBITS with the piece (it hangs off the ROTATED corner).
+      {
+        const p = await freshPlanner(makeStore([mkFloor()]));
+        p.activeFurnitureId = 'fu1';
+        paint(p);
+        const a = handleMm('fu1');
+        p.floor().furniture[0].rotation = 180;
+        paint(p);
+        const b = handleMm('fu1');
+        ok('18i: a 180° piece puts the handle on the opposite side',
+          b && b.x < C.x && b.y < C.y && near(b.x - C.x, -(a.x - C.x), 1e-6),
+          a && b && `${Math.round(a.x - C.x)},${Math.round(a.y - C.y)} → ${Math.round(b.x - C.x)},${Math.round(b.y - C.y)}`);
+        ok('18i: the offset constant is exported for the harness',
+          FURN_ROTATE_OFFSET_PX > 0, FURN_ROTATE_OFFSET_PX);
       }
     }
   } catch (err) {

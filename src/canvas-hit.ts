@@ -9,6 +9,7 @@ import type { Vec2, Wall, Sensor, Furniture, BgImage, MotionSensor, EnvSensor, B
 import { SOLAR_DEFAULTS } from './solar.js';
 import type { FloorEdge } from './geometry.js';
 import { envChipHalfPx, infoCardHalfPx, actionButtonHalfPx, flightHitPx, roomLabelHalfPx,
+         furnRotateHandlePx, mmToPx,
          insertHandleMinLenMm, insertHandlesEnabled, POLY_CAPS, type View } from './canvas-render.js';
 import { vacMapAffine, vacWorldToPixel, vacSegHasPixel } from './valetudo-map.js';
 
@@ -127,6 +128,24 @@ export function hitFurnitureCorner(p: Planner, view: View, mm: Vec2): FurnCorner
     }
   }
   return null;
+}
+
+// Rotate handle for the SELECTED furniture piece. Unlike every other hit test
+// here the anchor is pure SCREEN space (the chip floats a fixed px distance
+// beyond the rotated corner), so the world point is converted to px and tested
+// against the map the last frame published. An empty map = nothing painted
+// (hidden layer, nothing selected, not edit+select) = untappable.
+export function hitFurnitureRotateHandle(p: Planner, view: View, mm: Vec2):
+    { item: Furniture; idx: number } | null {
+  const id = p.activeFurnitureId; if (!id) return null;
+  const h = furnRotateHandlePx.get(id); if (!h) return null;
+  const f = p.floor();
+  const idx = f.furniture.findIndex(x => x.id === id);
+  if (idx < 0) return null;
+  const piece = f.furniture[idx];
+  if (piece.locked) return null;   // handles never grab locked items
+  const px = mmToPx(view, mm.x, mm.y);
+  return Math.hypot(px.x - h.x, px.y - h.y) <= h.r ? { item: piece, idx } : null;
 }
 
 export interface FixtureHit { kind: 'light' | 'switch'; idx: number; }

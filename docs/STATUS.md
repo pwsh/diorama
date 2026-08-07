@@ -404,6 +404,31 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Radar room confinement + furniture rotate handle + typing protection
+  v3 with rebindable hotkeys** (2026-08-07, three user requests, two
+  parallel agents; unreleased — on main past v0.62.0).
+  (1) `Sensor.confineToRoom` ("Keep avatars in this room"): radar
+  multipath reports past a wall no longer spawn the avatar in the next
+  room — pure `clampPointToLoop` (inward-verified, never returns a point
+  further out), renderer `_confineLoops` memo keyed by rounded sensor pos
+  (dropped at both _wallLoops writes), `_confinedCell`
+  region-first-room-second (a clamped point rests ON the wall band where
+  _regionOfWorld can answer the FAR side — the naive path silently undid
+  the clamp), stuck detector reads the confined GOAL cell's region (else
+  eternal respawn flicker; genuine stranding still escapes). 2D dot
+  clamps; showRealPositions ring deliberately doesn't (the pairing).
+  CONFINE 61/61 on a no-door two-region fixture.
+  (2) Furniture canvas rotate: double-arrow chip beyond the rotated
+  corner, 15° snap / Alt free (0.1° quantized), one undo step;
+  ALIGNGUIDES 125→157.
+  (3) Typing can never change tools: focusing any editable REVERTS the
+  tool to Select (and it stays); 1 s post-blur grace kills plain keys;
+  NEW src/keybinds.ts — rebindable catalog (11 actions), per-binding
+  disable, Settings ▸ Display ▸ Input capture UI; Ctrl-combos/Escape/
+  Enter/Space stay hard-coded; master switch still kills the class.
+  KEYBINDS 65 new, SENSORFOCUS 14→28. All independently re-verified on
+  the merged tree.
+
 - **Fix wave + real-position markers: 2D flicker root-caused; doors rotate
   about center; exercise_equipment reconnected; sink tops rebuilt; mmWave
   raw-position display** (2026-08-07, four user reports + one feature;

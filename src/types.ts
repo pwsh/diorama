@@ -649,6 +649,17 @@ export interface Sensor {
   // BY DESIGN (never ease it), making the report-vs-display gap visible. Item
   // level, absent = off (no repairFloor entry needed).
   showRealPositions?: boolean;
+  // Keep this sensor's avatars inside the room it stands in. mmWave sees THROUGH
+  // drywall — multipath / range overshoot reports a person standing against a
+  // wall as being a metre or two past it, and the rig then legitimately walks
+  // into the next room (the nav wall-LOS snap only rescues points inside the
+  // wall band, not ones fully beyond it). With this on, the radar report is
+  // clamped into the closed wall loop containing the SENSOR before nav sees it
+  // (3D) and before the dot is painted (2D). A sensor outside every loop (open
+  // plan / yard) has no room to clamp to → no-op. Pairs with showRealPositions:
+  // the raw marker stays UNCLAMPED, so the overshoot is still visible.
+  // Item level, absent = off (no repairFloor entry needed).
+  confineToRoom?: boolean;
   // Last-known-good zone vertices. Persisted so a reload paints zones from
   // store immediately, before HA's first state push completes — protects
   // against the case where firmware re-publishes partial / zeroed values

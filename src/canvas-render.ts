@@ -32,7 +32,7 @@ import {
   windowEndpoints, wallCutsForSegment, wallKind, isBayWindowKind, bayProjectSign, bayPlan,
   ENV_KINDS, envKindOf, envColor, envValueText, envScale,
   infoCardText, infoCardRule, infoCardScale, infoCardMount,
-  closedWallLoops, loopContaining, roomLabel, roomsByLoop, roomFloorLook,
+  closedWallLoops, loopContaining, clampPointToLoop, roomLabel, roomsByLoop, roomFloorLook,
   heatmapColor, HEATMAP_COMFORT_LO_DEFAULT, HEATMAP_COMFORT_HI_DEFAULT,
   parseNowPlaying, isMediaPlayerId,
   resolveRulerEnds, outerWallSegments, wallDimSide, structureExtents,
@@ -323,6 +323,19 @@ export function mmToPx(view: View, wx: number, wy: number) {
 // drawAll OUTSIDE the `labels` layer gate, so a hidden layer is undraggable.
 export const roomLabelHalfPx = new Map<string, { w: number; h: number }>();
 
+// Furniture ROTATE handle pick map (the envChipHalfPx idiom, but a pure SCREEN
+// anchor — the chip floats a fixed px distance outside the piece's rotated
+// top-right corner, so there is no stable world point to key it off). Published
+// per painted handle, keyed by furniture id, in CANVAS px. Feeds
+// hitFurnitureRotateHandle → the `furnRotate` drag. CLEARED in drawAll OUTSIDE
+// the furniture/appliance layer gate so a hidden layer is also un-rotatable.
+export const furnRotateHandlePx = new Map<string, { x: number; y: number; r: number }>();
+
+// Handle geometry (pre-DPR px): chip radius, and how far its centre floats
+// diagonally beyond the corner.
+export const FURN_ROTATE_R_PX = 9;
+export const FURN_ROTATE_OFFSET_PX = 14;
+
 // --- Midpoint vertex-INSERT handles -----------------------------------------
 // A dim hollow "+" ghost at the midpoint of every edge of a selected shape.
 // Pressing one splices a vertex there and starts the ordinary vertex drag, so
@@ -425,6 +438,10 @@ export function drawAll(ctx: CanvasRenderingContext2D, p: Planner, view: View,
   // user, and in 3D they share `_doorGroup` (which also carries curtains and
   // lock deadbolts), so a split would need a build-time group split too.
   if (on(L.openings)) { drawDoors(ctx, p, view); drawWindows(ctx, p, view); }
+  // Rotate-handle pick map rebuilt every frame and cleared HERE, outside the
+  // layer gate, so a hidden furniture layer is also un-rotatable (the
+  // flightHitPx / roomLabelHalfPx rule).
+  furnRotateHandlePx.clear();
   if (on(L.furniture) || on(L.appliances)) drawFurniture(ctx, p, view, on(L.furniture), on(L.appliances));
   if (L.activity === true) drawActivity(ctx, p, view);
   if (on(L.lights) || on(L.switches)) drawFixtures(ctx, p, view, on(L.lights), on(L.switches));
@@ -5596,6 +5613,50 @@ function drawFurniture(ctx: CanvasRenderingContext2D, p: Planner, view: View,
         ctx.strokeRect(px.x - 4, px.y - 4, 8, 8);
       }
     }
+    // ROTATE handle: a double-curved-arrow chip floating just OUTSIDE the
+    // piece's (rotated) top-right corner, for the SELECTED piece in edit +
+    // Select. Furniture has no other canvas rotation — the sidebar number field
+    // was the only way. Locked pieces show none (the handle-refuses-locked rule
+    // the corner anchors already follow). Screen-space only; the anchor follows
+    // the piece's rotation so the chip orbits with it.
+    if (isEdit && p.tool === 'select' && !piece.locked && p.activeFurnitureId === piece.id) {
+      const r = FURN_ROTATE_R_PX * dpr;
+      const off = FURN_ROTATE_OFFSET_PX * dpr / Math.SQRT2;   // diagonal component
+      // ctx.rotate(rotR) maps local (lx, ly) → (lx·cos − ly·sin, lx·sin + ly·cos);
+      // canvas-local (+halfW, −halfH) is the piece's top-right corner.
+      const cs = Math.cos(rotR), sn = Math.sin(rotR);
+      const lx = halfW + off, ly = -halfH - off;
+      const hx = center.x + lx * cs - ly * sn;
+      const hy = center.y + lx * sn + ly * cs;
+      furnRotateHandlePx.set(piece.id, { x: hx, y: hy, r: r + 3 * dpr });
+      ctx.save();
+      ctx.translate(hx, hy);
+      ctx.fillStyle = 'rgba(12,18,24,0.88)';
+      ctx.strokeStyle = '#ffb74d';
+      ctx.lineWidth = Math.max(1, 1.2 * dpr);
+      ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      // Two arc arrows head-to-tail (the universal "rotate" glyph): each sweeps
+      // ~130° on opposite halves, with a small triangular head at its end.
+      const gr = r * 0.55;
+      ctx.lineWidth = Math.max(1.2, 1.5 * dpr);
+      ctx.lineCap = 'round';
+      const head = Math.max(2, 2.4 * dpr);
+      for (const base of [0, Math.PI]) {
+        const a0 = base + 0.28, a1 = base + 0.28 + 2.27;   // ≈130°
+        ctx.beginPath(); ctx.arc(0, 0, gr, a0, a1); ctx.stroke();
+        // Arrowhead at a1, pointing along the tangent (CCW in canvas space).
+        const ex = Math.cos(a1) * gr, ey = Math.sin(a1) * gr;
+        const tx = -Math.sin(a1), ty = Math.cos(a1);         // unit tangent
+        const nx = Math.cos(a1), ny = Math.sin(a1);          // unit radial
+        ctx.beginPath();
+        ctx.moveTo(ex + tx * head * 1.5, ey + ty * head * 1.5);
+        ctx.lineTo(ex - tx * head * 0.4 + nx * head, ey - ty * head * 0.4 + ny * head);
+        ctx.lineTo(ex - tx * head * 0.4 - nx * head, ey - ty * head * 0.4 - ny * head);
+        ctx.closePath();
+        ctx.fillStyle = '#ffb74d'; ctx.fill();
+      }
+      ctx.restore();
+    }
   }
 }
 
@@ -7525,9 +7586,17 @@ function drawTargets(ctx: CanvasRenderingContext2D, p: Planner, view: View): voi
     const d = p.discBy[s.id]; if (!d) continue;
     const lerp = p.lerpBy[s.id]; if (!lerp) continue;
     const baseColor = sensorColor(s, si);
+    // Sensor.confineToRoom: the room this sensor stands in (null when it sits
+    // outside every closed loop — open plan / yard → confinement is a no-op).
+    // Resolved ONCE per sensor off the shared per-frame loop cache; the eased dot
+    // below is then clamped into it so 2D agrees with the 3D rig. The RAW ring
+    // (showRealPositions) is deliberately left unclamped further down.
+    const confLoop = s.confineToRoom === true
+      ? loopContaining(floorLoops(f), s.x, s.y) : null;
     for (let i = 0; i < 3; i++) {
       const sl = lerp[i]; if (!sl.active) continue;
-      const wp = localToWorld(s, sl.cx, sl.cy);
+      const wpRaw = localToWorld(s, sl.cx, sl.cy);
+      const wp = confLoop ? clampPointToLoop(confLoop, wpRaw.x, wpRaw.y) : wpRaw;
       const pt = mmToPx(view, wp.x, wp.y);
       const speed = parseFloat(states[d.targets[i]?.speed_id ?? '']?.state ?? '') || 0;
       const res = parseFloat(states[d.targets[i]?.resolution_id ?? '']?.state ?? '') || 500;
@@ -7547,7 +7616,9 @@ function drawTargets(ctx: CanvasRenderingContext2D, p: Planner, view: View): voi
       // Sensor.showRealPositions: a small hollow ring at the RAW radar report
       // (sl.tx/ty — the spring's GOAL) alongside the eased dot above, so the
       // smoothing lag is visible. Drawn AFTER the dot so it stays readable when
-      // the two coincide; deliberately NOT eased (it snaps at push cadence).
+      // the two coincide; deliberately NOT eased (it snaps at push cadence) and
+      // deliberately NOT room-clamped — with confineToRoom on, this ring landing
+      // outside the wall IS the overshoot the clamp is correcting.
       if (s.showRealPositions) {
         const rw = localToWorld(s, sl.tx, sl.ty);
         const rp = mmToPx(view, rw.x, rw.y);

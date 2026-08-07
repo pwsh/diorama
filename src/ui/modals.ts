@@ -17,6 +17,8 @@ import { listActiveVehiclePacks, resolveVehicleDef } from '../vehicles.js';
 import type { Planner } from '../planner.js';
 import type { Floor, HassState, WeatherConfig, DemoWeatherConfig, WeatherEffectKey, ScenePreset, FloorTexKind, MqttBridgeConfig, BgTextEntry, BgTextEntryMode, HeatmapConfig, CompassConfig } from '../types.js';
 import { resolveNorth } from '../compass.js';
+import { KEYBIND_ACTIONS, resolveKeybind, keybindConflict, keybindDef, keyLabel,
+         isModifierKey, normalizeKey, type KeybindAction } from '../keybinds.js';
 import {
   FLIGHT_LABEL_FIELDS, FLIGHT_LABEL_FIELDS_DEFAULT, sanitizeLabelFields,
   FLIGHTS_DEFAULT_RADIUS_NM, FLIGHT_SHELL_DEFAULT_RADIUS_M,
@@ -1227,6 +1229,11 @@ export class SettingsDrawer extends LitElement {
   // sidebar's collapsible-section idiom) rather than value-rules' always-open
   // rows — 10 expanded rules would be unusably tall. Runtime-only, one at a time.
   @state() private _glowRuleOpen: string | null = null;
+  // Keyboard-shortcut capture (Display ▸ Input): which action is listening for
+  // its next key, plus the rejection hint (modifier-only / already used).
+  // Runtime-only, one at a time — Escape cancels.
+  @state() private _rebind: KeybindAction | null = null;
+  @state() private _rebindMsg = '';
 
   protected override createRenderRoot() { return this; }
 
@@ -2258,10 +2265,11 @@ export class SettingsDrawer extends LitElement {
       <div style="border-top:1px solid var(--border);margin:10px 0 0;padding-top:8px">
         <div style="font-weight:600;font-size:11px;margin-bottom:4px">Input</div>
         <div class="row">
-          <label title="Single-key canvas shortcuts: the tool letters/digits (1–8, m), Delete / Backspace on the current selection, and the arrow-key furniture nudge. Turn OFF if tools switch or items vanish while you type — focus can silently fall back to the page body mid-edit. Ctrl/Cmd+Z undo, Ctrl/Cmd+0 reset view, Escape, Enter and the Space pan-hold keep working either way. Stored on this device only.">Keyboard shortcuts (tool hotkeys, Delete, arrows)</label>
+          <label title="Master switch for every single-key canvas shortcut: the tool keys (rebindable below), Delete / Backspace on the current selection, and the arrow-key furniture nudge. Turn OFF if tools switch or items vanish while you type — focus can silently fall back to the page body mid-edit. Ctrl/Cmd+Z undo, Ctrl/Cmd+0 reset view, Escape, Enter and the Space pan-hold keep working either way. Stored on this device only.">Keyboard shortcuts (tool hotkeys, Delete, arrows)</label>
           <input type="checkbox" data-hotkeys-toggle .checked=${p.hotkeysEnabled}
                  @change=${(e: Event) => p.setHotkeysEnabled((e.target as HTMLInputElement).checked)}>
         </div>
+        ${this._keybindRows()}
       </div>
       <div style="border-top:1px solid var(--border);margin:10px 0 0;padding-top:8px">
         <div style="font-weight:600;font-size:11px;margin-bottom:4px">Camera</div>
@@ -2352,6 +2360,77 @@ export class SettingsDrawer extends LitElement {
       ${this._compassBlock()}
       ${this._heatmapBlock()}
     `;
+  }
+
+  // ── Rebindable keyboard shortcuts (Display ▸ Input) ──────────────────────
+  // One row per rebindable action: label, current key chip, ✎ rebind (capture
+  // mode), ✕ disable. Device-local via planner.setKeybind — never save(), so
+  // rebinding costs nothing in HA sync / undo. Undo/redo, Ctrl/Cmd+0, Escape,
+  // Enter and the Space pan-hold are deliberately NOT in the catalog (see
+  // src/keybinds.ts for why).
+  private _onRebindKey = (e: KeyboardEvent) => {
+    // Swallow the key so canvas-2d's window listener can't ALSO act on it while
+    // the user is assigning it (the capture button isn't an editable target, so
+    // isEditableTarget would let it through).
+    e.preventDefault(); e.stopPropagation();
+    const action = this._rebind;
+    if (!action) return;
+    if (e.key === 'Escape') { this._rebind = null; this._rebindMsg = ''; return; }
+    if (isModifierKey(e.key)) { this._rebindMsg = 'Press a key that is not a modifier.'; return; }
+    const clash = keybindConflict(action, e.key, this.planner.keybinds);
+    if (clash) {
+      this._rebindMsg = `“${keyLabel(e.key)}” is already used by ${keybindDef(clash)?.label ?? clash}.`;
+      return;
+    }
+    this.planner.setKeybind(action, normalizeKey(e.key));
+    this._rebind = null; this._rebindMsg = '';
+  };
+
+  private _keybindRows() {
+    const p = this.planner;
+    const chip = (txt: string, dim: boolean) => html`
+      <span style="font:11px/1.4 ui-monospace,monospace;padding:1px 6px;border-radius:4px;
+                   border:1px solid var(--border);min-width:52px;text-align:center;
+                   color:${dim ? 'var(--text-dim)' : 'inherit'}">${txt}</span>`;
+    return html`
+      <div style="margin-top:8px">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+          <div style="font-weight:600;font-size:11px">Keyboard shortcuts</div>
+          <button class="btn-sm" title="Restore every shipped default key"
+                  @click=${() => { p.resetKeybinds(); this._rebind = null; this._rebindMsg = ''; }}>Reset all</button>
+        </div>
+        <div style="font-size:10px;color:var(--text-dim);line-height:1.3;margin:2px 0 4px">
+          Single-key canvas shortcuts. ✎ then press a key to rebind (Esc cancels); ✕ disables one.
+          Ctrl/Cmd+Z, Ctrl/Cmd+0, Escape, Enter and the Space pan-hold are fixed and always work.
+        </div>
+        ${this._rebindMsg
+          ? html`<div style="font-size:10px;color:#ffb74d;margin:0 0 4px">${this._rebindMsg}</div>`
+          : nothing}
+        ${KEYBIND_ACTIONS.map(a => {
+          const cur = resolveKeybind(a.action, p.keybinds);
+          const capturing = this._rebind === a.action;
+          return html`
+            <div class="row" data-keybind-row=${a.action}
+                 style=${p.hotkeysEnabled ? '' : 'opacity:0.5'}>
+              <label>${a.label}</label>
+              <span style="display:flex;align-items:center;gap:4px">
+                ${capturing ? chip('press a key…', true) : chip(keyLabel(cur), cur == null)}
+                <button class="btn-sm" title=${capturing ? 'Cancel' : 'Rebind'}
+                        data-keybind-capture=${a.action}
+                        @keydown=${this._onRebindKey}
+                        @click=${(e: Event) => {
+                          if (capturing) { this._rebind = null; this._rebindMsg = ''; return; }
+                          this._rebind = a.action; this._rebindMsg = '';
+                          (e.currentTarget as HTMLElement).focus();
+                        }}>${capturing ? '✕' : '✎'}</button>
+                <button class="btn-sm" title="Disable this shortcut"
+                        data-keybind-disable=${a.action}
+                        ?disabled=${cur == null}
+                        @click=${() => { p.setKeybind(a.action, null); this._rebind = null; this._rebindMsg = ''; }}>✕</button>
+              </span>
+            </div>`;
+        })}
+      </div>`;
   }
 
   // ── On-screen compass + in-plan north icon ───────────────────────────────

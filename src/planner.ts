@@ -19,6 +19,7 @@ import { slugToName, normMac, localToWorld, segCrossesSolidWall, mowerSweepWaypo
          type LockGlyphState, type RoomTemp, type TempSample,
          type BicycleState } from './geometry.js';
 import { solveHomography, applyHomography } from './homography.js';
+import { loadKeybinds, saveKeybinds, type KeybindAction, type KeybindMap } from './keybinds.js';
 import { viewCenterFitsFloor as _viewCenterFitsFloor,
          browserViewStorage, loadView2d, saveView2d } from './view-persist.js';
 import { stepFusion, newFusionState, DEFAULT_FUSION_CFG,
@@ -277,6 +278,11 @@ export type Drag =
   | { kind: 'wallMove'; wallId: string; startMm: Vec2; startPts: Vec2[] }
   | { kind: 'furnMove'; idx: number; startMm: Vec2; start: Vec2 }
   | { kind: 'furnCorner'; idx: number; anchor: Vec2 }
+  // Canvas rotate handle on the SELECTED furniture piece. `grabOffsetDeg` is
+  // (pointer bearing at grab − piece rotation) so the piece never jumps to the
+  // cursor on grab; `startRot` is kept for reference/debug. Rotation only — the
+  // centre never moves, so this is deliberately NOT in ALIGN_DRAG_KINDS.
+  | { kind: 'furnRotate'; idx: number; startRot: number; grabOffsetDeg: number }
   | { kind: 'fixture'; fxKind: 'light' | 'switch'; idx: number; startMm: Vec2; start: Vec2 }
   | { kind: 'obj'; oi: number; startMm: Vec2; startObj: Vec2 }
   | { kind: 'objR'; oi: number; startMm: Vec2; startR: number }
@@ -576,6 +582,9 @@ export class Planner extends EventTarget {
   // Keyboard-shortcut master switch (device-local, same discipline as the wall
   // prefs). Absent = ON. See HOTKEY_PREF for exactly which keys it gates.
   hotkeysEnabled = readWallPref(HOTKEY_PREF);
+  // Per-action key overrides (device-local; absent action = shipped default,
+  // explicit null = disabled). Read once at construction like the prefs above.
+  keybinds: KeybindMap = loadKeybinds();
   cursor: Vec2 | null = null;
   drag: Drag | null = null;
   dragJustEnded = false;
@@ -6978,6 +6987,23 @@ export class Planner extends EventTarget {
   // when typing"). Modifier combos, Escape, Enter and the Space pan-hold live on.
   setHotkeysEnabled(on: boolean): void {
     this.hotkeysEnabled = on; writeWallPref(HOTKEY_PREF, on); this.emitConfig();
+  }
+
+  // Per-action key overrides for the plain-key bindings (device-local, same
+  // no-save discipline as the master switch — never the Store, so rebinding
+  // costs nothing in HA sync / undo). Absent action = shipped default; an
+  // explicit null = that binding is DISABLED. See src/keybinds.ts for the
+  // catalog and for why undo/redo/Escape/Enter/Space stay hard-coded.
+  setKeybind(action: KeybindAction, key: string | null): void {
+    this.keybinds = { ...this.keybinds, [action]: key };
+    saveKeybinds(this.keybinds);
+    this.emitConfig();
+  }
+
+  resetKeybinds(): void {
+    this.keybinds = {};
+    saveKeybinds(this.keybinds);
+    this.emitConfig();
   }
 
   // Toggle whatever entity is bound — chooses the correct domain service

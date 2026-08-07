@@ -578,6 +578,52 @@ export function loopContaining(loops: Vec2[][], x: number, y: number): Vec2[] | 
   return null;
 }
 
+// Pull a point INTO a closed wall loop (`Sensor.confineToRoom`). mmWave radar
+// sees through drywall — multipath / overshoot puts the reported target a metre
+// or two past the wall, so the avatar legitimately materialises in the next
+// room. This is the opt-in clamp: a point already inside the loop is returned
+// unchanged (identity in VALUE — a fresh Vec2, callers never rely on identity),
+// anything outside lands on the nearest boundary point nudged `insetMm` inward
+// so `pointInPolygon` (which excludes the edge itself) accepts the result.
+//
+// The inward nudge is DERIVED, never assumed: try the p→q push-back direction
+// first (correct for any convex approach), then aim at the loop centroid (which
+// rescues a concave notch where the push-back would exit again), then the
+// centroid itself (a loop too small to hold the inset). Each candidate is
+// verified with pointInPolygon; the boundary point q is the last-ditch answer,
+// so the function NEVER returns a point further out than the wall.
+//
+// Degenerate input (fewer than 3 verts, non-finite coords) → the input point
+// unchanged: confinement is a refinement, never a source of NaN.
+export function clampPointToLoop(loop: Vec2[], x: number, y: number, insetMm = 60): Vec2 {
+  const n = loop?.length ?? 0;
+  if (n < 3 || !Number.isFinite(x) || !Number.isFinite(y)) return { x, y };
+  if (pointInPolygon(x, y, loop)) return { x, y };
+  // Nearest point on the closed ring (the wrap edge included).
+  let qx = loop[0].x, qy = loop[0].y, bd = Infinity;
+  for (let i = 0, j = n - 1; i < n; j = i++) {
+    const ax = loop[j].x, ay = loop[j].y, bx = loop[i].x, by = loop[i].y;
+    const dx = bx - ax, dy = by - ay;
+    const len2 = dx * dx + dy * dy;
+    const t = len2 > 0 ? Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / len2)) : 0;
+    const px = ax + t * dx, py = ay + t * dy;
+    const d = (x - px) * (x - px) + (y - py) * (y - py);
+    if (d < bd) { bd = d; qx = px; qy = py; }
+  }
+  if (!Number.isFinite(qx) || !Number.isFinite(qy)) return { x, y };
+  if (!(insetMm > 0)) return { x: qx, y: qy };
+  const c = centroid(loop);
+  const cands: Vec2[] = [];
+  const pdx = qx - x, pdy = qy - y, pl = Math.hypot(pdx, pdy);
+  if (pl > 1e-6) cands.push({ x: qx + (pdx / pl) * insetMm, y: qy + (pdy / pl) * insetMm });
+  const cdx = c.x - qx, cdy = c.y - qy, cl = Math.hypot(cdx, cdy);
+  if (cl > 1e-6) cands.push({ x: qx + (cdx / cl) * insetMm, y: qy + (cdy / cl) * insetMm });
+  cands.push(c);
+  for (const cd of cands)
+    if (Number.isFinite(cd.x) && Number.isFinite(cd.y) && pointInPolygon(cd.x, cd.y, loop)) return cd;
+  return { x: qx, y: qy };
+}
+
 // The named room that owns (x, y): find the loop containing the point, then
 // return the room whose anchor resolves to that SAME loop. Reference equality
 // on the loop array holds within one loops computation (both lookups use the

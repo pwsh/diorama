@@ -99,7 +99,7 @@ interface RobotRig {
   progressGroup: THREE.Group;       // toggled visible on/off by source presence
   progressMats: THREE.MeshToonMaterial[]; // ordered fill segments (strip L→R / ring CW)
 }
-import { wallCutsForSegment, WINDOW_DEFAULTS, isBayWindowKind, windowSillMm, windowGlassHMm, bayProjectSign, bayPlan, closedWallLoops, wallSegmentInLoops, doorSpanCenter, wallKind, WALL_KINDS, furnitureLocalToWorld, furnitureWorldToLocal, pointInPolygon as pip, centroid, loopContaining, resolveRoomForPoint, roomLabel, roomsByLoop, roomFloorLook, intersectLoopWithRect, polygonArea, heatmapColor, groundAreaSkirtBase, poolWaterColor, poolDepthMm, poolRaisedMm, poolHeaterState, poolPumpOn, poolLightOn, poolRimY, poolBasinFloorY, poolWaterSurfaceY, POOL_COPING_COLOR, POOL_HEAT_GLOW, type RoomTemp } from './geometry.js';
+import { wallCutsForSegment, WINDOW_DEFAULTS, isBayWindowKind, windowSillMm, windowGlassHMm, bayProjectSign, bayPlan, closedWallLoops, wallSegmentInLoops, doorSpanCenter, wallKind, WALL_KINDS, furnitureLocalToWorld, furnitureWorldToLocal, pointInPolygon as pip, centroid, loopContaining, clampPointToLoop, resolveRoomForPoint, roomLabel, roomsByLoop, roomFloorLook, intersectLoopWithRect, polygonArea, heatmapColor, groundAreaSkirtBase, poolWaterColor, poolDepthMm, poolRaisedMm, poolHeaterState, poolPumpOn, poolLightOn, poolRimY, poolBasinFloorY, poolWaterSurfaceY, POOL_COPING_COLOR, POOL_HEAT_GLOW, type RoomTemp } from './geometry.js';
 import { visibilityToFogDensity, moonPhaseFraction, uvBand, type WeatherNow } from './weather.js';
 import { SOLAR_DEFAULTS, solarAim, solarTrackOpts, solarRotation, solarPowerValue, SOLAR_DRAW_COLOR, SOLAR_GEN_COLOR } from './solar.js';
 import { skySnapshot, moonAltAz, capSampleAltAz, satAltAz } from './sky-astro.js';
@@ -438,6 +438,18 @@ export interface TargetWorld {
   // x/y which comes from the eased cx/cy. Present only alongside showReal.
   rawX?: number;
   rawY?: number;
+  // Optional (additive): the owning mmWave sensor has `confineToRoom` on — clamp
+  // this target into the closed wall loop containing the SENSOR before anything
+  // downstream (nav goal, sit/activity dwell, bed occupancy, respawn) reads it,
+  // because radar sees through walls and would otherwise plant the rig next door.
+  // Radar targets only (synthetic ai/ble/cam/roam rigs have their own confinement
+  // rules). srcX/srcY are the SENSOR's world-mm position — the renderer resolves
+  // + caches the loop from its own `_wallLoops` off them, so the app never has to
+  // ship geometry. Present only together. A stale renderer chunk ignores all
+  // three → today's unconfined behavior.
+  confine?: boolean;
+  srcX?: number;
+  srcY?: number;
 }
 
 // Per-frame context for the Sims-style activity system. Built cheaply every
@@ -3982,6 +3994,7 @@ export class ThreeDRenderer {
     this._beds = [];
     this._roomZones = [];
     this._wallLoops = [];
+    this._confineLoops = {};     // sensor → room memo dies with the loops
     this._wallSegBases = [];
     this._disposeBedCovers();
     this._fanRotors = [];
@@ -6233,6 +6246,7 @@ export class ThreeDRenderer {
     // rendering a wall. No closed loop → classic full-rectangle floor.
     const loops = closedWallLoops(f.walls ?? []);
     this._wallLoops = loops;
+    this._confineLoops = {};     // radar room-confinement memo keys off these loops
     this._terrain = [];
     this._hasTerrace = false;
 
@@ -8590,7 +8604,13 @@ export class ThreeDRenderer {
     // detour stays reachable and never crosses the wall.
     let goalCell = this._cellIdxOf(t.x, t.y);
     if (nav.blocked[goalCell] || nav.region[goalCell] !== navRegion) {
-      goalCell = this._nearestFreeCellInRegion(goalCell, navRegion);
+      // Confined target: the retarget must also stay in the sensor's room, or a
+      // clamped goal sitting inside a wall-side footprint would snap back out
+      // through the doorway (the AI home-loop path, reused verbatim).
+      const cLoop = this._confineLoopFor(t);
+      goalCell = cLoop
+        ? this._confinedCell(goalCell, navRegion, cLoop)
+        : this._nearestFreeCellInRegion(goalCell, navRegion);
       goalScene = this._cellToScene(goalCell);
     }
     const goalWx = this._fw / 2 - goalScene.x, goalWy = goalScene.z + this._fd / 2;
@@ -21148,6 +21168,53 @@ export class ThreeDRenderer {
     return loopContaining(this._wallLoops, wx, wy);
   }
 
+  // The confinement room for a RADAR target whose sensor has `confineToRoom`:
+  // the closed wall loop containing the SENSOR (t.srcX/srcY) — the same
+  // resolution `_aiHomeLoop` does for AI avatars, and the same honest no-op when
+  // the sensor sits outside every loop (open plan / yard → null → unconfined).
+  //
+  // Cached because this runs per target per frame while `_aiHomeLoop` only runs
+  // on goal picks. The key is the SENSOR position (rounded to a mm), so all
+  // three of a sensor's target slots share one entry and a moved sensor keys
+  // fresh; the whole map is dropped whenever `_wallLoops` is rebuilt
+  // (updateFloor) or torn down (clearTransientGroups), so a wall edit can never
+  // leave a stale room behind.
+  private _confineLoops: Record<string, Vec2[] | null> = {};
+
+  private _confineLoopFor(t: TargetWorld): Vec2[] | null {
+    if (!t.confine || !Number.isFinite(t.srcX) || !Number.isFinite(t.srcY)) return null;
+    const k = `${Math.round(t.srcX!)}:${Math.round(t.srcY!)}`;
+    const hit = this._confineLoops[k];
+    if (hit !== undefined) return hit;
+    const lp = loopContaining(this._wallLoops, t.srcX!, t.srcY!);
+    this._confineLoops[k] = lp;
+    return lp;
+  }
+
+  // Does this grid cell's CENTER fall inside `loop`? (the `_nearestFreeCellInLoop`
+  // membership test, hoisted so the confined snap can verify its own result.)
+  private _cellCenterInLoop(i: number, loop: Vec2[]): boolean {
+    const n = this._nav;
+    if (!n) return false;
+    const cx = i % n.nx, cy = (i / n.nx) | 0;
+    return pip((cx + 0.5) * n.cell, (cy + 0.5) * n.cell, loop);
+  }
+
+  // Snap a cell into the CONFINEMENT ROOM. Region-first (a room split into two
+  // nav pockets by furniture should still land the rig in its own reachable
+  // one), then room-only as the guarantee: a clamped radar point sits right up
+  // against the wall band, where `_regionOfWorld` can legitimately resolve to
+  // the region on the OTHER side of that wall — and honouring that region would
+  // walk the confinement straight back out through the doorway it just clamped
+  // away from. The ROOM is the promise the user checked the box for, so it wins
+  // the tie; `_nearestFreeCellInLoop(_, -1, loop)` accepts any free in-loop cell
+  // and only degrades further when the room has no free cell at all.
+  private _confinedCell(idx: number, regionId: number, loop: Vec2[]): number {
+    const inRegion = this._nearestFreeCellInLoop(idx, regionId, loop);
+    if (this._cellCenterInLoop(inRegion, loop)) return inRegion;
+    return this._nearestFreeCellInLoop(idx, -1, loop);
+  }
+
   // Advance one AI avatar's virtual raw position for this frame and rewrite the
   // synthetic target's x/y in place. Everything downstream then treats it as a
   // radar target. See AiState. `dt` is the shared frame dt.
@@ -21731,6 +21798,27 @@ export class ThreeDRenderer {
       if (a) this._anchorClaims.set(a.furnitureId, key);
     }
 
+    // ── Radar ROOM-CONFINEMENT pre-pass (Sensor.confineToRoom, opt-in).
+    // mmWave reports through drywall: a person leaning on a wall can be reported
+    // a metre past it, and every downstream system then does exactly the right
+    // thing with the wrong truth (nav routes into the neighbouring room, the
+    // stuck detector respawns the rig THERE because "the goal is ground truth").
+    // So the fix lands on the truth itself: clamp x/y into the sensor's own wall
+    // loop HERE, before anything reads it. Mutating in place is safe (three-view
+    // rebuilds the targets array every frame — the AI pre-pass below does the
+    // same), and it means rawPos/`p`/dwell/sit/activity/bed/steer/respawn all see
+    // ONE consistent position with no per-site plumbing. Only radar targets ever
+    // carry `confine`; a sensor outside every loop resolves null = no-op.
+    // Deliberately NOT clamped: t.rawX/rawY (the showRealPositions marker is the
+    // honest un-smoothed report — that pairing is the point).
+    for (const t of targets) {
+      if (!t.confine) continue;
+      const loop = this._confineLoopFor(t);
+      if (!loop) continue;
+      const c = clampPointToLoop(loop, t.x, t.y);
+      t.x = c.x; t.y = c.y;
+    }
+
     // AI-avatar pre-pass: advance each synthetic target's virtual raw position
     // and rewrite its x/y IN PLACE (the targets array is rebuilt each frame in
     // three-view, so mutating is safe). Must run before the bed pre-pass and the
@@ -21904,7 +21992,12 @@ export class ThreeDRenderer {
           // reachable side — never across a wall into the neighbouring room.
           if (this._nav.blocked[gi] || this._nav.region[gi] < 0) {
             const gr = this._regionOfWorld(t.x, t.y);
-            const sc = this._cellToScene(this._nearestFreeCellInRegion(gi, gr));
+            // A confined target spawns in its sensor's room, never in whatever
+            // free cell happens to be nearest across the wall.
+            const cLoop = this._confineLoopFor(t);
+            const sc = this._cellToScene(cLoop
+              ? this._confinedCell(gi, gr, cLoop)
+              : this._nearestFreeCellInRegion(gi, gr));
             h.navX = sc.x; h.navZ = sc.z;
           }
         }
@@ -22155,8 +22248,11 @@ export class ThreeDRenderer {
           const nwx = this._fw / 2 - h.carrotX, nwy = h.carrotZ + this._fd / 2;
           if (this._blockedWorld(nwx, nwy)) {
             const gr = this._regionOfWorld(t.x, t.y);
-            const sc = this._cellToScene(
-              this._nearestFreeCellInRegion(this._cellIdxOf(nwx, nwy), gr));
+            const ci = this._cellIdxOf(nwx, nwy);
+            const cLoop = this._confineLoopFor(t);   // stay in the sensor's room
+            const sc = this._cellToScene(cLoop
+              ? this._confinedCell(ci, gr, cLoop)
+              : this._nearestFreeCellInRegion(ci, gr));
             const gap = Math.hypot(sc.x - h.carrotX, sc.z - h.carrotZ);
             h.carrotX = sc.x; h.carrotZ = sc.z;
             // A genuine footprint DROP (radar teleported the person into a piece)
@@ -22176,7 +22272,18 @@ export class ThreeDRenderer {
       if (!anchored && this._nav && this._nav.blockedCount > 0) {
         const nwx = this._fw / 2 - h.carrotX, nwy = h.carrotZ + this._fd / 2;
         const navRegion = this._regionOfWorld(nwx, nwy);
-        const goalRegion = this._regionOfWorld(t.x, t.y);
+        // For a CONFINED target read the region off the goal cell `_steerNav`
+        // just resolved (guaranteed free + inside the sensor's room) instead of
+        // the raw point: the clamped point rests ON the wall band, where
+        // `_regionOfWorld` can legitimately answer with the region on the FAR
+        // side — which would show up here as a permanent mismatch and fade/
+        // respawn the rig every 3 s forever. The escape hatch survives: a rig
+        // genuinely stranded in the wrong room still mismatches the in-loop goal
+        // cell, respawns once, and then settles.
+        const cLoopStuck = this._confineLoopFor(t);
+        const goalRegion = (cLoopStuck && h.goalCell >= 0)
+          ? this._nav.region[h.goalCell]
+          : this._regionOfWorld(t.x, t.y);
         if (navRegion >= 0 && goalRegion >= 0 && navRegion !== goalRegion) h.stuckT += dt;
         else h.stuckT = 0;
       } else h.stuckT = 0;
@@ -22875,7 +22982,14 @@ export class ThreeDRenderer {
           const gr = ai
             ? this._regionOfWorld(this._fw / 2 - h.navX, h.navZ + this._fd / 2)
             : this._regionOfWorld(t.x, t.y);
-          const sc = this._cellToScene(this._nearestFreeCellInRegion(gi, gr));
+          // A CONFINED radar rig respawns inside its sensor's room — the goal is
+          // still ground truth, but the truth was already clamped to that room,
+          // so the landing cell must honour it too (a raw goal in a wall-side
+          // footprint could otherwise land the respawn on the far side).
+          const cLoop = this._confineLoopFor(t);
+          const sc = this._cellToScene(cLoop
+            ? this._confinedCell(gi, gr, cLoop)
+            : this._nearestFreeCellInRegion(gi, gr));
           h.navX = sc.x; h.navZ = sc.z; h.lastX = sc.x; h.lastZ = sc.z;
           this._pinCarrot(h);
           h.vx = 0; h.vz = 0; h.path = null; h.pathRev = -1; h.goalCell = -1;

@@ -6,7 +6,7 @@ import {
 } from './canvas-render.js';
 import {
   hitPx, hitSensor, hitSensorRotateHandle, hitWallVert, hitWall,
-  hitFurniture, hitFurnitureCorner, hitFixture,
+  hitFurniture, hitFurnitureCorner, hitFurnitureRotateHandle, hitFixture,
   hitVertexOrZone, hitObject, hitObjectRadiusHandle,
   hitBgBody, hitBgCorner, bgEditable,
   hitMotionSensor, hitMotionRotateHandle, hitEnvSensor, hitEnvResizeHandle,
@@ -578,6 +578,17 @@ export function resolveWallPoint(
 // through into the ordinary drag machinery and the gesture is only resolved at
 // release, by movement. Module-level (one pointer, like `_lastSyntheticClick`
 // in canvas-2d); cleared the moment it is consumed or the slop is exceeded.
+// ── Furniture canvas rotation ───────────────────────────────────────────────
+// Bearing of a world point about a piece's centre in the repo's screen-CW
+// convention (0 = +Y world, matching `Light.rotation` / `Furniture.rotation`
+// and the (sin θ, cos θ) direction every rotate handle is placed along).
+function pointerBearingDeg(piece: { x: number; y: number }, mm: Vec2): number {
+  return Math.atan2(mm.x - piece.x, mm.y - piece.y) * 180 / Math.PI;
+}
+// Free rotation (Alt) keeps a tenth of a degree — enough to feel continuous
+// without writing 12-decimal noise into the store.
+const FURN_ROTATE_SNAP_DEG = 15;
+
 let altPress: { mm: Vec2; cx: number; cy: number } | null = null;
 const ALT_IDENTIFY_SLOP_PX = 5;   // same slop the 3D mouse tap gate uses
 
@@ -965,6 +976,16 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
     p.drag = { kind: 'wallv', wallId: wvi.wall.id, idx: wvi.at.idx, startMm: mm, startPts };
     p.selectedVertex = { kind: 'wall', itemId: wvi.wall.id, index: wvi.at.idx }; p.markSelectionHot();
     canvas.style.cursor = 'grabbing'; e.preventDefault(); p.emitConfig(); return;
+  }
+  // Rotate handle first: it floats OUTSIDE the piece, but at tight zoom the
+  // chip can overlap a corner anchor, and "rotate" must win where it is drawn.
+  const frh = hitFurnitureRotateHandle(p, view, mm);
+  if (frh) {
+    const cur = frh.item.rotation || 0;
+    p.drag = { kind: 'furnRotate', idx: frh.idx, startRot: cur,
+               grabOffsetDeg: pointerBearingDeg(frh.item, mm) - cur };
+    p.activeFurnitureId = frh.item.id; p.markSelectionHot();
+    canvas.style.cursor = 'grabbing'; e.preventDefault(); return;
   }
   const fc = hitFurnitureCorner(p, view, mm);
   if (fc) {
@@ -1700,6 +1721,20 @@ export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: V
         }
         break;
       }
+      case 'furnRotate': {
+        const item = f.furniture[drag.idx];
+        if (item && !item.locked) {
+          // Pointer bearing minus the grab offset ⇒ the piece never jumps to
+          // the cursor on grab. Snapped to 15° like the door/window endpoint
+          // rotations; Alt suspends the snap (the wall-edit Alt convention).
+          const raw = pointerBearingDeg(item, mm) - drag.grabOffsetDeg;
+          const deg = e.altKey
+            ? Math.round(raw * 10) / 10
+            : Math.round(raw / FURN_ROTATE_SNAP_DEG) * FURN_ROTATE_SNAP_DEG;
+          item.rotation = ((deg % 360) + 360) % 360;
+        }
+        break;
+      }
       case 'furnCorner': {
         const item = f.furniture[drag.idx];
         if (item && !item.locked) {
@@ -1893,6 +1928,7 @@ export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: V
     else if (zonesInteractive(p) && (hitObject(p, view, mm) || hitVertexOrZone(p, view, mm))) canvas.style.cursor = 'grab';
     else if (hitWallVert(p, view, mm)) canvas.style.cursor = 'grab';
     else if (hitWallVertInsert(p, view, mm)) canvas.style.cursor = 'copy';
+    else if (hitFurnitureRotateHandle(p, view, mm)) canvas.style.cursor = 'grab';
     else if (hitFurnitureCorner(p, view, mm)) canvas.style.cursor = 'nwse-resize';
     else if (hitDoorLock(p, view, mm)) canvas.style.cursor = 'pointer';
     else if (hitDoorEnd(p, view, mm)) canvas.style.cursor = 'grab';
@@ -2236,6 +2272,12 @@ export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement, e?: Mouse
   } else if (drag.kind === 'wallMove') {
     const w = f.walls.find(x => x.id === drag.wallId);
     if (w && p.wallWeld && !free) connectWallEnds(f, w, true);
+    p.save();
+  } else if (drag.kind === 'furnRotate') {
+    // Rotation only — the centre never moved, so none of the drop resolvers
+    // (stair edges, surface mount, wall collision, seat tuck) apply. One
+    // save() = one undo step for the whole gesture; the trailing emitConfig
+    // bumps configRev → _keyFloor → the 3D rebuild (the furnMove contract).
     p.save();
   } else if (drag.kind === 'furnMove' || drag.kind === 'furnCorner') {
     const piece = f.furniture[drag.idx];

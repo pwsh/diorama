@@ -7132,6 +7132,21 @@ export class Sidebar extends LitElement {
                    p.save(); p.emitConfig();
                  }}>
         </div>
+        <div class="row" title="mmWave can report THROUGH a wall (multipath / range overshoot), so someone standing against it shows up in the next room and the avatar walks there. This clamps both the avatar and the 2D dot into the room this sensor stands in. Pair it with 'Show real positions' to still see the raw report where the radar actually put it.">
+          <label>Keep avatars in this room</label>
+          <input type="checkbox" .checked=${s.confineToRoom === true}
+                 @change=${(e: Event) => {
+                   const on = (e.target as HTMLInputElement).checked;
+                   if (on) s.confineToRoom = true; else delete s.confineToRoom;
+                   p.save(); p.emitConfig();
+                 }}>
+        </div>
+        ${s.confineToRoom === true &&
+          loopContaining(closedWallLoops(f.walls ?? []), s.x, s.y) === null
+          ? html`<div style="font-size:10px;color:var(--text-dim);margin:-2px 0 6px">
+              (sensor is not inside a room — no closed wall loop contains it, so
+              confinement does nothing here)</div>`
+          : ''}
         ${this._avatarGrid(s, (mut: () => void) => { mut(); p.save(); p.emitConfig(); })}
         <div class="row"><label>HA Device</label>
           <!-- Use .value (property) not ?selected (attribute) so a freshly-

@@ -22,7 +22,7 @@
        cp test-pages/sensor-focus-test.html "$H"/
        T=$(mktemp -d); cp -r src/* "$T"/; cp tsconfig.json "$T"/
        cp test-pages/fake-avatar-store.ts "$T"/avatar-store.ts
-       printf "export { Planner } from '../planner.js';\nimport './sidebar.js';\nimport './canvas-2d.js';\n" > "$T"/ui/sfocus-entry.ts
+       printf "export { Planner } from '../planner.js';\nexport { HOTKEY_BLUR_GRACE_MS } from './canvas-2d.js';\nimport './sidebar.js';\nimport './canvas-2d.js';\n" > "$T"/ui/sfocus-entry.ts
        npx esbuild "$T"/ui/sfocus-entry.ts --bundle --format=esm --tsconfig="$T"/tsconfig.json \
          --alias:lit=$PWD/node_modules/lit/index.js \
          --alias:lit/decorators.js=$PWD/node_modules/lit/decorators.js \
@@ -33,7 +33,10 @@
          "http://localhost:8796/sensor-focus-test.html" | grep -o "<title>[^<]*"  -->
 <script type="module">
   const V = '?v=' + Date.now();
-  const { Planner } = await import('./sfocus.mod.js' + V);
+  const { Planner, HOTKEY_BLUR_GRACE_MS } = await import('./sfocus.mod.js' + V);
+  // Post-typing grace (canvas-2d): plain keys stay dead this long after focus
+  // leaves an editable. Imported, not hard-coded, so the constant can move.
+  const GRACE_MS = HOTKEY_BLUR_GRACE_MS;
 
   const results = [];
   const ok = (name, cond, extra = '') => results.push({ name, pass: !!cond, extra: String(extra) });
@@ -148,9 +151,12 @@
     ok('C2 focusing a text input cools the selection', p.selectionHot === false, p.selectionHot);
 
     // Blur (tap-away / tablet keyboard dismiss) then a stray Delete on the body.
+    // Wait PAST the post-typing grace first, so C3 exercises the hot-selection
+    // COOLING specifically (the grace would suppress the key on its own — that
+    // is section D's subject).
     nameInput.blur();
     document.body.focus?.();
-    await frames(1);
+    await sleep(GRACE_MS + 120);
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete' }));
     await frames(1);
     ok('C3 stray Delete after blur does NOT delete the area',
@@ -169,6 +175,82 @@
     ok('C5 hot Delete still removes the area (gate intact)',
        !(p.floor().groundAreas ?? []).some(g => g.id === 'g1'),
        `areas=${(p.floor().groundAreas ?? []).length}`);
+
+    // ── D: typing must never change tools ───────────────────────────────────
+    // User-reported: "tool behavior changes as a result of typing, especially
+    // after typing labels… the tooling should revert to select mode while
+    // typing and after clicking out of typing." Two mechanisms, both here:
+    // (a) focusing an editable reverts the tool to Select, (b) plain keys stay
+    // dead for GRACE_MS after focus LEAVES an editable.
+    p.setTool('furniture');
+    ok('D0 precondition: a placement tool is armed', p.tool === 'furniture', p.tool);
+    nameInput.focus();
+    await frames(1);
+    ok('D1 focusing a text field reverts the tool to Select', p.tool === 'select', p.tool);
+
+    // (b) Plain keys within the grace after blur do nothing.
+    nameInput.blur();
+    document.body.focus?.();
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: '2' }));
+    await frames(1);
+    ok('D2 a plain tool key inside the grace is ignored', p.tool === 'select', p.tool);
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'm' }));
+    await frames(1);
+    ok('D3 …the letter bindings too', p.tool === 'select', p.tool);
+
+    // Modifier combos are resolved ABOVE the grace and stay live throughout.
+    p.zoom = 3;
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: '0', ctrlKey: true }));
+    await frames(1);
+    ok('D4 Ctrl+0 (reset view) still fires during the grace', p.zoom === 1, p.zoom);
+
+    // Escape likewise (cancel an armed draw latch).
+    p.drawingWall = { points: [{ x: 0, y: 0 }] };
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    await frames(1);
+    ok('D5 Escape still cancels a latch during the grace', p.drawingWall === null, `${p.drawingWall}`);
+
+    // After the grace, the same plain key works normally.
+    await sleep(GRACE_MS + 120);
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: '2' }));
+    await frames(1);
+    ok('D6 the same key works once the grace has passed', p.tool === 'wall', p.tool);
+
+    // Typing again re-arms both halves: the tool reverts on focus…
+    nameInput.focus();
+    await frames(1);
+    ok('D7 focus reverts an intentionally-picked tool too', p.tool === 'select', p.tool);
+    // …and the revert PERSISTS after clicking out (no restore on blur).
+    nameInput.blur();
+    document.body.focus?.();
+    await sleep(GRACE_MS + 120);
+    ok('D8 the tool stays Select after clicking out', p.tool === 'select', p.tool);
+
+    // ── E: rebindable + disable-able (keybinds.ts through the real listener) ─
+    p.setKeybind('tool.wall', 'w');
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'w' }));
+    await frames(1);
+    ok('E1 a rebound key picks its tool', p.tool === 'wall', p.tool);
+    p.setTool('select');
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: '2' }));
+    await frames(1);
+    ok('E2 the replaced default no longer fires', p.tool === 'select', p.tool);
+    p.setKeybind('tool.wall', null);      // disable
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'w' }));
+    await frames(1);
+    ok('E3 a disabled binding does nothing', p.tool === 'select', p.tool);
+    p.resetKeybinds();
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: '2' }));
+    await frames(1);
+    ok('E4 reset restores the shipped default', p.tool === 'wall', p.tool);
+    // The master switch still kills the whole rebindable class.
+    p.setTool('select');
+    p.setHotkeysEnabled(false);
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: '2' }));
+    await frames(1);
+    ok('E5 the master switch overrides every binding', p.tool === 'select', p.tool);
+    p.setHotkeysEnabled(true);
+
     nameInput.remove();
   } catch (err) {
     ok('unhandled error', false, (err && (err.stack || err.message)) || String(err));
