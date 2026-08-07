@@ -23,6 +23,16 @@ export const CHANGELOG_DISPLAY_COUNT = 10;
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: 'v0.63.0', name: 'home improvement', date: '2026-08-07',
+    notes: [
+      'Garage doors: 9 styles incl. windowed sectionals, locks, open-% readout, tracks & opener motor, opening height, door & window colors',
+      'Furniture reorganized into groups; 4 bed sizes; 6 new chairs; on-canvas rotate handle; the wall magnet is gone',
+      'mmWave: "Show real positions" raw markers + "Keep avatars in this room"; the rhythmic 2D flicker is fixed; the sky sun is parallax-free (the solar-panel aim mystery)',
+      'Typing can never change tools — plus rebindable, disable-able keyboard shortcuts',
+      'Vehicles: one toolbar tab + 11 common models; fleet-wide geometry cleanup; this Recent Releases list',
+    ],
+  },
+  {
     version: 'v0.62.0', name: 'personal space', date: '2026-08-07',
     notes: [
       'Avatars stop mobbing windows — standing activity spots are single-occupancy, like seats',

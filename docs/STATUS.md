@@ -1,6 +1,6 @@
 # Project status & pick-up guide
 
-Last updated: 2026-08-06, at **v0.62.0**. This is the single document to
+Last updated: 2026-08-07, at **v0.63.0**. This is the single document to
 read (alongside `CLAUDE.md`) to resume work with full context.
 
 ## Where things stand
@@ -400,13 +400,30 @@ instance.
   frame-rate-independent — 120 Hz displays no longer fade twice as
   fast as designed; plus the temporal flicker harness that
   exonerated the ground-depth fix 47× and now pins two-pose motion
-  stability in terrain §M).
+  stability in terrain §M)
+  → v0.63.0 home improvement (the furnishing + editing wave: NINE garage
+  door styles incl. windowed sectionals with locks, open-% readouts,
+  interior tracks/opener + exterior handle, per-door opening height, and
+  panel/slab/frame colors for every door and window; the Furniture
+  category split into six groups with four bed sizes, six new chairs, an
+  on-canvas rotate handle and the wall-suck magnet removed; the Vehicles
+  toolbar merge + 11 common civil models + a fleet-wide floating-part/
+  coplanar-face cleanup pinned repo-wide; mmWave "Show real positions"
+  raw markers + "Keep avatars in this room" confinement; the rhythmic 2D
+  flicker root-caused to spec-mandated canvas wipes on same-value size
+  assignments; the sky sun/moon made camera-relative — the solar-panel
+  "aim" saga's true culprit, the panel was right all along; sink tops
+  rebuilt as cohesive decks with real bowl holes; typing can never
+  change tools + rebindable/disable-able keyboard shortcuts; solar
+  per-axis tracking switches + sun-position display; the in-app Recent
+  Releases list in Settings fed by the new src/changelog.ts runbook
+  step).
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
 - **Radar room confinement + furniture rotate handle + typing protection
   v3 with rebindable hotkeys** (2026-08-07, three user requests, two
-  parallel agents; unreleased — on main past v0.62.0).
+  parallel agents; v0.63.0).
   (1) `Sensor.confineToRoom` ("Keep avatars in this room"): radar
   multipath reports past a wall no longer spawn the avatar in the next
   room — pure `clampPointToLoop` (inward-verified, never returns a point
@@ -432,7 +449,7 @@ instance.
 - **Fix wave + real-position markers: 2D flicker root-caused; doors rotate
   about center; exercise_equipment reconnected; sink tops rebuilt; mmWave
   raw-position display** (2026-08-07, four user reports + one feature;
-  unreleased — on main past v0.62.0). (1) FLICKER (user video,
+  v0.63.0). (1) FLICKER (user video,
   frame-diffed: one fully-blank canvas frame every 2.0 s): per the HTML
   spec ANY canvas.width/height assignment wipes the bitmap even
   unchanged; canvas-2d `_onConfig` → `_resize` assigned unconditionally
@@ -461,8 +478,7 @@ instance.
 - **Big furnishing wave: 3 windowed garage styles + garage hardware/height
   + door&window colors; furniture cat split (6 groups); 4 bed sizes;
   wall-magnet fix; 6 chair kinds** (2026-08-07, five user requests, three
-  parallel Opus agents on fenced regions; unreleased — on main past
-  v0.62.0). (1) GARAGE: `GarageStyle` grows to NINE
+  parallel Opus agents on fenced regions; v0.63.0). (1) GARAGE: `GarageStyle` grows to NINE
   (sectional_windows_top — the 4/5-up top-lite row — /left/right side-lite
   columns; chirality = observer OUTSIDE, local −X = their left,
   world-pinned); interior tracks + opener motor (local −Z) + exterior
@@ -496,8 +512,7 @@ instance.
 
 - **SOLAR AIM SAGA RESOLVED: the sky sun disc was the liar — now
   camera-relative (parallax-free)** (2026-08-07, root-caused from the
-  user's annotated top-down screenshot; unreleased — on main past
-  v0.62.0). The disc is a sprite at R = 26000 mm that was anchored at the
+  user's annotated top-down screenshot; v0.63.0). The disc is a sprite at R = 26000 mm that was anchored at the
   SCENE ORIGIN — on the user's 32×52 m property it hung *inside* the
   yard, so from their north-yard panel (24 m off-center) its apparent
   direction read ~195° when the true sun azimuth was 169° (their blue
@@ -516,8 +531,7 @@ instance.
   the annotated-screenshot request is what cracked it.
 
 - **Solar panel: per-axis tracking switches + sun-position display**
-  (2026-08-07, user-requested mid-investigation; unreleased — on main past
-  v0.62.0). `trackAzimuth`/`trackTilt` (absent = true) freeze either axis
+  (2026-08-07, user-requested mid-investigation; v0.63.0). `trackAzimuth`/`trackTilt` (absent = true) freeze either axis
   at `fixedAzimuthDeg` (compass, default 180) / `fixedTiltDeg` (35);
   `showSun` draws the RESOLVED sun as an amber ray + bead in 3D (a
   _solarGroup SIBLING of the head — a child would inherit the pose and
@@ -534,8 +548,7 @@ instance.
 - **Solar-panel aim investigation (user report "looking almost directly
   east at sun az 117.67/elev 49.33") — fixture VERIFIED CORRECT end-to-end
   with the user's real data; 2D arrow direction gains its missing test
-  pin** (2026-08-07; test-page + docs only, unreleased — on main past
-  v0.62.0). Measured every layer at the reported inputs: pure solarAim
+  pin** (2026-08-07; test-page + docs only, v0.63.0). Measured every layer at the reported inputs: pure solarAim
   (yaw 117.67 / tilt 40.67), the user's REAL fit θ from their 15 live
   landmarks (+0.416° — plan is north-up; plan az 117.25), no demo-sun
   leak (demoSunAltAz gates on source==='demo'; their weather is
@@ -554,7 +567,7 @@ instance.
   stale (pre-solar). No behavior change; dist unchanged, no redeploy.
 
 - **In-app changelog: "Recent releases" scroll list in Settings**
-  (2026-08-07, user-requested; unreleased — on main past v0.62.0). New
+  (2026-08-07, user-requested; v0.63.0). New
   `src/changelog.ts` (pure data, zero imports — flags.ts idiom):
   `ChangelogEntry[]` newest-first, seeded with v0.53.0–v0.62.0 condensed
   from the GitHub release bodies; `CHANGELOG_DISPLAY_COUNT` 10. The
@@ -567,7 +580,7 @@ instance.
 
 - **Vehicle-pack geometry cleanup: floating parts + coplanar faces, all 8
   packs, audit pinned repo-wide** (2026-08-06, user-requested follow-up;
-  unreleased — on main past v0.62.0). The AABB audit that hardened the 11
+  v0.63.0). The AABB audit that hardened the 11
   new civil models swept ALL 71 members: 135 floating parts + 38 genuine
   coplanar-face pairs fixed across 48 models (0/0/0 final). Systemic
   levers in prims.ts: `lamps()` LAMP_SINK 220 (plate grows inward, outer
@@ -591,7 +604,7 @@ instance.
 - **Garage door styles + garage lock + open-% readout; vehicle toolbar
   merge + 11 common civil models; vehicle "block" naming fix; room labels
   bottom-anchored** (2026-08-06, four user requests in one window;
-  unreleased — on main past v0.62.0). (1) `Door.garageStyle?` — six styles
+  v0.63.0). (1) `Door.garageStyle?` — six styles
   (sectional = the pre-feature 5-slat build BIT-identical when absent,
   golden-pinned; raised_panel / carriage / roll_up coil-drum (no ceiling
   fold) / glass_panel / tilt_up one-piece canopy), sidebar-only Style
