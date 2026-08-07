@@ -14,7 +14,7 @@ const AMBER = '#ffe9b0';
 const RED = '#c62828';
 
 const pack: VehiclePackDef = {
-  id: 'franchise-ground-fiction', version: 2, label: 'Fiction',
+  id: 'franchise-ground-fiction', version: 3, label: 'Fiction',
   path: ['Ground Vehicles', 'Fiction'], builtin: true, franchise: true,
   models: [
     // ── Chrome time-traveling sports car ─────────────────────────────────────
@@ -33,8 +33,8 @@ const pack: VehiclePackDef = {
         // 10 mm proud of the 890-wide hull), not the raised ±32° panels that
         // used to stand 214 mm over the car's own declared 1140 mm roofline and
         // 15 mm wider than its declared half-width.
-        box([180, 560, 1400], [-810, 700, 250], 'body'),        // gullwing door L (closed)
-        box([180, 560, 1400], [810, 700, 250], 'body'),         // gullwing door R (closed)
+        box([180, 560, 1370], [-810, 700, 235], 'body'),        // gullwing door L (closed)
+        box([180, 560, 1370], [810, 700, 235], 'body'),         // gullwing door R (closed)
         box([1300, 300, 420], [0, 800, 1620], 'accent'),        // rear vent stack
         box([1100, 120, 90], [0, 900, 1860], '#7fd8ff'),        // rear glow bar
         box([1600, 130, 90], [0, 340, -2120], 'accent'),        // front spoiler
@@ -106,8 +106,8 @@ const pack: VehiclePackDef = {
         box([1720, 260, 900], [0, 900, 2100], 'body', [9, 0, 0]),      // fastback tail slope
         cyl([300, 300, 60], [-960, 720, 100], '#efe6c8', [0, 0, 90]),  // painted door disc L
         cyl([300, 300, 60], [960, 720, 100], '#efe6c8', [0, 0, 90]),   // painted door disc R
-        box([1700, 140, 110], [0, 420, -2610], 'accent'),       // front bumper
-        box([1700, 140, 110], [0, 420, 2610], 'accent'),        // rear bumper
+        box([1700, 140, 230], [0, 420, -2550], 'accent'),       // front bumper (grown into the body)
+        box([1700, 140, 230], [0, 420, 2550], 'accent'),        // rear bumper (grown into the body)
         ...lamps(620, 830, -2600, AMBER, [250, 150, 50]),
         ...lamps(660, 850, 2620, RED, [230, 150, 50]),
         ...wheels4(1660, -1700, 1660, 340, 300),
@@ -191,7 +191,7 @@ const pack: VehiclePackDef = {
         box([1780, 720, 4400], [0, 1660, 0], 'body'),           // upper van body
         box([1860, 500, 3500], [0, 1580, 150], 'glass'),        // window band
         box([1880, 300, 2300], [0, 1120, 400], 'accent'),       // orange side panel
-        box([600, 240, 100], [0, 1520, -2300], 'accent'),       // nose flash
+        box([600, 240, 220], [0, 1520, -2240], 'accent'),       // nose flash (grown into the nose)
         box([1200, 300, 1800], [0, 2130, 300], 'accent'),       // roof travel case
         box([1240, 90, 1840], [0, 2300, 300], '#8d5a1c'),       // roof case lid
         box([1550, 140, 110], [0, 700, -2300], '#c9ced4'),      // front bumper

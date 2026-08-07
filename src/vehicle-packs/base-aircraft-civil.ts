@@ -13,7 +13,7 @@ import {
 const BANNER: ('ground' | 'banner' | 'adsb')[] = ['banner'];
 
 const pack: VehiclePackDef = {
-  id: 'base-aircraft-civil', version: 1, label: 'Civil',
+  id: 'base-aircraft-civil', version: 2, label: 'Civil',
   path: ['Aircraft', 'Civil'], builtin: true,
   models: [
     // ── Boeing 747 70.6 × 64.4 × 19.4 m ──────────────────────────────────────
@@ -27,9 +27,10 @@ const pack: VehiclePackDef = {
         tube(3000, 56000, [0, 0, 3000], 'body'),
         noseCone(2900, 7000, [0, -200, -34500], 'body'),
         box([4400, 2600, 14000], [0, 2500, -24000], 'body'),     // the UPPER-DECK hump
-        box([3600, 1200, 2400], [0, 3200, -30400], 'glass'),     // cockpit glazing
+        box([3600, 1200, 2400], [0, 3160, -30400], 'glass'),     // cockpit glazing (roof inside the hump's)
         ...mirrorX([box([26000, 500, 9000], [16000, -900, 3000], 'body', [0, -30, 0])]),
         ...mirrorX([tube(1500, 6000, [9000, -2600, -3000], 'accent')]),    // inboard engines
+        ...mirrorX([box([400, 2400, 2600], [17500, -2300, -1400], 'accent')]),  // outboard pylons
         ...mirrorX([tube(1500, 6000, [17500, -3400, -300], 'accent')]),    // outboard engines
         box([22000, 400, 6000], [0, 1800, 30000], 'body'),       // tailplane
         box([400, 9500, 11000], [0, 7000, 30500], 'accent'),     // tall swept fin
@@ -48,11 +49,12 @@ const pack: VehiclePackDef = {
         noseCone(1100, 3400, [0, 150, -7400], 'body'),
         box([1600, 700, 1800], [0, 900, -5000], 'glass'),        // flight-deck glazing
         box([29000, 220, 3000], [0, -500, -600], 'body'),        // wing
-        ...mirrorX([tube(720, 3000, [4300, -350, -2200], 'accent')]),      // radial nacelles
+        ...mirrorX([tube(720, 3220, [4300, -350, -2310], 'accent')]),      // radial nacelles (reach the props)
         ...mirrorX([...propBlades([4300, -350, -3900], 3400, 1)]),
         box([8000, 160, 1900], [0, 300, 7000], 'body'),          // tailplane
         box([200, 2600, 3000], [0, 1600, 7300], 'accent'),       // rounded fin
         cyl([200, 200, 500], [0, -1100, 7000], 'dark'),          // tailwheel
+        ...mirrorX([box([160, 1000, 700], [2300, -1000, -2200], 'dark')]),  // main gear legs
         ...mirrorX([cyl([420, 420, 300], [2300, -1500, -2400], 'dark', [0, 0, 90])]),
       ],
     },
@@ -67,9 +69,9 @@ const pack: VehiclePackDef = {
       prims: [
         tube(1500, 38000, [0, 0, 6000], 'body'),
         noseCone(1400, 12000, [0, -300, -18000], 'body'),        // long forebody
-        noseCone(320, 6000, [0, -1400, -27000], 'body'),       // DROOPED needle
+        noseCone(320, 6200, [0, -1400, -26900], 'body'),       // DROOPED needle (grown into the forebody)
         box([25600, 380, 34000], [0, -600, 10000], 'body'),      // ogival delta
-        ...mirrorX([box([3600, 1900, 12000], [4600, -1900, 15000], 'accent')]),  // engine boxes
+        ...mirrorX([box([3600, 2300, 12000], [4600, -1700, 15000], 'accent')]),  // engine boxes (grown up to the delta)
         box([500, 6000, 8000], [0, 4200, 26000], 'accent'),      // fin
       ],
     },
@@ -90,8 +92,10 @@ const pack: VehiclePackDef = {
         box([11000, 110, 1600], [0, 1000, -600], 'body'),        // HIGH wing
         ...mirrorX([cyl([50, 50, 1300], [1900, 400, -400], 'body', [0, 0, 30])]),  // lift struts
         box([3400, 90, 900], [0, 200, 3100], 'body'),
-        box([80, 900, 1000], [0, 700, 3300], 'accent'),          // swept fin
+        box([80, 960, 1000], [0, 670, 3300], 'accent'),          // swept fin (root into the tailplane)
+        box([2680, 400, 220], [0, -600, -1400], 'dark'),          // spring-steel main gear bow
         ...mirrorX([cyl([260, 260, 180], [1250, -900, -1400], 'dark', [0, 0, 90])]),
+        box([140, 700, 200], [0, -700, -2700], 'dark'),           // nose gear leg
         cyl([220, 220, 160], [0, -900, -2700], 'dark', [0, 0, 90]),       // nose wheel
       ],
     },
@@ -105,13 +109,15 @@ const pack: VehiclePackDef = {
       prims: [
         box([760, 880, 4200], [0, 0, 300], 'body'),
         box([800, 120, 3400], [0, 120, 320], 'accent'),          // lightning stripe
-        noseCone(360, 900, [0, 120, -2600], 'accent'),           // cowl
+        noseCone(360, 1410, [0, 120, -2455], 'accent'),          // cowl (fuselage → prop)
         ...propBlades([0, 120, -3160], 1750, 2),
         box([10740, 92, 1500], [0, 830, -400], 'body'),          // high wing
         ...mirrorX([cyl([44, 44, 1150], [1700, 320, -380], 'accent', [0, 0, 26])]),
         box([2800, 78, 1000], [0, 180, 2500], 'body'),
         box([64, 760, 800], [0, 560, 2700], 'body'),
+        box([1900, 300, 200], [0, -500, -1200], 'dark'),          // split-axle gear cross member
         ...mirrorX([cyl([250, 250, 150], [880, -800, -1200], 'dark', [0, 0, 90])]),
+        box([90, 1000, 160], [0, -250, 2600], 'dark'),            // tailwheel leg
         cyl([120, 120, 110], [0, -700, 2600], 'dark', [0, 0, 90]),        // tailwheel
       ],
     },
@@ -131,7 +137,7 @@ const pack: VehiclePackDef = {
         box([14630, 130, 1900], [0, 1300, -500], 'body'),        // high wing
         ...mirrorX([cyl([54, 54, 1500], [2300, 620, -400], 'body', [0, 0, 32])]),
         box([3800, 100, 1100], [0, 500, 3300], 'body'),
-        box([90, 1150, 1200], [0, 1150, 3500], 'accent'),
+        box([90, 1210, 1200], [0, 1120, 3500], 'accent'),        // fin root into the tailplane
         ...mirrorX([box([560, 420, 7000], [900, -1000, -300], 'accent')]),   // FLOATS
         ...mirrorX([cyl([56, 56, 900], [900, -350, -1400], 'dark')]),        // float struts
       ],
@@ -150,8 +156,8 @@ const pack: VehiclePackDef = {
         { shape: 'cylinder', size: [1150, 1500, 27000], pos: [0, 0, -600],
           rot: [90, 0, 0], color: 'body' },
         box([37600, 300, 4200], [0, -400, -1200], 'body'),       // wing
-        ...mirrorX([tube(880, 4200, [4800, -260, -3600], 'accent')]),
-        ...mirrorX([tube(820, 4000, [10200, -400, -3700], 'accent')]),
+        ...mirrorX([tube(880, 4420, [4800, -260, -3710], 'accent')]),      // reach the props
+        ...mirrorX([tube(820, 4180, [10200, -400, -3790], 'accent')]),
         ...mirrorX([...propBlades([4800, -260, -5900], 4700, 1)]),
         ...mirrorX([...propBlades([10200, -400, -5850], 4700, 1)]),
         box([12000, 220, 2600], [0, 700, 12800], 'body'),        // tailplane

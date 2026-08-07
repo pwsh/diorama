@@ -16,7 +16,7 @@ import {
 const BANNER: ('ground' | 'banner' | 'adsb')[] = ['banner'];
 
 const pack: VehiclePackDef = {
-  id: 'base-aircraft-military-modern', version: 1, label: 'Cold War & Modern',
+  id: 'base-aircraft-military-modern', version: 2, label: 'Cold War & Modern',
   path: ['Aircraft', 'Military', 'Cold War & Modern'], builtin: true,
   models: [
     // ── Grumman F-14 Tomcat 19.1 × 19.55/11.65 (swept) × 4.88 m ──────────────
@@ -51,9 +51,10 @@ const pack: VehiclePackDef = {
         tube(420, 6000, [0, 500, 3200], 'body'),                 // tail boom
         box([90, 1500, 1100], [0, 1200, 5900], 'accent'),        // fin
         box([2600, 90, 700], [0, 700, 5100], 'accent'),          // synchronized elevator
-        cyl([160, 160, 700], [0, 1500, -1400], 'dark'),          // rotor mast
+        cyl([160, 160, 1060], [0, 1400, -1400], 'dark'),         // rotor mast (cabin roof → hub)
         ...rotorBlades([0, 1900, -1400], 14600, 2),              // 2-blade main rotor
         ...tailRotorBlades([320, 1250, 6100], 2600, 2),          // tail rotor
+        ...mirrorX([box([90, 400, 160], [900, -1090, -2200], 'dark')]),    // skid struts
         ...mirrorX([box([120, 110, 3400], [900, -1300, -1700], 'dark')]),  // skids
       ],
     },
@@ -65,7 +66,7 @@ const pack: VehiclePackDef = {
       category: 'aircraft', era: 'Cold War', lenMm: 19430, dims: [13050, 19430, 5630],
       body: '#9aa1a9', accent: '#6c747d', surfaces: BANNER,
       prims: [
-        box([1900, 900, 12000], [0, 0, 1400], 'body'),
+        box([1900, 900, 12500], [0, 0, 1150], 'body'),           // nose reaches into the radome
         noseCone(470, 4200, [0, 120, -7100], 'body'),
         sph(400, [0, 620, -4200], 'glass'),
         box([13050, 150, 4200], [0, -60, 2000], 'accent'),       // big cropped-delta wing
@@ -83,12 +84,12 @@ const pack: VehiclePackDef = {
       category: 'aircraft', era: 'Cold War–modern', lenMm: 29300, dims: [40400, 29300, 11400],
       body: '#7d8471', accent: '#565c4d', surfaces: BANNER,
       prims: [
-        tube(1600, 19000, [0, 0, -1200], 'body'),
+        tube(1600, 19200, [0, 0, -1300], 'body'),                // nose reaches into the radome
         noseCone(1500, 3200, [0, 0, -12300], 'body'),
         tailCone(1500, 6000, [0, 1200, 11200], 'body'),          // UPSWEPT rear ramp
         box([40400, 240, 3400], [0, 1500, -2400], 'body'),       // HIGH wing
-        ...mirrorX([tube(560, 4200, [5200, 1300, -3600], 'accent')]),      // inboard nacelles
-        ...mirrorX([tube(520, 3900, [10400, 1250, -3700], 'accent')]),     // outboard nacelles
+        ...mirrorX([tube(560, 4420, [5200, 1300, -3710], 'accent')]),      // inboard nacelles (reach the props)
+        ...mirrorX([tube(520, 4120, [10400, 1250, -3810], 'accent')]),     // outboard nacelles (reach the props)
         ...mirrorX([...propBlades([5200, 1300, -5800], 4100, 1)]),
         ...mirrorX([...propBlades([10400, 1250, -5750], 4100, 1)]),
         box([16000, 200, 3000], [0, 1900, 12400], 'body'),       // tailplane
@@ -103,7 +104,7 @@ const pack: VehiclePackDef = {
       category: 'aircraft', era: 'Cold War', lenMm: 19200, dims: [31400, 19200, 4880],
       body: '#1e2126', accent: '#33383f', surfaces: BANNER,
       prims: [
-        tube(560, 13000, [0, 0, 1400], 'body'),
+        tube(560, 13600, [0, 0, 1100], 'body'),                  // nose reaches into the radome
         noseCone(540, 4000, [0, 0, -7500], 'body'),
         sph(340, [0, 460, -4600], 'glass'),
         box([31400, 130, 1900], [0, 220, -600], 'body'),         // glider wing
@@ -125,7 +126,7 @@ const pack: VehiclePackDef = {
         tube(420, 6400, [0, 400, 3400], 'body'),                 // tail boom
         box([110, 1900, 1400], [0, 1300, 6400], 'accent', [0, 0, -20]),    // canted fin
         box([3000, 90, 900], [0, 500, 5600], 'accent'),          // stabilator
-        cyl([180, 180, 600], [0, 1200, -2800], 'dark'),
+        cyl([180, 180, 860], [0, 1160, -2800], 'dark'),          // rotor mast (cabin roof → hub)
         ...rotorBlades([0, 1550, -2800], 16400, 4),              // 4-blade rotor
         ...tailRotorBlades([300, 1500, 6700], 3300, 2),
       ],
@@ -155,8 +156,8 @@ const pack: VehiclePackDef = {
       category: 'aircraft', era: 'Modern', lenMm: 17500, dims: [25800, 17500, 6730],
       body: '#4d5259', accent: '#33373d', surfaces: BANNER,
       prims: [
-        box([2700, 2300, 11000], [0, 0, 800], 'body'),
-        box([2300, 1100, 1600], [0, 500, -6000], 'glass'),
+        box([2700, 2700, 11000], [0, 200, 800], 'body'),         // roof reaches the high wing
+        box([2300, 1100, 2200], [0, 500, -5700], 'glass'),       // glazing grown aft into the body
         box([14000, 220, 2600], [0, 1600, -900], 'body'),        // HIGH wing
         ...mirrorX([tube(700, 3400, [6800, 1750, -1000], 'accent')]),      // tilt nacelles
         ...mirrorX([...propBlades([6800, 1750, -2900], 11600, 2)]),        // proprotors
@@ -172,7 +173,7 @@ const pack: VehiclePackDef = {
       category: 'aircraft', era: 'Cold War–modern', lenMm: 17300, dims: [11400, 17300, 4730],
       body: '#79808a', accent: '#4d545d', surfaces: BANNER,
       prims: [
-        box([1700, 850, 10500], [0, 0, 1000], 'body'),
+        box([1700, 850, 11700], [0, 0, 400], 'body'),            // nose reaches into the radome
         noseCone(430, 3600, [0, 90, -7100], 'body'),
         sph(360, [0, 570, -4200], 'glass'),
         box([11400, 130, 3200], [0, -60, 2300], 'accent'),       // wing

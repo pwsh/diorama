@@ -73,11 +73,25 @@ export function wheels6(
 /**
  * Headlight / tail-light pair — small flat plates proud of the nose or tail
  * face so they never sit coplanar with the body (the coincident-face gotcha).
+ *
+ * `size` describes the VISIBLE plate. The built prim is then grown INWARD along
+ * the vehicle axis by `LAMP_SINK`, keeping the outer face exactly where the
+ * caller put it: a lamp authored a few tens of mm ahead of the bumper used to
+ * hang in mid-air (a real floating-headlight artifact on nine shipped models),
+ * and the fix must not move the one face anybody sees. Everything the sink adds
+ * is buried inside opaque bodywork, so silhouettes are untouched. `z === 0` has
+ * no inward direction and is left alone.
  */
+export const LAMP_SINK = 220;
+
 export function lamps(
   x: number, y: number, z: number, color: C, size: [number, number, number] = [220, 130, 40],
 ): VehiclePrimitive[] {
-  return [box(size, [-x, y, z], color), box(size, [x, y, z], color)];
+  const outward = Math.sign(z);                      // the face the viewer sees
+  const d = size[2] + (outward ? LAMP_SINK : 0);
+  const zc = z - outward * LAMP_SINK / 2;            // grow back toward the centre
+  const s: [number, number, number] = [size[0], size[1], d];
+  return [box(s, [-x, y, zc], color), box(s, [x, y, zc], color)];
 }
 
 // ── Aircraft / spacecraft helpers (V2) ──────────────────────────────────────
@@ -120,6 +134,9 @@ export function engineBell(
   return { shape: 'cone', size: [r, len, 0], pos, rot: [180, 0, 0], color, emissive: true };
 }
 
+/** Per-blade thickness stagger that keeps crossing blades off one plane. */
+export const BLADE_STAGGER = 4;
+
 /**
  * Propeller blades: `n` boxes crossing in the XY plane at ONE position, tagged
  * `spin:'prop'` so the sky builder collects them into a group spun about the
@@ -132,7 +149,12 @@ export function propBlades(
 ): VehiclePrimitive[] {
   const out: VehiclePrimitive[] = [];
   for (let k = 0; k < n; k++) {
-    out.push({ shape: 'box', size: [chord, span, th], pos,
+    // Blades cross AT the hub, so a shared thickness puts two identical faces on
+    // one plane (and at n = 2 the pair is the SAME solid drawn twice). Staggering
+    // the thickness by BLADE_STAGGER per blade buries each inside the next — the
+    // coincident-face idiom, invisible at any viewing distance. The `pos` must
+    // stay identical: the renderer keys its spin group on `spin|pos`.
+    out.push({ shape: 'box', size: [chord, span, th + k * BLADE_STAGGER], pos,
                rot: [0, 0, (k * 180) / n], color, spin: 'prop' });
   }
   return out;
@@ -145,8 +167,8 @@ export function rotorBlades(
 ): VehiclePrimitive[] {
   const out: VehiclePrimitive[] = [];
   for (let k = 0; k < n; k++) {
-    out.push({ shape: 'box', size: [span, th, chord], pos,
-               rot: [0, (k * 180) / n, 0], color, spin: 'rotor' });
+    out.push({ shape: 'box', size: [span, th + k * BLADE_STAGGER, chord], pos,
+               rot: [0, (k * 180) / n, 0], color, spin: 'rotor' });   // see propBlades
   }
   return out;
 }
@@ -157,8 +179,8 @@ export function tailRotorBlades(
 ): VehiclePrimitive[] {
   const out: VehiclePrimitive[] = [];
   for (let k = 0; k < n; k++) {
-    out.push({ shape: 'box', size: [16, span, 60], pos,
-               rot: [(k * 180) / n, 0, 0], color, spin: 'tail' });
+    out.push({ shape: 'box', size: [16 + k * BLADE_STAGGER, span, 60], pos,
+               rot: [(k * 180) / n, 0, 0], color, spin: 'tail' });    // see propBlades
   }
   return out;
 }

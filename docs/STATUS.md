@@ -399,6 +399,29 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Vehicle-pack geometry cleanup: floating parts + coplanar faces, all 8
+  packs, audit pinned repo-wide** (2026-08-06, user-requested follow-up;
+  unreleased — on main past v0.62.0). The AABB audit that hardened the 11
+  new civil models swept ALL 71 members: 135 floating parts + 38 genuine
+  coplanar-face pairs fixed across 48 models (0/0/0 final). Systemic
+  levers in prims.ts: `lamps()` LAMP_SINK 220 (plate grows inward, outer
+  face unmoved — fixed 61 lamps with zero call-site churn) and blade
+  helpers' BLADE_STAGGER 4 (n=2 crossing blades used to be the same solid
+  drawn twice; pos untouched — the renderer keys spin on spin|pos). Fix
+  idiom throughout: grow a part inward, never move the visible face; a
+  handful gained genuinely missing structure (Huey skids, Model T front
+  axle, DC-3/172/Cub gear legs — sky-craft prim budget 14→16, reason at
+  the assertion). Coplanar rule deliberately scoped to axis-preserving
+  sibling BOXES (a tilted prim's AABB extremum isn't a face; curved prims
+  meet their AABB on a line — ~160 false positives excluded, documented
+  at the predicate). vehicle-pack-test §2n/§2o now pin the invariant for
+  EVERY member of EVERY pack (§9h/§9i removed as redundant;
+  negative-controlled via a LAMP_SINK-neutralized throwaway bundle). All
+  8 pack versions bumped (thumb cache). VEHICLEPACK 1326→1446;
+  VEHICLEBUILD 535, VEHICLECRAFT 483, TOOLBAR 70 unchanged. NB the
+  vehicle-pack-test harness ALSO needs vmanifest.mod.js + the 8
+  vp-<id>.mod.js bundles or it ERRs (recipe line 14 — bit me once).
+
 - **Garage door styles + garage lock + open-% readout; vehicle toolbar
   merge + 11 common civil models; vehicle "block" naming fix; room labels
   bottom-anchored** (2026-08-06, four user requests in one window;

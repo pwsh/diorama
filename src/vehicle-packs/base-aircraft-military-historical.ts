@@ -17,7 +17,7 @@ import {
 const BANNER: ('ground' | 'banner' | 'adsb')[] = ['banner'];
 
 const pack: VehiclePackDef = {
-  id: 'base-aircraft-military-historical', version: 1, label: 'Historical (WWI–WWII)',
+  id: 'base-aircraft-military-historical', version: 2, label: 'Historical (WWI–WWII)',
   path: ['Aircraft', 'Military', 'Historical (WWI–WWII)'], builtin: true,
   models: [
     // ── Supermarine Spitfire 9.12 × 11.23 × 3.86 m ───────────────────────────
@@ -35,7 +35,7 @@ const pack: VehiclePackDef = {
         ...propBlades([0, 0, -4180], 3200, 3),                   // 3-blade prop
         sph(340, [0, 380, -900], 'glass'),                       // canopy
         box([5000, 116, 2000], [0, -110, -100], 'body'),         // elliptical root panel
-        ...mirrorX([box([3100, 82, 1240], [4050, -110, -160], 'body')]),  // outboard taper
+        ...mirrorX([box([3140, 82, 1240], [4030, -110, -160], 'body')]),  // outboard taper (root buried in the panel)
         box([3800, 84, 900], [0, 60, 3500], 'body'),             // tailplane
         box([70, 1080, 1200], [0, 620, 3620], 'accent'),         // fin
       ],
@@ -75,6 +75,7 @@ const pack: VehiclePackDef = {
         box([9920, 100, 1700], [0, -130, -60], 'body'),          // squared-tip wing
         box([3400, 80, 820], [0, 60, 3500], 'body'),
         box([64, 940, 1100], [0, 540, 3620], 'accent'),
+        box([90, 480, 160], [0, -180, 3800], 'dark'),            // tailwheel leg
         cyl([110, 110, 220], [0, -420, 3800], 'dark'),           // tailwheel
       ],
     },
@@ -88,7 +89,7 @@ const pack: VehiclePackDef = {
       prims: [
         tube(400, 5200, [0, 0, 500], 'body'),
         tube(560, 900, [0, 0, -2500], 'dark'),                   // radial engine cowl
-        noseCone(180, 460, [0, 0, -3200], 'body'),
+        noseCone(180, 560, [0, 0, -3150], 'body'),               // spinner (grown aft into the cowl)
         ...propBlades([0, 0, -3450], 3100, 3),
         box([560, 340, 2200], [0, 360, -600], 'glass'),          // long low canopy
         box([12000, 104, 1900], [0, -140, -80], 'body'),
@@ -116,7 +117,7 @@ const pack: VehiclePackDef = {
         // Inner gull panels droop outboard (right panel: rotation.z < 0 lowers +X).
         ...mirrorX([box([2600, 118, 2200], [1600, -300, -120], 'body', [0, 0, -18])]),
         // Outer panels rise again — the gull's second bend.
-        ...mirrorX([box([3400, 92, 1700], [4600, -700, -160], 'body', [0, 0, 12])]),
+        ...mirrorX([box([3560, 92, 1700], [4520, -700, -160], 'body', [0, 0, 12])]),
         box([4000, 84, 900], [0, 80, 3700], 'body'),
         box([70, 1100, 1240], [0, 640, 3820], 'body'),
       ],
@@ -133,8 +134,8 @@ const pack: VehiclePackDef = {
         sph(720, [0, 0, -7400], 'glass'),                        // glazed nose
         sph(420, [0, -640, -5600], 'dark'),                      // chin turret
         box([31600, 200, 4200], [0, 260, -600], 'body'),         // big straight wing
-        ...mirrorX([tube(400, 2800, [5200, 100, -1400], 'accent')]),    // inboard nacelles
-        ...mirrorX([tube(360, 2500, [10400, 40, -1500], 'accent')]),    // outboard nacelles
+        ...mirrorX([tube(400, 3000, [5200, 100, -1500], 'accent')]),    // inboard nacelles (reach the props)
+        ...mirrorX([tube(360, 2720, [10400, 40, -1610], 'accent')]),    // outboard nacelles (reach the props)
         ...mirrorX([...propBlades([5200, 100, -2900], 3400, 1)]),
         ...mirrorX([...propBlades([10400, 40, -2860], 3200, 1)]),
         box([11400, 150, 2400], [0, 320, 8200], 'body'),         // tailplane
@@ -149,11 +150,11 @@ const pack: VehiclePackDef = {
       category: 'aircraft', era: 'WWII', lenMm: 21200, dims: [31100, 21200, 6100],
       body: '#3a4048', accent: '#6d7681', surfaces: BANNER,
       prims: [
-        tube(800, 15000, [0, 0, 1000], 'body'),
+        tube(800, 15200, [0, 0, 900], 'body'),                   // nose 200 mm into the bomb-aimer glass
         sph(600, [0, 220, -7100], 'glass'),                      // bomb-aimer nose
         box([31100, 200, 4000], [0, 300, -500], 'body'),
-        ...mirrorX([tube(400, 2700, [4900, 140, -1300], 'accent')]),
-        ...mirrorX([tube(380, 2500, [9900, 80, -1400], 'accent')]),
+        ...mirrorX([tube(400, 2920, [4900, 140, -1410], 'accent')]),   // nacelles reach the props
+        ...mirrorX([tube(380, 2720, [9900, 80, -1510], 'accent')]),
         ...mirrorX([...propBlades([4900, 140, -2760], 3600, 1)]),
         ...mirrorX([...propBlades([9900, 80, -2760], 3400, 1)]),
         box([10400, 150, 2200], [0, 340, 7800], 'body'),         // tailplane
@@ -186,7 +187,7 @@ const pack: VehiclePackDef = {
       body: '#b9a172', accent: '#5c4a2e', surfaces: BANNER,
       prims: [
         box([560, 640, 4000], [0, 0, 300], 'body'),              // slab-sided fuselage
-        tube(380, 700, [0, 60, -2100], 'dark'),                  // rotary cowl
+        tube(380, 940, [0, 60, -2090], 'dark'),                  // rotary cowl (fuselage → prop)
         ...propBlades([0, 60, -2560], 2500, 2),
         box([8530, 78, 1300], [0, -300, -200], 'body'),          // LOWER wing
         box([8530, 94, 1300], [0, 860, -260], 'body'),           // UPPER wing
@@ -204,14 +205,14 @@ const pack: VehiclePackDef = {
       body: '#a3231d', accent: '#f0e4c8', surfaces: BANNER,
       prims: [
         box([540, 620, 3900], [0, 0, 300], 'body'),
-        tube(360, 660, [0, 60, -2050], 'dark'),                  // rotary cowl
+        tube(360, 930, [0, 60, -2015], 'dark'),                  // rotary cowl (fuselage → prop)
         ...propBlades([0, 60, -2480], 2400, 2),
         box([7190, 92, 1000], [0, 1080, -300], 'body'),          // TOP wing
         box([6300, 78, 980], [0, 320, -240], 'body'),            // MIDDLE wing
         box([5700, 64, 940], [0, -400, -180], 'body'),           // BOTTOM wing
         ...mirrorX([cyl([40, 40, 1560], [1300, 340, -260], 'accent')]),    // cabane struts
         box([2400, 70, 900], [0, 180, 2050], 'body'),
-        box([52, 640, 700], [0, 440, 2150], 'accent'),
+        box([52, 640, 680], [0, 440, 2140], 'accent'),           // trailing edge 20 mm inside the tailplane's
       ],
     },
   ],

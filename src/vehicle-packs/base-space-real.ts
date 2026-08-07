@@ -33,7 +33,7 @@ const WHITE = '#eef1f4';
 const SOOT = '#1b1e22';
 
 const pack: VehiclePackDef = {
-  id: 'base-space-real', version: 2, label: 'Real',
+  id: 'base-space-real', version: 3, label: 'Real',
   path: ['Space', 'Real'], builtin: true,
   models: [
     // ── Saturn V 110.6 m tall × 10.1 m dia ───────────────────────────────────
@@ -46,13 +46,13 @@ const pack: VehiclePackDef = {
       prims: [
         cyl([5050, 5050, 42000], [0, -34000, 0], 'body'),        // S-IC first stage
         box([10300, 5000, 1400], [0, -46000, 0], 'accent'),      // black roll pattern
-        cyl([5050, 5050, 5000], [0, -10500, 0], 'accent'),       // S-IC/S-II interstage
-        cyl([5050, 5050, 19000], [0, 1500, 0], 'body'),          // S-II second stage
-        cyl([3300, 5050, 3600], [0, 12800, 0], 'accent'),        // tapered interstage
-        cyl([3300, 3300, 17800], [0, 23500, 0], 'body'),         // S-IVB third stage
-        cyl([1950, 1950, 11000], [0, 37900, 0], 'accent'),       // CSM stack
-        cyl([420, 420, 10000], [0, 48400, 0], 'body'),           // escape tower
-        cyl([80, 420, 2400], [0, 54600, 0], 'accent'),           // tower motor cap
+        cyl([5050, 5050, 5060], [0, -10530, 0], 'accent'),       // S-IC/S-II interstage
+        cyl([5050, 5050, 19060], [0, 1470, 0], 'body'),          // S-II second stage
+        cyl([3300, 5050, 3660], [0, 12770, 0], 'accent'),        // tapered interstage
+        cyl([3300, 3300, 17860], [0, 23470, 0], 'body'),         // S-IVB third stage
+        cyl([1950, 1950, 11060], [0, 37870, 0], 'accent'),       // CSM stack
+        cyl([420, 420, 10060], [0, 48370, 0], 'body'),           // escape tower
+        cyl([80, 420, 2460], [0, 54570, 0], 'accent'),           // tower motor cap
         // Five F-1s: one centre plus four on the axes. The ±Z pair is written
         // out — mirrorX only mirrors ACROSS x, so an on-centreline prim would
         // just be duplicated in place.
@@ -74,7 +74,7 @@ const pack: VehiclePackDef = {
         box([4200, 1700, 4200], [0, -1900, 0], 'body'),          // gold descent stage
         box([3400, 2100, 3000], [0, 800, -200], 'accent'),       // ascent cabin
         box([1500, 700, 700], [0, 1200, -1800], 'glass'),        // forward window bay
-        cyl([520, 520, 900], [0, 2300, -200], 'accent'),         // docking tunnel
+        cyl([520, 520, 960], [0, 2270, -200], 'accent'),         // docking tunnel (into the cabin roof)
         // Four legs on the axes, splayed outward: about +Z the top leans −X
         // (bottom out), about +X the top leans +Z (bottom out).
         ...mirrorX([cyl([120, 120, 3200], [2400, -3000, 0], 'accent', [0, 0, 20])]),
@@ -92,10 +92,10 @@ const pack: VehiclePackDef = {
       vertical: true, body: WHITE, accent: SOOT, surfaces: BANNER,
       prims: [
         cyl([1850, 1850, 42000], [0, -13500, 0], 'body'),        // first stage
-        cyl([1900, 1900, 3200], [0, 9100, 0], 'accent'),         // black interstage
-        cyl([1850, 1850, 13000], [0, 17200, 0], 'body'),         // second stage
-        cyl([1850, 1850, 3000], [0, 25200, 0], 'body'),          // fairing base
-        cyl([120, 1850, 8000], [0, 30700, 0], 'body'),           // fairing nose taper
+        cyl([1900, 1900, 3260], [0, 9070, 0], 'accent'),         // black interstage
+        cyl([1850, 1850, 13060], [0, 17170, 0], 'body'),         // second stage
+        cyl([1850, 1850, 3060], [0, 25170, 0], 'body'),          // fairing base
+        cyl([120, 1850, 8060], [0, 30670, 0], 'body'),           // fairing nose taper
         ...mirrorX([box([1400, 140, 1100], [2200, 6500, 0], 'accent')]),      // gridfins ±X
         box([1100, 140, 1400], [0, 6500, 2200], 'accent'),                    // gridfins ±Z
         box([1100, 140, 1400], [0, 6500, -2200], 'accent'),
@@ -124,11 +124,11 @@ const pack: VehiclePackDef = {
         // fender's underside buries 40 mm into the tyre crown).
         ...mirrorX([
           box([460, 90, 460], [330, 560, -60], 'accent'),        // seat pan
-          box([460, 520, 90], [330, 820, 200], 'accent'),        // seat back
+          box([440, 520, 90], [330, 820, 200], 'accent'),        // seat back (10 mm inside the pan's sides)
           box([300, 80, 900], [780, 800, -1150], 'body'),        // fender, front
           box([300, 80, 900], [780, 800, 1150], 'body'),         // fender, rear
         ]),
-        box([180, 240, 140], [0, 700, -560], 'accent'),          // control console
+        box([180, 400, 140], [0, 620, -560], 'accent'),          // control console (stem down to the floor pan)
         cyl([40, 40, 560], [0, 810, -1180], 'body'),             // high-gain antenna mast
         cone([400, 180], [0, 1120, -1180], '#e8ecef', [180, 0, 0]),  // umbrella dish (mouth up)
         cyl([36, 36, 460], [-420, 750, -1150], 'body'),          // TV camera mast

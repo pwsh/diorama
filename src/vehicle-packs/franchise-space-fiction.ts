@@ -20,7 +20,7 @@ const BANNER: ('ground' | 'banner' | 'adsb')[] = ['banner'];
 const lit = (p: VehiclePrimitive): VehiclePrimitive => ({ ...p, emissive: true });
 
 const pack: VehiclePackDef = {
-  id: 'franchise-space-fiction', version: 1, label: 'Fiction',
+  id: 'franchise-space-fiction', version: 2, label: 'Fiction',
   path: ['Space', 'Fiction'], builtin: true, franchise: true,
   models: [
     // ── Classic flying saucer (generic — no single IP owns the shape) ────────
@@ -71,7 +71,7 @@ const pack: VehiclePackDef = {
       body: '#7d838a', accent: '#4f555c', surfaces: BANNER,
       prims: [
         box([4400, 2400, 17000], [0, 0, 1500], 'body'),          // slab hull
-        box([2800, 1700, 5200], [0, -300, -11200], 'accent', [8, 0, 0]),     // angled prow
+        box([2800, 1700, 8400], [0, -300, -9616], 'accent', [8, 0, 0]),      // angled prow (grown into the hull)
         ...mirrorX([box([2000, 1100, 11000], [4600, -400, 2200], 'accent')]),// flight pods
         ...mirrorX([box([2900, 400, 900], [2600, -300, 2200], 'body')]),     // pod stalks
         ...mirrorX([tube(760, 1500, [1500, 200, 10600], '#ff8a3d')]).map(lit),
@@ -87,11 +87,11 @@ const pack: VehiclePackDef = {
       category: 'space', lenMm: 16000, dims: [7000, 16000, 5200],
       body: '#b8bec6', accent: '#5d646c', surfaces: BANNER,
       prims: [
-        box([2600, 2200, 6000], [0, 0, 800], 'body'),            // cargo pod
+        box([3000, 2200, 6000], [0, 0, 800], 'body'),            // cargo pod (reaches the truss rails)
         ...mirrorX([box([300, 300, 11000], [1600, 0, 500], 'accent')]),      // truss spine rails
         box([1800, 1500, 2600], [0, 200, -6200], 'body'),        // command pod
         box([1300, 600, 300], [0, 350, -7600], 'glass'),         // command glazing
-        box([2800, 2000, 3000], [0, 0, 6400], 'accent'),         // engine block
+        box([3040, 2000, 3000], [0, 0, 6400], 'accent'),         // engine block (reaches the truss rails)
         noseCone(420, 900, [0, 0, -7900], 'accent'),             // docking probe
         ...mirrorX([tube(600, 4600, [2000, 300, 600], 'accent')]),           // side tanks
         ...mirrorX([cyl([90, 90, 2000], [1700, -1900, 3200], 'accent', [0, 0, 16])]),

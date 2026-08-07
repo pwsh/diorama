@@ -60,6 +60,45 @@
   eq('1j: pack paths unique', new Set(VEHICLE_PACK_MANIFEST.map(r => r.path.join('/'))).size,
      VEHICLE_PACK_MANIFEST.length);
 
+  // ── Prim geometry helpers (shared by §2's repo-wide invariants and §8/§9's
+  // per-model pins). An exact rotated AABB — the recipe builder applies `rot`
+  // as a THREE 'XYZ' Euler and nothing else.
+  const D2R = Math.PI / 180;
+  const halfOf = (pr) => {
+    const [a, b, c] = [pr.size[0], pr.size[1], pr.size[2] ?? 0];
+    switch (pr.shape) {
+      case 'box': return [a / 2, b / 2, c / 2];
+      case 'cylinder': return [Math.max(a, b), c / 2, Math.max(a, b)];
+      case 'sphere': return [a, a, a];
+      case 'cone': return [a, b / 2, a];
+      default: return [a / 2, b / 2, c / 2];
+    }
+  };
+  const rotM = (rot) => {
+    const [rx, ry, rz] = (rot ?? [0, 0, 0]).map(d => d * D2R);
+    const cx = Math.cos(rx), sx = Math.sin(rx), cy = Math.cos(ry), sy = Math.sin(ry),
+          cz = Math.cos(rz), sz = Math.sin(rz);
+    const mul = (A, B) => A.map((_, i) => [0, 1, 2].map(j =>
+      [0, 1, 2].reduce((s, k) => s + A[i][k] * B[k][j], 0)));
+    return mul(mul([[1, 0, 0], [0, cx, -sx], [0, sx, cx]],
+                   [[cy, 0, sy], [0, 1, 0], [-sy, 0, cy]]),
+               [[cz, -sz, 0], [sz, cz, 0], [0, 0, 1]]);
+  };
+  // Axis-aligned bounds of one primitive, in model-local mm.
+  const bb = (pr) => {
+    const h = halfOf(pr), R = rotM(pr.rot);
+    const e = [0, 1, 2].map(i =>
+      Math.abs(R[i][0]) * h[0] + Math.abs(R[i][1]) * h[1] + Math.abs(R[i][2]) * h[2]);
+    return { min: pr.pos.map((p, i) => p - e[i]), max: pr.pos.map((p, i) => p + e[i]) };
+  };
+  // The documented flat-toon gotcha is about two sibling BOXES sharing an
+  // exactly coplanar VISIBLE FACE. A tilted prim's AABB extremum is not a face
+  // at all, and a cylinder/sphere/cone meets its AABB on a tangent LINE, not a
+  // plane — so the coplanar test below is scoped to boxes whose rotations are
+  // axis-preserving (every component a multiple of 90°).
+  const faceted = (pr) => pr.shape === 'box'
+    && (pr.rot ?? [0, 0, 0]).every(d => Math.abs(d % 90) < 1e-6);
+
   // ═══ 2. Model data sanity (every member of every pack) ═══════════════════
   const seenIds = new Set();
   let modelCount = 0;
@@ -91,11 +130,14 @@
       ok(`2f: ${tag} dims all positive finite`,
          m.dims.length === 3 && m.dims.every(v => Number.isFinite(v) && v > 0), JSON.stringify(m.dims));
       ok(`2g: ${tag} lenMm positive`, Number.isFinite(m.lenMm) && m.lenMm > 0, String(m.lenMm));
-      // Sky craft are budgeted 5..14 prims (they are message props read at
+      // Sky craft are budgeted 5..16 prims (they are message props read at
       // distance); ground vehicles are placed furniture and may carry more.
+      // The ceiling moved 14 → 16 on 2026-08-06: the three FIXED-GEAR types
+      // (DC-3, Cessna 172, J-3 Cub) are the only sky craft whose undercarriage
+      // is visible structure, and their wheels used to hang on nothing at all.
       ok(`2h: ${tag} has >= 5 primitives`, m.prims.length >= 5, String(m.prims.length));
-      if (sky) ok(`2h2: ${tag} sky craft within the 14-prim budget`,
-                  m.prims.length <= 14, String(m.prims.length));
+      if (sky) ok(`2h2: ${tag} sky craft within the 16-prim budget`,
+                  m.prims.length <= 16, String(m.prims.length));
       const badPrim = m.prims.find(p =>
         !['box', 'cylinder', 'sphere', 'cone'].includes(p.shape)
         || !Array.isArray(p.size) || !p.size.every(Number.isFinite)
@@ -125,6 +167,40 @@
         || Math.abs(p.pos[2]) > (m.vertical ? Math.max(D, H) : D)
         || (sky && Math.abs(p.pos[1]) > Math.max(H, W)));
       ok(`2k: ${tag} parts inside the footprint envelope`, out.length === 0, String(out.length));
+
+      // ── The two REPO-WIDE assembly invariants (2026-08-06) ────────────────
+      // 2n  no FLOATING part: every prim's AABB must overlap some sibling's.
+      //     AABB overlap is a superset of real overlap, so a non-overlap is a
+      //     genuinely detached piece (headlamps hanging ahead of a bumper,
+      //     rotor masts reaching neither cabin nor hub, rocket stages butted
+      //     with exactly zero overlap — 135 of these shipped).
+      // 2o  no COINCIDENT FACE between two sibling boxes: the flat-toon
+      //     hatching gotcha. Fix by GROWING one part inward, never by moving
+      //     the face anybody sees.
+      {
+        const bs = m.prims.map(bb);
+        const ovl = (a, b) => [0, 1, 2].every(i =>
+          Math.min(a.max[i], b.max[i]) - Math.max(a.min[i], b.min[i]) > 1);
+        const orphans = [], coplanar = [];
+        for (let i = 0; i < bs.length; i++) {
+          let touches = false;
+          for (let j = 0; j < bs.length; j++) {
+            if (i === j) continue;
+            if (!ovl(bs[i], bs[j])) continue;
+            touches = true;
+            if (j > i && faceted(m.prims[i]) && faceted(m.prims[j])) {
+              for (let k = 0; k < 3; k++) {
+                if (Math.abs(bs[i].max[k] - bs[j].max[k]) < 0.5) coplanar.push(`${i}/${j}${'xyz'[k]}+`);
+                if (Math.abs(bs[i].min[k] - bs[j].min[k]) < 0.5) coplanar.push(`${i}/${j}${'xyz'[k]}-`);
+              }
+            }
+          }
+          if (!touches) orphans.push(i);
+        }
+        ok(`2n: ${tag} no floating parts`, orphans.length === 0, `[${orphans.join(',')}]`);
+        ok(`2o: ${tag} no coincident sibling faces`, coplanar.length === 0,
+           coplanar.slice(0, 6).join(' '));
+      }
     }
   }
   const bySurface = (s) => PACKS.reduce(
@@ -323,34 +399,6 @@
   // exact rotated AABB — the recipe builder applies rot as a THREE 'XYZ' Euler
   // and nothing else), never eyeballed.
   {
-    const D2R = Math.PI / 180;
-    const halfOf = (pr) => {
-      const [a, b, c] = [pr.size[0], pr.size[1], pr.size[2] ?? 0];
-      switch (pr.shape) {
-        case 'box': return [a / 2, b / 2, c / 2];
-        case 'cylinder': return [Math.max(a, b), c / 2, Math.max(a, b)];
-        case 'sphere': return [a, a, a];
-        case 'cone': return [a, b / 2, a];
-        default: return [a / 2, b / 2, c / 2];
-      }
-    };
-    const rotM = (rot) => {
-      const [rx, ry, rz] = (rot ?? [0, 0, 0]).map(d => d * D2R);
-      const cx = Math.cos(rx), sx = Math.sin(rx), cy = Math.cos(ry), sy = Math.sin(ry),
-            cz = Math.cos(rz), sz = Math.sin(rz);
-      const mul = (A, B) => A.map((_, i) => [0, 1, 2].map(j =>
-        [0, 1, 2].reduce((s, k) => s + A[i][k] * B[k][j], 0)));
-      return mul(mul([[1, 0, 0], [0, cx, -sx], [0, sx, cx]],
-                     [[cy, 0, sy], [0, 1, 0], [-sy, 0, cy]]),
-                 [[cz, -sz, 0], [sz, cz, 0], [0, 0, 1]]);
-    };
-    // Axis-aligned bounds of one primitive, in model-local mm.
-    const bb = (pr) => {
-      const h = halfOf(pr), R = rotM(pr.rot);
-      const e = [0, 1, 2].map(i =>
-        Math.abs(R[i][0]) * h[0] + Math.abs(R[i][1]) * h[1] + Math.abs(R[i][2]) * h[2]);
-      return { min: pr.pos.map((p, i) => p - e[i]), max: pr.pos.map((p, i) => p + e[i]) };
-    };
     const mdl = (id) => {
       for (const p of PACKS) { const m = p.models.find(x => x.id === id); if (m) return m; }
       return null;
@@ -546,7 +594,7 @@
     const WAVE2 = ['sedan', 'hatchback', 'minivan', 'delivery_van', 'box_truck',
       'garbage_truck', 'tow_truck', 'rv_camper', 'tractor', 'golf_cart', 'bicycle'];
     eq('9z: the civil pack carries 20 members', civil.models.length, 20);
-    eq('9z2: pack version bumped (thumb-cache key)', civil.version, 4);
+    eq('9z2: pack version bumped (thumb-cache key)', civil.version, 5);
     for (const name of WAVE2) {
       const id = `base-ground-civil/${name}`;
       const m = mdl(id);
@@ -562,27 +610,9 @@
       }
       eq(`9f ${name}: lenMm == declared depth`, m.lenMm, m.dims[1]);
       eq(`9g ${name}: era tagged`, m.era, 'contemporary');
-      // Every part must TOUCH another (no floating trim) and no two parts may
-      // share an axis-aligned face plane (the flat-toon hatching gotcha).
-      const bs = m.prims.map(bb);
-      const ov = (a, b) => [0, 1, 2].every(i =>
-        Math.min(a.max[i], b.max[i]) - Math.max(a.min[i], b.min[i]) > 1);
-      let orphans = 0, coplanar = 0;
-      for (let i = 0; i < bs.length; i++) {
-        let touches = false;
-        for (let j = 0; j < bs.length; j++) {
-          if (i === j) continue;
-          if (!ov(bs[i], bs[j])) continue;
-          touches = true;
-          if (j > i) for (let k = 0; k < 3; k++) {
-            if (Math.abs(bs[i].max[k] - bs[j].max[k]) < 0.5
-                || Math.abs(bs[i].min[k] - bs[j].min[k]) < 0.5) coplanar++;
-          }
-        }
-        if (!touches) orphans++;
-      }
-      eq(`9h ${name}: no floating parts`, orphans, 0);
-      eq(`9i ${name}: no coplanar sibling faces`, coplanar, 0);
+      // (The floating-part / coincident-face invariants these rows used to pin
+      // for the second wave alone are now §2n / §2o, applied to EVERY member of
+      // EVERY pack — see the note there.)
     }
 
     // Per-model signature cues.

@@ -2019,14 +2019,11 @@ lookup + canvas-render's projection branch) are widened alongside, plus the
 vehicles are PLAIN furniture (no `userData.kind` — decor, not a device).
 **Packs** (`src/vehicle-packs/` — manifest.ts eager index, bodies LAZY
 dynamic-import-only chunks + a lazy-only `prims.ts` helper module; the
-avatar-packs chunk discipline): `base-ground-civil` (**20** since 2026-08-06 (v4,
+avatar-packs chunk discipline): `base-ground-civil` (**20** since 2026-08-06 (v5,
 user-requested "common models" — sedan/hatchback/minivan/delivery_van/box_truck/
 garbage_truck/tow_truck/rv_camper/tractor/golf_cart/bicycle joined the original 9:
 pickup/suv/school_bus/transit_bus/semi_truck/fire_engine/ambulance/police_cruiser/
-motorcycle; the new 11 are AABB-audited — every part interpenetrates a neighbour,
-no two share a face plane, both invariants test-pinned in vehicle-pack §9h/§9i;
-NB the ORIGINAL 9 fail that audit mildly (floating lamps, one coplanar pair) and
-are shipped-pinned as-is — a cheap follow-up)) +
+motorcycle)) +
 `base-ground-military` (7: model_t/beetle/microbus/jeep_willys/humvee/
 sherman/abrams) default loaded+active; `franchise-ground-fiction` (8 — incl. the black-and-white ex-police sedan 2026-08-05,
 **default UNLOADED** — labels are DESCRIPTIVE-GENERIC per the IP posture,
@@ -2049,9 +2046,26 @@ LIST row, the Label-input placeholder and ruler end captions all resolve through
 `kind:'block'` only as its unloaded-pack fallback), and the row's type chip shows
 **Vehicle** for `vehicleModelId` pieces; 2D captions + Alt+click identify were
 already correct. Tests:
-`vehicle-pack-test.html` (`VEHICLEPACK PASS 1326/1326` — NB its `veh.mod.js` is
+`vehicle-pack-test.html` (`VEHICLEPACK PASS 1446/1446` — NB its `veh.mod.js` is
 ONE bundle carrying vehicles.ts + geometry.ts so the registry instance is
-shared) + `vehicle-build-test.html` (`VEHICLEBUILD PASS 535/535` — builds
+shared, and the page ALSO needs `vmanifest.mod.js` + the 8 per-pack
+`vp-<id>.mod.js` bundles or it ERRs). **Repo-wide geometry audit (2026-08-06
+cleanup, user-requested — §2n/§2o)**: EVERY member of EVERY pack must (a) have
+every part's AABB overlap ≥1 sibling (no floating parts — AABB overlap is a
+superset of real overlap, so non-overlap is always a real detachment) and (b)
+share no face plane between two sibling BOXES with axis-preserving rotations
+(the coincident-face gotcha; tilted boxes + curved prims are excluded — their
+AABB extremum isn't a face, ~160 false positives otherwise; reasoning at the
+predicate). The 2026-08-06 sweep fixed 135 floating parts + 38 coplanar pairs
+across 48/71 models; the systemic levers live in `prims.ts` — `lamps()`
+`LAMP_SINK` 220 (plate grows INWARD, outer face where the caller put it) and
+`propBlades`/`rotorBlades`/`tailRotorBlades` `BLADE_STAGGER` 4 (per-blade
+thickness stagger — crossing blades share a hub, and at n=2 the pair used to
+be the same solid twice; `pos` deliberately unchanged, the renderer keys spin
+groups on `spin|pos`). Fix idiom: GROW a part inward, never move the visible
+face; all 8 pack versions bumped (thumb-cache invalidation). Sky-craft prim
+budget in the test is 16 (fixed-gear DC-3/172/Cub gained genuine gear legs).
++ `vehicle-build-test.html` (`VEHICLEBUILD PASS 535/535` — builds
 every GROUND member; sky craft (surface-gated since 2026-08-05 — the space rovers place as ground furniture) are gated by vehicle-craft-test instead — centred-vertically aircraft would sink through
 the floor as furniture).
 **Batch V2 — aircraft/space packs + the banner-tow surface (2026-08-04)**:

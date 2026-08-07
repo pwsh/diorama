@@ -12,7 +12,7 @@ const AMBER = '#ffe9b0';
 const RED = '#c62828';
 
 const pack: VehiclePackDef = {
-  id: 'base-ground-military', version: 2, label: 'Military & Historical',
+  id: 'base-ground-military', version: 3, label: 'Military & Historical',
   path: ['Ground Vehicles', 'Military & Historical'], builtin: true,
   models: [
     // ── Ford Model T (1908–1927) 3.4 × 1.7 × 2.1 m ───────────────────────────
@@ -28,6 +28,7 @@ const pack: VehiclePackDef = {
         box([820, 640, 140], [0, 1120, -1560], 'accent'),       // brass radiator shell
         box([1340, 780, 1500], [0, 1160, 620], 'body'),         // passenger tub
         box([1200, 560, 70], [0, 1620, -180], 'glass'),         // upright windshield
+        box([1500, 160, 200], [0, 440, -1060], 'dark'),         // beam front axle (carries the front wheels)
         cyl([42, 42, 800], [-620, 1560, -150], 'body'),         // top post FL
         cyl([42, 42, 800], [620, 1560, -150], 'body'),          // top post FR
         cyl([42, 42, 800], [-620, 1560, 1240], 'body'),         // top post RL
@@ -72,8 +73,8 @@ const pack: VehiclePackDef = {
         box([1720, 520, 3300], [0, 1500, 150], 'glass'),        // window band
         box([1300, 400, 70], [0, 1300, -2140], 'accent'),       // proud "V" panel
         box([260, 460, 90], [0, 1420, -2170], 'body'),          // V centre spine
-        box([1500, 130, 100], [0, 700, -2160], 'accent'),       // front bumper
-        box([1500, 130, 100], [0, 700, 2160], 'accent'),        // rear bumper
+        box([1500, 130, 220], [0, 700, -2100], 'accent'),       // front bumper (grown into the body)
+        box([1500, 130, 220], [0, 700, 2100], 'accent'),        // rear bumper (grown into the body)
         sph(160, [-580, 1120, -2160], AMBER),                   // headlamp L
         sph(160, [580, 1120, -2160], AMBER),                    // headlamp R
         ...lamps(640, 1250, 2180, RED, [180, 200, 50]),
@@ -142,7 +143,7 @@ const pack: VehiclePackDef = {
         // footprint is unchanged. The scale-true 440 mm belt looked like a rail.
         ...trackUnit(-1000, 5200, 400, 620),                    // track L
         ...trackUnit(1000, 5200, 400, 620),                     // track R
-        box([1960, 760, 5000], [0, 940, 100], 'body'),          // lower hull
+        box([1960, 760, 4960], [0, 940, 80], 'body'),           // lower hull (tail 40 mm inside the track line)
         box([1900, 520, 3200], [0, 1560, 300], 'body'),         // upper hull
         cyl([720, 800, 720], [0, 2020, 350], 'body'),           // cast turret
         sph(300, [0, 2340, 620], 'body'),                       // commander cupola

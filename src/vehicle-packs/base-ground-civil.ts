@@ -16,7 +16,7 @@ const RED = '#c62828';
 const BLUE_LIGHT = '#3d7bd6';
 
 const pack: VehiclePackDef = {
-  id: 'base-ground-civil', version: 4, label: 'Civil',
+  id: 'base-ground-civil', version: 5, label: 'Civil',
   path: ['Ground Vehicles', 'Civil'], builtin: true,
   models: [
     // ── Full-size pickup (F-150 class) 5.89 × 2.03 × 1.98 m ──────────────────
@@ -35,7 +35,7 @@ const pack: VehiclePackDef = {
         box([1880, 440, 1560], [0, 1500, -780], 'glass'),       // cab glass band
         box([170, 470, 3000], [-830, 1130, 1250], 'body'),      // bed wall L
         box([170, 470, 3000], [830, 1130, 1250], 'body'),       // bed wall R
-        box([1700, 450, 150], [0, 1130, 2700], 'accent'),       // tailgate
+        box([1710, 450, 150], [0, 1130, 2700], 'accent'),       // tailgate (5 mm past the lamp plates)
         ...lamps(690, 880, -2860, AMBER, [280, 150, 60]),
         ...lamps(740, 1080, 2860, RED, [220, 180, 50]),
         ...wheels4(1760, -1900, 1760, 400, 300),
@@ -57,7 +57,7 @@ const pack: VehiclePackDef = {
         box([120, 90, 2400], [-720, 1750, 250], 'accent'),      // roof rail L
         box([120, 90, 2400], [720, 1750, 250], 'accent'),       // roof rail R
         ...lamps(650, 900, -2340, AMBER, [280, 150, 60]),
-        ...lamps(700, 1060, 2340, RED, [200, 200, 50]),
+        ...lamps(700, 1025, 2340, RED, [200, 270, 50]),        // grown down onto the body panel
         ...wheels4(1680, -1560, 1500, 350, 260),
       ],
     },
@@ -82,7 +82,7 @@ const pack: VehiclePackDef = {
         // windshield where it belongs, on the front of the passenger box.
         box([1280, 520, 130], [0, 1120, -5280], 'accent'),      // nose grille (below hood top)
         box([2280, 700, 120], [0, 2200, -3390], 'glass'),       // windshield
-        box([70, 500, 700], [-1260, 1500, -3300], RED),         // stop-arm (driver side)
+        box([130, 500, 700], [-1230, 1500, -3300], RED),        // stop-arm (driver side, grown inboard)
         ...lamps(880, 900, -5290, AMBER, [300, 200, 70]),
         ...lamps(940, 1400, 5330, RED, [240, 260, 60]),
         ...wheels6(2000, -3900, 3400, 4400, 500, 320),
@@ -99,8 +99,8 @@ const pack: VehiclePackDef = {
         box([2540, 2500, 12000], [0, 1650, 0], 'body'),         // one-box body
         box([2580, 900, 11400], [0, 2300, 0], 'glass'),         // glazing band
         box([2600, 260, 11800], [0, 950, 0], 'accent'),         // skirt stripe
-        box([2560, 160, 11700], [0, 3020, 0], 'accent'),        // roof cap
-        box([1500, 320, 90], [0, 2760, -6060], '#141618'),      // destination sign
+        box([2560, 260, 11700], [0, 2970, 0], 'accent'),        // roof cap (grown down onto the body)
+        box([1500, 320, 120], [0, 2760, -6075], '#141618'),     // destination sign (proud of the glass)
         box([2400, 1300, 110], [0, 2200, -6050], 'glass'),      // windshield
         ...lamps(950, 800, -6070, AMBER, [320, 190, 70]),
         ...lamps(1000, 1200, 6080, RED, [260, 260, 60]),
@@ -148,7 +148,7 @@ const pack: VehiclePackDef = {
         box([2360, 1300, 2600], [0, 2150, -3100], 'body'),      // crew cab
         box([2420, 620, 2300], [0, 2500, -3200], 'glass'),      // cab glazing
         box([2460, 200, 5600], [0, 1600, 1600], 'accent'),      // compartment stripe
-        box([2200, 140, 5000], [0, 2120, 1700], '#3d4249'),     // hose bed deck
+        box([2200, 240, 5000], [0, 2070, 1700], '#3d4249'),     // hose bed deck (grown down into the module)
         box([300, 220, 7200], [-980, 2360, 700], 'accent'),     // roof ladder rail L
         box([300, 220, 7200], [980, 2360, 700], 'accent'),      // roof ladder rail R
         // Light bar SEATED on the crew-cab roof (top 2800; underside 2770 = 30 mm
@@ -174,7 +174,7 @@ const pack: VehiclePackDef = {
         box([2180, 620, 1900], [0, 2000, -2400], 'glass'),      // cab glazing
         box([2360, 1700, 4200], [0, 2000, 1250], 'body'),       // patient module
         box([2380, 220, 4000], [0, 1650, 1250], 'accent'),      // side stripe
-        box([1000, 700, 90], [0, 2100, 3400], 'accent'),        // rear door cross
+        box([1000, 700, 190], [0, 2100, 3350], 'accent'),       // rear door cross (grown into the module)
         // The bar SITS ON the cab roof (roof top 2350; the bar's underside 2320
         // buries 30 mm into it) instead of floating 455 mm above it. The blue
         // centre section is deliberately 20 mm taller and 10 mm longer than the
@@ -199,7 +199,7 @@ const pack: VehiclePackDef = {
         box([1800, 260, 1200], [0, 900, 1780], 'body'),         // boot lid
         box([1620, 540, 2200], [0, 1130, 120], 'body'),         // cabin
         box([1700, 340, 2020], [0, 1180, 120], 'glass'),        // glass band
-        box([1860, 620, 1500], [0, 800, 380], 'accent'),        // white door panels
+        box([1860, 620, 1480], [0, 800, 370], 'accent'),        // white door panels (20 mm inside the glass line)
         // Bar is seated (underside 1385 vs cabin roof 1400); the red centre is
         // 15 mm prouder than the blue in y AND z so their faces never sit a
         // hair apart (the 2.5 mm near-coplanar shimmer).
@@ -220,13 +220,13 @@ const pack: VehiclePackDef = {
       body: '#7b1e1e', accent: '#c8ccd1', surfaces: ['ground'],
       prims: [
         box([260, 300, 900], [0, 720, -180], 'body'),           // fuel tank
-        box([300, 260, 420], [0, 500, 120], '#2b2f34'),         // engine block
+        box([300, 260, 700], [0, 500, 260], '#2b2f34'),         // engine block + gearbox (reaches the rear wheel)
         box([340, 120, 520], [0, 780, 420], 'body'),            // seat + rear fender
         cyl([44, 44, 700], [0, 950, -740], 'accent', [0, 0, 90]),   // handlebar
         cyl([40, 40, 620], [0, 700, -680], 'accent', [12, 0, 0]),   // fork
         cyl([55, 55, 620], [180, 430, 260], 'accent', [90, 0, 0]),  // exhaust (runs fore-aft)
         sph(110, [0, 990, -840], AMBER),                        // headlamp
-        box([160, 120, 40], [0, 830, 700], RED),                // tail light
+        box([160, 120, 140], [0, 830, 650], RED),               // tail light (grown into the fender)
         wheel(0, -880, 340, 130),                               // front wheel
         wheel(0, 800, 340, 160),                                // rear wheel
       ],
