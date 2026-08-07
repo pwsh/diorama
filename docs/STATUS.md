@@ -1,6 +1,6 @@
 # Project status & pick-up guide
 
-Last updated: 2026-08-06, at **v0.61.0**. This is the single document to
+Last updated: 2026-08-06, at **v0.62.0**. This is the single document to
 read (alongside `CLAUDE.md`) to resume work with full context.
 
 ## Where things stand
@@ -388,11 +388,19 @@ instance.
   both viewports, byte-identical everywhere but the panel entry;
   README + guide gain the 2026.8 upgrade note incl. the
   handle_safe_area YAML trap).
+  → v0.62.0 personal space (avatars stop mobbing windows — activity
+  anchors become single-occupancy like seats, roamer wander is
+  genuinely per-rig with real yard excursions, unreachable goals
+  re-pick instead of walking into walls; the wall-cutaway fade is
+  frame-rate-independent — 120 Hz displays no longer fade twice as
+  fast as designed; plus the temporal flicker harness that
+  exonerated the ground-depth fix 47× and now pins two-pose motion
+  stability in terrain §M).
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
 - **Wall-cutaway ease made frame-rate-independent + demo republish**
-  (2026-08-06; unreleased — on main past v0.61.0). (1) The cutaway
+  (2026-08-06; v0.62.0). (1) The cutaway
   fade's fixed 0.1/frame factor → exact closed form
   `1 − exp(−dt/τ)`, τ derived FROM the old constant
   (`-(1/60)/ln 0.9` ≈ 0.158 s — 60 fps behavior bit-identical, all
@@ -418,8 +426,7 @@ instance.
 
 - **Moving-camera "flashing" investigation (temporal flicker
   harness; depth fix EXONERATED)** (2026-08-06, user-reported "the
-  hashing appears worse now when moving the camera"; unreleased —
-  on main past v0.61.0; test-page-only change). Built an orbit
+  hashing appears worse now when moving the camera"; v0.62.0; test-page-only change). Built an orbit
   frame-pair flicker metric (0.02° pose pairs ≈ 0.25 px
   reprojection; per-frame easings frozen after the metric's
   zero-delta control exposed 2.35% contamination from wall-cutaway/
@@ -441,7 +448,7 @@ instance.
 
 - **Avatar window-crowding fix (anchor claims + real free-range)**
   (2026-08-06, user-reported "avatars gather near windows like they
-  are trying to escape"; unreleased — on main past v0.61.0).
+  are trying to escape"; v0.62.0).
   Reproduced on the USER'S REAL plan (8 roamers, simulated minutes,
   instrumented goal logging): 59.3 % of rig-frames within 1.5 m of
   ONE window, 7/8 rigs simultaneously. Root cause NOT the
