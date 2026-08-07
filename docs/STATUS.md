@@ -404,6 +404,28 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Solar-panel aim investigation (user report "looking almost directly
+  east at sun az 117.67/elev 49.33") — fixture VERIFIED CORRECT end-to-end
+  with the user's real data; 2D arrow direction gains its missing test
+  pin** (2026-08-07; test-page + docs only, unreleased — on main past
+  v0.62.0). Measured every layer at the reported inputs: pure solarAim
+  (yaw 117.67 / tilt 40.67), the user's REAL fit θ from their 15 live
+  landmarks (+0.416° — plan is north-up; plan az 117.25), no demo-sun
+  leak (demoSunAltAz gates on source==='demo'; their weather is
+  openmeteo, no demo object), no base rotation on the placed panel, 3D
+  world normal BIT-EXACT (az 117.67 / elev 49.33 via quaternion probe),
+  3D profile silhouette correct (40.67° from horizontal), 2D arrow
+  pixel-measured at 117.5°. Conclusion: a dual-axis tracker at 10:30 am
+  correctly faces ESE (117.67° is only 27.7° south of due east — "almost
+  directly east" IS the right look; it sweeps to due south by solar noon
+  and SW after). The "should point south" expectation is fixed-panel
+  intuition. Investigation exposed the ONE unpinned surface — the 2D
+  arrow's presence was tested but not its DIRECTION — now pixel-pinned at
+  the incident's exact numbers (SOLAR 144→145). NB their HA .storage
+  snapshot re-pulled fresh for this (config `312 Rolling Hills Dr`,
+  15 landmarks, panel sol_yl29tjy) — the earlier /tmp/regsrv copy was
+  stale (pre-solar). No behavior change; dist unchanged, no redeploy.
+
 - **In-app changelog: "Recent releases" scroll list in Settings**
   (2026-08-07, user-requested; unreleased — on main past v0.62.0). New
   `src/changelog.ts` (pure data, zero imports — flags.ts idiom):

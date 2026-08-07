@@ -544,6 +544,29 @@
     assert('a parked panel draws NO sun arrow', parkArrow === 0, `n=${parkArrow}`);
     assert('the parked face is dimmed (different fill than tracking)', night && night.n === 0,
       night && `n=${night.n}`);
+    // ARROW DIRECTION pin (2026-08-07 — a user aim report exposed that only the
+    // arrow's PRESENCE was pinned; direction was the one unverified surface in
+    // the 2D/3D aim parity story). Sun az 117.67 (the incident's numbers, θ=0):
+    // the amber arrow's pixel centroid must sit 117.67° screen-CW from up
+    // (screen-up = plan +Y = north; canvas y is down, hence atan2(dx, −dy)).
+    {
+      p.hass.states['sun.sun'] = stOf('sun.sun', 'above_horizon', { azimuth: 117.67, elevation: 49.33 });
+      const cv = document.createElement('canvas'); cv.width = 640; cv.height = 480;
+      const ctx = cv.getContext('2d');
+      cr.drawAll(ctx, p, view, null);
+      const img = ctx.getImageData(0, 0, 640, 480);
+      const cx = view.ox + 2000 * view.scale, cy = view.oy - 3000 * view.scale;
+      let sx = 0, sy = 0, an = 0;
+      for (let y = 0; y < 480; y++) for (let x = 0; x < 640; x++) {
+        const i = (y * 640 + x) * 4;
+        if (img.data[i] > 200 && img.data[i + 1] > 160 && img.data[i + 1] < 230 && img.data[i + 2] < 130) {
+          sx += x; sy += y; an++;
+        }
+      }
+      const azScreen = an ? ((Math.atan2(sx / an - cx, -(sy / an - cy)) * 180 / Math.PI) + 360) % 360 : NaN;
+      assert('2D sun arrow POINTS at the plan azimuth (az 117.67 → 117.67° screen-CW from up)',
+        an > 4 && Math.abs(azScreen - 117.67) < 6, `azScreen=${azScreen.toFixed(1)} n=${an}`);
+    }
   }
   // Hidden panels + the sensors layer gate the painter.
   {

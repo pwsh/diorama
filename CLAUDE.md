@@ -1424,7 +1424,7 @@ label, base rotation, power bind, live aimed-az/tilt readout + a clock-
 fallback note (or a "demo sun" note — the DEMO weather source's authored
 sun overrides the panel aim in 2D, 3D and the readout; see "Demo source"
 under Weather core), lock, delete. Test `solar-test.html`
-(`SOLAR PASS 144/144`, §9 = the demo-sun override pins).
+(`SOLAR PASS 145/145`, §9 = the demo-sun override pins; the 2D arrow DIRECTION is pixel-pinned (2026-08-07 — a user aim report found presence-only coverage; az 117.67 → arrow centroid 117.67° screen-CW from up)).
 NB the identify callout paints over everything — 2D pixel-measuring tests
 must clear `identifyFx` first (this bit the solar test).
 
