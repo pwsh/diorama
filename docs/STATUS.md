@@ -421,6 +421,30 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Mower indoor-dock garage exception + doorway routing** (2026-08-08,
+  user-reported "the mower is showing parked past the wall instead of
+  inside the dock"; unreleased — on main past v0.63.0). The 2026-08-05
+  outdoor-containment design declared every building interior forbidden,
+  so a dock in the user's Four Seasons sunroom parked the mower at the
+  nearest OUTDOOR point — past the wall. Now the dock's own loop is
+  mower-legal (gated on reachability: a door on the loop boundary within
+  `dockDoorReachMm` 200; doorless room = byte-identical old fallback +
+  the reworded amber warning), wall-crossing untouched so entry is only
+  through the doorway. Second half found by an orchestrator probe the
+  agent's caveat prompted: the greedy deflection steerer DEADLOCKS when
+  the straight line to the dock crosses the boundary far from the door
+  (corner-door/far-corner-dock never converged at ANY width 800–1200;
+  width was never the issue — an aligned 800 mm door threads fine).
+  `_mowerDoorWaypoint` routes any leg whose endpoints straddle the dock
+  room through a point 700 mm past the door span centre (door nearest the
+  DOCK — mower-relative oscillates; side-flip is the phase transition, no
+  state; no `stop` on waypoint legs), wired into docked/returning, GPS
+  both directions, and the mowing/ellipse exit. Adversarial fixture now
+  docks at step 457 (was: never), pinned. Warning + router share one door
+  predicate (`_mowerDockDoors`). Known v1 limit: boundary-proximity
+  reachability false-passes an interior door to another forbidden room.
+  ROBOT 204→226.
+
 - **Radar room confinement + furniture rotate handle + typing protection
   v3 with rebindable hotkeys** (2026-08-07, three user requests, two
   parallel agents; v0.63.0).

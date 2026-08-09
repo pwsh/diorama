@@ -7,7 +7,7 @@ import { loadStore, saveStore, newId, repairFloor, defaultStore,
 import { slugToName, normMac, localToWorld, segCrossesSolidWall, mowerSweepWaypoints,
          MOWER_KINEMATICS, MOWER_ROW_MM, MOWER_CONTAINMENT, stepBicycle,
          mowerWaypointReached, wrapAngle, buildingWallLoops, pointInAnyLoop,
-         nearestPointOutsideLoops,
+         nearestPointOutsideLoops, pointInPolygon, doorSpanCenter,
          ROBOT_DEFAULTS, robotLedColor, dockParkedHeading, parseVacuumPosition, vacuumRawToWorld,
          vacuumRawHeadingRad, isStairsKind, logicLightState, actionButtonKind,
          furnitureKind, normalizeLockState, valveIsOpen, cameraColor, slugifyFrigateName,
@@ -62,7 +62,7 @@ import type {
   HassState, ConnStatus, DiscoveredDevice, Vec2, AvatarKind, WeatherConfig, CameraFixture,
   ConfigIndex, ConfigMeta, ThermostatFixture, SafetySensor, AlertBeacon, Furniture, MqttBridgeConfig,
   AlertsConfig, GroundArea, Pool, CompassConfig, Ruler, RulerEnd, DimensionMode, NeighborhoodConfig,
-  FlightsConfig,
+  FlightsConfig, Door,
 } from './types.js';
 import { normalizeAircraftList, flightBearingDistance, MAX_AIRCRAFT,
          isEmergency, emergencySquawk, sanitizeLabelFields,
@@ -7803,15 +7803,123 @@ export class Planner extends EventTarget {
     bs.heading = wrapAngle(ph + Math.max(-wMax * h, Math.min(wMax * h, K.steerGain * e * h)));
   }
 
-  // Is this mower's DOCK placed inside the house (user error — a mower docks in
-  // the yard or a shed)? The controller drives to the nearest outdoor point and
-  // parks there instead of entering; the sidebar surfaces the mismatch so the
-  // dock can be moved. Cheap: cached loops + one point-in-polygon.
+  // Is this mower's DOCK UNREACHABLE — inside a room with no way in?
+  //
+  // Since the 2026-08-08 "garage exception" a dock INSIDE a building loop is no
+  // longer user error: real mowers dock in garages, sheds and sunrooms, and
+  // _stepMower makes the dock's own loop(s) mower-legal so it drives in through
+  // the doorway (the wall-crossing check is separate and unchanged, so it can
+  // only enter through a real opening). This predicate is the single place that
+  // decides "the exception does not apply": a containing loop with NO door on
+  // its boundary. It drives BOTH the sidebar warning and _stepMower's fallback
+  // to the shipped park-outside behaviour, so the warning can never disagree
+  // with what the controller does.
+  //
+  // Reachability heuristic: a door counts as a loop's entry when its SPAN CENTRE
+  // (never the raw x/y — that is the HINGE) lies within
+  // MOWER_CONTAINMENT.dockDoorReachMm of the loop's boundary. Gates are Doors,
+  // so a fenced enclosure's gate counts too. KNOWN LIMITATION (accepted v1): an
+  // interior door connecting the dock room only to ANOTHER forbidden room
+  // false-passes this test — the mower still cannot reach the dock, but no
+  // warning shows. A true answer needs door-graph reachability from outdoors.
+  //
+  // The scan itself lives in `_mowerDockDoors` so the warning and the DOORWAY
+  // ROUTER (_mowerDoorWaypoint) share one definition of "this room's doors" by
+  // construction — a door the router would steer through must be a door the
+  // warning counts, and vice versa.
+  private _mowerDockDoors(f: Floor, dockContainLoops: Vec2[][]): Door[] {
+    if (!dockContainLoops.length) return [];
+    return (f.doors ?? []).filter(d => {
+      const c = doorSpanCenter(d);
+      return dockContainLoops.some(lp => this._pointNearLoop(lp, c.x, c.y));
+    });
+  }
+
+  // Loops of this floor that CONTAIN the point (the dock's own room(s)).
+  private _dockContainLoops(f: Floor, x: number, y: number): Vec2[][] {
+    return this._buildingLoops(f).filter(lp => pointInPolygon(x, y, lp));
+  }
+
+  private _mowerDockUnreachable(f: Floor, r: RobotFixture): boolean {
+    const containing = this._dockContainLoops(f, r.x, r.y);
+    if (!containing.length) return false;                 // outdoor dock: fine
+    return this._mowerDockDoors(f, containing).length === 0;
+  }
+
+  // ── Doorway routing (2026-08-08) ──────────────────────────────────────────
+  // Making the dock's room legal is not enough on its own: _mowerAdvance is a
+  // GREEDY deflection steerer, so whenever the straight line from the mower to
+  // the dock crosses the room boundary FAR from the door it grazes along the
+  // outside wall and settles into a stable stall pocket — measured on an
+  // adversarial fixture (door at the south end of the west run, dock in the far
+  // NE corner, mower approaching from the NW) as a byte-identical deadlock at
+  // 20000 steps for EVERY door width tried. Width was never the problem;
+  // ALIGNMENT was. So the crossing is made explicit: when the mower and its
+  // target are on opposite sides of the dock room, steer at a point just off the
+  // doorway first, and only then at the target.
+  //
+  // Returns null when both points are on the SAME side — which is exactly the
+  // phase transition: the moment the mower gets through the opening, its side
+  // matches the target's and the caller's ordinary final leg takes over. No
+  // extra controller state, no hysteresis, no latch to reset (a mower pushed
+  // back out of the doorway simply re-acquires the waypoint).
+  //
+  // The door is picked NEAREST THE DOCK, deliberately not nearest the mower: a
+  // dock sits by its own access door anyway, and a mower-relative pick would
+  // swap between two doors as the mower rounds the building, oscillating the
+  // carrot. Stable target > locally optimal target.
+  private _mowerDoorWaypoint(f: Floor, dockContainLoops: Vec2[][], doors: Door[],
+                             dock: RobotFixture,
+                             fromX: number, fromY: number,
+                             toX: number, toY: number): Vec2 | null {
+    if (!doors.length) return null;
+    const fromIn = pointInAnyLoop(dockContainLoops, fromX, fromY);
+    const toIn = pointInAnyLoop(dockContainLoops, toX, toY);
+    if (fromIn === toIn) return null;                     // same side: no crossing
+    let door = doors[0], bd = Infinity;
+    for (const d of doors) {
+      const c = doorSpanCenter(d);
+      const dist = Math.hypot(c.x - dock.x, c.y - dock.y);
+      if (dist < bd) { bd = dist; door = d; }
+    }
+    const c = doorSpanCenter(door);
+    // The span runs along the door's rotation; the two candidate stand-off
+    // directions are its ±perpendicular. Pick the sign whose point lands on the
+    // TO side (the bayProjectSign probe idiom — resolve by asking, never by
+    // assuming which way "outside" is).
+    const t = (door.rotation || 0) * Math.PI / 180;
+    const nx = Math.sin(t), ny = Math.cos(t);             // ⟂ to (cos t, −sin t)
+    for (const reach of [MOWER_CONTAINMENT.dockDoorWaypointMm, 300]) {
+      for (const s of [1, -1]) {
+        const px = c.x + nx * reach * s, py = c.y + ny * reach * s;
+        if (px < 0 || py < 0 || px > f.w || py > f.d) continue;
+        if (pointInAnyLoop(dockContainLoops, px, py) === toIn) return { x: px, y: py };
+      }
+    }
+    return { x: c.x, y: c.y };                            // tiny room: aim at the span itself
+  }
+
+  // Public API (sidebar warning + tests) — kept under its shipped name.
   mowerDockIndoors(r: RobotFixture): boolean {
     if (!r || r.kind !== 'mower') return false;
     const f = this.floor();
     if (!(f.robots ?? []).some(x => x.id === r.id)) return false;
-    return pointInAnyLoop(this._buildingLoops(f), r.x, r.y);
+    return this._mowerDockUnreachable(f, r);
+  }
+
+  // Min distance from (x, y) to a closed loop's boundary ≤ reach? Same edge walk
+  // as nearestPointOutsideLoops (project onto each segment, clamp t).
+  private _pointNearLoop(lp: Vec2[], x: number, y: number,
+                         reach = MOWER_CONTAINMENT.dockDoorReachMm): boolean {
+    for (let i = 0, n = lp.length; i < n; i++) {
+      const a = lp[i], b = lp[(i + 1) % n];
+      const dx = b.x - a.x, dy = b.y - a.y, len2 = dx * dx + dy * dy;
+      if (len2 < 1) continue;
+      let t = ((x - a.x) * dx + (y - a.y) * dy) / len2;
+      t = t < 0 ? 0 : t > 1 ? 1 : t;
+      if (Math.hypot(a.x + t * dx - x, a.y + t * dy - y) <= reach) return true;
+    }
+    return false;
   }
 
   // Pick a random reachable goal inside the floor rect (straight line-of-sight
@@ -8069,6 +8177,28 @@ export class Planner extends EventTarget {
   private _stepMower(r: RobotFixture, rs: RobotState, f: Floor, act: string, dt: number): void {
     const K = MOWER_KINEMATICS;
     const loops = this._buildingLoops(f);
+    // Garage exception (2026-08-08, user-reported "mower parked past the wall
+    // instead of inside the dock"): the loop CONTAINING the dock is mower-legal
+    // — a real mower docks in a garage/shed/sunroom, and the wall-crossing check
+    // (_segCrossesWall, door spans excised) still forces entry through the
+    // doorway. Every OTHER room stays hard-forbidden. Used by the branches that
+    // drive TO the dock (return/park) and by the GPS carrot (a fix inside the
+    // dock's own room is honest — the mower really is in the shed); the MOWING
+    // branches keep the unfiltered `loops`: mowing stays strictly outdoors, and
+    // _mowerAdvance's `wasInside` forgiveness is what lets a mower parked in the
+    // shed drive back out. When the dock's room has NO doorway the exception
+    // cannot help (the mower could never get in), so `dockLoops` collapses back
+    // to `loops` and the shipped park-at-the-nearest-outdoor-point behaviour is
+    // byte-identical — the same predicate the sidebar warning reads, so the two
+    // can never disagree. An OUTDOOR dock filters nothing out, also identical.
+    const dockRoom = this._dockContainLoops(f, r.x, r.y);
+    const dockDoors = this._mowerDockDoors(f, dockRoom);   // [] for an outdoor dock
+    const excepted = dockRoom.length > 0 && dockDoors.length > 0;
+    const dockLoops = excepted ? loops.filter(lp => !pointInPolygon(r.x, r.y, lp)) : loops;
+    // Doorway router — see _mowerDoorWaypoint. Costs nothing for an outdoor dock
+    // (no doors collected ⇒ every call short-circuits on the empty list).
+    const doorWp = (fx: number, fy: number, tx: number, ty: number): Vec2 | null =>
+      excepted ? this._mowerDoorWaypoint(f, dockRoom, dockDoors, r, fx, fy, tx, ty) : null;
     const bs: BicycleState = { x: rs.x, y: rs.y, heading: rs.heading, speed: rs.speed ?? 0 };
     const commit = () => { rs.x = bs.x; rs.y = bs.y; rs.heading = bs.heading; rs.speed = bs.speed; };
     // GPS reality (when calibrated + a fix exists) overrides the sim while
@@ -8087,10 +8217,21 @@ export class Planner extends EventTarget {
       // overlay's crosshair-vs-body delta stays the honest "your GPS says this,
       // the mower is drawn there" readout. The manual GPS TRIM (posOffsetX/Y)
       // composes first — it is already folded into gps.x/y upstream.
-      const cx = nearestPointOutsideLoops(loops, gps.x, gps.y, MOWER_CONTAINMENT.clampMarginMm);
+      // `dockLoops`, not `loops`: a fix projecting into the DOCK's own room is
+      // honest (the mower really is in the shed) and is chased; a fix in any
+      // OTHER room is still clamped outside.
+      const cx = nearestPointOutsideLoops(dockLoops, gps.x, gps.y, MOWER_CONTAINMENT.clampMarginMm);
       const d = Math.hypot(cx.x - rs.x, cx.y - rs.y);
-      if (d > K.arriveMm || gps.headingRad == null) {
-        this._mowerAdvance(bs, cx.x, cx.y, dt, f, loops,
+      // Crossing the dock room's threshold under GPS — in EITHER direction (a
+      // real fix in the shed must be reachable; a mower parked in the shed must
+      // be able to leave). Cruise through the opening: no `stop` at the
+      // waypoint, or the mower brakes straddling the span.
+      const gwp = doorWp(rs.x, rs.y, cx.x, cx.y);
+      if (gwp) {
+        this._mowerAdvance(bs, gwp.x, gwp.y, dt, f, dockLoops,
+                           { maxSpeed: K.maxSpeedMm * 2.5 });
+      } else if (d > K.arriveMm || gps.headingRad == null) {
+        this._mowerAdvance(bs, cx.x, cx.y, dt, f, dockLoops,
                            { maxSpeed: K.maxSpeedMm * 2.5, stop: true });
       } else {
         // Hold station on the fix, easing the yaw toward the reported heading.
@@ -8104,12 +8245,25 @@ export class Planner extends EventTarget {
       return;
     }
     if (act === 'docked' || act === 'returning') {
-      // A dock placed INSIDE the house is user error. The mower approaches the
-      // nearest outdoor point and parks there rather than driving in (the guard
-      // would refuse the entry step anyway; clamping the target means it settles
-      // cleanly instead of grinding against the wall). Sidebar: mowerDockIndoors.
-      const home = nearestPointOutsideLoops(loops, r.x, r.y, MOWER_CONTAINMENT.clampMarginMm);
-      this._mowerAdvance(bs, home.x, home.y, dt, f, loops, { stop: true });
+      // Drive to the dock itself. Under the garage exception the dock's own
+      // room is not in `dockLoops`, so the clamp is a NO-OP for the common
+      // garage/shed/sunroom case and `home` IS the dock — the mower rounds the
+      // building and threads the doorway (the wall check still forbids driving
+      // through the wall). The clamp survives for the pathological placement
+      // that lands a dock inside a DIFFERENT room's sliver: there it still
+      // parks at the nearest legal point instead of grinding on the wall.
+      // Sidebar: mowerDockIndoors warns only when no doorway exists at all.
+      const home = nearestPointOutsideLoops(dockLoops, r.x, r.y, MOWER_CONTAINMENT.clampMarginMm);
+      // Outside the dock's room? Steer at the doorway first — the greedy
+      // deflection steerer cannot find an opening that is not roughly on the
+      // straight line, and stalls against the wall instead. Deliberately WITHOUT
+      // `stop: true`: braking at the threshold leaves it straddling the span.
+      // The moment it is through, both points are on the same side, the waypoint
+      // goes null and the ordinary stop-at-the-dock leg below takes over — the
+      // side flip IS the phase transition, so there is no state to carry.
+      const hwp = doorWp(rs.x, rs.y, home.x, home.y);
+      if (hwp) this._mowerAdvance(bs, hwp.x, hwp.y, dt, f, dockLoops);
+      else this._mowerAdvance(bs, home.x, home.y, dt, f, dockLoops, { stop: true });
       // Parked IN the dock: settle the nose toward the dock's own facing so a
       // rotated dock holds a rotated mower. Same bounded-yaw discipline as the
       // GPS station-keeping branch — a car cannot spin on the spot, so the rate
@@ -8139,12 +8293,21 @@ export class Planner extends EventTarget {
         else if (rs.wpIdx < 0) { rs.wpIdx = 0; rs.wpDir = 1; }
         g = wps[rs.wpIdx];
       }
-      this._mowerAdvance(bs, g.x, g.y, dt, f, loops);
+      // Route the EXIT too: a mower parked in an awkward-door shed must not be
+      // trapped there when mowing starts. `loops` stays UNFILTERED for the
+      // advance (mowing is strictly outdoors; `wasInside` forgiveness is what
+      // lets it move while still in the shed) — only the STEERING TARGET is
+      // redirected at the doorway until it is out.
+      const ewp = doorWp(rs.x, rs.y, g.x, g.y);
+      if (ewp) this._mowerAdvance(bs, ewp.x, ewp.y, dt, f, loops);
+      else this._mowerAdvance(bs, g.x, g.y, dt, f, loops);
     } else {
       rs.ellipseAng += (K.maxSpeedMm / Math.max(1, Math.max(f.w, f.d))) * dt;
       const a = f.w / 2 + 900, b = f.d / 2 + 900;
       const gx = f.w / 2 + a * Math.cos(rs.ellipseAng), gy = f.d / 2 + b * Math.sin(rs.ellipseAng);
-      this._mowerAdvance(bs, gx, gy, dt, f, loops);
+      const ewp = doorWp(rs.x, rs.y, gx, gy);              // same exit routing
+      if (ewp) this._mowerAdvance(bs, ewp.x, ewp.y, dt, f, loops);
+      else this._mowerAdvance(bs, gx, gy, dt, f, loops);
     }
     commit();
   }

@@ -2409,6 +2409,19 @@ export const MOWER_CONTAINMENT = {
   escapeFanDeg: [0, 15, -15, 30, -30, 45, -45, 60, -60, 80, -80, 100, -100,
                  120, -120, 145, -145, 180],
   clampMarginMm: 400,
+  // How close a door's SPAN CENTRE must sit to a building loop's boundary to
+  // count as that loop's entry (Planner.mowerDockIndoors' reachability
+  // heuristic). Openings snap onto the wall axis, so the residual is only the
+  // snap tolerance plus half a wall thickness.
+  dockDoorReachMm: 200,
+  // Stand-off distance for the doorway routing waypoint (Planner's
+  // _mowerDoorWaypoint): the mower steers at a point this far off the door's
+  // span centre, on the side it is heading TO, before aiming at the real target.
+  // 700 sits just inside `lookaheadMm` (800), so from the waypoint the final
+  // approach through the opening is ONE clear probe-length leg — the greedy
+  // deflection steerer never has to discover the door on its own (which it
+  // provably cannot when the straight line meets the wall far from it).
+  dockDoorWaypointMm: 700,
 };
 
 // Row pitch for the simulated boustrophedon sweep: ≥ 2·turnRadiusMm (1000 mm)

@@ -2650,8 +2650,8 @@ export class Sidebar extends LitElement {
         </div>
         ${kind === 'mower' && p.mowerDockIndoors(r) ? html`
           <div style="color:#ffb74d;font-size:10px;line-height:1.3;margin:2px 0 4px">
-            ⚠ This dock sits inside the house. A mower never drives indoors — it
-            parks at the nearest outdoor point instead. Move the dock into the yard.
+            ⚠ This dock sits in a room with no doorway — the mower can't reach it
+            and parks at the nearest outdoor point. Add a door or move the dock.
           </div>` : nothing}
         <div class="row"><label>${kind === 'mower' ? 'lawn_mower' : 'vacuum'}</label>
           <span style="font-size:11px;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">

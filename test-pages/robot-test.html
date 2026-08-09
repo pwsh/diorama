@@ -57,7 +57,7 @@
       dockParkedHeading, frontVectorPlan, furnitureWorldToLocal,
       hexToInt,
     } from './geometry.mod.js';
-    import { fitGeoTransform, latLonToPlan, clampToBoundary } from './geo.mod.js';
+    import { fitGeoTransform, latLonToPlan, planToLatLon, clampToBoundary } from './geo.mod.js';
 
     const tests = [];
     const ok = (name, cond, detail) => tests.push({ name, ok: !!cond, detail });
@@ -712,14 +712,17 @@
          maxDth <= (K.maxSpeedMm / K.turnRadiusMm) * 0.05 + 1e-6,
          `maxΔθ=${maxDth.toFixed(4)} rad/step`);
 
-      // Dock placed INSIDE the house (user error): the mower parks at the nearest
-      // outdoor point and never drives in. Reported by mowerDockIndoors.
+      // Dock inside a DOORLESS room: the garage exception cannot apply (there is
+      // no way in), so the shipped behaviour stands — the mower parks at the
+      // nearest outdoor point and never drives in, and mowerDockIndoors warns.
+      // `house` above has four solid runs and NO doors, so this is that case.
       const pdi = new Planner();
       const fdi = pdi.floor();
-      fdi.w = 14000; fdi.d = 10000; fdi.walls = house;
+      fdi.w = 14000; fdi.d = 10000; fdi.walls = house; fdi.doors = [];
       const rdi = { id: 'md', kind: 'mower', x: 7000, y: 5500 };
       fdi.robots = [rdi];
-      ok('mower: an indoor dock is reported (sidebar warning)', pdi.mowerDockIndoors(rdi) === true);
+      ok('mower: a dock in a DOORLESS room is reported (sidebar warning)',
+         pdi.mowerDockIndoors(rdi) === true);
       pdi.stepRobots(0.05);
       const rsdi = pdi.robotStates.md;
       rsdi.x = 3000; rsdi.y = 5500; rsdi.heading = 0; rsdi.speed = 0;   // outdoors, aimed at the dock
@@ -729,7 +732,7 @@
         pdi.stepRobots(0.05);
         if (pointInAnyLoop(loopsC, rsdi.x, rsdi.y)) enteredDock++;
       }
-      ok('mower: an indoor dock is never entered', enteredDock === 0, `steps inside=${enteredDock}`);
+      ok('mower: a doorless-room dock is never entered', enteredDock === 0, `steps inside=${enteredDock}`);
       // It parks at the CLAMPED home point — the nearest point outside the house
       // to the indoor dock — having driven AROUND the building to reach it.
       const homeDi = nearestPointOutsideLoops(loopsC, 7000, 5500, 400);
@@ -744,6 +747,225 @@
          pdi.mowerDockIndoors({ id: 'x', kind: 'vacuum', x: 7000, y: 5500 }) === false);
     } catch (e) {
       ok('mower containment tests threw', false, String(e && e.message || e));
+    }
+
+    // ── (b2) GARAGE EXCEPTION: a dock in a room WITH a doorway is reachable ───
+    // User-reported 2026-08-08: a mower docked in a sunroom parked past the wall
+    // instead of in its dock, because the shipped design forbade EVERY building
+    // interior. The dock's own loop is now mower-legal; the wall-crossing check
+    // is untouched, so the mower must still thread the real doorway.
+    try {
+      const { Planner } = await import('./planner.mod.js?v=' + Date.now());
+      const { buildingWallLoops, pointInAnyLoop, doorSpanCenter } =
+        await import('./geometry.mod.js');
+      const K = MOWER_KINEMATICS;
+      // A garage 5000..9000 × 4000..7000 with a 1400 mm opening in the WEST run
+      // (x = 5000), centred at y = 5500 — wide enough for a turning mower.
+      const garage = [{ points: [
+        {x:5000,y:4000},{x:9000,y:4000},{x:9000,y:7000},{x:5000,y:7000},{x:5000,y:4000}] }];
+      // A door's (x, y) is its HINGE: doorSpanCenter offsets −sin(rot)·w/2, so a
+      // hinge at y = 6200 / rotation 90 gives span centre (5000, 5500), span
+      // y 4800..6200 — a 1400 mm opening, wide for a 500 mm-radius mower.
+      const gdoor = [{ x: 5000, y: 6200, w: 1400, rotation: 90 }];
+      const gc = doorSpanCenter(gdoor[0]);
+      ok('garage: the door span centre lands ON the west wall run',
+         near(gc.x, 5000, 1) && near(gc.y, 5500, 1), `(${gc.x.toFixed(0)},${gc.y.toFixed(0)})`);
+      ok('garage: the doorway is passable, the wall beside it is not',
+         segCrossesSolidWall(garage, gdoor, [], 4000, 5500, 6000, 5500) === false &&
+         segCrossesSolidWall(garage, gdoor, [], 4000, 4400, 6000, 4400) === true);
+
+      const pge = new Planner();
+      const fge = pge.floor();
+      fge.w = 14000; fge.d = 10000; fge.walls = garage; fge.doors = gdoor;
+      const rge = { id: 'mg1', kind: 'mower', x: 7000, y: 5500, rotation: 90 };
+      fge.robots = [rge];
+      const loopsG1 = buildingWallLoops(fge.walls);
+      ok('garage: the dock genuinely sits inside a building loop',
+         pointInAnyLoop(loopsG1, rge.x, rge.y) === true);
+      // (a) No warning any more — the room has a doorway.
+      ok('garage: a dock in a room WITH a doorway raises no warning',
+         pge.mowerDockIndoors(rge) === false);
+
+      // (b) Returning from outdoors: it must round the building, thread the
+      // doorway and park IN the dock, crossing no wall run on any step.
+      pge.stepRobots(0.05);
+      const rsge = pge.robotStates.mg1;
+      rsge.x = 2000; rsge.y = 2000; rsge.heading = 0; rsge.speed = 0;
+      rsge.demoPhase = 'return'; rsge.demoTimer = 999999;
+      // Run until it docks (the unbound demo machine flips 'return' → 'dock' on
+      // arrival and would later send it back out to mow, so stop at the arrival).
+      let crossG = 0, arriveStep = -1;
+      for (let i = 0; i < 8000; i++) {                    // ≤400 s @ 20 Hz
+        const px = rsge.x, py = rsge.y;
+        pge.stepRobots(0.05);
+        if (segCrossesSolidWall(fge.walls, fge.doors, [], px, py, rsge.x, rsge.y)) crossG++;
+        if (Math.hypot(rsge.x - rge.x, rsge.y - rge.y) < K.arriveMm) { arriveStep = i; break; }
+      }
+      ok('garage: the mower reaches the dock INSIDE the room',
+         Math.hypot(rsge.x - rge.x, rsge.y - rge.y) < K.arriveMm &&
+         pointInAnyLoop(loopsG1, rsge.x, rsge.y),
+         `(${rsge.x.toFixed(0)},${rsge.y.toFixed(0)}) arrived@step=${arriveStep}`);
+      ok('garage: it never drove through a wall getting there (every step)',
+         crossG === 0, `crossings=${crossG}`);
+
+      // (c) Once docked the nose settles toward the dock's own facing.
+      rsge.demoPhase = 'dock'; rsge.demoTimer = 999999;
+      for (let i = 0; i < 400; i++) pge.stepRobots(0.05);
+      const wantH = dockParkedHeading(rge.rotation);
+      ok('garage: docked, the heading settles toward the dock facing',
+         Math.abs(wrapAngle(rsge.heading - wantH)) < 0.12 && rsge.speed < 20,
+         `Δ=${Math.abs(wrapAngle(rsge.heading - wantH)).toFixed(3)} rad v=${rsge.speed.toFixed(1)}`);
+      // …and it STAYS parked in the dock — the user-reported failure was the
+      // mower settling on the far side of the wall instead.
+      ok('garage: it stays parked at the dock, inside the room',
+         pointInAnyLoop(loopsG1, rsge.x, rsge.y) &&
+         Math.hypot(rsge.x - rge.x, rsge.y - rge.y) < K.arriveMm,
+         `(${rsge.x.toFixed(0)},${rsge.y.toFixed(0)}) dock=(${rge.x},${rge.y})`);
+
+      // (d) MOWING stays strictly outdoors: `wasInside` forgiveness lets it leave
+      // the garage, and after that first exit it never re-enters any interior.
+      rsge.demoPhase = 'run'; rsge.demoTimer = 999999;
+      let leftAt = -1, reentered = 0;
+      for (let i = 0; i < 4000; i++) {                    // the containment pin, mirrored
+        pge.stepRobots(0.05);
+        const inside = pointInAnyLoop(loopsG1, rsge.x, rsge.y);
+        if (leftAt < 0) { if (!inside) leftAt = i; }
+        else if (inside) reentered++;
+      }
+      ok('garage: mowing leaves the dock room…', leftAt >= 0, `leftAt=${leftAt}`);
+      ok('garage: …and never re-enters an interior over 4000 steps',
+         reentered === 0, `reentries=${reentered}`);
+
+      // (e) A SECOND room with no dock stays hard-forbidden even while the
+      // garage is excepted (the exception is per-loop, not a global opt-out).
+      const pge2 = new Planner();
+      const fge2 = pge2.floor();
+      fge2.w = 20000; fge2.d = 10000;
+      const other = [{ points: [
+        {x:12000,y:4000},{x:16000,y:4000},{x:16000,y:7000},{x:12000,y:7000},{x:12000,y:4000}] }];
+      fge2.walls = [...garage, ...other];
+      // Give the other room a doorway too, so only the dock-loop filter can
+      // explain the mower staying out of it.
+      fge2.doors = [...gdoor, { x: 12000, y: 6200, w: 1400, rotation: 90 }];
+      const rge2 = { id: 'mg2', kind: 'mower', x: 7000, y: 5500 };
+      fge2.robots = [rge2];
+      const loopsG2 = buildingWallLoops(fge2.walls);
+      const otherLoop = loopsG2.filter(lp => !pointInPolygon(7000, 5500, lp));
+      pge2.stepRobots(0.05);
+      const rsge2 = pge2.robotStates.mg2;
+      rsge2.x = 10500; rsge2.y = 5500; rsge2.heading = 0; rsge2.speed = 0;  // aimed at the OTHER room
+      rsge2.demoPhase = 'return'; rsge2.demoTimer = 999999;
+      let inOther = 0;
+      for (let i = 0; i < 4000; i++) {
+        pge2.stepRobots(0.05);
+        if (pointInAnyLoop(otherLoop, rsge2.x, rsge2.y)) inOther++;
+      }
+      ok('garage: a room WITHOUT the dock stays forbidden', inOther === 0,
+         `steps inside other room=${inOther}`);
+    } catch (e) {
+      ok('mower garage-exception tests threw', false, String(e && e.message || e));
+    }
+
+    // ── (b3) ADVERSARIAL doorway: the door is NOT on the approach line ───────
+    // The garage exception alone is not enough. _mowerAdvance is a GREEDY
+    // deflection steerer, so when the straight line mower→dock meets the room
+    // boundary FAR from the opening it grazes the outside wall and settles into
+    // a stable stall pocket — measured as a byte-identical deadlock at 20000
+    // steps for EVERY door width tried (800/900/1000/1200), i.e. ALIGNMENT, not
+    // width, was the failure. _mowerDoorWaypoint makes the crossing explicit.
+    // This fixture is that probe, kept as a permanent pin.
+    try {
+      const { Planner } = await import('./planner.mod.js?v=' + Date.now());
+      const { buildingWallLoops, pointInAnyLoop } = await import('./geometry.mod.js');
+      const K = MOWER_KINEMATICS;
+      // Same garage; the 800 mm door now sits at the SOUTH end of the west run
+      // (span y 4000..4800), the dock in the FAR NE corner, the mower NW of the
+      // building — every straight line to the dock meets a wall, never the door.
+      const gar = [{ points: [
+        {x:5000,y:4000},{x:9000,y:4000},{x:9000,y:7000},{x:5000,y:7000},{x:5000,y:4000}] }];
+      const adoor = [{ x: 5000, y: 4800, w: 800, rotation: 90 }];   // centre (5000, 4400)
+      const pa = new Planner();
+      const fa = pa.floor();
+      fa.w = 14000; fa.d = 10000; fa.walls = gar; fa.doors = adoor;
+      const ra = { id: 'ma', kind: 'mower', x: 8500, y: 6500, rotation: 0 };
+      fa.robots = [ra];
+      const loopsA = buildingWallLoops(fa.walls);
+      ok('adversarial: dock in the far corner, door at the other end',
+         pointInAnyLoop(loopsA, ra.x, ra.y) === true && pa.mowerDockIndoors(ra) === false);
+      pa.stepRobots(0.05);
+      const rsa = pa.robotStates.ma;
+      rsa.x = 2000; rsa.y = 8500; rsa.heading = 0; rsa.speed = 0;    // NW of the building
+      rsa.demoPhase = 'return'; rsa.demoTimer = 999999;
+      let crossA = 0, arriveA = -1;
+      for (let i = 0; i < 20000; i++) {                    // ≤1000 s @ 20 Hz
+        const px = rsa.x, py = rsa.y;
+        pa.stepRobots(0.05);
+        if (segCrossesSolidWall(fa.walls, fa.doors, [], px, py, rsa.x, rsa.y)) crossA++;
+        if (Math.hypot(rsa.x - ra.x, rsa.y - ra.y) < K.arriveMm) { arriveA = i; break; }
+      }
+      ok('adversarial: the mower threads the off-line doorway and reaches the dock',
+         arriveA >= 0 && pointInAnyLoop(loopsA, rsa.x, rsa.y),
+         `arrived@step=${arriveA} (${rsa.x.toFixed(0)},${rsa.y.toFixed(0)})`);
+      ok('adversarial: zero wall crossings on the way in', crossA === 0, `crossings=${crossA}`);
+
+      // EXIT: from the dock, mowing must get it back OUT through the same
+      // awkward door — and then never back in.
+      rsa.demoPhase = 'run'; rsa.demoTimer = 999999;
+      let leftA = -1, reA = 0, crossAx = 0;
+      for (let i = 0; i < 4000; i++) {
+        const px = rsa.x, py = rsa.y;
+        pa.stepRobots(0.05);
+        if (segCrossesSolidWall(fa.walls, fa.doors, [], px, py, rsa.x, rsa.y)) crossAx++;
+        const inside = pointInAnyLoop(loopsA, rsa.x, rsa.y);
+        if (leftA < 0) { if (!inside) leftA = i; }
+        else if (inside) reA++;
+      }
+      ok('adversarial: mowing escapes the awkward-door room', leftA >= 0, `leftAt=${leftA}`);
+      ok('adversarial: …and never re-enters, crossing no wall',
+         reA === 0 && crossAx === 0, `reentries=${reA} crossings=${crossAx}`);
+
+      // GPS on the same fixture: a fix inside the room near the dock must be
+      // chased THROUGH the door, not stalled against the wall.
+      const pb = new Planner();
+      const fb = pb.floor();
+      fb.w = 14000; fb.d = 10000; fb.walls = gar; fb.doors = adoor;
+      // Landmarks chosen so the tracker fix projects to (8500, 6500) = the dock.
+      const B1 = { id: 'b1', name: 'B1', x: 0, y: 0, lat: 40, lon: -105 };
+      // Same-lon pair: the fit absorbs the plan↔north rotation, so only the
+      // DISTANCE matters — hypot(14, 10) m = 17.2047 m north of B1.
+      const B2 = { id: 'b2', name: 'B2', x: 14000, y: 10000,
+                   lat: 40.000154553, lon: -105 };
+      pb.store.geo = { landmarks: [B1, B2] };
+      const rb = { id: 'mb', kind: 'mower', x: 8500, y: 6500,
+                   trackerEntity: 'device_tracker.mowb' };
+      fb.robots = [rb];
+      const fitB = fitGeoTransform([
+        { x: B1.x, y: B1.y, lat: B1.lat, lon: B1.lon },
+        { x: B2.x, y: B2.y, lat: B2.lat, lon: B2.lon }]);
+      const ll = planToLatLon(fitB, 8500, 6500);
+      pb.hass = { states: { 'device_tracker.mowb': {
+        state: 'not_home', attributes: { latitude: ll.lat, longitude: ll.lon } } } };
+      const infoB = pb.robotPosInfo(rb);
+      ok('adversarial/gps: the fix projects onto the dock inside the room',
+         infoB && infoB.mode === 'gps' && Math.hypot(infoB.worldX - 8500, infoB.worldY - 6500) < 80,
+         infoB && `(${infoB.worldX.toFixed(0)},${infoB.worldY.toFixed(0)})`);
+      pb.stepRobots(0.05);
+      const rsb = pb.robotStates.mb;
+      rsb.x = 2000; rsb.y = 8500; rsb.heading = 0; rsb.speed = 0;
+      rsb.demoPhase = 'run'; rsb.demoTimer = 999999;
+      let crossB = 0, arriveB = -1;
+      for (let i = 0; i < 20000; i++) {
+        const px = rsb.x, py = rsb.y;
+        pb.stepRobots(0.05);
+        if (segCrossesSolidWall(fb.walls, fb.doors, [], px, py, rsb.x, rsb.y)) crossB++;
+        if (arriveB < 0 && Math.hypot(rsb.x - 8500, rsb.y - 6500) < 700) arriveB = i;
+      }
+      ok('adversarial/gps: a fix inside the dock room is chased through the door',
+         arriveB >= 0 && pointInAnyLoop(loopsA, rsb.x, rsb.y),
+         `arrived@step=${arriveB} (${rsb.x.toFixed(0)},${rsb.y.toFixed(0)})`);
+      ok('adversarial/gps: zero wall crossings', crossB === 0, `crossings=${crossB}`);
+    } catch (e) {
+      ok('mower adversarial-doorway tests threw', false, String(e && e.message || e));
     }
 
     // ── (c) Mower GPS: an indoor fix clamps the CARROT, not the readout ──────
@@ -784,7 +1006,10 @@
         pg.stepRobots(0.05);
         if (pointInAnyLoop(loopsG, rsg.x, rsg.y)) insideG++;
       }
-      ok('gps: the mower never drives to an indoor fix', insideG === 0, `steps inside=${insideG}`);
+      // The dock here is OUTDOORS (400, 400), so this house is "some other room"
+      // as far as the garage exception is concerned — still hard-forbidden.
+      ok('gps: the mower never drives to an indoor fix (a room without the dock)',
+         insideG === 0, `steps inside=${insideG}`);
       ok('gps: it holds just outside, near the clamped carrot',
          !pointInAnyLoop(loopsG, rsg.x, rsg.y) &&
          Math.hypot(rsg.x - info.worldX, rsg.y - info.worldY) < 1800,
@@ -804,6 +1029,41 @@
       ok('gps: with no house the mower still converges ON the fix',
          Math.hypot(rsg2.x - 2500, rsg2.y - 2000) < MOWER_KINEMATICS.arriveMm + 50,
          `(${rsg2.x.toFixed(0)},${rsg2.y.toFixed(0)})`);
+      // Garage exception: a fix projecting into the DOCK's OWN room is honest
+      // (the mower really is in the shed) and is chased, un-clamped. Same
+      // landmarks + same fix as above — only the dock moves inside the room, and
+      // the room gains a doorway.
+      const pg3 = new Planner();
+      const fg3 = pg3.floor();
+      fg3.w = 5000; fg3.d = 4000;
+      fg3.walls = [{ points: [
+        {x:1000,y:500},{x:4000,y:500},{x:4000,y:3500},{x:1000,y:3500},{x:1000,y:500}] }];
+      // Hinge y = 2700 / rotation 90 → span centre (1000, 2000), span 1300..2700.
+      fg3.doors = [{ x: 1000, y: 2700, w: 1400, rotation: 90 }];
+      pg3.store.geo = pg.store.geo;
+      const rg3 = { id: 'mg3', kind: 'mower', x: 2500, y: 2000,
+                    trackerEntity: 'device_tracker.mow' };
+      fg3.robots = [rg3];
+      pg3.hass = pg.hass;
+      const loopsG3 = buildingWallLoops(fg3.walls);
+      ok('gps/garage: the dock and the fix both sit in the same room',
+         pointInAnyLoop(loopsG3, rg3.x, rg3.y) && pg3.mowerDockIndoors(rg3) === false);
+      pg3.stepRobots(0.05);
+      const rsg3 = pg3.robotStates.mg3;
+      rsg3.x = 400; rsg3.y = 2000; rsg3.heading = 0; rsg3.speed = 0;   // outdoors, at the door
+      rsg3.demoPhase = 'run'; rsg3.demoTimer = 999999;
+      let crossG3 = 0;
+      for (let i = 0; i < 6000; i++) {
+        const px = rsg3.x, py = rsg3.y;
+        pg3.stepRobots(0.05);
+        if (segCrossesSolidWall(fg3.walls, fg3.doors, [], px, py, rsg3.x, rsg3.y)) crossG3++;
+      }
+      ok('gps/garage: a fix inside the DOCK room is chased, not clamped out',
+         pointInAnyLoop(loopsG3, rsg3.x, rsg3.y) &&
+         Math.hypot(rsg3.x - 2500, rsg3.y - 2000) < 900,
+         `(${rsg3.x.toFixed(0)},${rsg3.y.toFixed(0)}) d=${Math.hypot(rsg3.x - 2500, rsg3.y - 2000).toFixed(0)}`);
+      ok('gps/garage: it threaded the doorway (no wall crossing on any step)',
+         crossG3 === 0, `crossings=${crossG3}`);
     } catch (e) {
       ok('mower GPS containment tests threw', false, String(e && e.message || e));
     }
