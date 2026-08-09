@@ -15,7 +15,7 @@ import { slugToName, normMac, localToWorld, segCrossesSolidWall, mowerSweepWaypo
          bufferPolyline, PATH_DEFAULT_WIDTH, poolHeaterState, poolPumpOn,
          rotPointDeg, floorContentBbox, GRID_MM, rulerSetLength,
          furnitureLocalToWorld, furnitureDef, resolveFurnitureDef, resolveItemGroundMm, STAIRS_MIN_RISE_MM,
-         IDENTIFY_TTL_MS, sirenTurnOnData,
+         IDENTIFY_TTL_MS, sirenTurnOnData, doorOpenFraction,
          type LockGlyphState, type RoomTemp, type TempSample,
          type BicycleState } from './geometry.js';
 import { solveHomography, applyHomography } from './homography.js';
@@ -62,7 +62,7 @@ import type {
   HassState, ConnStatus, DiscoveredDevice, Vec2, AvatarKind, WeatherConfig, CameraFixture,
   ConfigIndex, ConfigMeta, ThermostatFixture, SafetySensor, AlertBeacon, Furniture, MqttBridgeConfig,
   AlertsConfig, GroundArea, Pool, CompassConfig, Ruler, RulerEnd, DimensionMode, NeighborhoodConfig,
-  FlightsConfig, Door,
+  FlightsConfig, Door, Window as WindowType,
 } from './types.js';
 import { normalizeAircraftList, flightBearingDistance, MAX_AIRCRAFT,
          isEmergency, emergencySquawk, sanitizeLabelFields,
@@ -332,6 +332,9 @@ export type Drag =
   | { kind: 'doorLock'; idx: number }
   | { kind: 'doorRotate'; idx: number; startMm: Vec2; start: { rotation: number } }
   | { kind: 'windowMove'; idx: number; startMm: Vec2; start: Vec2 }
+  // Curtain tick → open/close the drapes. A press-only kind (no movement, like
+  // 'doorLock'): the tick is a control affordance, never a drag handle.
+  | { kind: 'windowCurtain'; idx: number }
   | { kind: 'windowRotate'; idx: number; startMm: Vec2; start: { rotation: number } }
   // Dragging a floor boundary edge. Input is measured in FROZEN start-of-drag
   // screen space (startClient + startScale) so resizing the floor — which
@@ -7134,6 +7137,55 @@ export class Planner extends EventTarget {
     door.lockLocalState = locked ? 'unlocked' : 'locked';
     this.save();        // no-op outside edit → kiosk lock toggles are session-only
     this.emitConfig();  // configRev → _keyDoors rebuild (unbound state) + sidebar re-render
+  }
+
+  // Resolve a window's curtain openness the same way both renderers do:
+  // 0 = CLOSED (fabric covering the glass), 1 = OPEN (gathered aside). Bound
+  // entity → doorOpenFraction (a cover.* position interpolates; binary_sensor /
+  // switch 'on' → 1); unbound → the curtainPos slider. Mirrors the renderer's
+  // private `_resolveCurtainFrac` — the ONE openness rule, so the 2D tick, the
+  // 3D drape and this toggle can never disagree about which way "open" is.
+  curtainFraction(w: WindowType): number {
+    const c = w.curtain;
+    if (!c) return 1;
+    if (c.entityId) return doorOpenFraction(this.hass?.states?.[c.entityId] ?? null);
+    return Math.max(0, Math.min(1, (w.curtainPos ?? 0) / 100));
+  }
+
+  // Open / close a window's curtains. View mode refuses (kiosk fires — save()
+  // already no-ops outside edit, so a kiosk flip is session-only, exactly like
+  // toggleDoorLock). Bound cover.* is STATE-PICKED, never a blind toggle (the
+  // valve / siren precedent): a mostly-open drape closes, otherwise it opens —
+  // so a half-position cover always resolves to the intent the user can see.
+  // A bound switch.* is an ordinary domain toggle; a bound binary_sensor is a
+  // read-only sensor of somebody else's curtain, so it is display-only.
+  // Unbound → flip curtainPos between the two extremes (configRev already
+  // reaches _keyDoors, and the renderer's _curtainBlend eases the change).
+  toggleCurtain(w: WindowType): void {
+    if (this.uiMode === 'view') return;
+    const c = w.curtain;
+    if (!c) return;
+    const frac = this.curtainFraction(w);
+    const id = c.entityId;
+    if (id) {
+      const domain = id.split('.')[0];
+      if (domain === 'binary_sensor') return;   // display-only reading
+      if (!this.hass) return;
+      try {
+        if (domain === 'cover') {
+          void Promise.resolve(
+            this.hass.callService('cover', frac >= 0.5 ? 'close_cover' : 'open_cover',
+                                  { entity_id: id }),
+          ).catch(() => { /* ignore */ });
+        } else {
+          this.toggleEntity(id);                // switch.* (and anything else toggleable)
+        }
+      } catch { /* ignore */ }
+      return;
+    }
+    w.curtainPos = frac >= 0.5 ? 0 : 100;
+    this.save();        // no-op outside edit → kiosk curtain flips are session-only
+    this.emitConfig();  // configRev → _keyDoors rebuild + sidebar slider re-render
   }
 
   // ── Generic action buttons (batch DC-B) ────────────────────────────────

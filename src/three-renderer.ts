@@ -203,7 +203,7 @@ export const STAR_RAMP_MIN = 0.02;
 export type FixtureClickKind =
   | 'light' | 'switch' | 'media' | 'alarm' | 'thermostat' | 'safety' | 'alert'
   | 'robot' | 'lock' | 'appliance' | 'action' | 'projector' | 'valve' | 'plug'
-  | 'sprinkler' | 'flight' | 'door' | 'window';
+  | 'sprinkler' | 'flight' | 'door' | 'window' | 'curtain';
 export interface FixtureClickInfo {
   kind: FixtureClickKind;
   entity_id: string | null;
@@ -215,7 +215,7 @@ export interface FixtureClickInfo {
 const FIXTURE_CLICK_KINDS = new Set<string>([
   'light', 'switch', 'media', 'alarm', 'thermostat', 'safety', 'alert', 'robot',
   'lock', 'appliance', 'action', 'projector', 'valve', 'plug', 'sprinkler', 'flight',
-  'door', 'window',
+  'door', 'window', 'curtain',
 ]);
 // Test hook / documentation surface: the SAME set the walker tests, frozen as an
 // array so a harness can assert the union and the walker can never drift apart.
@@ -8846,11 +8846,18 @@ export class ThreeDRenderer {
       // Pane center group at (w.x, w.y); rotation matches wall axis.
       const grp = new THREE.Group();
       // The whole window assembly is CLICKABLE (userData.kind='window'): sashes,
-      // mullions, bay casework/bench, roller shade AND curtain panels all walk up
-      // to this one tag (the curtain's own userData.kind='curtain'/'curtainRod' is
-      // deliberately NOT in FIXTURE_CLICK_KINDS, so the walker passes through it).
-      // That mirrors 2D, where `hitWindow` is span-based — any pixel over the
+      // mullions, bay casework/bench and the roller shade all walk up to this one
+      // tag, mirroring 2D, where `hitWindow` is span-based — any pixel over the
       // window toggles the window itself.
+      //
+      // The CURTAIN drapes layer ON TOP of that, exactly the way a door's lock
+      // deadbolt layers on top of its panel: the fabric panels carry their own
+      // userData.kind='curtain' (IN FIXTURE_CLICK_KINDS) with this window's
+      // fixtureId + the curtain's entity_id, so the walker resolves them BEFORE
+      // climbing to the parent window — a click on the drape opens/closes the
+      // drape, a click on the glass beside it still toggles the window. The ROD
+      // (kind='curtainRod') is deliberately left OUT of the set: it is structure,
+      // so a rod click falls through to the window like any other frame member.
       grp.userData.kind = 'window';
       grp.userData.fixtureId = w.id;
       grp.userData.entity_id = w.entity_id ?? null;
@@ -9053,6 +9060,9 @@ export class ThreeDRenderer {
           }
           p.position.set(0, sill + glassH / 2 + 50, interiorZ + CURTAIN_T);   // y fixed; X set by place()
           p.userData.kind = 'curtain'; p.userData.curtainStyle = style; p.userData.windowId = w.id;
+          // Click-walker shape (FixtureClickInfo): the drape resolves to THIS window's
+          // fixture id, carrying the curtain's own binding as the entity_id.
+          p.userData.fixtureId = w.id; p.userData.entity_id = cur.entityId ?? null;
           grp.add(p);
           panels.push({ mesh: p, axis: 'x', anchorPos, anchorSign, full: fullW, min: GATHER });
         };
@@ -9069,6 +9079,9 @@ export class ThreeDRenderer {
           }
           p.position.set(0, 0, interiorZ + CURTAIN_T);      // x fixed; Y set by place()
           p.userData.kind = 'curtain'; p.userData.curtainStyle = style; p.userData.windowId = w.id;
+          // Click-walker shape (FixtureClickInfo): the drape resolves to THIS window's
+          // fixture id, carrying the curtain's own binding as the entity_id.
+          p.userData.fixtureId = w.id; p.userData.entity_id = cur.entityId ?? null;
           grp.add(p);
           panels.push({ mesh: p, axis: 'y', anchorPos: headerY, anchorSign: 1, full: glassH, min: GATHER });
         } else if (style === 'split') {

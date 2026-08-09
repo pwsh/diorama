@@ -9,7 +9,7 @@ import type { Vec2, Wall, Sensor, Furniture, BgImage, MotionSensor, EnvSensor, B
 import { SOLAR_DEFAULTS } from './solar.js';
 import type { FloorEdge } from './geometry.js';
 import { envChipHalfPx, infoCardHalfPx, actionButtonHalfPx, flightHitPx, roomLabelHalfPx,
-         furnRotateHandlePx, mmToPx,
+         furnRotateHandlePx, mmToPx, curtainTickPx, CURTAIN_TICK_TOL_PX,
          insertHandleMinLenMm, insertHandlesEnabled, POLY_CAPS, type View } from './canvas-render.js';
 import { vacMapAffine, vacWorldToPixel, vacSegHasPixel } from './valetudo-map.js';
 
@@ -338,6 +338,30 @@ export function hitWindow(p: Planner, view: View, mm: Vec2): { win: WindowType; 
     const w = f.windows[i];
     const ends = windowEndpoints(w);
     if (pointToSeg(mm.x, mm.y, ends.a.x, ends.a.y, ends.b.x, ends.b.y) < tol)
+      return { win: w, idx: i };
+  }
+  return null;
+}
+
+// The interior curtain tick → open/close the drapes. The clickable band IS the
+// painted band: `curtainTickPx` (canvas-render) is the single geometry source
+// for both, and it already excludes curtain-less + bay windows. Tested in SCREEN
+// px (the tick is a fixed px offset off the span, so a world-mm tolerance would
+// drift with zoom); the caller runs this BEFORE `hitWindow` — the door-lock
+// priority — but AFTER `hitWindowEnd`, so the rotate handles at the span ends
+// stay reachable on a curtained window (the band passes within a few px of them).
+export function hitWindowCurtain(p: Planner, view: View, mm: Vec2):
+    { win: WindowType; idx: number } | null {
+  if (!openingsVisible(p)) return null;
+  const f = p.floor();
+  const dpr = window.devicePixelRatio || 1;
+  const tol = CURTAIN_TICK_TOL_PX * dpr;
+  const at = mmToPx(view, mm.x, mm.y);
+  for (let i = f.windows.length - 1; i >= 0; i--) {
+    const w = f.windows[i];
+    const tick = curtainTickPx(view, w);
+    if (!tick) continue;
+    if (pointToSeg(at.x, at.y, tick.ax, tick.ay, tick.bx, tick.by) < tol)
       return { win: w, idx: i };
   }
   return null;

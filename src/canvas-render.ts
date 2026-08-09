@@ -74,7 +74,7 @@ import {
 // the combined canvas bundle.
 export { flightFieldText, flightLabelLines };
 import type { Planner } from './planner.js';
-import type { Vec2, LightIconKind, Furniture, ObjectRecipe, RecipePrimitive, HassState, FloorTexKind, RobotFixture, Floor } from './types.js';
+import type { Vec2, LightIconKind, Furniture, ObjectRecipe, RecipePrimitive, HassState, FloorTexKind, RobotFixture, Floor, Window as WindowType } from './types.js';
 
 // ── `objectLabels` layer (absent = ON) ──────────────────────────────────────
 // Gates NAME / caption text on fixtures and structural items — door + window
@@ -5001,6 +5001,38 @@ function drawDoorbellPulses(ctx: CanvasRenderingContext2D, p: Planner, view: Vie
   }
 }
 
+// Curtain tick geometry — the ONE definition of where the 2D drape symbol sits,
+// shared by the painter in `drawWindows` and by `hitWindowCurtain` (canvas-hit),
+// so the drawn band and the clickable band are the same segment by construction.
+// Returns SCREEN px endpoints, or null when the window carries no curtain.
+//
+// Side note (deliberate, pre-existing): the offset is taken off the SCREEN-space
+// span perpendicular (−dy, dx)/len, which maps back to the world direction
+// −(sin θ, cos θ) = window-local −Z. The 3D drapes hang on local +Z (the room
+// side by the shade/curtain-rod convention), so the plan symbol lands on the
+// opposite flank of the wall line from the 3D fabric — the same flank the
+// coverEntity blind tick already uses. A plan tick is a symbol, not a to-scale
+// placement, and both 2D dressings share one side; don't "fix" one of them alone.
+//
+// Bay windows are EXCLUDED: 3D gates curtains off for bays (a drape would slice
+// through the angled returns), so a bay must not paint — or offer a click on —
+// a curtain that does not exist in the model.
+export const CURTAIN_TICK_OFF_PX = 8;   // perpendicular offset, × dpr
+export const CURTAIN_TICK_TOL_PX = 6;   // hit half-width around the band, × dpr
+export function curtainTickPx(view: View, w: WindowType):
+    { ax: number; ay: number; bx: number; by: number } | null {
+  if (!w.curtain || isBayWindowKind(w.kind)) return null;
+  const dprL = window.devicePixelRatio || 1;
+  const ends = windowEndpoints(w);
+  const a = mmToPx(view, ends.a.x, ends.a.y);
+  const b = mmToPx(view, ends.b.x, ends.b.y);
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const len = Math.hypot(dx, dy) || 1;
+  const nx = -dy / len, ny = dx / len;              // perpendicular unit (screen)
+  const off = CURTAIN_TICK_OFF_PX * dprL;           // outside the blind tick
+  return { ax: a.x + nx * off, ay: a.y + ny * off, bx: b.x + nx * off, by: b.y + ny * off };
+}
+
 function drawWindows(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
   const names = objectLabelsOn(p);
   const status = openingStatusOn(p);
@@ -5092,23 +5124,23 @@ function drawWindows(ctx: CanvasRenderingContext2D, p: Planner, view: View): voi
         ctx.stroke();
       }
     }
-    // Interior curtain tick (Window.curtain): a thin line along the interior side
-    // of the span in the fabric color — SOLID when closed (covering), DASHED when
-    // open (gathered aside). Openness from the bound entity or the curtainPos slider.
-    if (w.curtain) {
-      const cn = w.curtain;
+    // Interior curtain tick (Window.curtain): a thin line offset off the span in
+    // the fabric color — SOLID when closed (covering), DASHED when open (gathered
+    // aside). Openness from the bound entity or the curtainPos slider. The tick's
+    // segment comes from the SHARED `curtainTickPx` so `hitWindowCurtain` (which
+    // makes it click-to-toggle) can never target a different band than the one
+    // painted here.
+    const tick = curtainTickPx(view, w);
+    if (tick) {
+      const cn = w.curtain!;
       const frac = cn.entityId
         ? doorOpenFraction(p.hass?.states?.[cn.entityId] ?? null)
         : Math.max(0, Math.min(1, (w.curtainPos ?? 0) / 100));
-      const dx = b.x - a.x, dy = b.y - a.y;
-      const len = Math.hypot(dx, dy) || 1;
-      const nx = -dy / len, ny = dx / len;     // perpendicular unit (screen)
-      const off = 8 * dpr;                      // interior side, outside the blind tick
       ctx.strokeStyle = cn.color ?? '#b9a58c'; ctx.lineWidth = 3;
       if (frac > 0.5) ctx.setLineDash([6, 5]);  // open (gathered) → dashed
       ctx.beginPath();
-      ctx.moveTo(a.x + nx * off, a.y + ny * off);
-      ctx.lineTo(b.x + nx * off, b.y + ny * off);
+      ctx.moveTo(tick.ax, tick.ay);
+      ctx.lineTo(tick.bx, tick.by);
       ctx.stroke(); ctx.setLineDash([]);
     }
     // End handles (drag to rotate) — hidden when locked

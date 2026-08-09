@@ -6,15 +6,29 @@
 <!-- Window glass polish (grey/translucent, open-vs-closed clarity) + interior
      curtains (roman / drape / split). Renderer assertions read _doorGroup meshes
      directly; the config-path assertion bundles the REAL Planner over a fake HaApi.
-     Generate the bundles next to this html (like config-test / covers-test):
-       npx esbuild src/geometry.ts --bundle --format=esm --outfile=<harness>/geometry.mod.js
-       npx esbuild src/planner.ts  --bundle --format=esm --outfile=<harness>/planner.mod.js -->
+     Curtain INTERACTION (toggleCurtain dispatch + the 2D hitWindowCurtain band)
+     needs the real Planner AND one COMBINED canvas bundle (canvas-render and
+     canvas-hit must share a module instance — the flights-ui-test precedent).
+
+     Harness build (from the repo root; NEVER reuse stale bundles):
+       npm run build
+       H=/tmp/diorama-harness-curtain
+       rm -rf "$H"; mkdir -p "$H"; cp test-pages/curtain-test.html "$H"/; cp -r dist/* "$H"/
+       npx esbuild src/geometry.ts --bundle --format=esm --outfile="$H"/geometry.mod.js
+       T=$(mktemp -d); cp -r src/* "$T"/
+       cp test-pages/fake-avatar-store.ts "$T"/avatar-store.ts
+       printf "export * from './canvas-render.js';\nexport * from './canvas-hit.js';\n" > "$T"/canvas2d-entry.ts
+       npx esbuild "$T"/planner.ts        --bundle --format=esm --outfile="$H"/planner.mod.js
+       npx esbuild "$T"/canvas2d-entry.ts --bundle --format=esm --outfile="$H"/canvas-render.mod.js
+     Run headless (serve over http — Chrome blocks dynamic module imports on file://):
+       (cd "$H" && python3 -m http.server 8873 &) -->
 <script type="module">
  try {
   const V = '?v=' + Date.now();
   const geo = await import('./geometry.mod.js' + V);
   const mod = await import('./assets/three-renderer.js' + V);
   const { Planner } = await import('./planner.mod.js' + V);
+  const C2D = await import('./canvas-render.mod.js' + V);
 
   const results = [];
   const ok = (name, cond, detail = '') => results.push(`${cond ? 'ok' : 'FAIL'}:${name}${detail ? '(' + detail + ')' : ''}`);
@@ -265,6 +279,227 @@
     build(wn);
     ok('nonbay_curtain_still_built', curtainGroups(r._doorGroup.children[0]).length === 2,
        String(curtainGroups(r._doorGroup.children[0]).length));
+  }
+
+  // ── Shared fake-HA harness for the interaction sections ───────────────────
+  const clone2 = v => JSON.parse(JSON.stringify(v));
+  class FakeHa2 {
+    constructor(seed) {
+      this.map = new Map(Object.entries(seed || {}).map(([k, v]) => [k, clone2(v)]));
+      this.states = {}; this._s = []; this._c = []; this.calls = [];
+    }
+    connect() { for (const cb of this._c) cb('connected'); for (const cb of this._s) cb(this.states, undefined); }
+    onState(fn) { this._s.push(fn); } onConn(fn) { this._c.push(fn); }
+    callService(domain, service, data) { this.calls.push({ domain, service, data }); return Promise.resolve(); }
+    async getHistory() { return {}; } async getWeatherForecasts() { return null; }
+    async getDevices() { return []; } async getEntityRegistry() { return []; }
+    async updateEntityRegistry() { return true; }
+    async getUserData(k) { return this.map.has(k) ? clone2(this.map.get(k)) : null; }
+    async setUserData(k, v) { this.map.set(k, clone2(v)); return true; }
+    async refreshStates() {}
+    async subscribeMqtt() { return () => {}; }
+    async subscribePersistentNotifications() { return () => {}; }
+    async listRepairsIssues() { return []; }
+    async getCalendarEvents() { return []; }
+  }
+  const mkStore = (windows) => ({
+    v: 2,
+    floors: [{
+      id: 'f1', name: 'H', w: 8000, d: 6000,
+      walls: [{ id: 'w1', points: [{ x: 0, y: 3000 }, { x: 8000, y: 3000 }] }],
+      furniture: [], lights: [], switches: [], sensors: [], motionSensors: [],
+      roamers: [], envSensors: [], doors: [], windows,
+      bg: null, rooms: [], bleProxies: [], alarmPanels: [], safetySensors: [], robots: [],
+      presenceZones: [], cameras: [], groundAreas: [], voidAreas: [],
+    }],
+    currentFloorId: 'f1', activeSensorId: null,
+    coverage: true, imperial: false, showDetails: false, useRawTargets: false,
+  });
+  const waitFor2 = async (fn, ms = 3000) => {
+    const t0 = Date.now();
+    while (!fn()) { if (Date.now() - t0 > ms) throw new Error('timeout'); await new Promise(r => setTimeout(r, 10)); }
+  };
+  // The store body lives under the config-registry key `diorama-cfg-<id>` (the
+  // legacy `diorama` key migrates ONCE and is never written again), so read the
+  // ACTIVE config body — reading the seed key would report stale values forever.
+  const persistedWindow = async (api, id) => {
+    for (const [k, v] of api.map) {
+      if (!k.startsWith('diorama-cfg-')) continue;
+      const w = v?.floors?.[0]?.windows?.find(x => x.id === id);
+      if (w) return w;
+    }
+    return null;
+  };
+  const bootPlanner = async (windows) => {
+    localStorage.removeItem('diorama:store:v1'); localStorage.removeItem('diorama:configs');
+    const api = new FakeHa2({ 'diorama': mkStore(windows) });
+    const pl = new Planner();
+    pl.connectWith(api);
+    await waitFor2(() => pl.store.floors[0].windows.length === windows.length);
+    return { pl, api };
+  };
+
+  // === 10. toggleCurtain dispatch matrix (REAL Planner over a fake HaApi) ====
+  // Bound cover.* is STATE-PICKED (never a blind toggle — the valve/siren rule);
+  // switch.* is an ordinary domain toggle; binary_sensor is display-only; unbound
+  // flips curtainPos between the two extremes. View refuses everywhere; kiosk
+  // fires but must not persist (save() no-ops outside edit).
+  {
+    const W = (id, curtain, extra = {}) => ({
+      id, x: 2000, y: 3000, w: 1400, rotation: 0, entity_id: null,
+      kind: 'single', curtain, ...extra,
+    });
+    const { pl, api } = await bootPlanner([
+      W('cvOpen',  { style: 'vertical', entityId: 'cover.drape' }),
+      W('cvHalf',  { style: 'vertical', entityId: 'cover.half' }),
+      W('sw',      { style: 'vertical', entityId: 'switch.drape' }),
+      W('bs',      { style: 'vertical', entityId: 'binary_sensor.drape' }),
+      W('unb',     { style: 'split' }, { curtainPos: 100 }),
+      W('unbShut', { style: 'split' }, { curtainPos: 0 }),
+      W('none',    undefined),
+    ]);
+    const wins = pl.store.floors[0].windows;
+    const byId = id => wins.find(w => w.id === id);
+    api.states['cover.drape'] = { state: 'open', attributes: {} };
+    api.states['cover.half']  = { state: 'open', attributes: { current_position: 20 } };
+    api.states['switch.drape'] = { state: 'on', attributes: {} };
+    api.states['binary_sensor.drape'] = { state: 'on', attributes: {} };
+
+    // Openness resolver agrees with the renderer's private rule.
+    ok('frac_cover_open', near(pl.curtainFraction(byId('cvOpen')), 1, 1e-9));
+    ok('frac_cover_partial', near(pl.curtainFraction(byId('cvHalf')), 0.2, 1e-9));
+    ok('frac_unbound_slider', near(pl.curtainFraction(byId('unb')), 1, 1e-9));
+    ok('frac_no_curtain_open', near(pl.curtainFraction(byId('none')), 1, 1e-9));
+
+    // Bound cover, OPEN → close_cover.
+    api.calls.length = 0;
+    pl.toggleCurtain(byId('cvOpen'));
+    ok('cover_open_calls_close', api.calls.length === 1 && api.calls[0].domain === 'cover'
+       && api.calls[0].service === 'close_cover'
+       && api.calls[0].data.entity_id === 'cover.drape', JSON.stringify(api.calls));
+    // Bound cover, mostly CLOSED (20 %) → open_cover.
+    api.calls.length = 0;
+    pl.toggleCurtain(byId('cvHalf'));
+    ok('cover_closed_calls_open', api.calls.length === 1 && api.calls[0].service === 'open_cover',
+       JSON.stringify(api.calls));
+    // Bound switch → switch.toggle (domain-aware toggleEntity).
+    api.calls.length = 0;
+    pl.toggleCurtain(byId('sw'));
+    ok('switch_calls_toggle', api.calls.length === 1 && api.calls[0].domain === 'switch'
+       && api.calls[0].service === 'toggle', JSON.stringify(api.calls));
+    // Bound binary_sensor → display-only, zero calls, no local mutation.
+    api.calls.length = 0;
+    const bsBefore = byId('bs').curtainPos;
+    pl.toggleCurtain(byId('bs'));
+    ok('binary_sensor_no_calls', api.calls.length === 0, JSON.stringify(api.calls));
+    ok('binary_sensor_no_flip', byId('bs').curtainPos === bsBefore, String(byId('bs').curtainPos));
+    // No curtain configured → no-op.
+    api.calls.length = 0;
+    pl.toggleCurtain(byId('none'));
+    ok('no_curtain_noop', api.calls.length === 0 && byId('none').curtainPos === undefined, '');
+    // Unbound → curtainPos flips 0 ↔ 100 (both directions).
+    pl.toggleCurtain(byId('unb'));
+    ok('unbound_open_to_shut', byId('unb').curtainPos === 0, String(byId('unb').curtainPos));
+    pl.toggleCurtain(byId('unb'));
+    ok('unbound_shut_to_open', byId('unb').curtainPos === 100, String(byId('unb').curtainPos));
+    pl.toggleCurtain(byId('unbShut'));
+    ok('unbound_from_zero_opens', byId('unbShut').curtainPos === 100, String(byId('unbShut').curtainPos));
+
+    // Edit mode PERSISTS the unbound flip (save() writes the store body). Let the
+    // 600 ms save debounce FLUSH before reading — save() serializes at flush time,
+    // so a still-pending edit-mode save would otherwise pick up a later value.
+    const rev0 = pl.configRev;
+    pl.toggleCurtain(byId('unb'));
+    ok('unbound_emits_config', pl.configRev > rev0, `${rev0}->${pl.configRev}`);
+    await new Promise(r => setTimeout(r, 900));
+    const editPersisted = (await persistedWindow(api, 'unb'))?.curtainPos;
+    ok('edit_unbound_persisted', editPersisted === byId('unb').curtainPos,
+       `${editPersisted} vs ${byId('unb').curtainPos}`);
+
+    // VIEW mode: zero calls, no flip, on every binding shape.
+    pl.setUiMode('view');
+    api.calls.length = 0;
+    const vBefore = byId('unb').curtainPos;
+    pl.toggleCurtain(byId('cvOpen'));
+    pl.toggleCurtain(byId('sw'));
+    pl.toggleCurtain(byId('unb'));
+    ok('view_zero_calls', api.calls.length === 0, JSON.stringify(api.calls));
+    ok('view_no_flip', byId('unb').curtainPos === vBefore, String(byId('unb').curtainPos));
+
+    // KIOSK: the cover service still fires (the whole point of a control kiosk),
+    // and an unbound flip lands in memory but never in the persisted store.
+    pl.setUiMode('kiosk');
+    api.calls.length = 0;
+    pl.toggleCurtain(byId('cvOpen'));
+    ok('kiosk_cover_fires', api.calls.length === 1 && api.calls[0].service === 'close_cover',
+       JSON.stringify(api.calls));
+    const kBefore = byId('unb').curtainPos;
+    pl.toggleCurtain(byId('unb'));
+    ok('kiosk_unbound_flips_in_memory', byId('unb').curtainPos !== kBefore,
+       `${kBefore}->${byId('unb').curtainPos}`);
+    await new Promise(r => setTimeout(r, 900));   // past the 600 ms save debounce
+    const pw = await persistedWindow(api, 'unb');
+    ok('kiosk_unbound_not_persisted', pw && pw.curtainPos === editPersisted,
+       `${pw && pw.curtainPos} (edit left ${editPersisted})`);
+    pl.setUiMode('edit');
+  }
+
+  // === 11. hitWindowCurtain: the clickable band IS the painted band ==========
+  // curtainTickPx is the ONE geometry source for the tick and its hit test, so
+  // these assertions exercise the same offset the painter uses.
+  {
+    const { computeView, mmToPx, curtainTickPx, hitWindowCurtain, hitWindow,
+            CURTAIN_TICK_OFF_PX } = C2D;
+    const dpr = window.devicePixelRatio || 1;
+    const cnv = document.createElement('canvas'); cnv.width = 800; cnv.height = 600;
+    const W2 = (id, kind, curtain) => ({
+      id, x: 4000, y: 3000, w: 1600, rotation: 0, entity_id: null, kind, curtain,
+    });
+    const { pl } = await bootPlanner([
+      W2('cw', 'single', { style: 'vertical' }),
+    ]);
+    const f2 = pl.store.floors[0];
+    const view = computeView(cnv, f2.w, f2.d, pl.viewCenter, pl.zoom);
+    const win = f2.windows[0];
+    // The tick exists and sits CURTAIN_TICK_OFF_PX·dpr off the span (screen px).
+    const tick = curtainTickPx(view, win);
+    ok('tick_exists', !!tick, '');
+    const centre = mmToPx(view, win.x, win.y);
+    const tmx = (tick.ax + tick.bx) / 2, tmy = (tick.ay + tick.by) / 2;
+    ok('tick_offset_px', near(Math.hypot(tmx - centre.x, tmy - centre.y),
+                              CURTAIN_TICK_OFF_PX * dpr, 1e-6),
+       String(Math.hypot(tmx - centre.x, tmy - centre.y)));
+    // World point under the tick's midpoint → hit; the bare span centre → miss.
+    const pxToMm = (px, py) => ({ x: (px - view.ox) / view.scale, y: (view.oy - py) / view.scale });
+    const onTick = pxToMm(tmx, tmy);
+    ok('hit_on_tick', hitWindowCurtain(pl, view, onTick)?.win?.id === 'cw', '');
+    ok('miss_on_span', hitWindowCurtain(pl, view, { x: win.x, y: win.y }) === null, '');
+    // A point far off the band (stepped PERPENDICULAR to it — the window is
+    // horizontal, so an along-band step would still land on the tick) misses;
+    // the WINDOW body still hits its own span (the curtain never steals it).
+    const far = pxToMm(tmx, tmy + 40 * dpr);
+    ok('miss_far_off_band', hitWindowCurtain(pl, view, far) === null, '');
+    ok('window_body_still_hits', hitWindow(pl, view, { x: win.x, y: win.y })?.win?.id === 'cw', '');
+    // Priority: the tick point ALSO satisfies hitWindow (the band is inside the
+    // window's ~10 px tolerance) — which is exactly why callers must test the
+    // curtain first. Assert the overlap so the ordering requirement is pinned.
+    ok('tick_overlaps_window_hit', hitWindow(pl, view, onTick)?.win?.id === 'cw', '');
+    // Layer OFF → untappable (the openings hidden-layer rule).
+    pl.store.layers2d = { ...(pl.store.layers2d || {}), openings: false };
+    ok('layer_off_no_hit', hitWindowCurtain(pl, view, onTick) === null, '');
+    pl.store.layers2d = { ...(pl.store.layers2d || {}), openings: true };
+    ok('layer_on_hit_returns', hitWindowCurtain(pl, view, onTick)?.win?.id === 'cw', '');
+    // No curtain configured → no band at all.
+    delete win.curtain;
+    ok('no_curtain_no_tick', curtainTickPx(view, win) === null, '');
+    ok('no_curtain_no_hit', hitWindowCurtain(pl, view, onTick) === null, '');
+    // Bay windows: curtains are gated off in 3D, so the plan offers no band.
+    win.curtain = { style: 'split' };
+    for (const bk of ['bay', 'bay_bench']) {
+      win.kind = bk;
+      ok(`bay_no_tick_${bk}`, curtainTickPx(view, win) === null, '');
+      ok(`bay_no_hit_${bk}`, hitWindowCurtain(pl, view, onTick) === null, '');
+    }
   }
 
   const pass = results.every(x => x.startsWith('ok'));

@@ -43,6 +43,9 @@ const IDENTIFY_KIND_FOR_CLICK: Record<string, IdentifyKind> = {
   robot: 'robot', action: 'action', projector: 'projector', valve: 'valve',
   plug: 'plug', sprinkler: 'sprinkler', lock: 'door',
   door: 'door', window: 'window',
+  // A curtain drape belongs to its window (the 'lock' → door precedent):
+  // Alt+clicking the fabric identifies + navigates to the window's row.
+  curtain: 'window',
 };
 
 @customElement('diorama-three-view')
@@ -432,9 +435,20 @@ export class ThreeView extends LitElement {
         if (dr) p.toggleItem(dr);
         return;
       }
+      // Curtain drape → open/close the drapes on its window. Resolved BEFORE
+      // 'window' both here and in the raycast walker, mirroring 2D, where
+      // `hitWindowCurtain` outranks `hitWindow` (the door-lock precedent).
+      // toggleCurtain owns the whole dispatch (state-picked cover service /
+      // switch toggle / display-only binary_sensor / unbound curtainPos flip)
+      // and refuses in view mode.
+      if (kind === 'curtain') {
+        const wn = p.floor().windows.find(x => x.id === fixtureId);
+        if (wn) p.toggleCurtain(wn);
+        return;
+      }
       // Window sash → open/close. Same reasoning as doors; 2D's `hitWindow` is
-      // span-based, so ANY part of the window assembly (sash, mullion, bay
-      // casework, roller shade, curtain drape) maps to the one window toggle.
+      // span-based, so any part of the window assembly (sash, mullion, bay
+      // casework, roller shade) maps to the one window toggle.
       if (kind === 'window') {
         const wn = p.floor().windows.find(x => x.id === fixtureId);
         if (wn) p.toggleItem(wn);
@@ -500,7 +514,7 @@ export class ThreeView extends LitElement {
       // Doors + windows have NO 2D dblclick action either (the 2D dblclick chain
       // never tests hitDoor/hitWindow — binding lives in the sidebar editors), so
       // a second 3D tap must stay a no-op rather than inventing a picker here.
-      if (kind === 'door' || kind === 'window') return;
+      if (kind === 'door' || kind === 'window' || kind === 'curtain') return;
       const f = p.floor();
 
       // Bound media furniture (TVs): open the media control modal. Unbound in

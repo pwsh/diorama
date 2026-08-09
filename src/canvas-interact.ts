@@ -17,7 +17,7 @@ import {
   hitVacuumSegment, hitFlight,
   hitVoidArea, hitVoidAreaVertex,
   hitRulerEnd, hitRulerBody,
-  hitDoor, hitDoorEnd, hitDoorLock, hitWindow, hitWindowEnd, hitFloorEdge,
+  hitDoor, hitDoorEnd, hitDoorLock, hitWindow, hitWindowEnd, hitWindowCurtain, hitFloorEdge,
   hitWallVertInsert, hitPresenceZoneVertexInsert, hitGroundAreaVertexInsert,
   hitPathVertexInsert, hitPoolVertexInsert, hitVoidAreaVertexInsert,
   hitRoomLabel, hitGeoLandmark,
@@ -1037,6 +1037,16 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
                start: { rotation: wEnd.win.rotation } };
     canvas.style.cursor = 'grabbing'; e.preventDefault(); return;
   }
+  // Curtain tick wins over the window BODY (exactly as the door padlock wins
+  // over the door panel) so drawing the drapes open/closed doesn't also move
+  // the window. It runs AFTER the endpoints so the rotate handles survive.
+  // Press-only: `windowCurtain` carries no start pos and mousemove ignores it —
+  // the tick is a control, not a drag handle.
+  const wCur = hitWindowCurtain(p, view, mm);
+  if (wCur) {
+    p.drag = { kind: 'windowCurtain', idx: wCur.idx };
+    canvas.style.cursor = 'pointer'; e.preventDefault(); return;
+  }
   const wHit = hitWindow(p, view, mm);
   if (wHit) {
     p.drag = { kind: 'windowMove', idx: wHit.idx, startMm: mm,
@@ -1882,7 +1892,7 @@ export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: V
       hitValve(p, view, mm) ||             // valves open/close in kiosk
       hitSprinklerZone(p, view, mm) ||     // sprinkler heads toggle in kiosk
       hitPlug(p, view, mm) ||              // plugs toggle in kiosk
-      hitDoor(p, view, mm) || hitWindow(p, view, mm);
+      hitDoor(p, view, mm) || hitWindowCurtain(p, view, mm) || hitWindow(p, view, mm);
     canvas.style.cursor = overDevice ? 'pointer' : 'default';
     return;
   }
@@ -1934,6 +1944,7 @@ export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: V
     else if (hitDoorEnd(p, view, mm)) canvas.style.cursor = 'grab';
     else if (hitDoor(p, view, mm)) canvas.style.cursor = 'grab';
     else if (hitWindowEnd(p, view, mm)) canvas.style.cursor = 'grab';
+    else if (hitWindowCurtain(p, view, mm)) canvas.style.cursor = 'pointer';
     else if (hitWindow(p, view, mm)) canvas.style.cursor = 'grab';
     else if (hitFixture(p, mm, Math.max(250, hitPx(view) * 3))) canvas.style.cursor = 'grab';
     else if (hitFurniture(p, mm) || hitWall(p, mm) || hitSensor(p, view, mm)) canvas.style.cursor = 'grab';
@@ -2373,6 +2384,9 @@ export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement, e?: Mouse
         p.save();
       }
     }
+  } else if (drag.kind === 'windowCurtain') {
+    const win = f.windows[drag.idx];
+    if (win) p.toggleCurtain(win);
   } else if (drag.kind === 'windowRotate') {
     p.save();
   } else if (drag.kind === 'obj' && sa) {
@@ -2449,6 +2463,10 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
     if (dLock2) { p.toggleDoorLock(dLock2.door); return; }
     const dHit2 = hitDoor(p, view, mm);
     if (dHit2) { p.toggleItem(dHit2.door); return; }
+    // Curtain tick → open/close the drapes (wins over the window body, the
+    // door-lock-over-panel precedent).
+    const wCur2 = hitWindowCurtain(p, view, mm);
+    if (wCur2) { p.toggleCurtain(wCur2.win); return; }
     const wHit2 = hitWindow(p, view, mm);
     if (wHit2) { p.toggleItem(wHit2.win); return; }
     // Stove/oven → toggle the oven door (session-only in kiosk; save() no-ops).

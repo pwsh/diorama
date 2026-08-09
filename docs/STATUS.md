@@ -421,6 +421,24 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Interactive curtains (2D + 3D)** (2026-08-08, user-requested "curtains
+  are not able to be controlled via the 2D or 3D interface"; unreleased —
+  on main past v0.63.0). `Planner.toggleCurtain`: bound cover →
+  state-picked open/close_cover (valve precedent), switch → toggle,
+  binary_sensor display-only, unbound → curtainPos 0↔100 (kiosk
+  session-only, view refuses). 3D: `'curtain'` joined the click union (19
+  kinds) — fabric panels resolve before the parent window, the
+  deadbolt-over-door layering; rod stays pass-through. 2D: the curtain
+  tick is a real hit target via the shared `curtainTickPx` band (draw and
+  hit consume one geometry), priority after `hitWindowEnd` (the band runs
+  inside the endpoint tolerance — curtain-first would kill rotation) and
+  before `hitWindow`; edit mode needed a press-only `windowCurtain` drag
+  kind (window toggles live at mouseup click-vs-drag, a click-path hook
+  would be swallowed by dragJustEnded). Bay kinds now gate the 2D tick
+  like 3D. Two old "curtains are NOT clickable" pins inverted. CURTAIN
+  36→71, OPENCLICK 39→41; WINDOW 73, DOORKINDS 131, RULERDIMS 107,
+  COVERS 22, IDENTIFY 57 all green.
+
 - **Mower indoor-dock garage exception + doorway routing** (2026-08-08,
   user-reported "the mower is showing parked past the wall instead of
   inside the dock"; unreleased — on main past v0.63.0). The 2026-08-05

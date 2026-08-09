@@ -205,7 +205,7 @@
   {
     const windows = [
       { id: 'w_cur', x: 4000, y: 8500, w: 1800, rotation: 0, kind: 'single', entity_id: null,
-        curtain: { style: 'split', color: '#b9a58c' }, curtainPos: 0 },
+        curtain: { style: 'split', color: '#b9a58c', entityId: 'cover.living_drape' }, curtainPos: 0 },
       { id: 'w_shade', x: 9000, y: 8500, w: 1800, rotation: 0, kind: 'single', entity_id: null,
         coverEntity: 'cover.shade' },
       { id: 'w_bench', x: 14000, y: 8500, w: 2000, rotation: 0, kind: 'bay_bench', entity_id: null },
@@ -217,20 +217,36 @@
     const cur = asm.find(a => a.userData.fixtureId === 'w_cur');
     const shade = asm.find(a => a.userData.fixtureId === 'w_shade');
     const bench = asm.find(a => a.userData.fixtureId === 'w_bench');
-    // The curtain group is tagged kind='curtain' — deliberately NOT clickable, so
-    // the walker must pass THROUGH it and land on the window.
+    // The curtain DRAPE is its own click target (kind='curtain', in the union) —
+    // the lock-over-panel layering: fabric resolves to the curtain, everything
+    // else on the assembly still resolves to the window. The ROD stays OUT of
+    // the union (structure), so it passes through like any frame member.
     let drape = null, rod = null;
     cur?.traverse(o => { if (o.userData?.kind === 'curtain' && !drape) drape = o;
                          if (o.userData?.kind === 'curtainRod' && !rod) rod = o; });
     ok('4a a curtain panel exists and is tagged kind="curtain"', !!drape);
-    ok('4b "curtain" is NOT in the click union (the walker passes through it)',
-       !KINDS.has('curtain') && !KINDS.has('curtainRod'));
+    ok('4b "curtain" IS in the click union; "curtainRod" is NOT',
+       KINDS.has('curtain') && !KINDS.has('curtainRod'),
+       `curtain=${KINDS.has('curtain')} rod=${KINDS.has('curtainRod')}`);
     const drapeMesh = drape ? meshesOf(drape)[0] : null;
-    ok('4c a curtain FABRIC mesh resolves to its window',
-       walk(drapeMesh)?.kind === 'window' && walk(drapeMesh)?.fixtureId === 'w_cur',
+    ok('4c a curtain FABRIC mesh resolves to kind="curtain" carrying its window id',
+       walk(drapeMesh)?.kind === 'curtain' && walk(drapeMesh)?.fixtureId === 'w_cur',
        `${walk(drapeMesh)?.kind}:${walk(drapeMesh)?.fixtureId}`);
-    ok('4d the curtain ROD resolves to its window',
+    ok('4d the curtain ROD still resolves to its window',
        walk(rod)?.kind === 'window' && walk(rod)?.fixtureId === 'w_cur', walk(rod)?.kind);
+    // The click info carries the CURTAIN's own binding, not the window's.
+    ok('4d2 curtain click info carries curtain.entityId as entity_id',
+       walk(drapeMesh)?.entity_id === 'cover.living_drape',
+       String(walk(drapeMesh)?.entity_id));
+    // A non-curtain part of the SAME window still resolves to the window, so the
+    // drape never swallows the window's own click target.
+    const sash = meshesOf(cur).find(m => {
+      let o = m; while (o) { if (o.userData?.kind === 'curtain') return false; o = o.parent; }
+      return true;
+    });
+    ok('4d3 a sash on the curtained window still resolves to "window"',
+       walk(sash)?.kind === 'window' && walk(sash)?.fixtureId === 'w_cur',
+       `${walk(sash)?.kind}`);
     ok('4e every roller-shade mesh resolves to its window',
        shade && meshesOf(shade).every(m => walk(m)?.fixtureId === 'w_shade'));
     let cushion = null;
