@@ -1,5 +1,5 @@
 import { vehicleRecipe } from './vehicles.js';
-import { snap, snapVertex15, distMM, worldToLocal, localToWorld, FURNITURE_KINDS, furnitureCorners, furnitureLocalToWorld, furnitureWorldToLocal, resolveFurnitureDef, resolveFurnitureWallCollision, resolveSeatTableCollision, seatBelongsToTable, snapStepLightToSurface, snapFireplaceToWall, snapFloodlightToWall, snapExhaustToWall, snapSwitchToWall, snapAlarmToWall, snapCalendarToWall, snapThermostatToWall, snapPlugToWall, snapInfoCardToWall, snapActionButtonToWall, isBinKind, isWetBathKind, defaultFurnitureElevation, nearestAlign, bestAlignShift, ALIGN_DRAG_KINDS, ALIGN_POLY_DRAG_KINDS, envScale, ENV_SCALE_MIN, ENV_SCALE_MAX, GRID_MM, floorContentBbox, resolveFloorEdgeDrag, DOOR_DEFAULT_W, doorDefaultWidth, windowDefaultWidth, isBoundaryWallKind } from './geometry.js';
+import { snap, snapVertex15, distMM, worldToLocal, localToWorld, FURNITURE_KINDS, furnitureCorners, furnitureLocalToWorld, furnitureWorldToLocal, resolveFurnitureDef, resolveFurnitureWallCollision, resolveSeatTableCollision, seatBelongsToTable, snapStepLightToSurface, snapFireplaceToWall, snapFloodlightToWall, snapExhaustToWall, snapSwitchToWall, snapAlarmToWall, snapCalendarToWall, snapThermostatToWall, snapPlugToWall, snapInfoCardToWall, snapActionButtonToWall, isBinKind, isWetBathKind, isStairsKind, defaultFurnitureElevation, nearestAlign, bestAlignShift, ALIGN_DRAG_KINDS, ALIGN_POLY_DRAG_KINDS, envScale, ENV_SCALE_MIN, ENV_SCALE_MAX, GRID_MM, floorContentBbox, resolveFloorEdgeDrag, DOOR_DEFAULT_W, doorDefaultWidth, windowDefaultWidth, isBoundaryWallKind } from './geometry.js';
 import { newId } from './storage.js';
 import {
   pxToMm, type View,
@@ -2315,12 +2315,22 @@ export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement, e?: Mouse
         piece.x = drag.start.x; piece.y = drag.start.y;
         p.toggleItem(piece);
       } else {
-        snapStairEdges(f, piece);
+        // Alt = free placement: the SAME modifier that suspends align + wall
+        // snaps also suspends the release resolvers (stair-edge magnet + wall
+        // push-out + seat tuck), so a deliberate Alt-placement always sticks.
+        // snapFurnitureToSurface stays live even under Alt — mounting is a
+        // semantic (mountOnId/elevation parenting), not a cosmetic snap.
+        if (!free) snapStairEdges(f, piece);
         snapFurnitureToSurface(f, piece, p.store.customObjects);
         // Keep the piece off wall slabs (edge locks flush to the wall face).
         // Mounted-on-surface items follow their host; locked pieces never move.
-        if (!piece.locked && !piece.mountOnId) {
-          resolveFurnitureWallCollision(piece, f.walls);
+        // STAIRS-FAMILY pieces are EXEMPT (2026-08-09, user-reported "I need to
+        // extend the lower stairway under this room and it will not allow me"):
+        // a flight legitimately runs under walls/rooms into its shaft, and the
+        // floorplans validator's `wallCollidable` (physical.mjs) has always
+        // exempted stairs — the interactive editor now agrees.
+        if (!piece.locked && !piece.mountOnId && !free) {
+          if (!isStairsKind(piece.kind)) resolveFurnitureWallCollision(piece, f.walls);
           // Then keep a tucked seat from sinking into the tabletop it serves.
           resolveSeatTableCollision(piece, f.furniture, p.store.customObjects);
         }
@@ -3008,10 +3018,13 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
     };
     f.furniture.push(piece);
     p.activeFurnitureId = piece.id; p.markSelectionHot();
-    snapStairEdges(f, piece);
+    // Alt drop = free placement (skips the snap + collision resolvers, same as
+    // the release path); stairs are always exempt from the wall push-out — see
+    // the release-site comment (a flight runs under walls into its shaft).
+    if (!e.altKey) snapStairEdges(f, piece);
     snapFurnitureToSurface(f, piece, p.store.customObjects);
-    if (!piece.locked && !piece.mountOnId) {
-      resolveFurnitureWallCollision(piece, f.walls);
+    if (!piece.locked && !piece.mountOnId && !e.altKey) {
+      if (!isStairsKind(piece.kind)) resolveFurnitureWallCollision(piece, f.walls);
       resolveSeatTableCollision(piece, f.furniture, p.store.customObjects);
     }
     p.save(); p.setTool('select'); p.emitConfig(); return;

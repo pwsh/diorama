@@ -546,6 +546,65 @@
           resolveFurnitureWallCollision(sunk, walls) === true && sunk.x === flushCx,
           `x=${sunk.x}`);
       }
+
+      // (f) STAIRS are exempt from the wall push-out (2026-08-09, user-reported
+      //     "I need to extend the lower stairway under this room and it will
+      //     not allow me even while holding alt"): a flight legitimately runs
+      //     under walls/rooms into its shaft — physical.mjs `wallCollidable`
+      //     always exempted stairs, and the editor now agrees. Dropped straight
+      //     onto the wall band, a stairs piece STAYS where it was dropped.
+      {
+        const p = await freshPlanner(mkPlan());
+        p.setTool('furniture');
+        p.pendingFurnitureKind = 'stairs';
+        p.pendingCustomObjectId = null; p.pendingVehicleModelId = null;
+        onCanvasClick(p, canvas, pview, pEvAt(5900, 6000));   // straddles the wall
+        const st = p.floor().furniture[0];
+        ok('17f: a stairs piece dropped over the wall band stays put',
+          st && st.x === 5900, `x=${st && st.x} kind=${st && st.kind}`);
+      }
+
+      // (g) Alt drop = free placement for ANY kind: the table from (b) that a
+      //     plain drop pushes to flush stays at the drop point under Alt.
+      {
+        const p = await freshPlanner(mkPlan());
+        p.setTool('furniture');
+        p.pendingFurnitureKind = KIND;
+        p.pendingCustomObjectId = null; p.pendingVehicleModelId = null;
+        onCanvasClick(p, canvas, pview, { ...pEvAt(5500, 6000), altKey: true });
+        const piece = p.floor().furniture[0];
+        ok('17g: an Alt drop overlapping the wall is NOT pushed out',
+          piece && piece.x === 5500, `x=${piece && piece.x}`);
+      }
+
+      // (h) The drag-RELEASE hook honors both too: a moved furnMove release
+      //     without Alt pushes out; with Alt (or a stairs piece) it sticks.
+      //     Driven through the REAL onCanvasMouseUp with a hand-armed drag.
+      {
+        const release = async (kind, x, alt) => {
+          const p = await freshPlanner(mkPlan());
+          const fu = { id: 'fu1', x, y: 6000, w: 1500, h: 900, kind, label: '' };
+          p.floor().furniture.push(fu);
+          // A genuinely-moved drag (start ≠ current) so no click-vs-drag branch
+          // (stove/bin/sink) and no Alt-identify (that gate needs an UN-moved
+          // release) can swallow the resolver path.
+          p.drag = { kind: 'furnMove', idx: 0, start: { x: x - 800, y: 6000 } };
+          onCanvasMouseUp(p, canvas, {
+            altKey: alt, clientX: 0, clientY: 0,
+            preventDefault() {}, stopPropagation() {},
+          });
+          return fu;
+        };
+        const plain = await release(KIND, 5500, false);
+        ok('17h: plain release overlapping the wall pushes out to flush',
+          plain.x === flushCx, `x=${plain.x} want=${flushCx}`);
+        const alt = await release(KIND, 5500, true);
+        ok('17h: Alt release overlapping the wall STICKS',
+          alt.x === 5500, `x=${alt.x}`);
+        const stairs = await release('stairs_half', 5500, false);
+        ok('17h: a stairs_half release under the wall STICKS without Alt',
+          stairs.x === 5500, `x=${stairs.x}`);
+      }
     }
     // ── (18) Furniture ROTATE handle ───────────────────────────────────────
     // The only canvas rotation furniture has ever had (the sidebar number field

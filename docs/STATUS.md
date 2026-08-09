@@ -421,6 +421,23 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Stairs exempt from the wall push-out + Alt free placement covers the
+  drop resolvers** (2026-08-09, user-reported "I have a set of half
+  stairs that goes under a closet… it will not allow me to extend the
+  lower stairway under this room even while holding alt"; unreleased —
+  on main past v0.63.0). The interactive `resolveFurnitureWallCollision`
+  call sites had no kind exemptions and never consulted Alt, so every
+  release shoved an extended flight back out of the wall band — while
+  the floorplans validator's `wallCollidable` (physical.mjs) had always
+  exempted stairs ("a flight legitimately runs from wall face to wall
+  face inside its shaft"). Editor now agrees: stairs-family skips the
+  wall push-out at both the drop and drag-release sites, and Alt (the
+  align/wall-snap modifier) suspends snapStairEdges + wall push-out +
+  seat tuck for any kind (snapFurnitureToSurface stays live — mounting
+  is a semantic, not a snap). Implemented directly (small-fix lane).
+  ALIGNGUIDES 157→162 (§17f–h: stairs drop sticks, Alt drop sticks,
+  release-path matrix via a hand-armed furnMove drag).
+
 - **Weather chip minimize-to-pill** (2026-08-08, user-requested "allow
   minimizing to just the current conditions"; unreleased — on main past
   v0.63.0). A chevron on the current-conditions row (own click target,
