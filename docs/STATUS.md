@@ -421,6 +421,18 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Weather chip minimize-to-pill** (2026-08-08, user-requested "allow
+  minimizing to just the current conditions"; unreleased — on main past
+  v0.63.0). A chevron on the current-conditions row (own click target,
+  the alert-badge idiom; only shown when panel content exists) collapses
+  the grown panel — extra rows + hourly/daily strips — to the bare pill.
+  Device-local `diorama:weather:min` (toolbar-collapse idiom; kiosk
+  screens minimize independently, never the synced store). An open
+  alerts panel still expands a minimized chip. Implemented directly
+  (small-fix lane). NEW `weather-chip-test.html` (`WCHIP PASS 22/22`) —
+  first DOM-level chip coverage; chip mounts against a planner-shaped
+  stub, no real Planner.
+
 - **Floor voids render as real openings** (2026-08-08, user-reported
   "floor voids do not appear to be rendering as open areas"; unreleased —
   on main past v0.63.0). Reproduced on the user's actual plan (offline

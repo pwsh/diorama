@@ -1,0 +1,170 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Running…</title>
+  <style>body { background: #0d1117; color: #ddd; font: 12px monospace; }</style>
+</head>
+<body>
+<div id="summary">Running…</div>
+<div id="rows"></div>
+<div id="stage"></div>
+
+<!-- <diorama-weather-chip> DOM harness: minimize-to-pill toggle (2026-08-08,
+     user-requested), device-local persistence, alert-badge coexistence.
+     The chip needs only a planner-shaped stub (store.weather / weatherNow /
+     uiMode / forecasts / weatherAlerts / add/removeEventListener), no real
+     Planner — so the bundle is just the chip + lit + weather.ts.
+     Harness build (from the repo root; NEVER reuse stale bundles):
+       H=/tmp/diorama-harness-wchip
+       rm -rf "$H"; mkdir -p "$H"
+       cp test-pages/weather-chip-test.html "$H"/
+       T=$(mktemp -d); cp -r src/* "$T"/; cp tsconfig.json "$T"/
+       printf "import './ui/weather-chip.js';\n" > "$T"/wchip-entry.ts
+       npx esbuild "$T"/wchip-entry.ts --bundle --format=esm --tsconfig="$T"/tsconfig.json \
+         --alias:lit=$PWD/node_modules/lit/index.js \
+         --alias:lit/decorators.js=$PWD/node_modules/lit/decorators.js \
+         --outfile="$H"/wchip.mod.js
+     Run headless (serve over http — Chrome blocks module imports on file://):
+       (cd "$H" && python3 -m http.server 8887 &)
+       google-chrome --headless=new --disable-gpu --window-size=1200,900 \
+         --virtual-time-budget=20000 --dump-dom \
+         "http://localhost:8887/weather-chip-test.html" | grep -o "<title>[^<]*" -->
+<script type="module">
+ try {
+  await import('./wchip.mod.js?v=' + Date.now());
+
+  const results = [];
+  const ok = (name, cond, detail = '') => results.push(`${cond ? 'ok' : 'FAIL'}:${name}${detail ? '(' + detail + ')' : ''}`);
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+  const stage = document.getElementById('stage');
+
+  // Planner-shaped stub: exactly the surface the chip reads.
+  const mkPlanner = (over = {}) => ({
+    uiMode: 'edit',
+    store: { imperial: false, weather: { chip: true, chipContent: { humidity: true }, placeLabel: 'Testville' } },
+    weatherNow: { condition: 'sunny', tempC: 22, humidity: 55, windKmh: 10, isDay: true, stale: false },
+    forecastHourly: null,
+    forecastDaily: null,
+    weatherAlerts: [],
+    addEventListener() {}, removeEventListener() {},
+    ...over,
+  });
+
+  const mount = async (planner) => {
+    const el = document.createElement('diorama-weather-chip');
+    el.planner = planner;
+    stage.appendChild(el);
+    await el.updateComplete;
+    return el;
+  };
+  const unmount = (el) => el.remove();
+  const minBtn = (el) => el.querySelector('[data-weather-min]');
+  const bodyText = (el) => (el.textContent || '').replace(/\s+/g, ' ');
+
+  localStorage.removeItem('diorama:weather:min');
+
+  // ── 1. A bare pill (no chipContent) gets NO chevron — pre-feature chip ──
+  {
+    const el = await mount(mkPlanner({
+      store: { imperial: false, weather: { chip: true, placeLabel: 'Testville' } },
+      weatherNow: { condition: 'sunny', tempC: 22, isDay: true, stale: false },
+    }));
+    ok('bare_pill_no_chevron', !minBtn(el));
+    ok('bare_pill_renders', bodyText(el).includes('22'));
+    unmount(el);
+  }
+
+  // ── 2. Content rows → chevron present, content visible by default ──
+  {
+    const el = await mount(mkPlanner());
+    ok('content_chevron_present', !!minBtn(el));
+    ok('content_visible_default', bodyText(el).includes('55%'), bodyText(el));
+    ok('chevron_glyph_expanded', minBtn(el).textContent.trim() === '▴');
+
+    // ── 3. Click minimizes: humidity row gone, pill + chevron remain ──
+    minBtn(el).click();
+    await el.updateComplete;
+    ok('minimized_hides_content', !bodyText(el).includes('55%'), bodyText(el));
+    ok('minimized_keeps_current', bodyText(el).includes('22'));
+    ok('minimized_keeps_label', bodyText(el).includes('Testville'));
+    ok('chevron_glyph_minimized', minBtn(el).textContent.trim() === '▸');
+    ok('persisted_flag_set', localStorage.getItem('diorama:weather:min') === '1');
+
+    // ── 4. Click again restores ──
+    minBtn(el).click();
+    await el.updateComplete;
+    ok('restored_shows_content', bodyText(el).includes('55%'));
+    ok('persisted_flag_cleared', localStorage.getItem('diorama:weather:min') === null);
+    unmount(el);
+  }
+
+  // ── 5. Persistence across remount (device-local restore) ──
+  {
+    localStorage.setItem('diorama:weather:min', '1');
+    const el = await mount(mkPlanner());
+    ok('remount_restores_minimized', !bodyText(el).includes('55%'), bodyText(el));
+    ok('remount_chevron_minimized', minBtn(el) && minBtn(el).textContent.trim() === '▸');
+    unmount(el);
+    localStorage.removeItem('diorama:weather:min');
+  }
+
+  // ── 6. Forecast strips minimize too ──
+  {
+    localStorage.setItem('diorama:weather:min', '1');
+    const el = await mount(mkPlanner({
+      store: { imperial: false, weather: { chip: true, chipContent: { daily: 3 } } },
+      forecastDaily: [
+        { datetime: '2026-08-08T00:00:00Z', condition: 'sunny', temperature: 30, templow: 18 },
+        { datetime: '2026-08-09T00:00:00Z', condition: 'rainy', temperature: 25, templow: 15 },
+      ],
+    }));
+    ok('minimized_hides_daily', !bodyText(el).includes('Today'), bodyText(el));
+    minBtn(el).click();
+    await el.updateComplete;
+    ok('expanded_shows_daily', bodyText(el).includes('Today'));
+    unmount(el);
+    localStorage.removeItem('diorama:weather:min');
+  }
+
+  // ── 7. Alerts still expand a MINIMIZED chip (urgent > tidy) ──
+  {
+    localStorage.setItem('diorama:weather:min', '1');
+    const el = await mount(mkPlanner({
+      weatherAlerts: [{ event: 'Tornado Warning', severity: 'warning' }],
+    }));
+    ok('minimized_shows_badge', bodyText(el).includes('⚠ 1'));
+    ok('minimized_hides_content_with_alert', !bodyText(el).includes('55%'));
+    const badge = [...el.querySelectorAll('span')].find(s => (s.textContent || '').includes('⚠'));
+    badge.click();
+    await el.updateComplete;
+    ok('alert_panel_opens_while_minimized', bodyText(el).includes('Tornado Warning'), bodyText(el));
+    ok('alert_panel_still_no_weather_content', !bodyText(el).includes('55%'));
+    unmount(el);
+    localStorage.removeItem('diorama:weather:min');
+  }
+
+  // ── 8. Chevron click does NOT trigger the edit body-click (open-weather) ──
+  {
+    const el = await mount(mkPlanner());
+    let opened = 0;
+    el.addEventListener('open-weather', () => opened++);
+    minBtn(el).click();
+    await el.updateComplete;
+    ok('chevron_no_open_weather', opened === 0);
+    // Body click still opens settings in edit mode.
+    el.querySelector('div').click();
+    ok('body_click_opens_weather', opened === 1);
+    unmount(el);
+    localStorage.removeItem('diorama:weather:min');
+  }
+
+  const fails = results.filter(r => r.startsWith('FAIL'));
+  document.getElementById('rows').textContent = results.join('\n');
+  document.title = `WCHIP ${fails.length ? 'FAIL' : 'PASS'} ${results.length - fails.length}/${results.length} ` + results.join(' ');
+ } catch (e) {
+  document.title = 'WCHIP ERR ' + String(e && e.message || e);
+ }
+</script>
+</body>
+</html>

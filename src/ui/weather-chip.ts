@@ -27,6 +27,13 @@ export class WeatherChip extends LitElement {
   // DC-D: whether the alerts detail panel is expanded (toggled by clicking the
   // badge in any mode, or the whole chip in non-edit mode). Runtime only.
   private _alertsOpen = false;
+  // Minimize-to-pill (2026-08-08, user-requested): collapse the grown panel to
+  // just the current-conditions row. DEVICE-LOCAL (a per-screen display
+  // preference — the toolbar-collapse idiom, never the synced store; kiosk
+  // tablets minimize independently of the desktop). Absent = full panel.
+  private _minimized = ((): boolean => {
+    try { return localStorage.getItem('diorama:weather:min') === '1'; } catch { return false; }
+  })();
 
   protected override createRenderRoot() { return this; }
 
@@ -60,6 +67,18 @@ export class WeatherChip extends LitElement {
   private _onBadgeClick = (e: Event): void => {
     e.stopPropagation();
     this._alertsOpen = !this._alertsOpen;
+    this.requestUpdate();
+  };
+
+  // Minimize chevron — its own target in every mode (the badge idiom). Writes
+  // the device-local flag; removing the key = the expanded default.
+  private _onMinClick = (e: Event): void => {
+    e.stopPropagation();
+    this._minimized = !this._minimized;
+    try {
+      if (this._minimized) localStorage.setItem('diorama:weather:min', '1');
+      else localStorage.removeItem('diorama:weather:min');
+    } catch { /* private mode etc. — session-only then */ }
     this.requestUpdate();
   };
 
@@ -174,7 +193,23 @@ export class WeatherChip extends LitElement {
 
     const hourly = content.hourly > 0 ? (p.forecastHourly ?? []).slice(0, content.hourly) : [];
     const daily = content.daily > 0 ? (p.forecastDaily ?? []).slice(0, content.daily) : [];
-    const expanded = extra.length > 0 || hourly.length > 0 || daily.length > 0 || alertsOpen;
+    // Minimize applies only to the WEATHER content (extra rows + forecast
+    // strips) — an open alerts panel still expands a minimized chip, because
+    // alerts are urgent and have their own explicit toggle.
+    const hasPanelContent = extra.length > 0 || hourly.length > 0 || daily.length > 0;
+    const minimized = this._minimized && hasPanelContent;
+    const showContent = hasPanelContent && !minimized;
+    const expanded = showContent || alertsOpen;
+
+    // Chevron shown only when there is something to hide (a bare pill gets no
+    // affordance and stays byte-identical to the pre-feature chip).
+    const minBtn = hasPanelContent ? html`
+      <span @click=${this._onMinClick}
+            title=${minimized ? 'Show weather details' : 'Minimize to current conditions'}
+            style="color:#90a4ae;cursor:pointer;pointer-events:auto;flex:0 0 auto;
+                   font-size:10px;line-height:1;padding:1px 3px;margin-left:2px;
+                   border:1px solid #2a3a4c;border-radius:3px"
+            data-weather-min>${minimized ? '▸' : '▴'}</span>` : nothing;
 
     // The current-conditions row (glyph + temp + label + alert badge) — the
     // legacy pill body, reused as the panel's header when expanded.
@@ -185,6 +220,7 @@ export class WeatherChip extends LitElement {
         ${label ? html`<span style="color:#90a4ae;max-width:120px;overflow:hidden;
                                      text-overflow:ellipsis;white-space:nowrap">${label}</span>` : nothing}
         ${badge}
+        ${minBtn}
       </div>`;
 
     // The chip is clickable whenever it can DO something: edit (opens settings)
@@ -221,16 +257,16 @@ export class WeatherChip extends LitElement {
            style="${chrome};display:flex;flex-direction:column;gap:4px;max-width:340px">
         ${currentRow}
         ${alertsPanel}
-        ${extra.length ? html`
+        ${showContent && extra.length ? html`
           <div style="display:flex;flex-wrap:wrap;gap:2px 10px;font-size:11px;color:#b0bec5">
             ${extra.map(s => typeof s === 'string' ? html`<span>${s}</span>` : s)}
           </div>` : nothing}
-        ${hourly.length ? html`
+        ${showContent && hourly.length ? html`
           <div style="display:flex;gap:8px;overflow:hidden;max-width:340px;
                       border-top:1px solid #22303d;padding-top:4px">
             ${hourly.map(r => this._hourCell(r, imperial))}
           </div>` : nothing}
-        ${daily.length ? html`
+        ${showContent && daily.length ? html`
           <div style="display:flex;flex-direction:column;gap:1px;
                       border-top:1px solid #22303d;padding-top:4px;min-width:150px">
             ${daily.map((r, i) => this._dayRow(r, i, imperial))}
