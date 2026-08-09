@@ -40,7 +40,9 @@
   // room) plus an ASCENDING flight out in the open floor.
   // Room x∈[1000,4000] y∈[1000,7000]. Flight center (2500,3500), w1000×h3600 →
   // footprint x[2000,3000] y[1700,5300]; local +y = top (y=5300, opens into the
-  // upper room), local −y = deep (y=1700). elevation −2400 → deep tread ≈ −2126.
+  // upper room), local −y = deep (y=1700). elevation −2400 → deep tread ≈ −2204
+  // (13 treads on 14 risers — the 2026-08-09 step-down default; every pin below
+  // is a depth THRESHOLD, so the riser-math change moved no assertion).
   const FLIGHT = { id: 'flight', x: 2500, y: 3500, w: 1000, h: 3600, kind: 'stairs', rotation: 0, elevation: -2400 };
   const ASCEND = { id: 'ascend', x: 6000, y: 3500, w: 1000, h: 3600, kind: 'stairs', rotation: 0, elevation: 0 };
   const RX0 = 1000, RX1 = 4000, RY0 = 1000, RY1 = 7000;

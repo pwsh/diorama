@@ -421,6 +421,41 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Stair anatomy: step-down default + side walls to the level above +
+  riser/newel/handrail toggles** (2026-08-09, three user asks; unreleased
+  — on main past v0.63.0). First batch under the TIGHTENED model routing
+  (user: "ensure fable is just being used for orchestration, architecture
+  and logic" — the small-fix lane is closed; recorded in memory):
+  Sonnet wrote `docs/research/stair-anatomy.md` (270 lines, the
+  dimensions/terminology reference + recommended-constants table), Fable
+  pinned the architecture, Opus implemented, Fable verified gates
+  independently. (1) **DELIBERATE DEFAULT CHANGE**: a flight of n treads
+  now has n+1 risers — riser = rise/(n+1) via the new pure
+  `stairsRiserCount(n, topFlush)` (THE one divisor, shared by the 3D
+  builder + `_groundYAt` via `_terrain.topFlush`), top tread one riser
+  below the ledge (the upper floor is the final step);
+  `Furniture.stairsTopFlush?` ("Start at top level") restores the old
+  flush geometry byte-for-byte, and every old flush golden is re-pinned
+  under it. Run/tread count/2D glyph/rise semantics/autofit/elevation
+  compose all unchanged. (2) `stairsSideWalls?` — raked side panels from
+  the stringer bottom line up to the STOREY CEILING plane
+  (`WALL_KINDS.full.h − elevation`), replacing the stringers (one board,
+  no coplanar seam); the research doc's 100 mm wall deliberately
+  overridden to the stringer's 40 mm (architect's note in code). (3)
+  `stairsRisers?` (19 mm closed riser boards, open flights only) /
+  `stairsNewels?` (4 capped 90 mm posts, head post on the top tread) /
+  `stairsHandrail?` (50 mm rail at nosing+900 with per-tread balusters;
+  wall-mounted rail w/o balusters under side walls; terminates at newel
+  centres when newels on — agent's coplanarity catch, accepted along
+  with burying riser boards 4 mm into tread bodies and balusters 6 mm
+  into caps). STAIRSFIT 136→208 (§L/§M/§N; 17 flush-era pins updated to
+  step-down values + re-pinned flush; Float32 bbox tolerance 1e-6→0.01
+  where integer luck had been carrying it); ALIGNGUIDES 162/162 +
+  STAIRS-DESCEND 23/23 re-verified (descend pins were thresholds — no
+  change). Known limits: anatomy is flights-only (ramp/landing + per-side
+  granularity are noted follow-ups); balusters one-per-tread (research
+  says two — pinned design choice).
+
 - **Stairs composition: tread-count entry + elevation auto-compose +
   overlap-safe welds + open-flight stringers** (2026-08-09, three user
   asks from one real staircase — "cannot get 2 half flights and a

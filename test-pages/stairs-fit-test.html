@@ -44,6 +44,18 @@
    (K) snapStairEdges v2: rectPenetrationMm's unit matrix, the overlap-safe
        corner weld (with a negative control on the old buried result), and the
        elevation auto-compose across a U staircase / straight chain / landing.
+   (L) STEP-DOWN top (Furniture.stairsTopFlush) — the n treads ⇒ n+1 risers
+       convention that became the DEFAULT on 2026-08-09. Pure stairsRiserCount,
+       builder ↔ _groundYAt agreement in BOTH modes, the stringer head endpoint,
+       and the elevation auto-compose being unaffected. Every tread-HEIGHT pin in
+       sections C / F / H / I / J moved with that default; the OLD flush values
+       are pinned here under stairsTopFlush: true.
+   (M) SIDE WALLS to the level above (Furniture.stairsSideWalls): one panel per
+       side topping out at the storey ceiling plane, replacing the stringers,
+       footprint-neutral, inboard of a solid flight's mass planes, skipped when
+       degenerate.
+   (N) RISERS / NEWELS / HANDRAIL show-hide: each flag independent, all absent =
+       the shipped build, every height step-down aware, nav + treads untouched.
 -->
 <script type="module">
   const G = await import('./geometry.mod.js');
@@ -137,26 +149,32 @@
     const s200 = mk('s200', 2000, 200), s350 = mk('s350', 5000, 350);
     r.updateFloor(mkFloor({ furniture: [s200, s350, dflt] }), scene);
 
+    // NB every tread-HEIGHT pin below moved on 2026-08-09 with the step-down
+    // default (n treads ⇒ n+1 risers, top tread at rise·n/(n+1)); §L pins the
+    // OLD flush values under stairsTopFlush. Tread COUNTS are unchanged.
     ok('C1 a 200 mm rise builds exactly ONE tread', treadCaps(grpAt(s200)).length === 1,
        `n=${treadCaps(grpAt(s200)).length}`);
-    ok('C2 …topping out at the rise', near(topY(grpAt(s200)), 200), `top=${topY(grpAt(s200))}`);
+    ok('C2 …topping out ONE riser below the rise (200·1/2)', near(topY(grpAt(s200)), 100),
+       `top=${topY(grpAt(s200))}`);
     ok('C3 a 350 mm rise builds TWO treads', treadCaps(grpAt(s350)).length === 2,
        `n=${treadCaps(grpAt(s350)).length}`);
-    ok('C4 …topping out at the rise', near(topY(grpAt(s350)), 350), `top=${topY(grpAt(s350))}`);
+    ok('C4 …topping out ONE riser below the rise (350·2/3)', near(topY(grpAt(s350)), 350 * 2 / 3),
+       `top=${topY(grpAt(s350))}`);
     // Ground truth must agree with the mesh, tread for tread.
-    ok('C5 _groundYAt on the 1-tread flight = 200 everywhere on it',
-       near(r._groundYAt(2000, 4700), 200) && near(r._groundYAt(2000, 5400), 200),
+    ok('C5 _groundYAt on the 1-tread flight = 100 everywhere on it',
+       near(r._groundYAt(2000, 4700), 100) && near(r._groundYAt(2000, 5400), 100),
        `${r._groundYAt(2000, 4700)}/${r._groundYAt(2000, 5400)}`);
-    ok('C6 _groundYAt on the 2-tread flight steps 175 → 350',
-       near(r._groundYAt(5000, 4700), 175) && near(r._groundYAt(5000, 5400), 350),
+    ok('C6 _groundYAt on the 2-tread flight steps 350/3 → 700/3',
+       near(r._groundYAt(5000, 4700), 350 / 3) && near(r._groundYAt(5000, 5400), 700 / 3),
        `${r._groundYAt(5000, 4700)}/${r._groundYAt(5000, 5400)}`);
     // REGRESSION PIN — an untouched flight is exactly what it always was.
     ok('C7 default flight still 13 treads', treadCaps(grpAt(dflt)).length === 13,
        `n=${treadCaps(grpAt(dflt)).length}`);
-    ok('C8 default flight still tops out at 2743', near(topY(grpAt(dflt)), 2743), `top=${topY(grpAt(dflt))}`);
-    ok('C9 default flight _groundYAt still quantizes to 13 treads',
-       near(r._groundYAt(8000, 5000 - 1800 + 3600 / 13 / 2), 2743 / 13) &&
-       near(r._groundYAt(8000, 5000 + 1800 - 1), 2743),
+    ok('C8 default flight tops out at 2743·13/14 (one riser below the storey)',
+       near(topY(grpAt(dflt)), 2743 * 13 / 14), `top=${topY(grpAt(dflt))}`);
+    ok('C9 default flight _groundYAt still quantizes to 13 treads (on 14 risers)',
+       near(r._groundYAt(8000, 5000 - 1800 + 3600 / 13 / 2), 2743 / 14) &&
+       near(r._groundYAt(8000, 5000 + 1800 - 1), 2743 * 13 / 14),
        `${r._groundYAt(8000, 5000 - 1800 + 3600 / 13 / 2)}/${r._groundYAt(8000, 5000 + 1800 - 1)}`);
     // A landing honours the override on its slab height.
     const land = { id: 'lnd', x: 2000, y: 8000, w: 1000, h: 1000, kind: 'stair_landing', rotation: 0, ht: 300 };
@@ -313,8 +331,11 @@
          `n=${G.stairsTreadCount(fu.h, G.stairsRiseMm(fu, 2743))}`);
       // …and the renderer agrees: base −950, top −800.
       r.updateFloor({ ...p.store.floors[0] }, { ...scene, groundLevelMm: -800 });
-      ok('F6 the built flight spans terrace → grade in the scene',
-         near(grpAt(fu).position.y, -950) && near(treadTopY(grpAt(fu)) + (fu.elevation ?? 0), -800),
+      // Step-down: the fit still BRIDGES −950 → −800 (rise = the level change it
+      // delivers, unchanged), but the top TREAD sits one riser below the grade —
+      // stepping off it onto the lawn is the final riser.
+      ok('F6 the built flight spans terrace → grade in the scene (top tread one riser below)',
+         near(grpAt(fu).position.y, -950) && near(treadTopY(grpAt(fu)) + (fu.elevation ?? 0), -875),
          `base=${grpAt(fu).position.y} top=${treadTopY(grpAt(fu)) + (fu.elevation ?? 0)}`);
     }
     {
@@ -418,7 +439,11 @@
     const openS = { ...solid, id: 'hOpen', x: 5000, stairsOpen: true };
     r.updateFloor(mkFloor({ furniture: [solid, openS] }), scene);
     const gS = grpAt(solid), gO = grpAt(openS);
-    const n = G.stairsTreadCount(RUN, HT), riser = HT / n, treadD = RUN / n;
+    // Step-down default (2026-08-09): n treads ride n+1 risers, so the tread
+    // heights below are HT/(n+1)·(i+1) — the tread COUNT and the run split are
+    // unchanged, and open-vs-solid is still bit-identical either way.
+    const n = G.stairsTreadCount(RUN, HT), riser = HT / G.stairsRiserCount(n), treadD = RUN / n;
+    const yTread = riser * n;   // top tread surface
 
     ok('H1 open flight builds the SAME tread count as the solid one',
        treadCaps(gO).length === n && treadCaps(gS).length === n, `open=${treadCaps(gO).length} solid=${treadCaps(gS).length} n=${n}`);
@@ -429,8 +454,8 @@
       ok('H2 every tread TOP is unchanged (cap y + 11 = riser·(i+1))', same && atRise,
          `solid=[${a.map(v => v.toFixed(1))}] open=[${b.map(v => v.toFixed(1))}]`);
     }
-    ok('H3 open flight tops out at the rise, exactly like the solid one',
-       near(topY(gO), HT, 1e-9) && near(topY(gS), HT, 1e-9), `open=${topY(gO)} solid=${topY(gS)}`);
+    ok('H3 open flight tops out at the top tread, exactly like the solid one',
+       near(topY(gO), yTread, 1e-9) && near(topY(gS), yTread, 1e-9), `open=${topY(gO)} solid=${topY(gS)}`);
     {
       // The HIGHEST tread must float: its lowest geometry sits just under its
       // own top, not down at the base.
@@ -442,7 +467,7 @@
         lo = Math.min(lo, m.position.y + m.geometry.boundingBox.min.y);
       }
       ok('H4 the top tread is open underneath (min y ≥ riser·(n−1) − 70)',
-         lo >= riser * (n - 1) - 70 && near(lo, HT - 60, 1),
+         lo >= riser * (n - 1) - 70 && near(lo, yTread - 60, 1),
          `min=${lo} floor=${riser * (n - 1) - 70}`);
     }
     {
@@ -470,7 +495,7 @@
     ok('H7 _groundYAt is identical on the open and the solid flight',
        near(r._groundYAt(5000, 2000 - RUN / 2 + 5), r._groundYAt(2000, 2000 - RUN / 2 + 5), 1e-9) &&
        near(r._groundYAt(5000, 2000 + RUN / 2 - 5), r._groundYAt(2000, 2000 + RUN / 2 - 5), 1e-9) &&
-       near(r._groundYAt(5000, 2000 + RUN / 2 - 5), HT, 1e-9),
+       near(r._groundYAt(5000, 2000 + RUN / 2 - 5), yTread, 1e-9),
        `${r._groundYAt(5000, 2000 - RUN / 2 + 5)}/${r._groundYAt(2000, 2000 - RUN / 2 + 5)} · ` +
        `${r._groundYAt(5000, 2000 + RUN / 2 - 5)}/${r._groundYAt(2000, 2000 + RUN / 2 - 5)}`);
 
@@ -569,24 +594,28 @@
        `n=${treadCaps(grpAt(over)).length}`);
     ok('I10 …and an un-overridden twin still renders the derived 6 (regression pin)',
        treadCaps(grpAt(auto)).length === 6, `n=${treadCaps(grpAt(auto)).length}`);
-    ok('I11 the overridden flight still tops out at the rise',
-       near(topY(grpAt(over)), HTd, 1e-6) && near(topY(grpAt(auto)), HTd, 1e-6),
+    // Step-down: 9 treads ride 10 risers, 6 treads ride 7 (heights moved
+    // 2026-08-09; the COUNTS these pins exist for are unchanged).
+    // NB topY reads geometry bounding boxes (Float32), so a non-round expected
+    // value needs a real tolerance — 1e-6 only ever worked on exact integers.
+    ok('I11 the overridden flight tops out one riser below the rise',
+       near(topY(grpAt(over)), HTd * 9 / 10, 0.01) && near(topY(grpAt(auto)), HTd * 6 / 7, 0.01),
        `over=${topY(grpAt(over))} auto=${topY(grpAt(auto))}`);
     {
-      // Centre of the piece → frac 0.5 → step floor(0.5·n) → (ht/n)·(step+1).
+      // Centre of the piece → frac 0.5 → step floor(0.5·n) → (ht/(n+1))·(step+1).
       const gOver = r._groundYAt(2000, 5000), gAuto = r._groundYAt(6000, 5000);
       ok('I12 _groundYAt quantizes to the OVERRIDDEN 9-step layout',
-         near(gOver, (HTd / 9) * 5, 1e-6), `g=${gOver} want=${(HTd / 9) * 5}`);
+         near(gOver, (HTd / 10) * 5, 1e-6), `g=${gOver} want=${(HTd / 10) * 5}`);
       ok('I13 …while the un-overridden twin keeps the 6-step layout',
-         near(gAuto, (HTd / 6) * 4, 1e-6), `g=${gAuto} want=${(HTd / 6) * 4}`);
+         near(gAuto, (HTd / 7) * 4, 1e-6), `g=${gAuto} want=${(HTd / 7) * 4}`);
       ok('I14 the two layouts really do differ (the pin is not vacuous)',
          Math.abs(gOver - gAuto) > 1, `${gOver} vs ${gAuto}`);
     }
     {
       // Every tread top of the overridden flight sits on the 9-step ladder.
       const ys = treadCaps(grpAt(over)).map(m => m.position.y + 11).sort((a, b) => a - b);
-      ok('I15 every overridden tread top = riser·(i+1) with riser = ht/9',
-         ys.length === 9 && ys.every((y, i) => near(y, (HTd / 9) * (i + 1), 1e-6)),
+      ok('I15 every overridden tread top = riser·(i+1) with riser = ht/10 (9 treads, 10 risers)',
+         ys.length === 9 && ys.every((y, i) => near(y, (HTd / 10) * (i + 1), 1e-6)),
          `[${ys.map(v => v.toFixed(1))}]`);
     }
     {
@@ -654,8 +683,10 @@
          bs.map(b => (b.maxX - b.minX).toFixed(2)).join('/'));
       ok('J6 the top never pokes above the flight (≤ HT)', bs.every(b => b.maxY <= HT + 1),
          bs.map(b => b.maxY.toFixed(1)).join('/'));
-      ok('J7 …and reaches the head (top ≈ HT)', bs.every(b => near(b.maxY, HT, 1)),
-         bs.map(b => b.maxY.toFixed(1)).join('/'));
+      // The head endpoint is the LAST TREAD TOP, not HT — step-down (2026-08-09)
+      // moved it from 1372 to 1372·6/7; §L pins the flush-mode identity.
+      ok('J7 …and reaches the head (top ≈ the last tread top)',
+         bs.every(b => near(b.maxY, HT * 6 / 7, 1)), bs.map(b => b.maxY.toFixed(1)).join('/'));
       ok('J8 the bottom is clipped at the floor (≥ 0, and it touches down)',
          bs.every(b => b.minY >= -1 && b.minY <= 1), bs.map(b => b.minY.toFixed(3)).join('/'));
       // Coincident-face pin: the full-width tread CAP side plane vs the board's
@@ -864,6 +895,455 @@
       CI.snapStairEdges(f, up);
       ok('K23 the compose reads the per-piece RISE override', up.elevation === 300,
          `elev=${up.elevation}`);
+    }
+  }
+
+  // ══ shared helpers for the anatomy sections (L / M / N) ═══════════════════
+  // World-local AABB of a mesh under a pure Y rotation (extruded boards).
+  const rotBox = (m) => {
+    const pos = m.geometry.attributes.position;
+    const c = Math.cos(m.rotation.y), s = Math.sin(m.rotation.y);
+    const b = { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity,
+                minZ: Infinity, maxZ: -Infinity };
+    for (let i = 0; i < pos.count; i++) {
+      const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+      const wx = x * c + z * s + m.position.x, wy = y + m.position.y;
+      const wz = -x * s + z * c + m.position.z;
+      if (wx < b.minX) b.minX = wx; if (wx > b.maxX) b.maxX = wx;
+      if (wy < b.minY) b.minY = wy; if (wy > b.maxY) b.maxY = wy;
+      if (wz < b.minZ) b.minZ = wz; if (wz > b.maxZ) b.maxZ = wz;
+    }
+    return b;
+  };
+  // AABB of an UNROTATED box mesh (newels / balusters / riser boards).
+  const boxAABB = (m) => {
+    m.geometry.computeBoundingBox();
+    const bb = m.geometry.boundingBox;
+    return { minX: m.position.x + bb.min.x, maxX: m.position.x + bb.max.x,
+             minY: m.position.y + bb.min.y, maxY: m.position.y + bb.max.y,
+             minZ: m.position.z + bb.min.z, maxZ: m.position.z + bb.max.z };
+  };
+  const tagged = (o, key) => realMeshes(o).filter(m => m.userData?.[key] === true);
+  const capYsOf = (o) => treadCaps(o).map(m => m.position.y).sort((a, b) => a - b);
+
+  // ══ (L) STEP-DOWN top — the n / n+1 riser convention ══════════════════════
+  // A flight starts ONE STEP DOWN from the ledge it delivers to: n treads ride
+  // n+1 risers and the top tread lands at rise·n/(n+1), because stepping off it
+  // onto the upper floor IS the last riser (research §1). This is the DEFAULT
+  // since 2026-08-09 — a deliberate behaviour change. `stairsTopFlush: true`
+  // restores the old flush geometry, and every "old golden" below is pinned
+  // under that flag so the change is exactly and only what it claims to be.
+  {
+    const RC = G.stairsRiserCount;
+    ok('L1 pure: absent topFlush → n + 1 risers',
+       RC(13) === 14 && RC(1) === 2 && RC(6) === 7, `${RC(13)}/${RC(1)}/${RC(6)}`);
+    ok('L2 pure: topFlush → n risers (the old divisor)',
+       RC(13, true) === 13 && RC(1, true) === 1 && RC(6, true) === 6,
+       `${RC(13, true)}/${RC(1, true)}/${RC(6, true)}`);
+    ok('L3 pure: false / undefined are both the step-down default',
+       RC(6, false) === 7 && RC(6, undefined) === 7, `${RC(6, false)}/${RC(6, undefined)}`);
+    ok('L4 pure: garbage never divides by zero (≥ 1 tread, ≥ 1 riser)',
+       RC(0) === 2 && RC(NaN) === 2 && RC(-4) === 2 && RC(NaN, true) === 1,
+       `${RC(0)}/${RC(NaN)}/${RC(-4)}/${RC(NaN, true)}`);
+    ok('L5 pure: rounded to whole treads', RC(3.6) === 5 && RC(3.4) === 4,
+       `${RC(3.6)}/${RC(3.4)}`);
+
+    // Default full flight, both modes side by side.
+    const HT = 2743, RUN = 3600;
+    const down = { id: 'lDown', x: 2000, y: 5000, w: 1000, h: RUN, kind: 'stairs', rotation: 0 };
+    const flush = { ...down, id: 'lFlush', x: 6000, stairsTopFlush: true };
+    r.updateFloor(mkFloor({ furniture: [down, flush] }), scene);
+    const gD = grpAt(down), gF = grpAt(flush);
+    ok('L6 both modes build the SAME 13 treads (the run split is unchanged)',
+       treadCaps(gD).length === 13 && treadCaps(gF).length === 13,
+       `down=${treadCaps(gD).length} flush=${treadCaps(gF).length}`);
+    {
+      const yd = capYsOf(gD).map(y => y + 11), yf = capYsOf(gF).map(y => y + 11);
+      ok('L7 step-down tread tops sit on the 14-riser ladder',
+         yd.every((y, i) => near(y, (HT / 14) * (i + 1), 1e-6)),
+         `[${yd.map(v => v.toFixed(1))}]`);
+      ok('L8 flush tread tops sit on the 13-riser ladder (the OLD golden)',
+         yf.every((y, i) => near(y, (HT / 13) * (i + 1), 1e-6)),
+         `[${yf.map(v => v.toFixed(1))}]`);
+      ok('L9 step-down tops out one riser below the rise; flush tops out AT it',
+         near(topY(gD), HT * 13 / 14, 0.01) && near(topY(gF), HT, 1e-6),
+         `down=${topY(gD)} flush=${topY(gF)}`);
+      ok('L10 …and the two layouts really differ (the pin is not vacuous)',
+         Math.abs(topY(gD) - topY(gF)) > 100, `Δ=${(topY(gF) - topY(gD)).toFixed(1)}`);
+    }
+    // _groundYAt must match the BUILDER tread for tread, in both modes.
+    {
+      const treadD = RUN / 13;
+      let dOk = true, fOk = true;
+      for (let i = 0; i < 13; i++) {
+        const wy = 5000 - RUN / 2 + (i + 0.5) * treadD;
+        if (!near(r._groundYAt(2000, wy), (HT / 14) * (i + 1), 1e-6)) dOk = false;
+        if (!near(r._groundYAt(6000, wy), (HT / 13) * (i + 1), 1e-6)) fOk = false;
+      }
+      ok('L11 _groundYAt walks the step-down ladder on every one of the 13 treads', dOk,
+         `head=${r._groundYAt(2000, 5000 + RUN / 2 - 1)}`);
+      ok('L12 …and the flush ladder on the flush twin', fOk,
+         `head=${r._groundYAt(6000, 5000 + RUN / 2 - 1)}`);
+      ok('L13 the head of each flight reads its own top tread',
+         near(r._groundYAt(2000, 5000 + RUN / 2 - 1), HT * 13 / 14, 1e-6) &&
+         near(r._groundYAt(6000, 5000 + RUN / 2 - 1), HT, 1e-6),
+         `${r._groundYAt(2000, 5000 + RUN / 2 - 1)}/${r._groundYAt(6000, 5000 + RUN / 2 - 1)}`);
+    }
+    // A one-tread flight: the whole feature in miniature.
+    {
+      const d1 = { id: 'l1d', x: 2000, y: 1500, w: 1000, h: 1000, kind: 'stairs', rotation: 0, ht: 200 };
+      const f1 = { ...d1, id: 'l1f', x: 6000, stairsTopFlush: true };
+      r.updateFloor(mkFloor({ furniture: [d1, f1] }), scene);
+      ok('L14 a 200 mm 1-tread flight: step-down top = 100, flush top = 200',
+         treadCaps(grpAt(d1)).length === 1 && treadCaps(grpAt(f1)).length === 1 &&
+         near(topY(grpAt(d1)), 100, 1e-6) && near(topY(grpAt(f1)), 200, 1e-6),
+         `down=${topY(grpAt(d1))} flush=${topY(grpAt(f1))}`);
+      ok('L15 …and the ground truth agrees with each',
+         near(r._groundYAt(2000, 1500), 100, 1e-6) && near(r._groundYAt(6000, 1500), 200, 1e-6),
+         `${r._groundYAt(2000, 1500)}/${r._groundYAt(6000, 1500)}`);
+    }
+    // The STRINGER head endpoint follows the last tread top, not the rise.
+    {
+      const HTh = 1372, RUNh = 1800, nH = 6;
+      const so = { id: 'lsD', x: 2000, y: 8000, w: 1000, h: RUNh, kind: 'stairs_half',
+                   rotation: 0, stairsOpen: true };
+      const sf = { ...so, id: 'lsF', x: 6000, stairsTopFlush: true };
+      r.updateFloor(mkFloor({ furniture: [so, sf] }), scene);
+      const bd = tagged(grpAt(so), 'stairStringer').map(rotBox);
+      const bf = tagged(grpAt(sf), 'stairStringer').map(rotBox);
+      ok('L16 the step-down stringer head = the last tread top (ht·6/7), not ht',
+         bd.length === 2 && bd.every(b => near(b.maxY, HTh * 6 / 7, 1)),
+         bd.map(b => b.maxY.toFixed(1)).join('/'));
+      ok('L17 the flush stringer head = ht (byte-identical to the old build)',
+         bf.length === 2 && bf.every(b => near(b.maxY, HTh, 1e-6)),
+         bf.map(b => b.maxY.toFixed(1)).join('/'));
+      ok('L18 both still touch down at the floor (the foot is unchanged)',
+         [...bd, ...bf].every(b => b.minY >= -1 && b.minY <= 1),
+         [...bd, ...bf].map(b => b.minY.toFixed(3)).join('/'));
+    }
+    // The elevation AUTO-COMPOSE reads the delivered rise, which topFlush does
+    // not touch — a whole U staircase of step-down pieces composes identically.
+    {
+      const CI = await import('./canvas-interact.mod.js?v=' + Date.now());
+      const mkU = (extra) => {
+        const A = { id: 'A', x: 500, y: 900, w: 1000, h: 1800, kind: 'stairs_half', rotation: 0, elevation: 0, ...extra };
+        const L = { id: 'L', x: 1000, y: 2300, w: 2000, h: 1000, kind: 'stair_landing', rotation: 0, elevation: 0 };
+        const B = { id: 'B', x: 1540, y: 930, w: 1000, h: 1800, kind: 'stairs_half', rotation: 180, elevation: 0, ...extra };
+        CI.snapStairEdges({ furniture: [A, L, B] }, B);
+        return B;
+      };
+      const bDown = mkU({}), bFlush = mkU({ stairsTopFlush: true });
+      ok('L19 the U-stair elevation auto-compose is UNCHANGED by topFlush',
+         bDown.elevation === 1372 && bFlush.elevation === 1372 &&
+         bDown.x === 1500 && bFlush.x === 1500,
+         `down=${bDown.elevation} flush=${bFlush.elevation}`);
+      ok('L20 …because stairsRiseMm is still the level change the flight delivers',
+         G.stairsRiseMm({ kind: 'stairs_half', stairsTopFlush: true }, 1372) === 1372 &&
+         G.stairsRiseMm({ kind: 'stairs_half' }, 1372) === 1372, 'ok');
+    }
+  }
+
+  // ══ (M) SIDE WALLS to the level above (Furniture.stairsSideWalls) ═════════
+  // One continuous board per side whose TOP edge is the storey CEILING plane
+  // (WALL_KINDS.full.h minus the piece elevation), so two half flights at
+  // different levels top out at the same ABSOLUTE plane. It replaces the
+  // open-flight stringers rather than doubling them along the same slope.
+  {
+    const CEIL = G.WALL_KINDS.full.h;
+    const W = 1000, RUN = 1800, HT = 1372, nH = 6;
+    const yTread = (HT / 7) * nH;
+    const on = { id: 'mOn', x: 2000, y: 5000, w: W, h: RUN, kind: 'stairs_half',
+                 rotation: 0, stairsOpen: true, stairsSideWalls: true };
+    const off = { id: 'mOff', x: 6000, y: 5000, w: W, h: RUN, kind: 'stairs_half',
+                  rotation: 0, stairsOpen: true };
+    r.updateFloor(mkFloor({ furniture: [on, off] }), scene);
+    const gOn = grpAt(on), gOff = grpAt(off);
+    ok('M1 side walls on → exactly two panels', tagged(gOn, 'stairsSideWall').length === 2,
+       `n=${tagged(gOn, 'stairsSideWall').length}`);
+    ok('M2 …and ZERO stringers (the panel subsumes them — no coplanar slope pair)',
+       tagged(gOn, 'stairStringer').length === 0, `n=${tagged(gOn, 'stairStringer').length}`);
+    ok('M3 REGRESSION: an open flight without the flag still builds two stringers and no panels',
+       tagged(gOff, 'stairStringer').length === 2 && tagged(gOff, 'stairsSideWall').length === 0,
+       `stringers=${tagged(gOff, 'stairStringer').length} panels=${tagged(gOff, 'stairsSideWall').length}`);
+    {
+      const bs = tagged(gOn, 'stairsSideWall').map(rotBox);
+      ok('M4 the panel top is the storey ceiling plane (elevation 0 → CEIL)',
+         bs.every(b => near(b.maxY, CEIL, 1e-6)), bs.map(b => b.maxY.toFixed(1)).join('/'));
+      ok('M5 …well above the slope it replaces (top tread ht·6/7)',
+         bs.every(b => b.maxY > yTread + 1000), `tread=${yTread.toFixed(1)}`);
+      ok('M6 no footprint widening (|x| ≤ W/2)',
+         bs.every(b => b.maxX <= W / 2 + 1e-6 && b.minX >= -W / 2 - 1e-6),
+         bs.map(b => `[${b.minX.toFixed(1)},${b.maxX.toFixed(1)}]`).join(' '));
+      ok('M7 one 40 mm board per side, 2 mm inside the flight half-width',
+         bs.length === 2 && bs.every(b => near(b.maxX - b.minX, 40, 1e-6)) &&
+         bs.some(b => b.minX > 0) && bs.some(b => b.maxX < 0) &&
+         near(Math.max(...bs.map(b => b.maxX)), W / 2 - 2, 1e-6),
+         bs.map(b => `[${b.minX.toFixed(1)},${b.maxX.toFixed(1)}]`).join(' '));
+      ok('M8 the bottom is still the stringer line, clipped at the floor',
+         bs.every(b => b.minY >= -1 && b.minY <= 1), bs.map(b => b.minY.toFixed(3)).join('/'));
+      ok('M9 …and it spans the whole run (foot to head)',
+         bs.every(b => near(b.minZ, -RUN / 2, 1) && near(b.maxZ, RUN / 2, 1)),
+         bs.map(b => `[${b.minZ.toFixed(1)},${b.maxZ.toFixed(1)}]`).join(' '));
+      // NB topY is the panel now (it reaches the ceiling) — the invariant is
+      // about the TREADS, so compare the tread tops.
+      ok('M10 tread count / tread tops / ground truth are untouched by the panel',
+         treadCaps(gOn).length === treadCaps(gOff).length &&
+         near(treadTopY(gOn), treadTopY(gOff), 1e-9) &&
+         near(r._groundYAt(2000, 5000), r._groundYAt(6000, 5000), 1e-9),
+         `${treadCaps(gOn).length}/${treadCaps(gOff).length} g=${r._groundYAt(2000, 5000)}`);
+    }
+    // A RAISED and a SUNKEN flight top out at the same ABSOLUTE plane — the
+    // whole point of anchoring to the ceiling instead of the flight.
+    {
+      const up = { id: 'mUp', x: 2000, y: 8500, w: W, h: RUN, kind: 'stairs_half',
+                   rotation: 0, elevation: 1372, stairsOpen: true, stairsSideWalls: true };
+      const dn = { id: 'mDn', x: 6000, y: 8500, w: W, h: RUN, kind: 'stairs_half',
+                   rotation: 0, elevation: -1000, stairsOpen: true, stairsSideWalls: true };
+      r.updateFloor(mkFloor({ furniture: [up, dn] }), scene);
+      const bu = tagged(grpAt(up), 'stairsSideWall').map(rotBox);
+      const bd = tagged(grpAt(dn), 'stairsSideWall').map(rotBox);
+      ok('M11 a raised flight tops out at CEIL − elevation in its own frame',
+         bu.length === 2 && bu.every(b => near(b.maxY, CEIL - 1372, 1e-6)),
+         bu.map(b => b.maxY.toFixed(1)).join('/'));
+      ok('M12 a sunken flight tops out further above itself (CEIL + 1000)',
+         bd.length === 2 && bd.every(b => near(b.maxY, CEIL + 1000, 1e-6)),
+         bd.map(b => b.maxY.toFixed(1)).join('/'));
+      ok('M13 …so BOTH reach the same absolute plane (the enclosed-stairwell rule)',
+         near(grpAt(up).position.y + bu[0].maxY, CEIL, 1e-6) &&
+         near(grpAt(dn).position.y + bd[0].maxY, CEIL, 1e-6),
+         `up=${grpAt(up).position.y + bu[0].maxY} dn=${grpAt(dn).position.y + bd[0].maxY}`);
+    }
+    // SOLID flight: the below-slope part is buried inside the mass, and the
+    // panel's faces stay strictly INBOARD of the mass side planes (±W/2).
+    {
+      const sol = { id: 'mSol', x: 2000, y: 2000, w: W, h: RUN, kind: 'stairs_half',
+                    rotation: 0, stairsSideWalls: true };
+      r.updateFloor(mkFloor({ furniture: [sol] }), scene);
+      const bs = tagged(grpAt(sol), 'stairsSideWall').map(rotBox);
+      ok('M14 a SOLID flight still gets its panels', bs.length === 2, `n=${bs.length}`);
+      const plus = bs.find(b => b.minX > 0);
+      ok('M15 …with both faces inboard of the mass side plane by 2 and 42 mm (no coplanar pair)',
+         near(W / 2 - plus.maxX, 2, 1e-6) && near(W / 2 - plus.minX, 42, 1e-6),
+         `outer=${(W / 2 - plus.maxX).toFixed(2)} inner=${(W / 2 - plus.minX).toFixed(2)}`);
+      ok('M16 a solid flight builds no stringers either way (regression)',
+         tagged(grpAt(sol), 'stairStringer').length === 0, 'ok');
+    }
+    // Degenerate skip: a flight whose head already reaches the ceiling plane.
+    {
+      const hi = { id: 'mHi', x: 2000, y: 2000, w: W, h: 3600, kind: 'stairs',
+                   rotation: 0, elevation: 2000, stairsOpen: true, stairsSideWalls: true };
+      r.updateFloor(mkFloor({ furniture: [hi] }), scene);
+      ok('M17 a panel that would be degenerate (yTop ≤ slope max) is skipped…',
+         tagged(grpAt(hi), 'stairsSideWall').length === 0,
+         `yTop=${CEIL - 2000} slopeMax=${(2743 * 13 / 14).toFixed(1)}`);
+      ok('M18 …and the stringers come back, so the flight is never left bare',
+         tagged(grpAt(hi), 'stairStringer').length === 2,
+         `n=${tagged(grpAt(hi), 'stairStringer').length}`);
+    }
+    // Flights only — landings and ramps ignore the flag (noted follow-up).
+    {
+      const land = { id: 'mL', x: 2000, y: 2000, w: 1000, h: 1000, kind: 'stair_landing',
+                     rotation: 0, ht: 400, stairsSideWalls: true };
+      const ramp = { id: 'mR', x: 6000, y: 2000, w: 1000, h: 2400, kind: 'ramp',
+                     rotation: 0, stairsSideWalls: true };
+      r.updateFloor(mkFloor({ furniture: [land, ramp] }), scene);
+      ok('M19 a landing / ramp ignores stairsSideWalls (flights only)',
+         tagged(grpAt(land), 'stairsSideWall').length === 0 &&
+         tagged(grpAt(ramp), 'stairsSideWall').length === 0, 'ok');
+    }
+  }
+
+  // ══ (N) RISER boards / NEWEL posts / HANDRAIL show-hide ═══════════════════
+  // Three independent item-level booleans, ALL absent = hidden = the shipped
+  // build. Every height is step-down aware (it hangs off the last tread top /
+  // the nosing line, never the rise).
+  {
+    const W = 1000, RUN = 1800, HT = 1372, n = 6;
+    const riser = HT / 7, treadD = RUN / n, yTread = riser * n;
+    const base = (id, x, extra) => ({ id, x, y: 5000, w: W, h: RUN, kind: 'stairs_half',
+                                      rotation: 0, stairsOpen: true, ...extra });
+    const KEYS = ['stairsRiser', 'stairsNewel', 'stairsNewelCap', 'stairsRail', 'stairsBaluster'];
+
+    // ── the default is the shipped build, exactly ────────────────────────────
+    {
+      const plain = base('nPlain', 2000, {});
+      r.updateFloor(mkFloor({ furniture: [plain] }), scene);
+      const g = grpAt(plain);
+      ok('N1 absent flags build ZERO anatomy meshes',
+         KEYS.every(k => tagged(g, k).length === 0),
+         KEYS.map(k => `${k}=${tagged(g, k).length}`).join(' '));
+      ok('N2 …and the mesh count is exactly the shipped open flight (2n treads + 2 stringers)',
+         realMeshes(g).length === 2 * n + 2, `meshes=${realMeshes(g).length} want=${2 * n + 2}`);
+    }
+
+    // ── riser boards ─────────────────────────────────────────────────────────
+    {
+      const rOpen = base('nRis', 2000, { stairsRisers: true });
+      const rSolid = { ...base('nRisS', 6000, { stairsRisers: true }), stairsOpen: undefined };
+      r.updateFloor(mkFloor({ furniture: [rOpen, rSolid] }), scene);
+      const gb = tagged(grpAt(rOpen), 'stairsRiser');
+      ok('N3 an OPEN flight builds one riser board per tread', gb.length === n, `n=${gb.length}`);
+      ok('N4 a SOLID flight builds none (its own mass already closes it)',
+         tagged(grpAt(rSolid), 'stairsRiser').length === 0,
+         `n=${tagged(grpAt(rSolid), 'stairsRiser').length}`);
+      const bs = gb.map(boxAABB).sort((a, b) => a.minZ - b.minZ);
+      ok('N5 each board is 19 mm thick and narrower than the tread cap (W − 16)',
+         bs.every(b => near(b.maxZ - b.minZ, 19, 1e-6) && near(b.maxX - b.minX, W - 16, 1e-6)),
+         `${(bs[0].maxZ - bs[0].minZ).toFixed(1)} × ${(bs[0].maxX - bs[0].minX).toFixed(1)}`);
+      ok('N6 board 0 stands on the floor; the rest sit on the tread below (step-down ladder)',
+         near(bs[0].minY, 0, 1e-6) && bs.slice(1).every((b, i) => near(b.minY, riser * (i + 1), 1e-6)),
+         bs.map(b => b.minY.toFixed(1)).join('/'));
+      ok('N7 each board is set BACK from its tread nosing by the 25 mm overhang',
+         bs.every((b, i) => near(b.minZ, -RUN / 2 + i * treadD + 25, 1e-6)),
+         bs.map(b => b.minZ.toFixed(1)).join('/'));
+      ok('N8 …and its top is BURIED 4 mm in the tread body above (no coplanar face)',
+         bs.every((b, i) => near(b.maxY, riser * (i + 1) - 60 + 4, 1e-6)),
+         bs.map(b => b.maxY.toFixed(1)).join('/'));
+      ok('N9 nothing widens the footprint', bs.every(b => Math.abs(b.maxX) <= W / 2 + 1e-6), 'ok');
+    }
+
+    // ── newel posts ──────────────────────────────────────────────────────────
+    {
+      const nw = base('nNew', 2000, { stairsNewels: true });
+      r.updateFloor(mkFloor({ furniture: [nw] }), scene);
+      const g = grpAt(nw);
+      const posts = tagged(g, 'stairsNewel').map(boxAABB);
+      ok('N10 four newel posts (foot + head × both sides)', posts.length === 4, `n=${posts.length}`);
+      ok('N11 …four caps, each 20 mm wider than its post', tagged(g, 'stairsNewelCap').length === 4,
+         `n=${tagged(g, 'stairsNewelCap').length}`);
+      ok('N12 90 mm square section, inside the footprint',
+         posts.every(p => near(p.maxX - p.minX, 90, 1e-6) && near(p.maxZ - p.minZ, 90, 1e-6) &&
+                          Math.abs(p.maxX) <= W / 2 + 1e-6),
+         posts.map(p => (p.maxX - p.minX).toFixed(1)).join('/'));
+      const foot = posts.filter(p => p.minZ < 0), head = posts.filter(p => p.minZ > 0);
+      ok('N13 the two FOOT posts stand on the floor at the first nosing',
+         foot.length === 2 && foot.every(p => near(p.minY, 0, 1e-6) && near(p.minZ, -RUN / 2, 1e-6)),
+         foot.map(p => `${p.minY.toFixed(1)}@${p.minZ.toFixed(1)}`).join(' '));
+      ok('N14 the two HEAD posts stand on the LAST TREAD TOP (step-down aware)',
+         head.length === 2 && head.every(p => near(p.minY, yTread, 1e-6) &&
+                                              near(p.maxZ, RUN / 2, 1e-6)),
+         head.map(p => `${p.minY.toFixed(1)}@${p.maxZ.toFixed(1)}`).join(' '));
+      ok('N15 every post is 1150 mm above its own base',
+         posts.every(p => near(p.maxY - p.minY, 1150, 1e-6)),
+         posts.map(p => (p.maxY - p.minY).toFixed(1)).join('/'));
+      const caps = tagged(g, 'stairsNewelCap').map(boxAABB);
+      ok('N16 each cap OVERLAPS its post top by 10 mm (never abuts it)',
+         caps.every(c => posts.some(p => near(c.minY, p.maxY - 10, 1e-6) &&
+                                         near(c.maxX - c.minX, 110, 1e-6))),
+         caps.map(c => c.minY.toFixed(1)).join('/'));
+    }
+
+    // ── handrail + balusters ─────────────────────────────────────────────────
+    {
+      const hr = base('nRail', 2000, { stairsHandrail: true });
+      r.updateFloor(mkFloor({ furniture: [hr] }), scene);
+      const g = grpAt(hr);
+      const rails = tagged(g, 'stairsRail'), bals = tagged(g, 'stairsBaluster');
+      ok('N17 one rail per side', rails.length === 2, `n=${rails.length}`);
+      ok('N18 …and one baluster per tread per side (2·n)', bals.length === 2 * n,
+         `n=${bals.length} want=${2 * n}`);
+      ok('N19 the rail is a 50 mm round profile sloped along the flight',
+         rails.every(m => m.geometry?.type === 'CylinderGeometry' &&
+                          near(m.geometry.parameters.radiusTop, 25, 1e-6) &&
+                          Math.abs(m.rotation.x) > 0.5),
+         rails.map(m => m.rotation.x.toFixed(3)).join('/'));
+      {
+        // Midpoint sample: nosing line at z = 0 plus 900 mm.
+        const wantMid = riser + (RUN / 2) * ((yTread - riser) / RUN) + 900;
+        ok('N20 rail height = the nosing line + 900 mm (sampled at its midpoint)',
+           rails.every(m => near(m.position.y, wantMid, 1e-6) && near(m.position.z, 0, 1e-6)),
+           `y=${rails[0].position.y.toFixed(1)} want=${wantMid.toFixed(1)}`);
+      }
+      ok('N21 the rail never widens the footprint (axis at W/2 − 27, r 25)',
+         rails.every(m => near(Math.abs(m.position.x), W / 2 - 27, 1e-6)) &&
+         rails.some(m => m.position.x > 0) && rails.some(m => m.position.x < 0),
+         rails.map(m => m.position.x.toFixed(1)).join('/'));
+      {
+        const bb = bals.map(boxAABB).filter(b => b.minX > 0).sort((a, b) => a.minZ - b.minZ);
+        ok('N22 balusters are 35 mm square, one at each tread centre',
+           bb.length === n && bb.every((b, i) =>
+             near(b.maxX - b.minX, 35, 1e-6) &&
+             near((b.minZ + b.maxZ) / 2, -RUN / 2 + (i + 0.5) * treadD, 1e-6)),
+           bb.map(b => ((b.minZ + b.maxZ) / 2).toFixed(0)).join('/'));
+        ok('N23 …sunk 6 mm into the tread below and running up into the rail axis',
+           bb.every((b, i) => near(b.minY, riser * (i + 1) - 6, 0.01) &&
+                              b.maxY > riser * (i + 1) + 800),
+           bb.map(b => `${b.minY.toFixed(0)}..${b.maxY.toFixed(0)}`).join(' '));
+      }
+      // With NEWELS on, the rail terminates at the post CENTRES so its flat end
+      // caps are buried inside them (a shallow flight's rail is near-horizontal).
+      {
+        const both = base('nBoth', 6000, { stairsHandrail: true, stairsNewels: true });
+        r.updateFloor(mkFloor({ furniture: [both] }), scene);
+        const rr = tagged(grpAt(both), 'stairsRail');
+        const halfLen = rr[0].geometry.parameters.height / 2;
+        const dz = RUN - 90, dy = (yTread - riser) * (RUN - 90) / RUN;
+        ok('N24 with newels the rail spans post-centre to post-centre (ends buried)',
+           rr.length === 2 && near(rr[0].geometry.parameters.height, Math.hypot(dz, dy), 1e-6),
+           `len=${(halfLen * 2).toFixed(1)} want=${Math.hypot(dz, dy).toFixed(1)}`);
+        ok('N25 …and it still terminates BELOW each newel cap (research §7)',
+           riser + 900 < 1150 && yTread + 900 < yTread + 1150, 'ok');
+      }
+      // With SIDE WALLS on it becomes a wall-mounted rail: no balusters.
+      {
+        const wall = base('nWall', 6000, { stairsHandrail: true, stairsSideWalls: true });
+        r.updateFloor(mkFloor({ furniture: [wall] }), scene);
+        const gw = grpAt(wall);
+        ok('N26 side walls + handrail → the rail stays, the balusters go',
+           tagged(gw, 'stairsRail').length === 2 && tagged(gw, 'stairsBaluster').length === 0,
+           `rails=${tagged(gw, 'stairsRail').length} bals=${tagged(gw, 'stairsBaluster').length}`);
+        ok('N27 …and the rail moves inboard of the panel inner face (60 mm clear)',
+           tagged(gw, 'stairsRail').every(m =>
+             near(Math.abs(m.position.x), W / 2 - 2 - 40 - 60, 1e-6)),
+           tagged(gw, 'stairsRail').map(m => m.position.x.toFixed(1)).join('/'));
+      }
+      // FLUSH mode: every anatomy height follows the flush nosing line instead.
+      {
+        const fl = base('nFlush', 6000, { stairsHandrail: true, stairsNewels: true,
+                                          stairsTopFlush: true });
+        r.updateFloor(mkFloor({ furniture: [fl] }), scene);
+        const gf = grpAt(fl);
+        const fRiser = HT / n, fTread = HT;
+        const head = tagged(gf, 'stairsNewel').map(boxAABB).filter(p => p.minZ > 0);
+        ok('N28 flush mode: the head newels stand on the FLUSH top tread (= the rise)',
+           head.length === 2 && head.every(p => near(p.minY, fTread, 1e-6)),
+           head.map(p => p.minY.toFixed(1)).join('/'));
+        const wantMid = fRiser + (RUN / 2) * ((fTread - fRiser) / RUN) + 900;
+        ok('N29 flush mode: the rail follows the flush nosing line + 900',
+           tagged(gf, 'stairsRail').every(m => near(m.position.y, wantMid, 1e-6)),
+           `y=${tagged(gf, 'stairsRail')[0].position.y.toFixed(1)} want=${wantMid.toFixed(1)}`);
+      }
+    }
+
+    // ── flights only, and nav/terrain are untouched by all three ─────────────
+    {
+      const all = base('nAll', 2000, { stairsRisers: true, stairsNewels: true,
+                                       stairsHandrail: true, stairsSideWalls: true });
+      const none = base('nNone', 6000, {});
+      const land = { id: 'nL', x: 2000, y: 2000, w: 1000, h: 1000, kind: 'stair_landing',
+                     rotation: 0, ht: 400, stairsOpen: true, stairsRisers: true,
+                     stairsNewels: true, stairsHandrail: true };
+      r.updateFloor(mkFloor({ furniture: [all, none, land] }), scene);
+      ok('N30 a landing ignores every anatomy flag (flights only)',
+         KEYS.every(k => tagged(grpAt(land), k).length === 0), 'ok');
+      ok('N31 the walkable ground truth is identical with and without the anatomy',
+         near(r._groundYAt(2000, 5000), r._groundYAt(6000, 5000), 1e-9) &&
+         near(r._groundYAt(2000, 5000 + RUN / 2 - 5), r._groundYAt(6000, 5000 + RUN / 2 - 5), 1e-9),
+         `${r._groundYAt(2000, 5000)} vs ${r._groundYAt(6000, 5000)}`);
+      ok('N32 …and so are the tread count and the tread tops',
+         treadCaps(grpAt(all)).length === treadCaps(grpAt(none)).length &&
+         capYsOf(grpAt(all)).every((y, i) => near(y, capYsOf(grpAt(none))[i], 1e-9)),
+         `${treadCaps(grpAt(all)).length}/${treadCaps(grpAt(none)).length}`);
+      {
+        // Nav: the flight's footprint is exempt either way, and the anatomy adds
+        // no blockers — the free-cell count over the plan is unchanged.
+        const freeCells = () => (r._nav?.blocked ?? []).reduce((s, b) => s + (b ? 0 : 1), 0);
+        r.updateFloor(mkFloor({ furniture: [none] }), scene);
+        const a = freeCells();
+        r.updateFloor(mkFloor({ furniture: [{ ...all, x: 6000 }] }), scene);
+        ok('N33 nav is byte-identical: the anatomy blocks no cell', freeCells() === a,
+           `plain=${a} anatomy=${freeCells()}`);
+      }
     }
   }
 

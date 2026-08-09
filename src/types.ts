@@ -182,6 +182,32 @@ export interface Furniture {
                       // platform; every TOP surface is bit-identical to the solid build, so
                       // _groundYAt / _buildNav / _terrain / 2D / autofit are untouched. Absent
                       // = solid = the classic build. Item-level → no repairFloor change.
+  stairsTopFlush?: boolean; // FLIGHTS ONLY (stairs / stairs_half): draw the top tread FLUSH with
+                      // the level this flight rises to (n treads ⇒ n risers, riser = rise/n).
+                      // ABSENT = the DEFAULT, and this default CHANGED on 2026-08-09 (deliberate,
+                      // user-directed): a flight now starts ONE STEP DOWN from the ledge it
+                      // delivers to — n treads ⇒ n+1 risers, riser = rise/(n+1), top tread at
+                      // rise·n/(n+1) — because the upper floor IS the final step (the real-world
+                      // convention, docs/research/stair-anatomy.md §1). Set true to restore the
+                      // old flush geometry byte-for-byte. Divisor resolution lives in ONE place:
+                      // geometry.stairsRiserCount. 3D build + _groundYAt ground truth only — the
+                      // plan footprint, tread COUNT, 2D glyph, stairsRiseMm (= the level change
+                      // the flight delivers, unchanged in both modes), autofit and the elevation
+                      // auto-compose are all untouched. Item-level → no repairFloor change.
+  stairsSideWalls?: boolean; // FLIGHTS ONLY (3D build only): draw a full side wall on each side of
+                      // the flight, running from the stair line UP TO THE STOREY CEILING PLANE —
+                      // the enclosed-stairwell look, so two half flights at different elevations
+                      // top out at the same absolute plane. Replaces the open-flight stringers
+                      // (one continuous board per side). Absent = off = byte-identical.
+  stairsRisers?: boolean; // FLIGHTS ONLY (3D build only): closed RISER boards under each tread's
+                      // nosing. Only meaningful on an OPEN flight (a solid one has them
+                      // inherently). Absent = off = byte-identical.
+  stairsNewels?: boolean; // FLIGHTS ONLY (3D build only): four capped newel posts (foot + head ×
+                      // both sides). Absent = off = byte-identical.
+  stairsHandrail?: boolean; // FLIGHTS ONLY (3D build only): a sloped handrail per side following
+                      // the nosing line, with one baluster per tread (balusters are suppressed
+                      // when stairsSideWalls is on — a wall-mounted rail). Absent = off =
+                      // byte-identical.
   color?: string;     // hex override of the kind's default tint; undefined = use def color
   locked?: boolean;   // canvas move/resize/rotate/delete disabled
   entity_id?: string | null;  // HA binding for appliances / TV (media_player etc.)

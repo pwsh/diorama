@@ -5988,6 +5988,43 @@ export class Sidebar extends LitElement {
                  piece.stairsOpen = (e.target as HTMLInputElement).checked || undefined;
                })}>
       </div>
+      ${curKind === 'stairs' || curKind === 'stairs_half' ? html`
+        <div class="row">
+          <label title="Checked: the top tread is flush with the level this flight rises to. Unchecked (default): treads start one step down from the ledge — the level above acts as the final step, so a flight of N steps has N+1 risers.">Start at top level</label>
+          <input type="checkbox" .checked=${piece.stairsTopFlush === true}
+                 @change=${(e: Event) => upd(() => {
+                   piece.stairsTopFlush = (e.target as HTMLInputElement).checked ? true : undefined;
+                 })}>
+        </div>
+        <div class="row">
+          <label title="Draw a wall on each side of the flight running from the stair line up to the ceiling of this storey — the enclosed-stairwell look. Because the top edge is the ceiling plane, two half flights at different levels top out together. Replaces the open-flight stringers with one continuous board per side.">Side walls to level above</label>
+          <input type="checkbox" .checked=${piece.stairsSideWalls === true}
+                 @change=${(e: Event) => upd(() => {
+                   piece.stairsSideWalls = (e.target as HTMLInputElement).checked || undefined;
+                 })}>
+        </div>
+        ${piece.stairsOpen === true ? html`
+          <div class="row">
+            <label title="Close each step with a riser board under the tread's nosing. A solid flight is already closed by its own mass, so this only applies while “Open underneath” is on.">Risers</label>
+            <input type="checkbox" .checked=${piece.stairsRisers === true}
+                   @change=${(e: Event) => upd(() => {
+                     piece.stairsRisers = (e.target as HTMLInputElement).checked || undefined;
+                   })}>
+          </div>` : nothing}
+        <div class="row">
+          <label title="Capped posts at the foot and the head of the flight, both sides — where a handrail terminates.">Newel posts</label>
+          <input type="checkbox" .checked=${piece.stairsNewels === true}
+                 @change=${(e: Event) => upd(() => {
+                   piece.stairsNewels = (e.target as HTMLInputElement).checked || undefined;
+                 })}>
+        </div>
+        <div class="row">
+          <label title="A sloped rail on each side, 900 mm above the nosing line, with one baluster per step. With side walls on it becomes a wall-mounted rail and the balusters are dropped.">Handrail</label>
+          <input type="checkbox" .checked=${piece.stairsHandrail === true}
+                 @change=${(e: Event) => upd(() => {
+                   piece.stairsHandrail = (e.target as HTMLInputElement).checked || undefined;
+                 })}>
+        </div>` : nothing}
     `;
   }
 

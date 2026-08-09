@@ -19,7 +19,7 @@ import {
   isRackKind, rackHealth, rackHealthColor, type RackHealth,
   uvParasolWanted,
   plantThirsty, PLANT_MOISTURE_DEFAULT_THRESHOLD,
-  isStairsKind, stairsRiseMm, stairsTreadCount, isBedKind, bedPillowLayout,
+  isStairsKind, stairsRiseMm, stairsTreadCount, stairsRiserCount, isBedKind, bedPillowLayout,
   isTreeKind, treeHeightMm,
   isVehicleKind, evStatusOf, evStatusColor, carChargeState,
   doorOpenFraction, garageDoorHeightMm, doorSlideDir, lighten,
@@ -1221,6 +1221,21 @@ const RAMP_OPEN_SLAB_MM = 80;
 const STAIR_STRINGER_T_MM = 40;
 const STAIR_STRINGER_DROP_MM = 300;
 const STAIR_STRINGER_INSET_MM = 2;
+// Stair ANATOMY parts (Furniture.stairsRisers / stairsNewels / stairsHandrail /
+// stairsSideWalls — all 3D-BUILD-ONLY, all absent = off). Every value is the ONE
+// nominal from docs/research/stair-anatomy.md's "Diorama design constants" table.
+const STAIR_RISER_BOARD_MM = 19;    // 3/4 in closed-riser stock
+const STAIR_NOSING_MM = 25;         // 1 in tread overhang — the riser board's setback
+const STAIR_RAIL_H_MM = 900;        // rail top above the NOSING LINE (IRC 864–965)
+const STAIR_RAIL_R_MM = 25;         // 50 mm round profile (IRC circular 32–51)
+const STAIR_NEWEL_MM = 90;          // box-newel square section
+const STAIR_NEWEL_H_MM = 1150;      // post height above its own base, cap sits on top
+const STAIR_BALUSTER_MM = 35;       // slim square spindle
+// ARCHITECT'S NOTE — the research doc recommends a 100 mm enclosed-stairwell side
+// wall (matching Diorama's `Wall` thickness). Deliberately OVERRIDDEN to the
+// stringer's 40 mm here: the side-wall panel REPLACES the stringer as one
+// continuous board per side, and a 100 mm board on a 1000 mm flight would eat
+// 20 % of the tread width. Same 2 mm inset, so the same coincident-face safety.
 
 // Light kinds that STAND ON THE GROUND (as opposed to hanging from a ceiling or
 // bolting to a wall) and so follow the surroundings grade when placed outdoors.
@@ -3009,11 +3024,12 @@ export class ThreeDRenderer {
   private _fanSpin: Record<string, { rps: number; angle: number }> = {};
   // Walkable terrain (stairs + landings): humanoids stand on the computed
   // surface height instead of the floor plane.
-  // `treads` = the piece's Furniture.stairTreads override (flights only), so
-  // the ground truth quantizes to the SAME steps the builder rendered.
+  // `treads` = the piece's Furniture.stairTreads override and `topFlush` its
+  // Furniture.stairsTopFlush (flights only), so the ground truth quantizes to
+  // the SAME steps at the SAME heights the builder rendered.
   private _terrain: { x: number; y: number; w: number; h: number; rotation?: number;
                       ht: number; elevation: number; kind: string; poly?: Vec2[];
-                      treads?: number }[] = [];
+                      treads?: number; topFlush?: boolean }[] = [];
   // Does _terrain hold at least one `terrace` entry? Gates the terrace lookup in
   // _itemGroundY (and the wall/opening base short-circuits) so a plan with no
   // terraces keeps the pre-terrace fast path exactly. Reset wherever _terrain is.
@@ -4358,11 +4374,14 @@ export class ThreeDRenderer {
         gy = t.elevation + t.ht * frac;
       } else {
         // Tread kinds: quantize to the SAME step layout the builder renders
-        // (rise AND depth — a short flight is 1–2 steps, not a forced 3).
+        // (rise AND depth — a short flight is 1–2 steps, not a forced 3), at the
+        // SAME heights (the n+1-riser step-down default, unless stairsTopFlush).
+        // The run still holds n treads; only the divisor of the rise differs, so
+        // the top tread reads ht·n/(n+1) — one riser below the level above.
         const n = stairsTreadCount(t.h, t.ht, t.treads);
         const frac = (l.y + t.h / 2) / t.h;  // 0 at the front → 1 at the top
         const step = Math.min(n - 1, Math.max(0, Math.floor(frac * n)));
-        gy = t.elevation + (t.ht / n) * (step + 1);
+        gy = t.elevation + (t.ht / stairsRiserCount(n, t.topFlush)) * (step + 1);
       }
       if (!found || gy > g) { g = gy; found = true; }
     }
@@ -7187,7 +7206,7 @@ export class ThreeDRenderer {
         this._terrain.push({
           x: fu.x, y: fu.y, w: fu.w, h: fu.h, rotation: fu.rotation,
           ht: stairsRiseMm(fu, def.ht), elevation: fu.elevation ?? 0, kind: fu.kind,
-          treads: fu.stairTreads,
+          treads: fu.stairTreads, topFlush: fu.stairsTopFlush,
         });
         // Glass-house: build the stairs translucent so the storey reads through.
         // Cutaway: enroll the solid step meshes so a foreground stairwell fades
@@ -9841,6 +9860,9 @@ export class ThreeDRenderer {
                                  kind?: import('./types.js').FurnitureKind;
                                  rotation?: number; elevation?: number;
                                  stairsOpen?: boolean; stairTreads?: number;
+                                 stairsTopFlush?: boolean; stairsSideWalls?: boolean;
+                                 stairsRisers?: boolean; stairsNewels?: boolean;
+                                 stairsHandrail?: boolean;
                                  color?: string; customKindId?: string; vehicleModelId?: string },
                           neighbors?: Furniture[],
                           customObjects?: ObjectRecipe[],
@@ -10552,11 +10574,24 @@ export class ThreeDRenderer {
         // Solid stacked steps rising toward local +Z (the plan-top). Tread
         // count follows the run depth (~280 mm treads) AND the rise (~130 mm
         // minimum riser), so a short-rise flight is 1–2 steps instead of three
-        // impossible slivers. Default flights are unchanged. riser = HT / n.
+        // impossible slivers. Default flights are unchanged.
         // `Furniture.stairTreads` overrides the derived count (a user counting
         // their real staircase); _groundYAt + the 2D glyph pass the same field.
+        //
+        // RISER COUNT ≠ TREAD COUNT: by default a flight STARTS ONE STEP DOWN
+        // from the ledge it delivers to, so n treads ride n+1 risers and the
+        // top tread lands at HT·n/(n+1) — the upper floor is the final step
+        // (docs/research/stair-anatomy.md §1). `Furniture.stairsTopFlush`
+        // restores the old flush-top geometry. The divisor lives in exactly one
+        // place — geometry.stairsRiserCount — shared with _groundYAt. The RUN is
+        // still divided into n treads either way, so the plan footprint, the
+        // tread count and the 2D glyph are untouched.
         const n = stairsTreadCount(D, HT, fu.stairTreads);
-        const riser = HT / n, treadD = D / n;
+        const riser = HT / stairsRiserCount(n, fu.stairsTopFlush), treadD = D / n;
+        // Top of the highest tread — the head of the slope line every anatomy
+        // part hangs off (stringer/side-wall head, head newel base, rail top
+        // end). Equals HT exactly in flush mode.
+        const yTread = riser * n;
         const treadMat = this._mat({ color: 0xa1887f, roughness: 0.6 });
         // "Open underneath" (Furniture.stairsOpen): each tread is a FLOATING
         // ~60 mm slab (38 mm body + the same 22 mm nosing cap) instead of a
@@ -10597,24 +10632,47 @@ export class ThreeDRenderer {
         // side faces (±(W/2 − 4)) land INSIDE the 40 mm board thickness.
         // Skipped for a single-tread flight (nothing to carry, and its top edge
         // would be horizontal AT the cap top = a coplanar pair).
-        if (open && n >= 2) {
-          const yFoot = riser, yHead = HT;               // top edge endpoints
-          const bFoot = yFoot - STAIR_STRINGER_DROP_MM;  // dropped bottom edge
-          const bHead = yHead - STAIR_STRINGER_DROP_MM;
-          const prof = new THREE.Shape();
-          if (bFoot >= 0) {
-            prof.moveTo(-D / 2, yFoot); prof.lineTo(D / 2, yHead);
-            prof.lineTo(D / 2, bHead);  prof.lineTo(-D / 2, bFoot);
-          } else if (bHead > 0) {
+        //
+        // The SLOPE line + its dropped, floor-clipped underside is shared with
+        // the enclosed-stairwell SIDE WALL below (which replaces the stringer as
+        // one continuous board), so it is derived once here. `pts` is the profile
+        // exactly as the stringer walks it AFTER the head-top vertex; the closing
+        // segment back to (−D/2, footTopY) is implied by closePath(), which is
+        // what keeps the stringer byte-identical to the shipped build.
+        const yFootSlope = riser, yHeadSlope = yTread;
+        const slopeProfile = () => {
+          const bFoot = yFootSlope - STAIR_STRINGER_DROP_MM;   // dropped bottom edge
+          const bHead = yHeadSlope - STAIR_STRINGER_DROP_MM;
+          if (bFoot >= 0)
+            return { footTopY: yFootSlope, footBotY: bFoot,
+                     pts: [[D / 2, bHead], [-D / 2, bFoot]] as [number, number][] };
+          if (bHead > 0) {
             // Bottom crosses the floor: run along y = 0 from the foot to it.
-            const zc = -D / 2 + D * (STAIR_STRINGER_DROP_MM - yFoot) / (yHead - yFoot);
-            prof.moveTo(-D / 2, yFoot); prof.lineTo(D / 2, yHead);
-            prof.lineTo(D / 2, bHead);  prof.lineTo(zc, 0); prof.lineTo(-D / 2, 0);
-          } else {
-            // Shorter than the drop: a plain foot→head triangle (never a
-            // degenerate or self-intersecting profile).
-            prof.moveTo(-D / 2, 0); prof.lineTo(D / 2, yHead); prof.lineTo(D / 2, 0);
+            const zc = -D / 2 + D * (STAIR_STRINGER_DROP_MM - yFootSlope) /
+                                    (yHeadSlope - yFootSlope);
+            return { footTopY: yFootSlope, footBotY: 0,
+                     pts: [[D / 2, bHead], [zc, 0], [-D / 2, 0]] as [number, number][] };
           }
+          // Shorter than the drop: a plain foot→head triangle (never a
+          // degenerate or self-intersecting profile).
+          return { footTopY: 0, footBotY: 0, pts: [[D / 2, 0]] as [number, number][] };
+        };
+        // Enclosed-stairwell SIDE WALLS (Furniture.stairsSideWalls): the same
+        // raked board, but its TOP edge runs level at the STOREY CEILING plane
+        // instead of following the treads — so an enclosed stairwell's two half
+        // flights, sitting at different elevations, top out at the SAME absolute
+        // plane. yTop is measured in the piece's own frame, hence CEIL minus the
+        // piece elevation (a sunken flight's ceiling is further above it).
+        const sideWalls = fu.stairsSideWalls === true;
+        const yWallTop = WALL_KINDS.full.h - (fu.elevation ?? 0);
+        const wantSideWalls = sideWalls && yWallTop > yHeadSlope;
+        // The panel SUBSUMES the stringer (one continuous board per side — two
+        // boards sharing the slope line would be a coplanar pair).
+        if (open && n >= 2 && !wantSideWalls) {
+          const sp = slopeProfile();
+          const prof = new THREE.Shape();
+          prof.moveTo(-D / 2, sp.footTopY); prof.lineTo(D / 2, yHeadSlope);
+          for (const [pz, py] of sp.pts) prof.lineTo(pz, py);
           prof.closePath();
           const sGeo = new THREE.ExtrudeGeometry(
             prof, { depth: STAIR_STRINGER_T_MM, bevelEnabled: false });
@@ -10628,6 +10686,117 @@ export class ThreeDRenderer {
             b.position.x = px;
             b.userData.stairStringer = true;
             grp.add(b);
+          }
+        }
+        if (wantSideWalls) {
+          const sp = slopeProfile();
+          const prof = new THREE.Shape();
+          prof.moveTo(-D / 2, yWallTop); prof.lineTo(D / 2, yWallTop);
+          for (const [pz, py] of sp.pts) prof.lineTo(pz, py);
+          // The stringer's implied closing segment ends at (−D/2, footTopY); the
+          // panel's left edge is vertical down to the bottom line, so a profile
+          // whose bottom run stopped short of the foot needs that vertex spelled
+          // out (the triangle branch is the only one that does).
+          if (Math.abs(sp.pts[sp.pts.length - 1][0] + D / 2) > 1e-6)
+            prof.lineTo(-D / 2, sp.footBotY);
+          prof.closePath();
+          const pGeo = new THREE.ExtrudeGeometry(
+            prof, { depth: STAIR_STRINGER_T_MM, bevelEnabled: false });
+          // Same thickness + inset as the stringer it replaces, so on a SOLID
+          // flight the buried part stays inboard of the mass side faces (±W/2)
+          // and never lands coplanar with them.
+          const outer = W / 2 - STAIR_STRINGER_INSET_MM;
+          for (const px of [outer, -outer + STAIR_STRINGER_T_MM]) {
+            const b = new THREE.Mesh(pGeo, wood);
+            b.rotation.y = -Math.PI / 2;
+            b.position.x = px;
+            b.userData.stairsSideWall = true;
+            grp.add(b);
+          }
+        }
+        // ── closed RISER boards (Furniture.stairsRisers) ─────────────────────
+        // Only meaningful on an OPEN flight: a solid one is closed by its own
+        // mass. Board i fills the gap between tread (i−1)'s top and tread i's
+        // underside, set BACK from tread i's nosing by the overhang so the tread
+        // above visibly overhangs it (a flush riser reads as a slab front, not a
+        // stair — research §4). Narrower than the tread body AND buried 4 mm up
+        // into it, so no face of it is ever coplanar with a tread face.
+        if (open && fu.stairsRisers === true) {
+          for (let i = 0; i < n; i++) {
+            const hStep = riser * (i + 1);
+            const bodyH = Math.max(1, Math.min(STAIRS_OPEN_SLAB_MM - 22, hStep - 22));
+            const yTopB = hStep - 22 - bodyH + 4;   // 4 mm inside the tread body
+            const yBotB = i === 0 ? 0 : riser * i;  // the tread below's surface
+            const hB = yTopB - yBotB;
+            if (hB < 1) continue;
+            const frontZ = -D / 2 + i * treadD;     // tread i's leading edge
+            const m = addBox(W - 16, hB, STAIR_RISER_BOARD_MM, wood, 0, yBotB + hB / 2,
+                             frontZ + STAIR_NOSING_MM + STAIR_RISER_BOARD_MM / 2);
+            m.userData.stairsRiser = true;
+          }
+        }
+        // ── NEWEL posts (Furniture.stairsNewels) ─────────────────────────────
+        // Four capped box posts: foot + head of the flight × both sides. The
+        // head post stands ON the top tread (step-down aware), so both posts
+        // rise the same amount above the surface a hand actually walks. The cap
+        // is wider than the post and OVERLAPS its top by 10 mm — never abuts it.
+        const newels = fu.stairsNewels === true;
+        const newelX = W / 2 - STAIR_NEWEL_MM / 2 - STAIR_STRINGER_INSET_MM;
+        const newelZ0 = -D / 2 + STAIR_NEWEL_MM / 2, newelZ1 = D / 2 - STAIR_NEWEL_MM / 2;
+        if (newels) {
+          for (const px of [newelX, -newelX]) {
+            for (const [pz, base] of [[newelZ0, 0], [newelZ1, yTread]] as [number, number][]) {
+              const post = addBox(STAIR_NEWEL_MM, STAIR_NEWEL_H_MM, STAIR_NEWEL_MM, wood,
+                                  px, base + STAIR_NEWEL_H_MM / 2, pz);
+              post.userData.stairsNewel = true;
+              const cap = addBox(STAIR_NEWEL_MM + 20, 30, STAIR_NEWEL_MM + 20, wood,
+                                 px, base + STAIR_NEWEL_H_MM + 5, pz);
+              cap.userData.stairsNewelCap = true;
+            }
+          }
+        }
+        // ── HANDRAIL + balusters (Furniture.stairsHandrail) ──────────────────
+        // The rail follows the NOSING LINE (foot (−D/2, riser) → head (+D/2,
+        // yTread) — the same line the stringer's top edge walks) raised
+        // STAIR_RAIL_H_MM vertically, so its height over the treads is constant
+        // and step-down-aware by construction. With newels on, the rail
+        // TERMINATES AT THE POST CENTRES so its end caps are buried inside them
+        // (a shallow flight's rail is near-horizontal, and a flat end cap at the
+        // post's outer face would be a near-coplanar pair). With side walls on
+        // it becomes a wall-mounted rail: inboard of the panel's inner face and
+        // WITHOUT balusters (they would be buried inside the panel).
+        if (fu.stairsHandrail === true) {
+          const railX = wantSideWalls
+            ? W / 2 - STAIR_STRINGER_INSET_MM - STAIR_STRINGER_T_MM - 60
+            : W / 2 - STAIR_STRINGER_INSET_MM - STAIR_RAIL_R_MM;
+          const slope = (yHeadSlope - yFootSlope) / D;
+          const railY = (z: number) => yFootSlope + (z + D / 2) * slope + STAIR_RAIL_H_MM;
+          const z0 = newels ? newelZ0 : -D / 2, z1 = newels ? newelZ1 : D / 2;
+          const y0 = railY(z0), y1 = railY(z1);
+          const dz = z1 - z0, dy = y1 - y0;
+          const len = Math.hypot(dz, dy);
+          if (len > 1) {
+            for (const px of [railX, -railX]) {
+              const rail = addCyl(STAIR_RAIL_R_MM, STAIR_RAIL_R_MM, len, wood,
+                                  px, (y0 + y1) / 2, (z0 + z1) / 2, 12);
+              // A +Y cylinder rotated by θ about X points at (0, cos θ, sin θ).
+              rail.rotation.x = Math.atan2(dz, dy);
+              rail.userData.stairsRail = true;
+            }
+            if (!wantSideWalls) {
+              for (let i = 0; i < n; i++) {
+                const cz = -D / 2 + (i + 0.5) * treadD;
+                // Sunk 6 mm into the tread cap below and running up to the rail
+                // AXIS, so both ends are buried — no coplanar or tangent pair.
+                const yb = riser * (i + 1) - 6, yt = railY(cz);
+                if (yt - yb < 1) continue;
+                for (const px of [railX, -railX]) {
+                  const bal = addBox(STAIR_BALUSTER_MM, yt - yb, STAIR_BALUSTER_MM, wood,
+                                     px, (yb + yt) / 2, cz);
+                  bal.userData.stairsBaluster = true;
+                }
+              }
+            }
           }
         }
         break;

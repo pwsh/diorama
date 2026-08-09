@@ -1718,7 +1718,19 @@ entry for the number of stairs"; item-level, flights only)** is the trailing
 user counting their real staircase is the authority); all three consumers pass
 it so what a rig stands on can never diverge from the mesh; sidebar "Steps"
 input under Rise (placeholder `auto: N`, blank clears) on stairs/stairs_half
-only. It joins `ht` as a stairs-only per-piece field. **Autofit**:
+only. It joins `ht` as a stairs-only per-piece field. **RISER COUNT ≠ TREAD
+COUNT — the step-down DEFAULT (2026-08-09, user-directed DEFAULT CHANGE:
+"stairs typically start at a step down from the ledge")**: a flight of n
+treads has **n+1 risers** — riser = rise/`stairsRiserCount(n, topFlush)`
+(geometry.ts, THE one divisor; never write an inline `n+1`), top tread at
+rise·n/(n+1), ONE riser below the level delivered — the upper floor is the
+final step (`docs/research/stair-anatomy.md` §1, the batch's Sonnet research
+reference). `Furniture.stairsTopFlush?` ("Start at top level" checkbox)
+restores the old flush-top rise/n byte-for-byte; the `_terrain` entry carries
+`topFlush?` so `_groundYAt` quantizes identically. The RUN still divides into
+n treads → plan footprint, tread count, 2D glyph, `stairsRiseMm`, autofit and
+the elevation auto-compose ALL untouched; old flush values stay test-pinned
+under `stairsTopFlush: true`. **Autofit**:
 `Planner.autofitStairs(fu)` (edit-only, one undo step; sidebar "⇅ Fit between
 levels" button, refusal reason shown dim) probes the ground just beyond the
 foot (local −Z) and head (+Z) edges at `±(h/2 + 150)` via the pure
@@ -1759,9 +1771,36 @@ sides stay 2 mm proud; inset tread-body sides land INSIDE the board
 thickness); skipped for solid builds, landings, ramps and 1-tread flights
 (horizontal top edge would be coplanar with the cap). NOT the 2026-07-28
 removed shaft side walls — these are thin carriage boards under the treads,
-commented at the site. The top edge runs `(−D/2, riser) → (D/2, HT)` — at or
+commented at the site. The top edge runs `(−D/2, riser) → (D/2, riser·n)`
+(= the LAST TREAD TOP — step-down aware; flush mode reduces to HT) — at or
 below every tread top by construction (the true nosing line would overshoot
-the head). **`snapStairEdges` v2 (2026-08-09, user-reported "cannot get 2
+the head). **Stair ANATOMY options (2026-08-09, user-requested; all
+item-level booleans, absent = off = byte-identical, flights only, 3D-BUILD-
+ONLY — nav/`_groundYAt`/2D untouched, test-pinned; constants from
+`docs/research/stair-anatomy.md`'s recommended table, declared next to
+`STAIR_STRINGER_*`)**: `stairsSideWalls?` ("Side walls to level above") —
+one raked panel per side from the stringer's bottom line UP to the STOREY
+CEILING plane (`WALL_KINDS.full.h − elevation` local, so two half flights at
+different elevations top out at the SAME absolute plane — the enclosed-
+stairwell look); REPLACES the stringers when built (one continuous board, no
+coplanar seam along the slope; same T 40 / inset 2 — the research doc's
+100 mm deliberately overridden, architect's note at the constants), buried
+inboard of a solid flight's mass, skipped when the ceiling ≤ the slope head,
+`userData.stairsSideWall`. `stairsRisers?` — closed riser boards (19 mm, set
+back `STAIR_NOSING_MM` 25 behind each nosing, buried 4 mm up into the tread
+body) — OPEN flights only (solid has them inherently; checkbox renders only
+while "Open underneath" is on). `stairsNewels?` — four capped 90 mm box
+posts (foot at y=0 + head ON the top tread × both sides, 1150 tall, cap
+overlaps the post top). `stairsHandrail?` — a 50 mm round rail per side
+following the nosing line +900 mm vertical (step-down aware by construction)
++ one 35 mm baluster per tread sunk 6 mm into the cap and running to the
+rail AXIS; with newels on the rail TERMINATES AT THE POST CENTRES (end caps
+buried — a shallow rail's flat cap at the post face would near-coplanar);
+with side walls on it becomes a WALL-MOUNTED rail (inboard of the panel, NO
+balusters — they'd be buried). Sidebar checkbox order after "Open
+underneath": Start at top level · Side walls · Risers · Newel posts ·
+Handrail. Ramp/landing anatomy + per-side granularity are noted follow-ups.
+**`snapStairEdges` v2 (2026-08-09, user-reported "cannot get 2
 half flights and a landing to line up"; canvas-interact)**: (a) corner
 candidates are taken in ascending distance and REJECTED when the weld would
 bury the piece > `STAIR_MAX_PEN_MM` 30 inside ANY stair piece (the matched
@@ -1779,11 +1818,13 @@ landing → height − my thickness; ONE compose, FOOT > HEAD > landing then
 widest run, skipped under 0.5 mm so a correct staircase re-welds as a no-op
 (idempotent), rides the caller's save() = one undo step, Alt skips the whole
 resolver. Family still skips blob shadows (an open flight arguably wants one
-— noted, not built). Test `stairs-fit-test.html` (`STAIRSFIT PASS 136/136` —
+— noted, not built). Test `stairs-fit-test.html` (`STAIRSFIT PASS 208/208` —
 D3 pins the curb-less wedge, section H open-vs-solid top-surface +
 `_groundYAt` equality, §I tread override, §J stringers, §K snap v2 incl. a
 clean-start burial refusal negative-controlled against the old nearest-corner
-result).
+result, §L step-down/flush matrix incl. the old flush goldens re-pinned under
+`stairsTopFlush: true`, §M side walls, §N riser/newel/handrail anatomy; NB
+tolerance on Float32 bbox reads is 0.01, not 1e-6).
 
 ### Descending stairs (below floor level)
 Stairs-family pieces with `elevation < 0` cut their own stairwell hole and

@@ -1121,6 +1121,34 @@ export function stairsTreadCount(depthMm: number, riseMm: number, overrideN?: nu
   return Math.min(byDepth, byRise);
 }
 
+/**
+ * How many RISERS a flight of `nTreads` treads has — the divisor of the rise.
+ *
+ * THE n / n+1 CONVENTION (docs/research/stair-anatomy.md §1). A riser is one
+ * vertical step; a tread is a surface you stand on. Riser 1 lifts you off the
+ * LOWER floor onto tread 1, risers 2..n lift you tread-to-tread, and the LAST
+ * riser lifts you off the topmost tread onto the UPPER floor itself. The two
+ * floors are never treads — they are the endpoints the risers connect. So a
+ * flight drawn with N treads really has **N + 1 risers**, and its top tread's
+ * walking surface sits exactly ONE riser BELOW the level the flight delivers to.
+ *
+ *   riser height = rise / stairsRiserCount(nTreads, topFlush)
+ *   tread i (0-based) top = riser · (i + 1)      // top tread = riser · n
+ *
+ * `topFlush` (Furniture.stairsTopFlush, "start at top level") opts OUT: the
+ * flight is drawn with n risers instead, so its top tread lands flush ON the
+ * upper level. That was the shipped behaviour before 2026-08-09 and is now the
+ * non-default choice — see the field comment in types.ts.
+ *
+ * EVERY divisor of a flight's rise must route through here (3D builder, the
+ * stringer/side-wall slope line, `_groundYAt`'s tread quantization) so what you
+ * walk on can never disagree with what you see. Never write an inline `n + 1`.
+ */
+export function stairsRiserCount(nTreads: number, topFlush?: boolean): number {
+  const n = (typeof nTreads === 'number' && isFinite(nTreads)) ? Math.max(1, Math.round(nTreads)) : 1;
+  return topFlush === true ? n : n + 1;
+}
+
 // Direction glyph for a linked-stairs chip: '▲' when the partner piece sits on a
 // HIGHER story (its floor index in Store.floors is greater — canonical story
 // order, lower index = lower story), else '▼'. Pure — drives the 2D chip + tests.
