@@ -23,6 +23,22 @@
    (f) repairFloor backfills voidAreas: [] (needs storage.mod.js —
        npx esbuild src/storage.ts --bundle --format=esm --outfile=<harness>/storage.mod.js).
 
+  2026-08-08 — "voids do not appear to be rendering as open areas":
+   (g) clipVoidToLoop: a CONCAVE void fully inside its loop comes back VERBATIM.
+       The old path (intersectLoopWithRect with the void as the Sutherland–
+       Hodgman CLIPPER) is only exact for a convex clipper and butchered a
+       concave void down to its convex kernel (a real 8-point opening lost 58 %
+       of its area). Void vertices snapped ONTO the wall lines still count as
+       contained (VOID_BOUNDARY_TOL_MM). A straddler falls back (⊆ the loop).
+   (h) every punched hole gets an OPEN SHAFT (walls slab→−depth + a darker
+       bottom) instead of the old global dark plane, which for a pure-void floor
+       sat 120 mm under the slab and read as black PAINT. The plane now builds
+       for sunken-stairs WELLS only; both coexist when a floor has both.
+   (i) voidDepthBelowMm: drop to the next ENABLED storey below, min 600, nominal
+       STORY_H_MM when nothing is under the active floor.
+  (g)+(i) need geometry.mod.js —
+       npx esbuild src/geometry.ts --bundle --format=esm --outfile=<harness>/geometry.mod.js
+
   Serve the built renderer chunk next to this file.
 -->
 <script type="module">
@@ -70,12 +86,17 @@
 
   // Count triangles of the floor SLAB meshes + gather ShapeGeometry slab
   // triangle centroids in WORLD coords. The slab is the toon-material mesh
-  // rotated -pi/2; the dark void plane is a MeshBasicMaterial PlaneGeometry.
+  // rotated -pi/2; the dark void plane is a MeshBasicMaterial PlaneGeometry;
+  // void SHAFT walls/bottoms carry userData.voidShaft (they are toon meshes and
+  // the bottom is a ShapeGeometry sitting right under the hole, so without the
+  // tag they'd read as slab and cancel the "no slab inside the void" probe).
+  const isShaft = (ch) => !!(ch.userData && ch.userData.voidShaft);
   const slabInfo = () => {
     let tris = 0, shapeMeshes = 0, planeMeshes = 0;
     const centroids = [];
     for (const ch of r._floorGroup.children) {
       if (!ch.isMesh || !ch.geometry) continue;
+      if (isShaft(ch)) continue;            // void shaft, not the slab
       const gt = ch.geometry.type;
       const isVoidPlane = ch.material && ch.material.isMeshBasicMaterial;
       if (isVoidPlane) continue;            // dark void plane, not the slab
@@ -176,6 +197,177 @@
     repairVoid = Array.isArray(rf.voidAreas) && rf.voidAreas.length === 0 ? 'ok' : 'bad';
   } catch (e) { repairVoid = 'no-module'; }
 
+  // ══ (g) clipVoidToLoop — pure matrix (geometry.mod.js) ═════════════════════
+  let G = null;
+  try { G = await import('./geometry.mod.js'); } catch (e) { G = null; }
+  const g = {};
+  if (G) {
+    const area = (p) => Math.abs(G.polygonArea(p));
+    // A room loop, and a CONCAVE 8-point U-shaped void fully inside it. This is
+    // the shape class that collapsed to its convex kernel. Synthetic, not the
+    // reporter's plan.
+    const LOOP = [{ x: 0, y: 0 }, { x: 6000, y: 0 }, { x: 6000, y: 6000 }, { x: 0, y: 6000 }];
+    const U = [
+      { x: 1000, y: 1000 }, { x: 4000, y: 1000 }, { x: 4000, y: 4000 },
+      { x: 3200, y: 4000 }, { x: 3200, y: 2000 }, { x: 1800, y: 2000 },
+      { x: 1800, y: 4000 }, { x: 1000, y: 4000 },
+    ];
+    const uArea = area(U);                                   // 3000² − 1400·2000
+    const cIn = G.clipVoidToLoop(LOOP, U);
+    g.containedVerbatim = cIn === U;                         // identity, not a copy
+    g.containedArea = cIn ? area(cIn) : 0;
+    g.uArea = uArea;
+    // Negative control: the OLD path really does butcher it.
+    const old = G.intersectLoopWithRect(LOOP, U);
+    g.oldLoss = old ? 1 - area(old) / uArea : 1;
+
+    // Same U translated so its left/bottom vertices sit EXACTLY on the loop
+    // boundary (the reporter's case — void verts snapped onto the wall lines,
+    // where strict pointInPolygon says "outside").
+    const onEdge = U.map(p => ({ x: p.x - 1000, y: p.y - 1000 }));
+    const cEdge = G.clipVoidToLoop(LOOP, onEdge);
+    g.onEdgeVerbatim = cEdge === onEdge;
+    // …and nudged 20 mm OUTSIDE (< VOID_BOUNDARY_TOL_MM 30) — still contained.
+    const nudged = onEdge.map(p => ({ x: p.x === 0 ? -20 : p.x, y: p.y === 0 ? -20 : p.y }));
+    const cNudge = G.clipVoidToLoop(LOOP, nudged);
+    g.nudgeVerbatim = cNudge === nudged;
+    g.tol = G.VOID_BOUNDARY_TOL_MM;
+    // 100 mm outside (> tol) → NOT the fast path. It falls back, and for a
+    // CONCAVE straddler the fallback's convex-kernel result is legitimately
+    // EMPTY (x > 2200 ∧ x < 800) — the documented approximation. All we pin is
+    // that the fast path did not fire.
+    const far = onEdge.map(p => ({ x: p.x === 0 ? -100 : p.x, y: p.y === 0 ? -100 : p.y }));
+    const cFar = G.clipVoidToLoop(LOOP, far);
+    g.farFellBack = cFar !== far;
+    // A CONVEX poly 100 mm outside still clips to a real overlap.
+    const farBox = [{ x: -100, y: -100 }, { x: 2000, y: -100 },
+                    { x: 2000, y: 2000 }, { x: -100, y: 2000 }];
+    const cFarBox = G.clipVoidToLoop(LOOP, farBox);
+    g.farBoxClipped = !!cFarBox && cFarBox !== farBox && Math.abs(area(cFarBox) - 4e6) < 1;
+
+    // A convex STRADDLER over the loop's far corner → non-null, ⊆ the loop.
+    const strad = [{ x: 5000, y: 5000 }, { x: 7000, y: 5000 },
+                   { x: 7000, y: 7000 }, { x: 5000, y: 7000 }];
+    const cStrad = G.clipVoidToLoop(LOOP, strad);
+    g.stradNonNull = !!cStrad && cStrad !== strad;
+    g.stradInside = !!cStrad && cStrad.every(p =>
+      p.x >= -0.01 && p.x <= 6000.01 && p.y >= -0.01 && p.y <= 6000.01);
+    g.stradArea = cStrad ? area(cStrad) : 0;                 // 1000 × 1000
+
+    // Fully outside → nothing to punch.
+    const out = [{ x: 8000, y: 8000 }, { x: 9000, y: 8000 }, { x: 9000, y: 9000 }];
+    g.outNull = G.clipVoidToLoop(LOOP, out) === null;
+    // Degenerate inputs never throw.
+    g.degenerate = G.clipVoidToLoop(LOOP, [{ x: 1, y: 1 }, { x: 2, y: 2 }]) === null &&
+                   G.clipVoidToLoop([{ x: 0, y: 0 }], U) === null;
+
+    // ── (i) voidDepthBelowMm ────────────────────────────────────────────────
+    const vd = G.voidDepthBelowMm;
+    const two = [{ id: 'b', elevationMm: -3000 }, { id: 'e', elevationMm: 0 }];
+    g.depthWalkout = vd(two, 'e');                            // 0 − (−3000)
+    g.depthLowest = vd(two, 'b');                             // nothing below
+    g.depthSingle = vd([{ id: 'only' }], 'only');
+    g.depthAuto = vd([{ id: 'a' }, { id: 'b' }], 'b');        // AUTO 0 / 3000
+    g.depthClamp = vd([{ id: 'lo', elevationMm: -400 }, { id: 'hi', elevationMm: 0 }], 'hi');
+    // A DISABLED floor below must not shorten the shaft.
+    g.depthDisabled = vd([
+      { id: 'deep', elevationMm: -3000 },
+      { id: 'mid', elevationMm: -500, disabled: true },
+      { id: 'top', elevationMm: 0 },
+    ], 'top');                                                // skips mid → 3000
+    g.depthEmpty = vd([], 'x');
+    g.storyH = G.STORY_H_MM;
+  }
+
+  // ══ (h) renderer: concave hole + open shafts ═══════════════════════════════
+  // Concave U void inside the (wall-less) 8000 × 6000 floor: arms at
+  // x[2000,2800] and x[4200,5000] rising to y=4000, bar at y[1000,2000], and a
+  // NOTCH (x[2800,4200], y[2000,4000]) that must stay FLOOR.
+  const UVOID = [
+    { x: 2000, y: 1000 }, { x: 5000, y: 1000 }, { x: 5000, y: 4000 },
+    { x: 4200, y: 4000 }, { x: 4200, y: 2000 }, { x: 2800, y: 2000 },
+    { x: 2800, y: 4000 }, { x: 2000, y: 4000 },
+  ];
+  // Is (wx, wy) covered by a SLAB triangle? (shafts + void plane excluded)
+  const slabCovers = (wx, wy) => {
+    for (const ch of r._floorGroup.children) {
+      if (!ch.isMesh || !ch.geometry || isShaft(ch)) continue;
+      if (ch.material && ch.material.isMeshBasicMaterial) continue;
+      if (ch.geometry.type !== 'ShapeGeometry') continue;
+      const pos = ch.geometry.getAttribute('position');
+      const idx = ch.geometry.getIndex();
+      if (!pos) continue;
+      const w = (vi) => ({ x: FW / 2 - pos.getX(vi), y: FD / 2 - pos.getY(vi) });
+      const tri = idx ? idx.count / 3 : pos.count / 3;
+      for (let t = 0; t < tri; t++) {
+        const A = w(idx ? idx.getX(t * 3) : t * 3);
+        const B = w(idx ? idx.getX(t * 3 + 1) : t * 3 + 1);
+        const C = w(idx ? idx.getX(t * 3 + 2) : t * 3 + 2);
+        const d = (px, py, ax, ay, bx, by) => (bx - ax) * (py - ay) - (by - ay) * (px - ax);
+        const s1 = d(wx, wy, A.x, A.y, B.x, B.y);
+        const s2 = d(wx, wy, B.x, B.y, C.x, C.y);
+        const s3 = d(wx, wy, C.x, C.y, A.x, A.y);
+        const neg = s1 < 0 || s2 < 0 || s3 < 0, posv = s1 > 0 || s2 > 0 || s3 > 0;
+        if (!(neg && posv)) return true;
+      }
+    }
+    return false;
+  };
+  const shaftMeshes = () => r._floorGroup.children.filter(c => c.isMesh && isShaft(c));
+  const voidPlaneOf = () => r._floorGroup.children.find(c =>
+    c.isMesh && c.material && c.material.isMeshBasicMaterial &&
+    c.geometry && c.geometry.type === 'PlaneGeometry') || null;
+  // Shaft WALLS are an un-rotated BufferGeometry, so their local bbox y IS
+  // world y. (The shaft BOTTOM is a ShapeGeometry rotated −π/2 — its local y is
+  // the shape's sy, i.e. world −z — so read its world height off position.y,
+  // which is exact for a planar shape at local z = 0.)
+  const yRange = (m) => {
+    m.geometry.computeBoundingBox();
+    const bb = m.geometry.boundingBox;
+    return { min: bb.min.y + m.position.y, max: bb.max.y + m.position.y };
+  };
+
+  // Default depth (no 8th arg — the stale-chunk path) → STORY_H_MM 3000.
+  r.updateFloor(baseFloor({ voidAreas: [{ id: 'u1', points: UVOID }] }), scene);
+  const uSlab = slabInfo();
+  const armL = slabCovers(2400, 3500), armR = slabCovers(4600, 3500);
+  const notch = slabCovers(3500, 3000), far = slabCovers(7000, 5000);
+  const bar = slabCovers(3500, 1500);
+  const defShafts = shaftMeshes();
+  const defWalls = defShafts.filter(m => m.geometry.type !== 'ShapeGeometry');
+  const defBottoms = defShafts.filter(m => m.geometry.type === 'ShapeGeometry');
+  const defWallY = defWalls.length ? yRange(defWalls[0]) : null;
+  const defBottomY = defBottoms.length ? defBottoms[0].position.y : null;
+  const purePlane = voidPlaneOf();
+
+  // Custom depth (8th arg) — walkout basement 1800 mm down.
+  r.updateFloor(baseFloor({ voidAreas: [{ id: 'u1', points: UVOID }] }),
+                scene, undefined, undefined, undefined, null, undefined, 1800);
+  const cShafts = shaftMeshes();
+  const cWalls = cShafts.filter(m => m.geometry.type !== 'ShapeGeometry');
+  const cBottoms = cShafts.filter(m => m.geometry.type === 'ShapeGeometry');
+  const cWallY = cWalls.length ? yRange(cWalls[0]) : null;
+  const cBottomY = cBottoms.length ? cBottoms[0].position.y : null;
+
+  // glassHouse → shaft walls + bottom see-through (the ghost storey reads).
+  r.updateFloor(baseFloor({ voidAreas: [{ id: 'u1', points: UVOID }] }),
+                { ...scene, glassHouse: true });
+  const gShafts = shaftMeshes();
+  const glassOK = gShafts.length > 0 && gShafts.every(m =>
+    m.material.transparent === true && Math.abs(m.material.opacity - 0.18) < 1e-6 &&
+    m.material.depthWrite === false);
+
+  // A sunken-stairs WELL still gets the dark plane; a void on the same floor
+  // still gets its shaft.
+  const sunken = { id: 'sk', x: 6800, y: 4800, w: 1200, h: 1600, kind: 'stairs', rotation: 0, elevation: -900 };
+  r.updateFloor(baseFloor({ voidAreas: [{ id: 'u1', points: UVOID }], furniture: [sunken] }), scene);
+  const wellPlane = voidPlaneOf();
+  const wellShafts = shaftMeshes().length;
+
+  // Voidless floor: no shafts, no plane (unchanged).
+  r.updateFloor(baseFloor(), scene);
+  const bareShafts = shaftMeshes().length, barePlane = voidPlaneOf();
+
   // Assertions
   ok('(a) void cell off the bridge is BLOCKED', aBlocked === 1 && bBlockedAway === 1,
      `voidOnly=${aBlocked} withBridge=${bBlockedAway}`);
@@ -197,6 +389,63 @@
   ok('(e) route crosses void ONLY on stair cells', !!path && routeVoidNonStair === 0,
      `voidCells=${routeVoidCells} nonStair=${routeVoidNonStair}`);
   ok('(f) repairFloor backfills voidAreas: []', repairVoid === 'ok', `repair=${repairVoid}`);
+
+  // ── (g) clipVoidToLoop
+  ok('(g) geometry.mod.js loaded', !!G, G ? '' : 'missing bundle');
+  ok('(g) contained CONCAVE void returned VERBATIM', g.containedVerbatim === true);
+  ok('(g) contained void keeps its full area', G && Math.abs(g.containedArea - g.uArea) < 1e-6,
+     `area=${g.containedArea} want=${g.uArea}`);
+  ok('(g) negative control: old clipper loses >25% of a concave void', g.oldLoss > 0.25,
+     `loss=${(g.oldLoss * 100).toFixed(1)}%`);
+  ok('(g) verts snapped ONTO the loop boundary → verbatim', g.onEdgeVerbatim === true);
+  ok('(g) verts 20 mm outside (< tol) → verbatim', g.nudgeVerbatim === true, `tol=${g.tol}`);
+  ok('(g) verts 100 mm outside (> tol) → NOT the fast path', g.farFellBack === true);
+  ok('(g) convex poly 100 mm outside clips to the overlap', g.farBoxClipped === true);
+  ok('(g) straddler falls back, non-null', g.stradNonNull === true);
+  ok('(g) straddler result stays INSIDE the loop', g.stradInside === true);
+  ok('(g) straddler area is the overlap (1e6 mm²)', G && Math.abs(g.stradArea - 1e6) < 1,
+     `area=${g.stradArea}`);
+  ok('(g) fully-outside poly → null', g.outNull === true);
+  ok('(g) degenerate inputs → null, no throw', g.degenerate === true);
+
+  // ── (h) concave hole + open shafts
+  ok('(h) LEFT arm of the concave void is a HOLE', armL === false);
+  ok('(h) RIGHT arm of the concave void is a HOLE', armR === false);
+  ok('(h) bottom bar of the concave void is a HOLE', bar === false);
+  ok('(h) the U NOTCH is still FLOOR', notch === true);
+  ok('(h) floor away from the void is still FLOOR', far === true);
+  ok('(h) no slab centroid inside the concave void', uSlab.centroids.every(c => !pip(c.x, c.y, UVOID)));
+  ok('(h) shaft built: walls + bottom', defWalls.length === 1 && defBottoms.length === 1,
+     `walls=${defWalls.length} bottoms=${defBottoms.length}`);
+  ok('(h) default voidDepthMm = STORY_H_MM 3000', defWallY &&
+     Math.abs(defWallY.min + 3000) < 1e-3 && Math.abs(defWallY.max) < 1e-3,
+     defWallY ? `y=[${defWallY.min},${defWallY.max}]` : '');
+  ok('(h) default shaft bottom sits at −depth + 2', defBottomY !== null &&
+     Math.abs(defBottomY + 2998) < 1e-3, `y=${defBottomY}`);
+  ok('(h) custom voidDepthMm 1800 → walls 0..−1800', cWallY &&
+     Math.abs(cWallY.min + 1800) < 1e-3 && Math.abs(cWallY.max) < 1e-3,
+     cWallY ? `y=[${cWallY.min},${cWallY.max}]` : '');
+  ok('(h) custom shaft bottom at −1798', cBottomY !== null &&
+     Math.abs(cBottomY + 1798) < 1e-3, `y=${cBottomY}`);
+  ok('(h) shaft walls/bottom use DIFFERENT tones', defWalls.length && defBottoms.length &&
+     defWalls[0].material.color.getHex() !== defBottoms[0].material.color.getHex());
+  ok('(h) glassHouse → shaft transparent 0.18 depthWrite:false', glassOK,
+     `n=${gShafts.length}`);
+  ok('(h) pure-voids floor builds NO global dark plane', purePlane === null);
+  ok('(h) sunken well STILL builds the dark plane', !!wellPlane);
+  ok('(h) well + void: plane AND shaft coexist', !!wellPlane && wellShafts === 2,
+     `shaftMeshes=${wellShafts}`);
+  ok('(h) voidless floor: no shafts, no plane', bareShafts === 0 && barePlane === null,
+     `shafts=${bareShafts}`);
+
+  // ── (i) voidDepthBelowMm
+  ok('(i) walkout: 0 over −3000 → 3000', g.depthWalkout === 3000, `${g.depthWalkout}`);
+  ok('(i) lowest floor → nominal storey', g.depthLowest === g.storyH, `${g.depthLowest}`);
+  ok('(i) single floor → nominal storey', g.depthSingle === g.storyH, `${g.depthSingle}`);
+  ok('(i) AUTO elevations resolve (index × STORY_H)', g.depthAuto === 3000, `${g.depthAuto}`);
+  ok('(i) tiny delta clamps to 600', g.depthClamp === 600, `${g.depthClamp}`);
+  ok('(i) DISABLED lower floor is skipped', g.depthDisabled === 3000, `${g.depthDisabled}`);
+  ok('(i) empty floors list → nominal storey', g.depthEmpty === g.storyH, `${g.depthEmpty}`);
 
   let pass = 0; const fails = [];
   for (const t of tests) { if (t.ok) pass++; else fails.push(t.name); }

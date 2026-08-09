@@ -421,6 +421,28 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Floor voids render as real openings** (2026-08-08, user-reported
+  "floor voids do not appear to be rendering as open areas"; unreleased —
+  on main past v0.63.0). Reproduced on the user's actual plan (offline
+  CDP boot of their config): two defects. (1) The void hole clipper was
+  Sutherland–Hodgman with the VOID as the clip region — exact only for
+  convex voids; their concave 8-pt stairwell void clipped to its convex
+  kernel (5.07 → 2.13 m², 58 % lost; a synthetic U loses 100 % — no hole
+  at all). New `clipVoidToLoop`: containment fast path (verts inside or
+  within 30 mm of the loop boundary — verts get wall-snapped — and no
+  proper crossing → polygon verbatim, exact at any concavity), S-H
+  fallback for straddlers (documented approximation). (2) A pure void's
+  only depth cue was the global dark plane 120 mm under the slab — reads
+  as black PAINT. Now every hole gets an open SHAFT (toon walls
+  slab→−depth + darker bottom; glassHouse translucent per the glass-see
+  rule); the global plane builds for sunken-stairs wells only. Depth =
+  pure `voidDepthBelowMm` (next enabled storey below, min 600, default
+  STORY_H) via a stale-chunk-safe trailing updateFloor param. Verified
+  on the user's plan: stairwell hole at full drawn footprint, deck void
+  reads as a railed opening with 3 m of visible depth to the walkout
+  basement level. VOID 9→47; STAIRS-DESCEND 23, GLASSSEE 26, TERRAIN
+  122 green.
+
 - **Interactive curtains (2D + 3D)** (2026-08-08, user-requested "curtains
   are not able to be controlled via the 2D or 3D interface"; unreleased —
   on main past v0.63.0). `Planner.toggleCurtain`: bound cover →

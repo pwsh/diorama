@@ -13,7 +13,7 @@ import { parseNowPlaying, isMediaPlayerId } from '../geometry.js';
 import { robotProgress } from '../geometry.js';
 import { poolWaterColor } from '../geometry.js';
 import { floorsUnionCenter, resolvePivotMode } from '../geometry.js';
-import { floorElevationMm, resolveGroundLevelMm, bgGroundInkKey } from '../geometry.js';
+import { floorElevationMm, voidDepthBelowMm, resolveGroundLevelMm, bgGroundInkKey } from '../geometry.js';
 import { resolveScreenContent } from '../surfaces.js';
 import { resolveScenePreset, resolveTimeBucket } from '../time-of-day.js';
 import {
@@ -1388,9 +1388,15 @@ export class ThreeView extends LitElement {
         }
         // customObjects edits bump configRev (via emitConfig) → keyFloor flips
         // → the placed recipe instance rebuilds as its own live preview.
+        // Floor-void shaft depth: the drop from this slab to the next ENABLED
+        // storey below (a nominal storey when nothing is under it). Pure +
+        // config-only — it moves only with floor elevations / enable flags /
+        // ordering, all of which bump configRev, so _keyFloor already covers
+        // it; no new dirty-key input is needed.
+        const voidDepthMm = voidDepthBelowMm(p.store.floors, f.id);
         r.updateFloor(fBuild, scMerged, layers, p.store.customObjects,
                       id => states[id] || null, selCustomId || null,
-                      fuId => p.applianceJustFinished({ id: fuId }));
+                      fuId => p.applianceJustFinished({ id: fuId }), voidDepthMm);
       }
 
       // Glass-house ghost floors: every OTHER story as a translucent shell.

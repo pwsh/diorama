@@ -4082,6 +4082,15 @@ export function seatBelongsToTable(
 // or null when the overlap is empty. Exact for a convex rect clipper against
 // any simple subject — used to trim a stairwell well-rect to the part that
 // actually lies inside a given floor loop before punching it as a hole.
+//
+// CONVEX-CLIPPER LIMIT (load-bearing — see clipVoidToLoop): Sutherland–Hodgman
+// intersects the subject with the HALF-PLANE of every clipper edge in turn, so
+// when the CLIPPER is concave the result collapses to the subject ∩ the
+// clipper's convex kernel. Stairwell wells are rects (convex) so they are
+// exact; a user-drawn CONCAVE void used as the clipper is NOT — an 8-point
+// L-shaped void loses the whole re-entrant part. Floor voids therefore go
+// through `clipVoidToLoop`, which returns a contained void verbatim and only
+// falls back here for the (rare, accepted-approximate) straddling case.
 export function intersectLoopWithRect(loop: Vec2[], rect: Vec2[]): Vec2[] | null {
   if (loop.length < 3 || rect.length < 3) return null;
   // Orient the rect CCW so "inside" is consistently the left of each edge.
@@ -4114,6 +4123,88 @@ export function intersectLoopWithRect(loop: Vec2[], rect: Vec2[]): Vec2[] | null
     }
   }
   return output.length >= 3 ? output : null;
+}
+
+// ── Floor-void clipping ──────────────────────────────────────────────────────
+// How far a void vertex may sit OUTSIDE a wall loop and still count as
+// contained. Voids are drawn against the plan, so their vertices are routinely
+// snapped ONTO the wall centerlines the loop is traced from — `pointInPolygon`
+// is strict and reports those as outside. 30 mm is well under the 100 mm grid
+// snap and under WALL_HALF (50), so it can only ever absorb "on the wall line",
+// never a genuinely-outside vertex.
+//
+// NB no inset is applied to a contained void: earcut tolerates a hole edge
+// lying exactly on the containing contour here (the shipped behaviour for
+// convex on-boundary voids, which have always cut correctly) — unlike the
+// well-rect path, which insets 3 mm because a rect corner can land exactly on
+// a loop CORNER.
+export const VOID_BOUNDARY_TOL_MM = 30;
+
+// Signed perpendicular distance (mm) of p from the INFINITE line a→b.
+// NaN-free: a degenerate (zero-length) segment returns 0.
+function _perpDist(a: Vec2, b: Vec2, p: Vec2): number {
+  const ex = b.x - a.x, ey = b.y - a.y;
+  const len = Math.hypot(ex, ey);
+  if (!(len > 1e-9)) return 0;
+  return (ex * (p.y - a.y) - ey * (p.x - a.x)) / len;
+}
+
+// Do segments a→b and c→d cross PROPERLY (interiors intersect)? Touching —
+// an endpoint on the other segment's line within `tol` mm — is deliberately
+// NOT a crossing: a void vertex snapped onto a wall line must read as
+// contained, not straddling.
+function _segCrossesProper(a: Vec2, b: Vec2, c: Vec2, d: Vec2, tol: number): boolean {
+  const d1 = _perpDist(a, b, c), d2 = _perpDist(a, b, d);
+  if (Math.abs(d1) <= tol || Math.abs(d2) <= tol || (d1 > 0) === (d2 > 0)) return false;
+  const d3 = _perpDist(c, d, a), d4 = _perpDist(c, d, b);
+  if (Math.abs(d3) <= tol || Math.abs(d4) <= tol || (d3 > 0) === (d4 > 0)) return false;
+  return true;
+}
+
+/**
+ * Clip a floor-VOID polygon to the wall loop (or floor rect) that will carry it
+ * as a hole. Pure; world mm in, world mm out; null when nothing is left.
+ *
+ * CONTAINMENT FAST PATH (the case that matters): when every void vertex is
+ * inside the loop — or within `VOID_BOUNDARY_TOL_MM` of its boundary — AND no
+ * void edge properly crosses a loop edge, the void is returned VERBATIM. That
+ * is exact for ANY concavity, which `intersectLoopWithRect` is not: with the
+ * void as a Sutherland–Hodgman clipper a concave void is butchered down to its
+ * convex kernel (a real 8-point L-shaped opening measured a 58 % area loss —
+ * the "voids don't render as open areas" report).
+ *
+ * FALLBACK: a genuinely STRADDLING void still routes through
+ * `intersectLoopWithRect`, which stays APPROXIMATE for a concave subject (see
+ * that function's note). Accepted for v1 — containment is the norm and the
+ * result is always ⊆ the loop, so a straddling void can never bleed a hole
+ * outside its floor patch.
+ */
+export function clipVoidToLoop(loop: Vec2[], poly: Vec2[]): Vec2[] | null {
+  if (loop.length < 3 || poly.length < 3) return null;
+  const tol = VOID_BOUNDARY_TOL_MM;
+  let contained = true;
+  for (const p of poly) {
+    if (pointInPolygon(p.x, p.y, loop)) continue;
+    let near = false;
+    for (let i = 0; i < loop.length && !near; i++) {
+      const a = loop[i], b = loop[(i + 1) % loop.length];
+      if (pointToSeg(p.x, p.y, a.x, a.y, b.x, b.y) <= tol) near = true;
+    }
+    if (!near) { contained = false; break; }
+  }
+  if (contained) {
+    let crosses = false;
+    for (let i = 0; i < poly.length && !crosses; i++) {
+      const p0 = poly[i], p1 = poly[(i + 1) % poly.length];
+      for (let j = 0; j < loop.length; j++) {
+        if (_segCrossesProper(p0, p1, loop[j], loop[(j + 1) % loop.length], tol)) {
+          crosses = true; break;
+        }
+      }
+    }
+    if (!crosses) return poly;
+  }
+  return intersectLoopWithRect(loop, poly);
 }
 
 // Hex (#rgb / #rrggbb) → {r,g,b} 0..255. Returns null on parse failure.
@@ -4456,6 +4547,43 @@ export function floorElevationMm(
     return (typeof e === 'number' && isFinite(e)) ? e : i * STORY_H_MM;
   }
   return 0;
+}
+
+// ── Void shaft depth ─────────────────────────────────────────────────────────
+// A floor opening must never bottom out flush with its own slab: at least this
+// much drop, so even two floors authored a few mm apart read as a real hole.
+export const VOID_DEPTH_MIN_MM = 600;
+
+/**
+ * How deep a floor VOID's shaft should be drawn on the active floor, in mm.
+ *
+ * The drop to the next storey down: `activeElevation − nearestLowerElevation`,
+ * clamped at `VOID_DEPTH_MIN_MM`. Only ENABLED floors count as "below" — a
+ * disabled floor isn't part of the live experience, so its slab must not
+ * shorten the shaft. With nothing below (single floor, or the active floor IS
+ * the lowest) the shaft falls a nominal storey, `STORY_H_MM`.
+ *
+ * `floors` MUST be the FULL `Store.floors` array — AUTO elevations are
+ * index-derived (see `floorElevationMm`), so a pre-filtered list would re-stack
+ * them. The disabled filter is applied here, per-candidate, instead.
+ *
+ * Pure; unknown id → resolves against elevation 0; never throws, never NaN.
+ */
+export function voidDepthBelowMm(
+  floors: readonly { id: string; elevationMm?: number; disabled?: boolean }[] | null | undefined,
+  activeId: string,
+): number {
+  if (!floors || !floors.length) return STORY_H_MM;
+  const active = floorElevationMm(floors, activeId);
+  let below: number | null = null;
+  for (const fl of floors) {
+    if (!fl || fl.id === activeId || fl.disabled) continue;
+    const e = floorElevationMm(floors, fl.id);
+    if (!isFinite(e) || e >= active) continue;
+    if (below === null || e > below) below = e;
+  }
+  if (below === null) return STORY_H_MM;
+  return Math.max(VOID_DEPTH_MIN_MM, active - below);
 }
 
 // ── Item ground level, app-side ──────────────────────────────────────────────

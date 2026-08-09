@@ -1768,11 +1768,34 @@ user-drawn 3–12-vertex "no floor here" polygons (presence-zone latch idiom:
 `drawingVoidArea`, `void` tool, `voidVert` drag, low-priority hit; sidebar
 `_section('voids', …)`). 2D dark hatched fill riding the **ground** layer;
 3D the polygon is cut from the floor patches as a HOLE (same earcut path as
-stairwell wells; shared dark void plane activates). **Nav: void cells are
-BLOCKED** — except cells on any stairs-family footprint (a flight bridges
-the void), so avatars route around missing floor and take the stairs when
-that's the only connection. Radar/BLE raw positions never remapped. Ghost
-floors ignore voids. Test page `void-test.html`.
+stairwell wells). **Hole clipping is `clipVoidToLoop` (2026-08-08, user-reported
+"voids do not appear to be rendering as open areas")**: containment fast path —
+every void vertex inside the loop OR within `VOID_BOUNDARY_TOL_MM` 30 of its
+boundary (verts get snapped ONTO wall centerlines) and no proper edge crossing
+→ the polygon comes back VERBATIM (exact at any concavity; on-boundary verts
+earcut fine in practice, no inset); else falls back to `intersectLoopWithRect`,
+which is Sutherland–Hodgman with the VOID as the CLIP region — exact ONLY for
+convex voids (a concave void clips to its convex kernel: the user's 8-pt
+stairwell void lost 58 % of its area, and a synthetic U loses 100 % — no hole
+at all; the fallback's concave-straddler approximation is documented at both
+fns, wells keep intersectLoopWithRect — rects are convex). **Every punched
+hole gets an OPEN SHAFT** — toon quad-strip walls slab→`−voidDepthMm`
+(0x262b31) + a darker ShapeGeometry bottom at `−depth+2` (0x14171b), tagged
+`userData.voidShaft` + outlineSkip, glassHouse → transparent 0.18 depthWrite
+false (the glass-see rule) — replacing the old global dark plane for pure
+voids, which sat a flat 120 mm under the slab and read as black PAINT, not an
+opening. The global plane now builds for sunken-stairs WELLS only (their look
+byte-unchanged; both coexist on a mixed floor). Depth = the pure
+`voidDepthBelowMm(floors, activeId)` (geometry.ts: drop to the next ENABLED
+storey below, min `VOID_DEPTH_MIN_MM` 600, `STORY_H_MM` when nothing below),
+passed as `updateFloor`'s trailing `voidDepthMm = STORY_H_MM`
+(stale-chunk-safe; elevations are config → configRev, no new dirty-key input).
+**Nav: void cells are BLOCKED** — except cells on any stairs-family footprint
+(a flight bridges the void), so avatars route around missing floor and take
+the stairs when that's the only connection; `_buildNav` deliberately keeps
+RAW unclipped void polygons (nav was always concave-correct — the defect was
+visual only). Radar/BLE raw positions never remapped. Ghost floors ignore
+voids. Test page `void-test.html` (`VOID PASS 47/47`).
 
 **Stair links & cross-floor transits** (`Furniture.stairLinkId`, item-level —
 the same opaque id on exactly two stairs-family pieces on two floors; role

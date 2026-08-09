@@ -99,7 +99,7 @@ interface RobotRig {
   progressGroup: THREE.Group;       // toggled visible on/off by source presence
   progressMats: THREE.MeshToonMaterial[]; // ordered fill segments (strip L→R / ring CW)
 }
-import { wallCutsForSegment, WINDOW_DEFAULTS, isBayWindowKind, windowSillMm, windowGlassHMm, bayProjectSign, bayPlan, closedWallLoops, wallSegmentInLoops, doorSpanCenter, wallKind, WALL_KINDS, furnitureLocalToWorld, furnitureWorldToLocal, pointInPolygon as pip, centroid, loopContaining, clampPointToLoop, resolveRoomForPoint, roomLabel, roomsByLoop, roomFloorLook, intersectLoopWithRect, polygonArea, heatmapColor, groundAreaSkirtBase, poolWaterColor, poolDepthMm, poolRaisedMm, poolHeaterState, poolPumpOn, poolLightOn, poolRimY, poolBasinFloorY, poolWaterSurfaceY, POOL_COPING_COLOR, POOL_HEAT_GLOW, type RoomTemp } from './geometry.js';
+import { wallCutsForSegment, WINDOW_DEFAULTS, isBayWindowKind, windowSillMm, windowGlassHMm, bayProjectSign, bayPlan, closedWallLoops, wallSegmentInLoops, doorSpanCenter, wallKind, WALL_KINDS, furnitureLocalToWorld, furnitureWorldToLocal, pointInPolygon as pip, centroid, loopContaining, clampPointToLoop, resolveRoomForPoint, roomLabel, roomsByLoop, roomFloorLook, intersectLoopWithRect, clipVoidToLoop, polygonArea, heatmapColor, groundAreaSkirtBase, poolWaterColor, poolDepthMm, poolRaisedMm, poolHeaterState, poolPumpOn, poolLightOn, poolRimY, poolBasinFloorY, poolWaterSurfaceY, POOL_COPING_COLOR, POOL_HEAT_GLOW, type RoomTemp } from './geometry.js';
 import { visibilityToFogDensity, moonPhaseFraction, uvBand, type WeatherNow } from './weather.js';
 import { SOLAR_DEFAULTS, solarAim, solarTrackOpts, solarRotation, solarPowerValue, SOLAR_DRAW_COLOR, SOLAR_GEN_COLOR } from './solar.js';
 import { skySnapshot, moonAltAz, capSampleAltAz, satAltAz } from './sky-astro.js';
@@ -6202,7 +6202,13 @@ export class ThreeDRenderer {
   updateFloor(f: Floor, scene3d?: Scene3D, layers?: import('./types.js').Layers2D,
               customObjects?: ObjectRecipe[], stateProvider?: StateProvider,
               selectedFurnitureId?: string | null,
-              jobDoneProvider?: (fuId: string) => boolean): void {
+              jobDoneProvider?: (fuId: string) => boolean,
+              // Depth (mm) of the open shaft drawn under every floor VOID —
+              // the drop to the next storey down. TRAILING + defaulted so a
+              // stale three-view chunk (or a test harness) still builds a
+              // sensible nominal-storey shaft. three-view resolves the real
+              // value with geometry's `voidDepthBelowMm`.
+              voidDepthMm: number = STORY_H_MM): void {
     if (!this._scene) return;
     this._fw = f.w; this._fd = f.d; this._floorId = f.id;
     // Ground (surroundings) level: the grid + neighborhood overlay ride it as a
@@ -6348,10 +6354,21 @@ export class ThreeDRenderer {
       side: THREE.DoubleSide, roughness: 0.9, metalness: 0.0,
       ...(glassHouse ? { transparent: true, opacity: 0.45, depthWrite: true } : {}),
     });
-    if (wellCuts.length || voidPolys.length) {
-      // Dark void plane below the deepest well (or just below the slab for a
-      // pure floor void) so stairwell / void openings show depth instead of the
-      // sky behind the scene.
+    // Every void hole ACTUALLY punched into the slab this build (already
+    // clipped to its carrying loop / the floor rect), in world mm. Each gets an
+    // open SHAFT below it — see _buildVoidShaft's note on why the old global
+    // dark plane was not enough.
+    const voidHoles: Vec2[][] = [];
+    if (wellCuts.length) {
+      // Dark void plane below the deepest well so a stairwell opening shows
+      // depth instead of the sky behind the scene.
+      //
+      // WELLS ONLY (2026-08-08). It used to build for floor VOIDS too, where
+      // with no sunken stairs `deepest` is 0 and the plane lands at −120 mm: a
+      // dark sheet 12 cm under the slab reads as black-PAINTED floor, not an
+      // opening ("voids do not appear to be rendering as open areas"). Voids
+      // now get real shafts instead. A floor with BOTH keeps both — the plane
+      // for its wells, shafts for its voids.
       const deepest = Math.min(0, ...wellCuts.map(fu => fu.elevation ?? 0));
       // Under glassHouse the void plane must NOT blanket the ghost stack below —
       // build it translucent + depthWrite off so the storeys beneath read through
@@ -6431,12 +6448,17 @@ export class ThreeDRenderer {
             shape.holes.push(scenePathFor(clipped));
           }
         }
-        // Floor-void holes: clip each void polygon to THIS loop (same path as
-        // wells — intersectLoopWithRect handles a void straddling the boundary).
+        // Floor-void holes: clip each void polygon to THIS loop. NOT the wells'
+        // intersectLoopWithRect — a void is user-drawn and may be CONCAVE, and
+        // Sutherland–Hodgman with a concave clipper keeps only its convex
+        // kernel. clipVoidToLoop returns a contained void verbatim (exact at
+        // any concavity, tolerant of vertices snapped onto the wall lines) and
+        // only falls back for a straddler.
         for (const vp of voidPolys) {
-          const clipped = intersectLoopWithRect(loop, vp);
+          const clipped = clipVoidToLoop(loop, vp);
           if (clipped && Math.abs(polygonArea(clipped)) >= MIN_HOLE_AREA) {
             shape.holes.push(scenePathFor(clipped));
+            voidHoles.push(clipped);
           }
         }
         // Occupancy wash WINS over the room look while the room is occupied
@@ -6467,10 +6489,13 @@ export class ThreeDRenderer {
           shape.holes.push(scenePathFor(clipped));
         }
       }
+      // Same concave-safe clip as the per-loop path (here the "loop" is the
+      // floor rect, so a contained void comes back verbatim).
       for (const vp of voidPolys) {
-        const clipped = intersectLoopWithRect(floorRect, vp);
+        const clipped = clipVoidToLoop(floorRect, vp);
         if (clipped && Math.abs(polygonArea(clipped)) >= MIN_HOLE_AREA) {
           shape.holes.push(scenePathFor(clipped));
+          voidHoles.push(clipped);
         }
       }
       const mesh = new THREE.Mesh(new THREE.ShapeGeometry(shape), floorMat);
@@ -6482,6 +6507,65 @@ export class ThreeDRenderer {
       floor.rotation.x = -Math.PI / 2;
       floor.receiveShadow = true;  // ground catches shadows, never casts
       this._floorGroup.add(floor);
+    }
+
+    // ── Void shafts ──────────────────────────────────────────────────────────
+    // A hole in the slab needs something to look DOWN into. Its only depth cue
+    // used to be the global dark plane above, which for a pure floor void sat
+    // 120 mm under the slab and read as black paint on the floor. Instead each
+    // punched hole gets an open shaft: vertical walls from the slab down to the
+    // next storey, plus a darker floor at the bottom. Two tones so toon shading
+    // has an edge to band on.
+    //
+    // Meshes live in _floorGroup (cleared + material-disposed by _clearGroup on
+    // the next rebuild — no new dispose path; the shared _mat gradient map is
+    // never per-instance disposed). No outline shells (a pit is not an object).
+    if (voidHoles.length) {
+      const depth = Math.max(1, isFinite(voidDepthMm) ? voidDepthMm : STORY_H_MM);
+      // Under glassHouse the shaft must not blanket the ghost storey below —
+      // same rule the well plane follows.
+      const glass = glassHouse
+        ? { transparent: true, opacity: 0.18, depthWrite: false } : {};
+      const shaftWallMat = this._mat({
+        color: 0x262b31, side: THREE.DoubleSide, roughness: 1, metalness: 0, ...glass,
+      });
+      const shaftFloorMat = this._mat({
+        color: 0x14171b, side: THREE.DoubleSide, roughness: 1, metalness: 0, ...glass,
+      });
+      for (const poly of voidHoles) {
+        // Walls: one quad per polygon edge, slab (y = 0) → y = −depth.
+        // DoubleSide, so the source winding doesn't matter.
+        const verts: number[] = [];
+        for (let i = 0; i < poly.length; i++) {
+          const p0 = poly[i], p1 = poly[(i + 1) % poly.length];
+          const x0 = f.w / 2 - p0.x, z0 = p0.y - f.d / 2;
+          const x1 = f.w / 2 - p1.x, z1 = p1.y - f.d / 2;
+          verts.push(
+            x0, 0, z0, x1, 0, z1, x1, -depth, z1,
+            x0, 0, z0, x1, -depth, z1, x0, -depth, z0,
+          );
+        }
+        const wg = new THREE.BufferGeometry();
+        wg.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+        wg.computeVertexNormals();
+        const walls = new THREE.Mesh(wg, shaftWallMat);
+        walls.userData.outlineSkip = true;
+        walls.userData.voidShaft = true;
+        this._floorGroup.add(walls);
+        // Bottom: 2 mm above the wall feet so the two never z-fight.
+        const bShape = new THREE.Shape();
+        poly.forEach((pt, i) => {
+          const sx = f.w / 2 - pt.x, sy = f.d / 2 - pt.y;
+          if (i === 0) bShape.moveTo(sx, sy); else bShape.lineTo(sx, sy);
+        });
+        bShape.closePath();
+        const bottom = new THREE.Mesh(new THREE.ShapeGeometry(bShape), shaftFloorMat);
+        bottom.rotation.x = -Math.PI / 2;
+        bottom.position.y = -depth + 2;
+        bottom.userData.outlineSkip = true;
+        bottom.userData.voidShaft = true;
+        this._floorGroup.add(bottom);
+      }
     }
 
     // Background image (overlays grid when visible)
