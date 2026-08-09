@@ -1,5 +1,5 @@
 import { vehicleRecipe } from './vehicles.js';
-import { snap, snapVertex15, distMM, worldToLocal, localToWorld, FURNITURE_KINDS, furnitureCorners, furnitureLocalToWorld, furnitureWorldToLocal, resolveFurnitureDef, resolveFurnitureWallCollision, resolveSeatTableCollision, seatBelongsToTable, snapStepLightToSurface, snapFireplaceToWall, snapFloodlightToWall, snapExhaustToWall, snapSwitchToWall, snapAlarmToWall, snapCalendarToWall, snapThermostatToWall, snapPlugToWall, snapInfoCardToWall, snapActionButtonToWall, isBinKind, isWetBathKind, isStairsKind, defaultFurnitureElevation, nearestAlign, bestAlignShift, ALIGN_DRAG_KINDS, ALIGN_POLY_DRAG_KINDS, envScale, ENV_SCALE_MIN, ENV_SCALE_MAX, GRID_MM, floorContentBbox, resolveFloorEdgeDrag, DOOR_DEFAULT_W, doorDefaultWidth, windowDefaultWidth, isBoundaryWallKind } from './geometry.js';
+import { snap, snapVertex15, distMM, worldToLocal, localToWorld, FURNITURE_KINDS, furnitureCorners, furnitureLocalToWorld, furnitureWorldToLocal, resolveFurnitureDef, resolveFurnitureWallCollision, resolveSeatTableCollision, seatBelongsToTable, snapStepLightToSurface, snapFireplaceToWall, snapFloodlightToWall, snapExhaustToWall, snapSwitchToWall, snapAlarmToWall, snapCalendarToWall, snapThermostatToWall, snapPlugToWall, snapInfoCardToWall, snapActionButtonToWall, isBinKind, isWetBathKind, isStairsKind, stairsRiseMm, rectPenetrationMm, defaultFurnitureElevation, nearestAlign, bestAlignShift, ALIGN_DRAG_KINDS, ALIGN_POLY_DRAG_KINDS, envScale, ENV_SCALE_MIN, ENV_SCALE_MAX, GRID_MM, floorContentBbox, resolveFloorEdgeDrag, DOOR_DEFAULT_W, doorDefaultWidth, windowDefaultWidth, isBoundaryWallKind } from './geometry.js';
 import { newId } from './storage.js';
 import {
   pxToMm, type View,
@@ -368,11 +368,26 @@ function bestWeldTarget(f: WeldWalls,
 //      another stair piece's edge with ≥150 mm of overlap closes just the
 //      perpendicular gap, preserving your placement ALONG the edge — so a
 //      flight can meet a wider landing mid-edge.
-// Position-only — elevation stays manual. Locked pieces never move.
+// After a successful weld the ELEVATION auto-composes so the climb continues
+// (a half flight welded onto a landing lands at the landing's top, etc.) — see
+// the rules at the compose block below. Locked pieces never move, and Alt at
+// either call site skips the whole resolver, so free placement is one key away.
 const STAIR_KINDS = new Set(['stairs', 'stairs_half', 'stair_landing', 'ramp']);
+// Sloped members: their FOOT edge (local −y) sits at the base elevation and
+// their HEAD edge (+y) at base + rise; the two SIDE edges are ramps, not levels.
+const STAIR_SLOPED_KINDS = new Set(['stairs', 'stairs_half', 'ramp']);
+// A corner snap that would bury the piece this deep inside the matched
+// neighbour is rejected (abutting is ~0; a sloppy drop over a landing was
+// snapping into full overlap).
+const STAIR_MAX_PEN_MM = 30;
+// Post-weld edge-coincidence tolerance + minimum shared run for the elevation
+// compose (the gap path closes to ~0; corner welds land exactly).
+const STAIR_ABUT_GAP_MM = 5;
+const STAIR_ABUT_OVERLAP_MM = 150;
 
 type StairPiece = { id: string; x: number; y: number; w: number; h: number;
-                    kind?: string; rotation?: number; locked?: boolean };
+                    kind?: string; rotation?: number; locked?: boolean;
+                    ht?: number; elevation?: number };
 
 function perimeterCorners(p: StairPiece): { x: number; y: number }[] {
   const cs: [number, number][] = [[-1, -1], [1, -1], [1, 1], [-1, 1]];
@@ -389,15 +404,37 @@ export function snapStairEdges(
   if (piece.locked || !STAIR_KINDS.has(piece.kind ?? '')) return false;
   const mine = perimeterCorners(piece);
   const others = f.furniture.filter(o => o.id !== piece.id && STAIR_KINDS.has(o.kind ?? ''));
-  // 1. Corner-to-corner.
+  // 1. Corner-to-corner — candidates in ascending distance order, taking the
+  //    first that does NOT bury the piece inside the neighbour it matched. The
+  //    nearest corner used to be accepted blindly, so a flight dropped sloppily
+  //    across a landing snapped into gross overlap; a rejected candidate falls
+  //    through to the parallel-edge path, which closes a gap along an edge
+  //    normal and can't create overlap with that neighbour.
+  //    The test is against EVERY stair piece, not just the one whose corner was
+  //    matched: the reported defect welds a flight onto a legitimately touching
+  //    NEIGHBOUR corner (penetration 0 there) while burying it in a THIRD piece
+  //    a metre away, which a matched-neighbour-only test cannot see.
+  //    Caveat: the test is planar, so it also rejects a corner weld between two
+  //    flights deliberately STACKED over each other in a stairwell (different
+  //    elevations, same plan footprint); those fall through to the edge path.
   let best: { d: number; dx: number; dy: number } | null = null;
+  const cands: { d: number; dx: number; dy: number; other: StairPiece }[] = [];
   for (const other of others) {
     for (const oc of perimeterCorners(other)) {
       for (const mc of mine) {
         const d = Math.hypot(oc.x - mc.x, oc.y - mc.y);
-        if (d < 250 && (!best || d < best.d)) best = { d, dx: oc.x - mc.x, dy: oc.y - mc.y };
+        if (d < 250) cands.push({ d, dx: oc.x - mc.x, dy: oc.y - mc.y, other });
       }
     }
+  }
+  cands.sort((a, b) => a.d - b.d);
+  for (const c of cands) {
+    const moved = { ...piece, x: piece.x + c.dx, y: piece.y + c.dy };
+    let buried = false;
+    for (const o of others) {
+      if (rectPenetrationMm(moved, o) > STAIR_MAX_PEN_MM) { buried = true; break; }
+    }
+    if (!buried) { best = c; break; }
   }
   // 2. Parallel-edge gap closing.
   if (!best) {
@@ -429,6 +466,86 @@ export function snapStairEdges(
   if (!best) return false;
   piece.x = Math.round(piece.x + best.dx);
   piece.y = Math.round(piece.y + best.dy);
+  composeStairElevation(f, piece);
+  return true;
+}
+
+// Surface height (mm) of stair piece `p`'s edge `idx` — null when that edge is
+// SLOPED (a flight's two sides), which can't hand a level off to anything.
+// Edge order follows perimeterCorners: 0 = FOOT (local −y), 2 = HEAD (+y).
+function stairEdgeHeight(p: StairPiece, idx: number): number | null {
+  const base = p.elevation ?? 0;
+  const def = FURNITURE_KINDS[p.kind as keyof typeof FURNITURE_KINDS];
+  const ht = stairsRiseMm({ kind: p.kind as Furniture['kind'], ht: p.ht }, def?.ht ?? 0);
+  if (STAIR_SLOPED_KINDS.has(p.kind ?? '')) {
+    if (idx === 0) return base;          // foot, at the base
+    if (idx === 2) return base + ht;     // head, a full rise up
+    return null;                         // sides are the slope itself
+  }
+  return base + ht;                      // a landing is level all round
+}
+
+/**
+ * ELEVATION AUTO-COMPOSE (run right after a successful position weld).
+ *
+ * Scans every edge of `piece` against every edge of the other stair pieces for
+ * an ABUTMENT — parallel within 6°, perpendicular gap ≤ 5 mm (the weld just
+ * made them coincident) and ≥ 150 mm of shared run — then sets the piece's
+ * elevation so the climb continues through that joint:
+ *
+ *   my FOOT edge abuts  → elevation = the neighbour edge's surface height
+ *   my HEAD edge abuts  → elevation = that height − my own rise
+ *   I am a landing      → elevation = that height − my own thickness
+ *   my SIDE edge (flight/ramp) → nothing to compose (it is the slope)
+ *
+ * At most ONE compose is applied, preferring FOOT > HEAD > landing and, among
+ * equals, the widest shared run. Already-correct staircases are a no-op (the
+ * write is skipped under 0.5 mm), so re-welding is idempotent. The mutation
+ * rides the caller's save() = one undo step; Alt skips the whole resolver.
+ */
+function composeStairElevation(f: { furniture: StairPiece[] }, piece: StairPiece): boolean {
+  const myKind = piece.kind ?? '';
+  const mySloped = STAIR_SLOPED_KINDS.has(myKind);
+  const myDef = FURNITURE_KINDS[myKind as keyof typeof FURNITURE_KINDS];
+  const myHt = stairsRiseMm({ kind: myKind as Furniture['kind'], ht: piece.ht }, myDef?.ht ?? 0);
+  const mine = perimeterCorners(piece);
+  let bestPick: { rank: number; overlap: number; target: number } | null = null;
+  for (let i = 0; i < 4; i++) {
+    // What this edge of MINE wants from a neighbouring surface height, and how
+    // strongly it counts. Side edges of a sloped piece compose nothing.
+    let rank: number, offset: number;
+    if (!mySloped) { rank = 2; offset = -myHt; }
+    else if (i === 0) { rank = 0; offset = 0; }
+    else if (i === 2) { rank = 1; offset = -myHt; }
+    else continue;
+    const p1 = mine[i], p2 = mine[(i + 1) % 4];
+    const eLen = Math.hypot(p2.x - p1.x, p2.y - p1.y) || 1;
+    const dax = (p2.x - p1.x) / eLen, day = (p2.y - p1.y) / eLen;
+    const nx = -day, ny = dax;
+    for (const other of f.furniture) {
+      if (other.id === piece.id || !STAIR_KINDS.has(other.kind ?? '')) continue;
+      const theirs = perimeterCorners(other);
+      for (let j = 0; j < 4; j++) {
+        const h = stairEdgeHeight(other, j);
+        if (h == null) continue;
+        const q1 = theirs[j], q2 = theirs[(j + 1) % 4];
+        const bLen = Math.hypot(q2.x - q1.x, q2.y - q1.y) || 1;
+        const dbx = (q2.x - q1.x) / bLen, dby = (q2.y - q1.y) / bLen;
+        if (Math.abs(dax * dby - day * dbx) > 0.105) continue;   // >6° off-parallel
+        if (Math.abs((q1.x - p1.x) * nx + (q1.y - p1.y) * ny) > STAIR_ABUT_GAP_MM) continue;
+        const tb1 = (q1.x - p1.x) * dax + (q1.y - p1.y) * day;
+        const tb2 = (q2.x - p1.x) * dax + (q2.y - p1.y) * day;
+        const overlap = Math.min(eLen, Math.max(tb1, tb2)) - Math.max(0, Math.min(tb1, tb2));
+        if (overlap < STAIR_ABUT_OVERLAP_MM) continue;
+        if (!bestPick || rank < bestPick.rank ||
+            (rank === bestPick.rank && overlap > bestPick.overlap))
+          bestPick = { rank, overlap, target: h + offset };
+      }
+    }
+  }
+  if (!bestPick) return false;
+  if (Math.abs((piece.elevation ?? 0) - bestPick.target) <= 0.5) return false;
+  piece.elevation = Math.round(bestPick.target);
   return true;
 }
 

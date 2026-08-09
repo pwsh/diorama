@@ -421,6 +421,45 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Stairs composition: tread-count entry + elevation auto-compose +
+  overlap-safe welds + open-flight stringers** (2026-08-09, three user
+  asks from one real staircase — "cannot get 2 half flights and a
+  landing to line up", "there should also be an entry for the number of
+  stairs", "'open underneath' … steps are shown as floating" over rooms
+  under an enclosed stairwell; unreleased — on main past v0.63.0).
+  (1) `Furniture.stairTreads?` overrides the derived tread count
+  (clamp 1–60; wins over both derivations) via `stairsTreadCount`'s new
+  trailing param, passed by ALL THREE consumers (3D builder, 2D glyph,
+  `_groundYAt` via a `treads?` field on the `_terrain` entry); sidebar
+  "Steps" input under Rise, flights only, placeholder `auto: N`.
+  (2) `snapStairEdges` v2: corner welds now REJECT candidates that
+  would bury the piece > 30 mm inside ANY stair piece (new pure SAT
+  `rectPenetrationMm` in geometry.ts — probed defect: a sloppy drop
+  near a landing snapped INTO it; the burial can be in a third piece,
+  so matched-neighbor-only testing can't see it), and after a
+  successful weld the ELEVATION auto-composes so the climb continues
+  (foot→neighbor surface height, head→height−rise, landing→height−
+  thickness; level neighbor edges only, FOOT>HEAD>landing, one compose,
+  idempotent on a correct staircase, Alt skips). A default U-stair now
+  lines up in plan AND height with three drags.
+  (3) Open-underneath flights build two closed STRINGER boards (40 mm,
+  300 mm drop, outer faces 2 mm inside ±W/2 for coincident-face safety,
+  clipped at y=0; skipped for landings/ramps/1-tread flights) so treads
+  read as carried structure over the room below — distinct from the
+  2026-07-28 removed shaft side walls, commented at the site.
+  Agent-implemented (Opus); orchestrator probed the corner-weld overlap
+  defect pre-design and verified gates independently. Agent deviations
+  accepted: burial test widened to all pieces; the pinned probe case is
+  dirty-start (penetration can only shrink, pinned as such) with a
+  clean-start refusal found by scanning as the real positive pin;
+  1-tread stringer exemption. STAIRSFIT 78→136 (§I override, §J
+  stringers, §K snap v2); ALIGNGUIDES 162/162, STAIRS-DESCEND 23/23
+  re-verified. NB stairs-fit-test now also bundles canvas-interact.ts
+  (plain esbuild, no lit aliases needed — recipe in the page header).
+  Known limits (documented in code): penetration test is planar (stacked
+  same-footprint flights fall through to the edge path); an authored
+  stairTreads is invisible to physical.mjs (it doesn't model treads).
+
 - **Stairs exempt from the wall push-out + Alt free placement covers the
   drop resolvers** (2026-08-09, user-reported "I have a set of half
   stairs that goes under a closet… it will not allow me to extend the

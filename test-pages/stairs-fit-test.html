@@ -11,7 +11,9 @@
     npx esbuild src/geometry.ts      --bundle --format=esm --outfile=<harness>/geometry.mod.js
     npx esbuild src/planner.ts       --bundle --format=esm --outfile=<harness>/planner.mod.js
     npx esbuild src/canvas-render.ts --bundle --format=esm --outfile=<harness>/canvas-render.mod.js
-    (the built three-renderer chunk is served next to this file, like the other 3D pages)
+    npx esbuild src/canvas-interact.ts --bundle --format=esm --outfile=<harness>/canvas-interact.mod.js
+    (the built three-renderer chunk is served next to this file, like the other 3D pages:
+     npm run build, then copy THIS PAGE FIRST and dist/assets/ SECOND into the harness dir)
 
   Asserts:
    (A) pure stairsTreadCount: the golden matrix (defaults UNCHANGED — stairs
@@ -33,6 +35,15 @@
    (H) Furniture.stairsOpen ("open underneath", 3D-BUILD-ONLY): floating tread /
        ramp / landing slabs whose TOP surfaces are bit-identical to the solid
        build, open air beneath, and a _groundYAt that cannot tell the difference.
+   (I) Furniture.stairTreads (the per-piece STEP COUNT override): it wins over
+       both derivations, clamps/rounds, and reaches all three consumers — the
+       3D builder, _groundYAt's quantization and the 2D glyph.
+   (J) Open-flight STRINGERS: two sloped boards under the floating treads,
+       flights only, footprint-neutral, clipped at the floor, and 2 mm inside
+       the tread cap side plane (the coincident-face pin).
+   (K) snapStairEdges v2: rectPenetrationMm's unit matrix, the overlap-safe
+       corner weld (with a negative control on the old buried result), and the
+       elevation auto-compose across a U staircase / straight chain / landing.
 -->
 <script type="module">
   const G = await import('./geometry.mod.js');
@@ -434,8 +445,26 @@
          lo >= riser * (n - 1) - 70 && near(lo, HT - 60, 1),
          `min=${lo} floor=${riser * (n - 1) - 70}`);
     }
-    ok('H5 NOTHING in the open flight reaches the base (min y = riser − 60 > 0)',
-       minY(gO) > 0 && near(minY(gO), riser - 60, 1), `min=${minY(gO)}`);
+    {
+      // Stringers (the boards carrying the treads) DO touch down by design —
+      // the assertion is about the TREADS floating, so they are filtered out.
+      const treadOnly = (o) => {
+        let lo = Infinity;
+        for (const m of realMeshes(o)) {
+          if (m.userData?.stairStringer) continue;
+          m.geometry.computeBoundingBox();
+          let y = m.position.y + m.geometry.boundingBox.min.y;
+          let pp = m.parent;
+          while (pp && pp !== o) { y += pp.position.y; pp = pp.parent; }
+          if (y < lo) lo = y;
+        }
+        return lo;
+      };
+      ok('H5 no TREAD in the open flight reaches the base (min y = riser − 60 > 0)',
+         treadOnly(gO) > 0 && near(treadOnly(gO), riser - 60, 1), `min=${treadOnly(gO)}`);
+      ok('H5b …while the stringers under them DO touch down (they carry the flight)',
+         near(minY(gO), 0, 1e-6), `min=${minY(gO)}`);
+    }
     ok('H6 SOLID regression: the first tread still reaches y = 0',
        near(minY(gS), 0, 1e-9), `min=${minY(gS)}`);
     ok('H7 _groundYAt is identical on the open and the solid flight',
@@ -510,6 +539,331 @@
       ok('H16 _groundYAt on the open landing is unchanged',
          near(r._groundYAt(5000, 8500), LHT, 1e-9) && near(r._groundYAt(2000, 8500), LHT, 1e-9),
          `${r._groundYAt(5000, 8500)}/${r._groundYAt(2000, 8500)}`);
+    }
+  }
+
+  // ══ (I) Furniture.stairTreads — the per-piece STEP COUNT override ═════════
+  // A user counting the steps on their real staircase is the authority, so the
+  // override wins over BOTH the run-depth and the rise derivations, and all
+  // three consumers (3D builder, 2D glyph, _groundYAt) read the same field.
+  {
+    ok('I1 absent override → the derived count (regression pin)', TC(1800, 1372) === 6, `n=${TC(1800, 1372)}`);
+    ok('I2 override wins over the derivation', TC(1800, 1372, 10) === 10, `n=${TC(1800, 1372, 10)}`);
+    ok('I3 …and over the RISE cap too (a short rise, many steps)',
+       TC(1000, 200, 8) === 8 && TC(1000, 200) === 1, `n=${TC(1000, 200, 8)}`);
+    ok('I4 below 1 falls back to the derivation', TC(1800, 1372, 0.4) === 6, `n=${TC(1800, 1372, 0.4)}`);
+    ok('I5 zero / negative / NaN / undefined all fall back',
+       TC(1800, 1372, 0) === 6 && TC(1800, 1372, -5) === 6 &&
+       TC(1800, 1372, NaN) === 6 && TC(1800, 1372, undefined) === 6, 'ok');
+    ok('I6 clamped at 60', TC(1800, 1372, 200) === 60, `n=${TC(1800, 1372, 200)}`);
+    ok('I7 rounded to a whole step', TC(1800, 1372, 3.6) === 4 && TC(1800, 1372, 3.4) === 3,
+       `${TC(1800, 1372, 3.6)}/${TC(1800, 1372, 3.4)}`);
+    ok('I8 exactly 1 is honoured (not treated as absent)', TC(3600, 2743, 1) === 1, `n=${TC(3600, 2743, 1)}`);
+
+    // Renderer: the builder AND the ground truth follow the override together.
+    const HTd = 1372, RUNd = 1800;
+    const over = { id: 'iOver', x: 2000, y: 5000, w: 1000, h: RUNd, kind: 'stairs_half', rotation: 0, stairTreads: 9 };
+    const auto = { id: 'iAuto', x: 6000, y: 5000, w: 1000, h: RUNd, kind: 'stairs_half', rotation: 0 };
+    r.updateFloor(mkFloor({ furniture: [over, auto] }), scene);
+    ok('I9 the builder renders the overridden step count', treadCaps(grpAt(over)).length === 9,
+       `n=${treadCaps(grpAt(over)).length}`);
+    ok('I10 …and an un-overridden twin still renders the derived 6 (regression pin)',
+       treadCaps(grpAt(auto)).length === 6, `n=${treadCaps(grpAt(auto)).length}`);
+    ok('I11 the overridden flight still tops out at the rise',
+       near(topY(grpAt(over)), HTd, 1e-6) && near(topY(grpAt(auto)), HTd, 1e-6),
+       `over=${topY(grpAt(over))} auto=${topY(grpAt(auto))}`);
+    {
+      // Centre of the piece → frac 0.5 → step floor(0.5·n) → (ht/n)·(step+1).
+      const gOver = r._groundYAt(2000, 5000), gAuto = r._groundYAt(6000, 5000);
+      ok('I12 _groundYAt quantizes to the OVERRIDDEN 9-step layout',
+         near(gOver, (HTd / 9) * 5, 1e-6), `g=${gOver} want=${(HTd / 9) * 5}`);
+      ok('I13 …while the un-overridden twin keeps the 6-step layout',
+         near(gAuto, (HTd / 6) * 4, 1e-6), `g=${gAuto} want=${(HTd / 6) * 4}`);
+      ok('I14 the two layouts really do differ (the pin is not vacuous)',
+         Math.abs(gOver - gAuto) > 1, `${gOver} vs ${gAuto}`);
+    }
+    {
+      // Every tread top of the overridden flight sits on the 9-step ladder.
+      const ys = treadCaps(grpAt(over)).map(m => m.position.y + 11).sort((a, b) => a - b);
+      ok('I15 every overridden tread top = riser·(i+1) with riser = ht/9',
+         ys.length === 9 && ys.every((y, i) => near(y, (HTd / 9) * (i + 1), 1e-6)),
+         `[${ys.map(v => v.toFixed(1))}]`);
+    }
+    {
+      // The 2D glyph reads the same field (it must not throw and must paint).
+      const cr = await import('./canvas-render.mod.js?v=' + Date.now());
+      // The glyph FILLS its rect at alpha 0.4, so any-alpha pixel counting
+      // saturates; the tread lines are drawn fully OPAQUE over that fill, so
+      // count alpha ≈ 255 pixels instead.
+      const paintLines = (fu) => {
+        const cv = document.createElement('canvas'); cv.width = 140; cv.height = 140;
+        const ctx = cv.getContext('2d'); ctx.translate(70, 70);
+        cr.drawFurniturePrimitiveLocal(ctx, { id: 'x', x: 0, y: 0, ...fu }, 40, 90, [], false, {});
+        const d = ctx.getImageData(0, 0, 140, 140).data;
+        let solid = 0;
+        for (let i = 3; i < d.length; i += 4) if (d[i] > 200) solid++;
+        return solid;
+      };
+      let threw = null, a = 0, b = 0;
+      try {
+        a = paintLines({ w: 1000, h: RUNd, kind: 'stairs_half' });
+        b = paintLines({ w: 1000, h: RUNd, kind: 'stairs_half', stairTreads: 20 });
+      } catch (e) { threw = String(e); }
+      ok('I16 the 2D glyph honours the override (more tread lines, no throw)',
+         threw === null && a > 0 && b > a, `${threw ?? ''} auto=${a} over=${b}`);
+    }
+  }
+
+  // ══ (J) Open-flight STRINGERS ═════════════════════════════════════════════
+  // The two sloped boards that carry the floating tread slabs. NOT the removed
+  // full-height shaft side walls — thin boards tucked under the treads.
+  {
+    // World-local AABB of a mesh under a pure Y rotation (all we ever use).
+    const meshBox = (m) => {
+      const pos = m.geometry.attributes.position;
+      const c = Math.cos(m.rotation.y), s = Math.sin(m.rotation.y);
+      const b = { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity };
+      for (let i = 0; i < pos.count; i++) {
+        const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+        const wx = x * c + z * s + m.position.x, wy = y + m.position.y;
+        if (wx < b.minX) b.minX = wx; if (wx > b.maxX) b.maxX = wx;
+        if (wy < b.minY) b.minY = wy; if (wy > b.maxY) b.maxY = wy;
+      }
+      return b;
+    };
+    const stringers = (o) => realMeshes(o).filter(m => m.userData?.stairStringer === true);
+
+    const W = 1000, RUN = 1800, HT = 1372;
+    const sSolid = { id: 'jS', x: 2000, y: 7000, w: W, h: RUN, kind: 'stairs_half', rotation: 0 };
+    const sOpen = { ...sSolid, id: 'jO', x: 6000, stairsOpen: true };
+    r.updateFloor(mkFloor({ furniture: [sSolid, sOpen] }), scene);
+    const gO = grpAt(sOpen), gS = grpAt(sSolid);
+    ok('J1 an OPEN flight builds exactly two stringers', stringers(gO).length === 2,
+       `n=${stringers(gO).length}`);
+    ok('J2 a SOLID flight builds none (byte-identical to before)', stringers(gS).length === 0,
+       `n=${stringers(gS).length}`);
+    {
+      const bs = stringers(gO).map(meshBox);
+      ok('J3 neither board widens the footprint (|x| ≤ W/2)',
+         bs.every(b => b.maxX <= W / 2 + 1e-6 && b.minX >= -W / 2 - 1e-6),
+         bs.map(b => `[${b.minX.toFixed(1)},${b.maxX.toFixed(1)}]`).join(' '));
+      ok('J4 one board per side', bs.length === 2 &&
+         bs.some(b => b.maxX > 0 && b.minX > 0) && bs.some(b => b.minX < 0 && b.maxX < 0),
+         bs.map(b => `[${b.minX.toFixed(1)},${b.maxX.toFixed(1)}]`).join(' '));
+      ok('J5 they are 40 mm boards', bs.every(b => near(b.maxX - b.minX, 40, 1e-6)),
+         bs.map(b => (b.maxX - b.minX).toFixed(2)).join('/'));
+      ok('J6 the top never pokes above the flight (≤ HT)', bs.every(b => b.maxY <= HT + 1),
+         bs.map(b => b.maxY.toFixed(1)).join('/'));
+      ok('J7 …and reaches the head (top ≈ HT)', bs.every(b => near(b.maxY, HT, 1)),
+         bs.map(b => b.maxY.toFixed(1)).join('/'));
+      ok('J8 the bottom is clipped at the floor (≥ 0, and it touches down)',
+         bs.every(b => b.minY >= -1 && b.minY <= 1), bs.map(b => b.minY.toFixed(3)).join('/'));
+      // Coincident-face pin: the full-width tread CAP side plane vs the board's
+      // OUTER face must NOT be coplanar (2 mm apart by construction).
+      const outer = Math.max(...bs.map(b => b.maxX));
+      ok('J9 the outer face is 2 mm inside the tread cap side plane (no coplanar pair)',
+         near(W / 2 - outer, 2, 1e-6), `capPlane=${W / 2} outer=${outer}`);
+      // …and the inset tread BODY side plane (±(W/2 − 4)) is BURIED in the board.
+      const bodyPlane = W / 2 - 4;
+      const plus = bs.find(b => b.minX > 0);
+      ok('J10 the tread body side plane lands inside the board thickness (buried)',
+         bodyPlane < plus.maxX && bodyPlane > plus.minX,
+         `body=${bodyPlane} board=[${plus.minX.toFixed(1)},${plus.maxX.toFixed(1)}]`);
+    }
+    ok('J11 stringers do not disturb the tread count / tops',
+       treadCaps(gO).length === treadCaps(gS).length &&
+       near(topY(gO), topY(gS), 1e-6), `${treadCaps(gO).length}/${treadCaps(gS).length}`);
+    ok('J12 …nor the walkable ground truth',
+       near(r._groundYAt(6000, 7000), r._groundYAt(2000, 7000), 1e-9),
+       `${r._groundYAt(6000, 7000)} vs ${r._groundYAt(2000, 7000)}`);
+    {
+      // Landing + ramp are untouched — stringers are a FLIGHT thing only.
+      const land = { id: 'jL', x: 2000, y: 2500, w: 1000, h: 1000, kind: 'stair_landing', rotation: 0, ht: 400, stairsOpen: true };
+      const ramp = { id: 'jR', x: 6000, y: 2500, w: 1000, h: 2400, kind: 'ramp', rotation: 0, stairsOpen: true };
+      r.updateFloor(mkFloor({ furniture: [land, ramp] }), scene);
+      ok('J13 an open LANDING builds no stringers', stringers(grpAt(land)).length === 0,
+         `n=${stringers(grpAt(land)).length}`);
+      ok('J14 an open RAMP builds no stringers', stringers(grpAt(ramp)).length === 0,
+         `n=${stringers(grpAt(ramp)).length}`);
+    }
+    {
+      // A single-tread flight is skipped (its top edge would be horizontal AT
+      // the cap top = a coplanar pair).
+      const one = { id: 'j1', x: 3000, y: 2500, w: 1000, h: 1000, kind: 'stairs', rotation: 0, ht: 200, stairsOpen: true };
+      r.updateFloor(mkFloor({ furniture: [one] }), scene);
+      ok('J15 a ONE-tread open flight builds no stringers',
+         treadCaps(grpAt(one)).length === 1 && stringers(grpAt(one)).length === 0,
+         `treads=${treadCaps(grpAt(one)).length} stringers=${stringers(grpAt(one)).length}`);
+    }
+    {
+      // Very short flight (rise under the 300 mm drop) → the triangle fallback,
+      // still two well-formed boards clipped at the floor.
+      const shortF = { id: 'jT', x: 3000, y: 5000, w: 1000, h: 1000, kind: 'stairs', rotation: 0, ht: 260, stairsOpen: true };
+      r.updateFloor(mkFloor({ furniture: [shortF] }), scene);
+      const bs = stringers(grpAt(shortF)).map(meshBox);
+      ok('J16 a flight shorter than the drop still builds two clipped boards',
+         bs.length === 2 && bs.every(b => b.minY >= -1e-6 && b.maxY <= 260 + 1), 
+         `n=${bs.length} ${bs.map(b => `${b.minY.toFixed(1)}..${b.maxY.toFixed(1)}`).join(' ')}`);
+    }
+  }
+
+  // ══ (K) snapStairEdges v2 — overlap-safe weld + elevation auto-compose ════
+  {
+    const CI = await import('./canvas-interact.mod.js?v=' + Date.now());
+    const PEN = G.rectPenetrationMm;
+
+    // ── rectPenetrationMm unit matrix ────────────────────────────────────────
+    const R = (x, y, w, h, rot) => ({ x, y, w, h, rotation: rot ?? 0 });
+    ok('K1 separated rects → 0', PEN(R(0, 0, 100, 100), R(500, 0, 100, 100)) === 0);
+    ok('K2 exactly touching → ~0', near(PEN(R(0, 0, 100, 100), R(100, 0, 100, 100)), 0, 1e-9),
+       String(PEN(R(0, 0, 100, 100), R(100, 0, 100, 100))));
+    ok('K3 a known 40 mm overlap measures 40',
+       near(PEN(R(0, 0, 100, 100), R(60, 0, 100, 100)), 40, 1e-9),
+       String(PEN(R(0, 0, 100, 100), R(60, 0, 100, 100))));
+    ok('K4 identical rects → the full min dimension',
+       near(PEN(R(0, 0, 100, 60), R(0, 0, 100, 60)), 60, 1e-9),
+       String(PEN(R(0, 0, 100, 60), R(0, 0, 100, 60))));
+    ok('K5 a rotated pair separates correctly',
+       PEN(R(0, 0, 100, 100, 45), R(400, 0, 100, 100, 45)) === 0 &&
+       PEN(R(0, 0, 100, 100, 45), R(50, 0, 100, 100, 45)) > 0, 'ok');
+    ok('K6 corner-touching rects are not "penetrating"',
+       near(PEN(R(0, 0, 100, 100), R(100, 100, 100, 100)), 0, 1e-9),
+       String(PEN(R(0, 0, 100, 100), R(100, 100, 100, 100))));
+
+    // ── the well-formed U staircase (defaults: rise/landing ht 1372) ─────────
+    // A rises 0→1372 (head at y=1800), the landing tops out at 1372, B turns
+    // back and starts FROM the landing.
+    const mkU = (over = {}) => {
+      const A = { id: 'A', x: 500, y: 900, w: 1000, h: 1800, kind: 'stairs_half', rotation: 0, elevation: 0 };
+      const L = { id: 'L', x: 1000, y: 2300, w: 2000, h: 1000, kind: 'stair_landing', rotation: 0, elevation: 0 };
+      const B = { id: 'B', x: 1500, y: 900, w: 1000, h: 1800, kind: 'stairs_half', rotation: 180, elevation: 1372 };
+      const f = { furniture: [A, L, B] };
+      Object.assign(f.furniture.find(p => p.id === over.id) ?? {}, over);
+      return { f, A, L, B };
+    };
+    {
+      // (a) weld B in from a sloppy drop → position AND elevation land.
+      const { f, B } = mkU();
+      B.x = 1540; B.y = 930; B.elevation = 0;
+      const changed = CI.snapStairEdges(f, B);
+      ok('K7 a sloppily-dropped half flight welds onto the landing corner',
+         changed === true && B.x === 1500 && B.y === 900, `changed=${changed} (${B.x},${B.y})`);
+      ok('K8 …and its elevation composes to the landing top (its FOOT abuts it)',
+         B.elevation === 1372, `elev=${B.elevation}`);
+    }
+    {
+      // …idempotent: re-welding a correct staircase changes no elevation.
+      const { f, A, L, B } = mkU();
+      CI.snapStairEdges(f, B);
+      ok('K9 re-welding the already-correct B is an elevation no-op', B.elevation === 1372 && B.x === 1500,
+         `elev=${B.elevation} x=${B.x}`);
+      CI.snapStairEdges(f, A);
+      ok('K10 re-welding A (its HEAD meets the landing: 1372 − 1372) stays 0',
+         A.elevation === 0 && A.x === 500 && A.y === 900, `elev=${A.elevation} (${A.x},${A.y})`);
+      L.x = 1030; L.y = 2360;
+      CI.snapStairEdges(f, L);
+      ok('K11 nudging the landing welds it back with elevation untouched',
+         L.x === 1000 && L.y === 2300 && L.elevation === 0, `(${L.x},${L.y}) elev=${L.elevation}`);
+      CI.snapStairEdges(f, B);
+      ok('K12 …and B is still 1372 after the whole round trip (idempotent)',
+         B.elevation === 1372, `elev=${B.elevation}`);
+    }
+    {
+      // (b) straight chain: an upper flight's FOOT on a lower flight's HEAD.
+      const low = { id: 'lo', x: 500, y: 900, w: 1000, h: 1800, kind: 'stairs_half', rotation: 0, elevation: 0 };
+      const up = { id: 'up', x: 520, y: 2730, w: 1000, h: 1800, kind: 'stairs_half', rotation: 0, elevation: 0 };
+      const f = { furniture: [low, up] };
+      CI.snapStairEdges(f, up);
+      ok('K13 a straight chain composes the upper flight onto the lower rise',
+         up.x === 500 && up.y === 2700 && up.elevation === 1372,
+         `(${up.x},${up.y}) elev=${up.elevation}`);
+    }
+    {
+      // (c) my HEAD abutting a low landing → landingTop − myRise (negative here).
+      const fl = { id: 'f1', x: 500, y: 880, w: 1000, h: 1800, kind: 'stairs_half', rotation: 0, elevation: 0 };
+      const land = { id: 'l1', x: 500, y: 2300, w: 1000, h: 1000, kind: 'stair_landing', rotation: 0, ht: 400, elevation: 0 };
+      const f = { furniture: [fl, land] };
+      CI.snapStairEdges(f, fl);
+      ok('K14 a HEAD-on-landing weld composes landingTop − myRise',
+         fl.y === 900 && fl.elevation === 400 - 1372, `y=${fl.y} elev=${fl.elevation}`);
+    }
+    {
+      // (d) overlap rejection — the reported defect. A sloppy flight near A's
+      // corner used to snap to (1900, 2300), fully inside the landing.
+      const A = { id: 'A', x: 500, y: 900, w: 1000, h: 1800, kind: 'stairs_half', rotation: 0, elevation: 0 };
+      const L = { id: 'L', x: 1000, y: 2300, w: 2000, h: 1000, kind: 'stair_landing', rotation: 0, elevation: 0 };
+      const bad = { id: 'X', x: 2080, y: 2320, w: 1000, h: 1800, kind: 'stairs_half', rotation: 90, elevation: 0 };
+      // NB this probe DROP already overlaps the landing (820 mm) — the sloppy
+      // placement the user made. A ≤ 250 mm weld can never undo that, so the
+      // pin is that the weld must not make it WORSE by jumping to a far corner.
+      const penBefore = PEN(bad, L);
+      const oldRes = { ...bad, x: 1900, y: 2300 };
+      ok('K15 negative control: the old nearest-corner result buried it deeper still',
+         PEN(oldRes, L) > 300 && PEN(oldRes, L) > penBefore,
+         `old=${PEN(oldRes, L)} drop=${penBefore}`);
+      const f = { furniture: [A, L, bad] };
+      CI.snapStairEdges(f, bad);
+      ok('K16 the weld never increases penetration (it no longer corner-jumps inward)',
+         PEN(bad, L) <= penBefore && PEN(bad, A) <= 30,
+         `(${bad.x},${bad.y}) penL=${PEN(bad, L)} drop=${penBefore} penA=${PEN(bad, A)}`);
+      ok('K17 …and it did not land on the old buried position',
+         !(bad.x === 1900 && bad.y === 2300), `(${bad.x},${bad.y})`);
+      {
+        // The same defect from a CLEAN drop: the nearest corner belongs to one
+        // piece while the snap would bury the flight 183 mm inside a THIRD one
+        // (a rotated landing) — which is why the rejection tests EVERY stair
+        // piece, not just the corner's owner.
+        const C = { id: 'C', x: 2600, y: 2300, w: 1000, h: 1000, kind: 'stair_landing', rotation: 30, elevation: 0 };
+        const clean = { id: 'Y', x: 2400, y: 3900, w: 1000, h: 1800, kind: 'stairs_half', rotation: 0, elevation: 0 };
+        const before = Math.max(PEN(clean, A), PEN(clean, L), PEN(clean, C));
+        ok('K17b negative control: the drop is clean and the old snap would bury it',
+           near(before, 0, 1e-6) && PEN({ ...clean, x: 2500, y: 3700 }, C) > 150,
+           `before=${before} old=${PEN({ ...clean, x: 2500, y: 3700 }, C)}`);
+        CI.snapStairEdges({ furniture: [A, L, C, clean] }, clean);
+        ok('K17c the corner weld is refused rather than burying it in the third piece',
+           Math.max(PEN(clean, A), PEN(clean, L), PEN(clean, C)) <= 30 &&
+           !(clean.x === 2500 && clean.y === 3700),
+           `(${clean.x},${clean.y}) pen=${Math.max(PEN(clean, A), PEN(clean, L), PEN(clean, C))}`);
+      }
+    }
+    {
+      // (e) side-by-side flights: position welds, elevation is NOT composed
+      // (their shared edges are the SLOPED sides, which hand off no level).
+      const a = { id: 'sa', x: 500, y: 900, w: 1000, h: 1800, kind: 'stairs_half', rotation: 0, elevation: 0 };
+      const b = { id: 'sb', x: 1520, y: 920, w: 1000, h: 1800, kind: 'stairs_half', rotation: 0, elevation: 0 };
+      const f = { furniture: [a, b] };
+      const changed = CI.snapStairEdges(f, b);
+      ok('K18 side-by-side flights weld position…',
+         changed === true && b.x === 1500 && b.y === 900, `(${b.x},${b.y})`);
+      ok('K19 …without touching elevation (a side edge is the slope)',
+         b.elevation === 0, `elev=${b.elevation}`);
+    }
+    {
+      // A locked piece and a non-family kind still refuse outright.
+      const L = { id: 'L', x: 1000, y: 2300, w: 2000, h: 1000, kind: 'stair_landing', rotation: 0, elevation: 0 };
+      const lk = { id: 'lk', x: 1540, y: 930, w: 1000, h: 1800, kind: 'stairs_half', rotation: 180, elevation: 0, locked: true };
+      const sofa = { id: 'so', x: 1540, y: 930, w: 1000, h: 1800, kind: 'sofa', rotation: 0, elevation: 0 };
+      ok('K20 a locked piece never welds or composes',
+         CI.snapStairEdges({ furniture: [L, lk] }, lk) === false && lk.x === 1540 && lk.elevation === 0,
+         `(${lk.x}) elev=${lk.elevation}`);
+      ok('K21 a non-family kind is ignored',
+         CI.snapStairEdges({ furniture: [L, sofa] }, sofa) === false && sofa.x === 1540, `x=${sofa.x}`);
+    }
+    {
+      // A lone piece with nothing to weld to is untouched.
+      const solo = { id: 'so1', x: 4000, y: 4000, w: 1000, h: 1800, kind: 'stairs_half', rotation: 0, elevation: 250 };
+      ok('K22 a lone flight neither moves nor re-elevates',
+         CI.snapStairEdges({ furniture: [solo] }, solo) === false &&
+         solo.x === 4000 && solo.elevation === 250, `(${solo.x}) elev=${solo.elevation}`);
+    }
+    {
+      // The per-piece rise override feeds the compose (not the kind default).
+      const low = { id: 'r1', x: 500, y: 500, w: 1000, h: 1000, kind: 'stairs', rotation: 0, elevation: 0, ht: 300 };
+      const up = { id: 'r2', x: 520, y: 1490, w: 1000, h: 1000, kind: 'stairs', rotation: 0, elevation: 0, ht: 300 };
+      const f = { furniture: [low, up] };
+      CI.snapStairEdges(f, up);
+      ok('K23 the compose reads the per-piece RISE override', up.elevation === 300,
+         `elev=${up.elevation}`);
     }
   }
 

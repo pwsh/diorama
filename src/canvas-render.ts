@@ -6012,7 +6012,8 @@ export function drawFurniturePrimitiveLocal(
       ctx.strokeStyle = '#8d6e63'; ctx.lineWidth = 1;
       // Same shared rule the 3D builder + _groundYAt use, so the plan symbol
       // never shows a different number of treads than you can walk on.
-      const nSteps = stairsTreadCount(piece.h, stairsRiseMm(piece, FURNITURE_KINDS[kind].ht));
+      const nSteps = stairsTreadCount(piece.h, stairsRiseMm(piece, FURNITURE_KINDS[kind].ht),
+                                      piece.stairTreads);
       for (let i = 1; i < nSteps; i++) {
         const ty = y + (h * i) / nSteps;
         ctx.beginPath(); ctx.moveTo(x + 2, ty); ctx.lineTo(x + w - 2, ty); ctx.stroke();

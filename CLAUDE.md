@@ -1706,12 +1706,19 @@ non-finite / <50 mm → kind default; deliberately NOT a blanket all-kinds
 override so `mountable` host-top math keeps reading `def.ht`); sidebar "Rise
 (mm)" input on family pieces (min 50, placeholder = default, blank/default
 clears). **Tread count** is the ONE pure rule `stairsTreadCount(depthMm,
-riseMm) = min(max(3, round(depth/280)), max(1, floor(rise/130)))`
+riseMm, overrideN?) = min(max(3, round(depth/280)), max(1, floor(rise/130)))`
 (`STAIRS_TREAD_DEPTH_MM` 280 / `STAIRS_MIN_RISER_MM` 130) consumed in exactly
 three places — the 3D builder, `_groundYAt`'s tread quantization (the
-`_terrain` entry now carries the RESOLVED rise), and the 2D stairs glyph — so
-a 200 mm rise builds 1 step, 350 mm builds 2, while default flights keep 13/6
-treads byte-identically (the rise cap only bites below ~390 mm). **Autofit**:
+`_terrain` entry carries the RESOLVED rise + the override as `treads?`), and
+the 2D stairs glyph — so a 200 mm rise builds 1 step, 350 mm builds 2, while
+default flights keep 13/6 treads byte-identically (the rise cap only bites
+below ~390 mm). **`Furniture.stairTreads?` (2026-08-09, user-requested "an
+entry for the number of stairs"; item-level, flights only)** is the trailing
+`overrideN`: finite ≥ 1 WINS over both derivations (round + clamp 1–60 — a
+user counting their real staircase is the authority); all three consumers pass
+it so what a rig stands on can never diverge from the mesh; sidebar "Steps"
+input under Rise (placeholder `auto: N`, blank clears) on stairs/stairs_half
+only. It joins `ht` as a stairs-only per-piece field. **Autofit**:
 `Planner.autofitStairs(fu)` (edit-only, one undo step; sidebar "⇅ Fit between
 levels" button, refusal reason shown dim) probes the ground just beyond the
 foot (local −Z) and head (+Z) edges at `±(h/2 + 150)` via the pure
@@ -1742,10 +1749,41 @@ inset 4 mm/side so the cap overhangs — no coplanar faces; `bodyH` clamps so a
 (parallelogram extrude profile CLIPPED at y=0 at the foot, top plane
 identical; slope shallower than the slab thickness falls back solid), the
 landing a 60 mm platform (unchanged 40 mm 1.02× cap over a 20 mm body).
-Family still skips blob shadows (an open flight arguably wants one — noted,
-not built). Test `stairs-fit-test.html` (`STAIRSFIT PASS 78/78` — D3 pins the
-curb-less wedge, section H pins open-vs-solid top-surface + `_groundYAt`
-equality).
+**Open flights carry CLOSED STRINGERS (2026-08-09, user-reported "steps are
+shown as floating" over rooms under the stairs)**: two sloped boards
+(`STAIR_STRINGER_T_MM` 40 thick, `STAIR_STRINGER_DROP_MM` 300 below the
+top line, ramp-wedge extrude idiom, clipped at y=0 so the foot touches down,
+`userData.stairStringer`) whose OUTER faces sit `STAIR_STRINGER_INSET_MM` 2
+inside ±W/2 — load-bearing for the coincident-face gotcha (full-width cap
+sides stay 2 mm proud; inset tread-body sides land INSIDE the board
+thickness); skipped for solid builds, landings, ramps and 1-tread flights
+(horizontal top edge would be coplanar with the cap). NOT the 2026-07-28
+removed shaft side walls — these are thin carriage boards under the treads,
+commented at the site. The top edge runs `(−D/2, riser) → (D/2, HT)` — at or
+below every tread top by construction (the true nosing line would overshoot
+the head). **`snapStairEdges` v2 (2026-08-09, user-reported "cannot get 2
+half flights and a landing to line up"; canvas-interact)**: (a) corner
+candidates are taken in ascending distance and REJECTED when the weld would
+bury the piece > `STAIR_MAX_PEN_MM` 30 inside ANY stair piece (the matched
+neighbor alone can't see it — the defect welds a legitimately-touching corner
+while burying the piece in a THIRD piece; SAT depth via the pure
+`rectPenetrationMm(a, b)` in geometry.ts, the complement of
+`furnitureClearance` which flattens any overlap to 0; planar, so stacked
+same-footprint flights fall through to the parallel-edge path); (b) after a
+successful position weld, **elevation AUTO-COMPOSES** so the climb continues:
+edge-abutment scan (parallel ≤ 6°, gap ≤ 5 mm, shared run ≥ 150 mm) against
+neighbor LEVEL edges only (flight/ramp foot = elevation, head = elevation +
+rise, landing = top all round; flight SIDES are the slope → never compose) —
+my foot abuts → elevation = that height; my head → height − my rise; I'm a
+landing → height − my thickness; ONE compose, FOOT > HEAD > landing then
+widest run, skipped under 0.5 mm so a correct staircase re-welds as a no-op
+(idempotent), rides the caller's save() = one undo step, Alt skips the whole
+resolver. Family still skips blob shadows (an open flight arguably wants one
+— noted, not built). Test `stairs-fit-test.html` (`STAIRSFIT PASS 136/136` —
+D3 pins the curb-less wedge, section H open-vs-solid top-surface +
+`_groundYAt` equality, §I tread override, §J stringers, §K snap v2 incl. a
+clean-start burial refusal negative-controlled against the old nearest-corner
+result).
 
 ### Descending stairs (below floor level)
 Stairs-family pieces with `elevation < 0` cut their own stairwell hole and

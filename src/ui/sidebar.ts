@@ -39,7 +39,7 @@ import {
   envKindOf, envColor, envValueText, envHeight, envScale,
   INFO_CARD_MOUNT_DEFAULTS, INFO_CARD_SCALE_MIN, INFO_CARD_SCALE_MAX,
   infoCardText, infoCardMount, infoCardHeight, infoCardW, infoCardH, infoCardScale,
-  furnitureCat, type FurnitureCat, isBinKind, isWetBathKind, isVehicleKind, isStairsKind, isBedKind, STAIRS_MIN_RISE_MM, isClimateApplianceKind, isBladedFanKind,
+  furnitureCat, type FurnitureCat, isBinKind, isWetBathKind, isVehicleKind, isStairsKind, isBedKind, STAIRS_MIN_RISE_MM, stairsRiseMm, stairsTreadCount, isClimateApplianceKind, isBladedFanKind,
   isTreeKind, TREE_MIN_HEIGHT_MM, TREE_MAX_HEIGHT_MM,
   isMechanicalApplianceKind, mechanicalBindDomains, mechanicalRun,
   isRackKind, rackHealth, rackHealthColor,
@@ -5961,6 +5961,16 @@ export class Sidebar extends LitElement {
                  piece.ht = (isFinite(v) && v >= STAIRS_MIN_RISE_MM && Math.round(v) !== defHt) ? v : undefined;
                })}>
       </div>
+      ${curKind === 'stairs' || curKind === 'stairs_half' ? html`
+        <div class="row"><label>Steps</label>
+          <input type="number" min="1" step="1" .value=${piece.stairTreads != null ? String(Math.round(piece.stairTreads)) : ''}
+                 placeholder=${`auto: ${stairsTreadCount(piece.h, stairsRiseMm(piece, defHt))}`}
+                 title="How many steps this flight has. Blank = derived from the run depth and the rise. Counting the steps on your real staircase overrides both — the treads, the plan symbol and the height a figure stands at all follow this number."
+                 @input=${(e: Event) => upd(() => {
+                   const v = parseFloat((e.target as HTMLInputElement).value);
+                   piece.stairTreads = (isFinite(v) && v >= 1) ? Math.min(60, Math.round(v)) : undefined;
+                 })}>
+        </div>` : nothing}
       <div class="row"><label></label>
         <button class="btn" style="font-size:10px;padding:2px 6px"
                 title="Read the ground just past each end of the piece and set its elevation + rise to bridge them. If the piece is aimed downhill it is rotated 180° so it still rises from the lower end."

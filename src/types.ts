@@ -169,6 +169,13 @@ export interface Furniture {
                       // rise AND depth (geometry.stairsTreadCount); absent / < 50 →
                       // the kind default, which keeps every untouched flight identical.
                       // Item-level → no repairFloor change. See stairsRiseMm.
+  stairTreads?: number; // FLIGHTS ONLY (stairs / stairs_half): how many steps this flight has,
+                      // overriding the derived count. A user counting their real staircase is
+                      // the authority, so the override WINS over both the run-depth and the
+                      // rise derivations (clamped 1–60, rounded). Absent = derived — see
+                      // geometry.stairsTreadCount. Consumed by all three tread consumers (3D
+                      // builder, 2D glyph, _groundYAt's ground truth) so what you walk on can
+                      // never disagree with what you see. Item-level → no repairFloor change.
   stairsOpen?: boolean; // STAIRS FAMILY ONLY (3D build only): render the piece FLOATING —
                       // open air underneath instead of a solid mass down to the base. Treads
                       // become ~60 mm slabs, the ramp a ~80 mm sloped slab, a landing a ~60 mm

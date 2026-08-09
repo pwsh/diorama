@@ -1212,6 +1212,15 @@ const HOUSE_MOUNTED_FURNITURE_KINDS = new Set<string>([
 // existing nosing cap. Ramp: 80 mm measured PERPENDICULAR to the slope.
 const STAIRS_OPEN_SLAB_MM = 60;
 const RAMP_OPEN_SLAB_MM = 80;
+// Closed STRINGERS for an open flight: the two sloped boards that carry the
+// floating tread slabs (a real staircase over a room below reads as structure,
+// not as steps hanging in mid-air). Thickness in local X, vertical depth below
+// the nosing line, and the inset of each board's OUTER face from the flight's
+// half-width — the inset is load-bearing for the coincident-face gotcha, see
+// the builder.
+const STAIR_STRINGER_T_MM = 40;
+const STAIR_STRINGER_DROP_MM = 300;
+const STAIR_STRINGER_INSET_MM = 2;
 
 // Light kinds that STAND ON THE GROUND (as opposed to hanging from a ceiling or
 // bolting to a wall) and so follow the surroundings grade when placed outdoors.
@@ -3000,8 +3009,11 @@ export class ThreeDRenderer {
   private _fanSpin: Record<string, { rps: number; angle: number }> = {};
   // Walkable terrain (stairs + landings): humanoids stand on the computed
   // surface height instead of the floor plane.
+  // `treads` = the piece's Furniture.stairTreads override (flights only), so
+  // the ground truth quantizes to the SAME steps the builder rendered.
   private _terrain: { x: number; y: number; w: number; h: number; rotation?: number;
-                      ht: number; elevation: number; kind: string; poly?: Vec2[] }[] = [];
+                      ht: number; elevation: number; kind: string; poly?: Vec2[];
+                      treads?: number }[] = [];
   // Does _terrain hold at least one `terrace` entry? Gates the terrace lookup in
   // _itemGroundY (and the wall/opening base short-circuits) so a plan with no
   // terraces keeps the pre-terrace fast path exactly. Reset wherever _terrain is.
@@ -4347,7 +4359,7 @@ export class ThreeDRenderer {
       } else {
         // Tread kinds: quantize to the SAME step layout the builder renders
         // (rise AND depth — a short flight is 1–2 steps, not a forced 3).
-        const n = stairsTreadCount(t.h, t.ht);
+        const n = stairsTreadCount(t.h, t.ht, t.treads);
         const frac = (l.y + t.h / 2) / t.h;  // 0 at the front → 1 at the top
         const step = Math.min(n - 1, Math.max(0, Math.floor(frac * n)));
         gy = t.elevation + (t.ht / n) * (step + 1);
@@ -7175,6 +7187,7 @@ export class ThreeDRenderer {
         this._terrain.push({
           x: fu.x, y: fu.y, w: fu.w, h: fu.h, rotation: fu.rotation,
           ht: stairsRiseMm(fu, def.ht), elevation: fu.elevation ?? 0, kind: fu.kind,
+          treads: fu.stairTreads,
         });
         // Glass-house: build the stairs translucent so the storey reads through.
         // Cutaway: enroll the solid step meshes so a foreground stairwell fades
@@ -9827,7 +9840,7 @@ export class ThreeDRenderer {
   private _buildFurniture(fu: { id?: string; x: number; y: number; w: number; h: number;
                                  kind?: import('./types.js').FurnitureKind;
                                  rotation?: number; elevation?: number;
-                                 stairsOpen?: boolean;
+                                 stairsOpen?: boolean; stairTreads?: number;
                                  color?: string; customKindId?: string; vehicleModelId?: string },
                           neighbors?: Furniture[],
                           customObjects?: ObjectRecipe[],
@@ -10540,7 +10553,9 @@ export class ThreeDRenderer {
         // count follows the run depth (~280 mm treads) AND the rise (~130 mm
         // minimum riser), so a short-rise flight is 1–2 steps instead of three
         // impossible slivers. Default flights are unchanged. riser = HT / n.
-        const n = stairsTreadCount(D, HT);
+        // `Furniture.stairTreads` overrides the derived count (a user counting
+        // their real staircase); _groundYAt + the 2D glyph pass the same field.
+        const n = stairsTreadCount(D, HT, fu.stairTreads);
         const riser = HT / n, treadD = D / n;
         const treadMat = this._mat({ color: 0xa1887f, roughness: 0.6 });
         // "Open underneath" (Furniture.stairsOpen): each tread is a FLOATING
@@ -10563,6 +10578,57 @@ export class ThreeDRenderer {
           }
           // Tread cap for a visible nosing line.
           addBox(W, 22, treadD, treadMat, 0, hStep - 11, cz);
+        }
+        // Open flights get CLOSED STRINGERS — the two sloped boards a real
+        // staircase's treads are carried by. Without them the floating slabs
+        // read as broken (user-reported: "rooms underneath them … the steps are
+        // shown as floating"). NOT the full-height shaft SIDE WALLS that were
+        // removed in 2026-07-28 ("remove the sides from the stairs and the
+        // ramps") — those were storey-tall wall panels lining the stairwell;
+        // these are thin boards tucked UNDER the treads. Don't delete them
+        // citing that request.
+        //
+        // Profile (worldZ, worldY), extruded along X exactly like the ramp
+        // wedge: the top edge is the sloped line foot→head, the bottom the same
+        // line dropped and clipped at y = 0 so the foot touches down. Each
+        // board's OUTER face sits 2 mm inside the flight half-width, which is
+        // what keeps the coincident-face gotcha away: the full-width tread CAP
+        // side faces (±W/2) stay 2 mm proud of it, and the inset tread BODY
+        // side faces (±(W/2 − 4)) land INSIDE the 40 mm board thickness.
+        // Skipped for a single-tread flight (nothing to carry, and its top edge
+        // would be horizontal AT the cap top = a coplanar pair).
+        if (open && n >= 2) {
+          const yFoot = riser, yHead = HT;               // top edge endpoints
+          const bFoot = yFoot - STAIR_STRINGER_DROP_MM;  // dropped bottom edge
+          const bHead = yHead - STAIR_STRINGER_DROP_MM;
+          const prof = new THREE.Shape();
+          if (bFoot >= 0) {
+            prof.moveTo(-D / 2, yFoot); prof.lineTo(D / 2, yHead);
+            prof.lineTo(D / 2, bHead);  prof.lineTo(-D / 2, bFoot);
+          } else if (bHead > 0) {
+            // Bottom crosses the floor: run along y = 0 from the foot to it.
+            const zc = -D / 2 + D * (STAIR_STRINGER_DROP_MM - yFoot) / (yHead - yFoot);
+            prof.moveTo(-D / 2, yFoot); prof.lineTo(D / 2, yHead);
+            prof.lineTo(D / 2, bHead);  prof.lineTo(zc, 0); prof.lineTo(-D / 2, 0);
+          } else {
+            // Shorter than the drop: a plain foot→head triangle (never a
+            // degenerate or self-intersecting profile).
+            prof.moveTo(-D / 2, 0); prof.lineTo(D / 2, yHead); prof.lineTo(D / 2, 0);
+          }
+          prof.closePath();
+          const sGeo = new THREE.ExtrudeGeometry(
+            prof, { depth: STAIR_STRINGER_T_MM, bevelEnabled: false });
+          // After rotation.y = −π/2 the extrusion runs toward −X from position.x,
+          // so position.x IS the board's outer (max-x) face for the +X side and
+          // its inner face for the −X side.
+          const outer = W / 2 - STAIR_STRINGER_INSET_MM;
+          for (const px of [outer, -outer + STAIR_STRINGER_T_MM]) {
+            const b = new THREE.Mesh(sGeo, wood);
+            b.rotation.y = -Math.PI / 2;
+            b.position.x = px;
+            b.userData.stairStringer = true;
+            grp.add(b);
+          }
         }
         break;
       }

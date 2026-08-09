@@ -1096,15 +1096,24 @@ export function stairsRiseMm(fu: { kind?: FurnitureKind; ht?: number }, defHt: n
  *
  * THE ONE RULE — consumed by the 3D builder (`case 'stairs'`), the nav/rig
  * ground truth (`_groundYAt`'s tread quantization) and the 2D plan glyph, so
- * what you walk on can never disagree with what you see.
+ * what you walk on can never disagree with what you see. All three pass the
+ * per-piece `Furniture.stairTreads` override, so it can never apply to only
+ * some of them.
  *
  *   min( max(3, round(depth / 280)),  max(1, floor(rise / 130)) )
  *
  * The depth term IS the historical formula. The rise cap only bites when the
  * rise is short (≤ ~390 mm for a normal run), so every default flight keeps its
  * exact tread count: stairs 3600/2743 → 13, stairs_half 1800/1372 → 6.
+ *
+ * `overrideN` (Furniture.stairTreads) WINS over both derivations when it is a
+ * finite number ≥ 1 — a user counting the steps on their real staircase is the
+ * authority — rounded and clamped to 1–60. Anything else (absent, garbage,
+ * < 1) falls through to the derivation, so two-arg callers are unchanged.
  */
-export function stairsTreadCount(depthMm: number, riseMm: number): number {
+export function stairsTreadCount(depthMm: number, riseMm: number, overrideN?: number): number {
+  if (typeof overrideN === 'number' && isFinite(overrideN) && overrideN >= 1)
+    return Math.min(60, Math.max(1, Math.round(overrideN)));
   const d = (typeof depthMm === 'number' && isFinite(depthMm)) ? depthMm : 0;
   const r = (typeof riseMm === 'number' && isFinite(riseMm)) ? Math.abs(riseMm) : 0;
   const byDepth = Math.max(3, Math.round(d / STAIRS_TREAD_DEPTH_MM));
@@ -4367,6 +4376,46 @@ export function furnitureClearance(
   if (polysOverlap(pa.slice(0, 4), pb.slice(0, 4)))
     return { ax: a.x, ay: a.y, bx: b.x, by: b.y, mm: 0 };
   return polylineClosestPair(pa, pb);
+}
+
+/**
+ * SAT penetration DEPTH (mm) between two rotated rectangles: 0 when they are
+ * separated or merely touching, else the minimum overlap across the four face
+ * axes — the shortest distance one would have to travel to break contact.
+ *
+ * The complement of `furnitureClearance`, which answers the other half (the gap
+ * when apart, a flat 0 for ANY overlap). The stair-edge weld needs the depth so
+ * it can tell "abutting" (~0) from "buried inside the landing" (hundreds of mm)
+ * and reject the latter. Pure + allocation-light (a rect has only two distinct
+ * face normals, so four axes total).
+ */
+export function rectPenetrationMm(
+  a: { x: number; y: number; w: number; h: number; rotation?: number },
+  b: { x: number; y: number; w: number; h: number; rotation?: number },
+): number {
+  const pa = furnitureRectClosed(a), pb = furnitureRectClosed(b);
+  let best = Infinity;
+  for (const poly of [pa, pb]) {
+    for (let i = 0; i < 2; i++) {
+      const p1 = poly[i], p2 = poly[i + 1];
+      const ex = p2.x - p1.x, ey = p2.y - p1.y;
+      const len = Math.hypot(ex, ey) || 1;
+      const nx = -ey / len, ny = ex / len;
+      let aMin = Infinity, aMax = -Infinity, bMin = Infinity, bMax = -Infinity;
+      for (let k = 0; k < 4; k++) {
+        const t = pa[k].x * nx + pa[k].y * ny;
+        if (t < aMin) aMin = t; if (t > aMax) aMax = t;
+      }
+      for (let k = 0; k < 4; k++) {
+        const t = pb[k].x * nx + pb[k].y * ny;
+        if (t < bMin) bMin = t; if (t > bMax) bMax = t;
+      }
+      const ov = Math.min(aMax, bMax) - Math.max(aMin, bMin);
+      if (ov <= 0) return 0;
+      if (ov < best) best = ov;
+    }
+  }
+  return isFinite(best) ? best : 0;
 }
 
 // Resolve one ruler end into a measurement shape: a polyline + a face inset
