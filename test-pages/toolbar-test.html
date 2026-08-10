@@ -552,6 +552,47 @@
         cat(model, 'theater').cards.some(c => c.thumb.kind === 'theater_recliner')
         && cat(model, 'theater').cards.some(c => c.thumb.kind === 'recliner_row3'), '');
 
+      // I10–I14 (2026-08-08) — the `plants` cat: `plant` (was decor) + the nine
+      // outdoor tree/bush/flower_bed kinds get their own tab, placed right
+      // before Outdoor. NB there was no pre-existing tab-COUNT pin; I10 adds
+      // one so a future silent tab add/drop is caught. MEASURED: 15 tabs before
+      // this batch, 16 after — no tab is conditional (the Custom tab always
+      // renders, empty or not). CLAUDE.md's "16 tabs" line predates the count
+      // and was already off by one.
+      ok('I10: the toolbar has exactly 16 tabs', model.length === 16,
+        `${model.length}: ${ids.join(',')}`);
+      const PLANT_KINDS = ['plant', 'tree', 'pine_tree', 'oak_tree', 'birch_tree',
+        'palm_tree', 'willow_tree', 'spruce_tree', 'bush', 'flower_bed'];
+      const plantsTab = cat(model, 'plants');
+      ok('I11: a Plants tab exists', !!plantsTab, ids.join(','));
+      // Cards come out in FURNITURE_KINDS declaration order (furnitureCards
+      // filters Object.keys) — pin the exact order, not just the set.
+      const wantPlants = Object.keys(FURNITURE_KINDS).filter(k => PLANT_KINDS.includes(k));
+      const gotPlants = (plantsTab?.cards ?? []).map(c => c.thumb.kind);
+      ok('I12: Plants tab = exactly the 10 moved kinds in FURNITURE_KINDS order',
+        gotPlants.length === 10 && wantPlants.length === 10
+        && gotPlants.every((k, i) => k === wantPlants[i]),
+        `got=[${gotPlants.join(',')}] want=[${wantPlants.join(',')}]`);
+      ok('I12b: every plants card really carries cat plants',
+        gotPlants.every(k => FURNITURE_KINDS[k]?.cat === 'plants'), gotPlants.join(','));
+      // Negative pin — the moved kinds must be GONE from Outdoor and Decor…
+      const outdoorKinds = cat(model, 'outdoor').cards
+        .filter(c => c.thumb.type === 'furniture').map(c => c.thumb.kind);
+      const decorKinds = cat(model, 'decor').cards.map(c => c.thumb.kind);
+      const leaked = PLANT_KINDS.filter(k => outdoorKinds.includes(k) || decorKinds.includes(k));
+      ok('I13: no moved kind is still listed in Outdoor or Decor',
+        leaked.length === 0, `leaked=${leaked.join(',')}`);
+      // …while Outdoor keeps its non-plant yard props (+ the flagpole fixture).
+      ok('I13b: Outdoor still lists rock_cluster / bird_bath / fountain',
+        ['rock_cluster', 'bird_bath', 'fountain'].every(k => outdoorKinds.includes(k)),
+        outdoorKinds.join(','));
+      ok('I13c: Outdoor still carries the flagpole fixture card',
+        cat(model, 'outdoor').cards.some(c => c.tool === 'flagpole'), '');
+      // The Plants tab sits immediately BEFORE Outdoor.
+      ok('I14: Plants tab is immediately before Outdoor',
+        ids.indexOf('plants') >= 0 && ids.indexOf('plants') + 1 === ids.indexOf('outdoor'),
+        ids.join(','));
+
       // I9 — bed sizes surface as their own Bedroom cards.
       const bedCards = cat(model, 'bedroom').cards.map(c => c.thumb.kind);
       ok('I9: all four bed sizes are Bedroom cards',

@@ -2889,6 +2889,7 @@ export function logicLightState(logic: { rules?: ValueRule[]; offColor?: string 
 export type FurnitureCat =
   | 'furniture'   // legacy / custom-object fallback (furnitureCat's default)
   | 'seating' | 'tables' | 'bedroom' | 'storage' | 'stairs' | 'decor'
+  | 'plants'      // potted plants, flower beds + the whole tree family
   | 'appliance' | 'bathroom' | 'outdoor' | 'theater' | 'vehicle';
 
 export interface FurnitureKindDef {
@@ -2962,7 +2963,7 @@ export const FURNITURE_KINDS: Record<FurnitureKind, FurnitureKindDef> = {
   wardrobe:      { label: 'Wardrobe',      w: 1200, h: 600,  ht: 2000, back: 'none', color: 0x5d4037, cat: 'bedroom' },
   ottoman:       { label: 'Ottoman',       w: 700,  h: 700,  ht: 400,  seat: 380, back: 'none', color: 0x607d8b, cat: 'seating', frontArrow: false },
   stool:         { label: 'Stool',         w: 400,  h: 400,  ht: 650,  seat: 620, back: 'none', color: 0x6d4c41, cat: 'seating', frontArrow: false },
-  plant:         { label: 'Plant',         w: 400,  h: 400,  ht: 1400, back: 'none', color: 0x33691e, cat: 'decor', frontArrow: false, activity: 'tend_plant' },
+  plant:         { label: 'Plant',         w: 400,  h: 400,  ht: 1400, back: 'none', color: 0x33691e, cat: 'plants', frontArrow: false, activity: 'tend_plant' },
   counter:       { label: 'Counter',       w: 1800, h: 650,  ht: 900,  back: 'none', color: 0x8d6e63, cat: 'tables', surface: true },
   island:        { label: 'Island',        w: 2000, h: 1000, ht: 900,  back: 'none', color: 0x8d6e63, cat: 'tables', surface: true, frontArrow: false },
   cabinet:       { label: 'Cabinet',       w: 900,  h: 400,  ht: 2000, back: 'none', color: 0x5d4037, cat: 'storage' },
@@ -3030,18 +3031,18 @@ export const FURNITURE_KINDS: Record<FurnitureKind, FurnitureKindDef> = {
   trash_bin:     { label: 'Trash bin',     w: 600,  h: 700,  ht: 1100, back: 'none', color: 0x3a3f45, cat: 'outdoor', frontArrow: false },
   recycle_bin:   { label: 'Recycling bin', w: 600,  h: 700,  ht: 1100, back: 'none', color: 0x1f6fb2, cat: 'outdoor', frontArrow: false },
   // Outdoor — yard objects (the "yard" arc). Symmetric pieces skip the front chevron.
-  tree:          { label: 'Tree',          w: 900,  h: 900,  ht: 3000, back: 'none', color: 0x4c8c2b, cat: 'outdoor', frontArrow: false },
-  pine_tree:     { label: 'Pine tree',     w: 800,  h: 800,  ht: 3200, back: 'none', color: 0x2f6d3a, cat: 'outdoor', frontArrow: false },
+  tree:          { label: 'Tree',          w: 900,  h: 900,  ht: 3000, back: 'none', color: 0x4c8c2b, cat: 'plants', frontArrow: false },
+  pine_tree:     { label: 'Pine tree',     w: 800,  h: 800,  ht: 3200, back: 'none', color: 0x2f6d3a, cat: 'plants', frontArrow: false },
   // Additional species. Every tree kind is built PARAMETRICALLY from (w, h, HT)
   // where HT = treeHeightMm(piece, def.ht) — so the sidebar "Height (mm)" row
   // grows a bigger tree rather than stretching the default one.
-  oak_tree:      { label: 'Oak tree',      w: 3000, h: 3000, ht: 5500, back: 'none', color: 0x4a7c2f, cat: 'outdoor', frontArrow: false },
-  birch_tree:    { label: 'Birch tree',    w: 1800, h: 1800, ht: 5000, back: 'none', color: 0x7fbf4d, cat: 'outdoor', frontArrow: false },
-  palm_tree:     { label: 'Palm tree',     w: 2200, h: 2200, ht: 5000, back: 'none', color: 0x4f9e3a, cat: 'outdoor', frontArrow: false },
-  willow_tree:   { label: 'Willow tree',   w: 3200, h: 3200, ht: 4500, back: 'none', color: 0x6a9c47, cat: 'outdoor', frontArrow: false },
-  spruce_tree:   { label: 'Spruce tree',   w: 2000, h: 2000, ht: 6000, back: 'none', color: 0x2c5f52, cat: 'outdoor', frontArrow: false },
-  bush:          { label: 'Bush',          w: 700,  h: 700,  ht: 700,  back: 'none', color: 0x5a9e35, cat: 'outdoor', frontArrow: false },
-  flower_bed:    { label: 'Flower bed',    w: 900,  h: 450,  ht: 300,  back: 'none', color: 0x6b4a2b, cat: 'outdoor', frontArrow: false },
+  oak_tree:      { label: 'Oak tree',      w: 3000, h: 3000, ht: 5500, back: 'none', color: 0x4a7c2f, cat: 'plants', frontArrow: false },
+  birch_tree:    { label: 'Birch tree',    w: 1800, h: 1800, ht: 5000, back: 'none', color: 0x7fbf4d, cat: 'plants', frontArrow: false },
+  palm_tree:     { label: 'Palm tree',     w: 2200, h: 2200, ht: 5000, back: 'none', color: 0x4f9e3a, cat: 'plants', frontArrow: false },
+  willow_tree:   { label: 'Willow tree',   w: 3200, h: 3200, ht: 4500, back: 'none', color: 0x6a9c47, cat: 'plants', frontArrow: false },
+  spruce_tree:   { label: 'Spruce tree',   w: 2000, h: 2000, ht: 6000, back: 'none', color: 0x2c5f52, cat: 'plants', frontArrow: false },
+  bush:          { label: 'Bush',          w: 700,  h: 700,  ht: 700,  back: 'none', color: 0x5a9e35, cat: 'plants', frontArrow: false },
+  flower_bed:    { label: 'Flower bed',    w: 900,  h: 450,  ht: 300,  back: 'none', color: 0x6b4a2b, cat: 'plants', frontArrow: false },
   bird_bath:     { label: 'Bird bath',     w: 450,  h: 450,  ht: 950,  back: 'none', color: 0xb0b6bb, cat: 'outdoor', frontArrow: false },
   fountain:      { label: 'Fountain',      w: 1200, h: 1200, ht: 1400, back: 'none', color: 0xa8aeb4, cat: 'outdoor', frontArrow: false },
   swingset:      { label: 'Swing set',     w: 2800, h: 1600, ht: 2200, seat: 350, back: 'none', color: 0x6d7378, cat: 'outdoor', frontArrow: false },

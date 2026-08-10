@@ -1059,6 +1059,12 @@ const CAT_PAGE: Record<string, string> = {
   furniture: 'furniture', appliance: 'appliances', bathroom: 'bathroom', outdoor: 'outdoor',
   seating: 'furniture', tables: 'furniture', bedroom: 'furniture',
   storage: 'furniture', stairs: 'furniture', decor: 'furniture',
+  // `plants` split off outdoor (9 of its 10 members) + decor (`plant`). It maps
+  // to the OUTDOOR page for the same reason the six above map to `furniture`:
+  // `page` feeds media/<page>/<kind>.gif, so a new page would orphan nine
+  // published tree GIF URLs. `plant` alone moves furniture/ → outdoor/ on the
+  // next gallery regen — one URL, accepted.
+  plants: 'outdoor',
 };
 const CAT_TITLE: Record<string, string> = {
   furniture: 'Furniture', appliance: 'Appliances', bathroom: 'Bathroom', outdoor: 'Outdoor & yard',
@@ -1066,6 +1072,7 @@ const CAT_TITLE: Record<string, string> = {
   // of sidebar.ts's _kindOptions optgroups).
   seating: 'Seating', tables: 'Tables & counters', bedroom: 'Bedroom',
   storage: 'Storage', stairs: 'Stairs & platforms', decor: 'Decor & misc',
+  plants: 'Plants & trees',
   // theater/vehicle fall through to their own page (CAT_PAGE has no entry, so
   // `page = CAT_PAGE[cat] ?? cat` already yields 'theater'/'vehicle') — these
   // just give the in-page group heading the same phrasing sidebar.ts's

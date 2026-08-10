@@ -167,7 +167,11 @@ const CONTROL_TOOLS: { tool: Tool; label: string; glyph: string }[] = [
 // renders / when WebGL is unavailable).
 const CAT_GLYPH: Record<FurnitureCat, string> = {
   furniture: '🛋',
-  seating: '🪑', tables: '🍽️', bedroom: '🛏', storage: '🗄', stairs: '🪜', decor: '🪴',
+  // NB decor was '🪴' until the 2026-08-08 plants split took the potted plant
+  // with it (decor now holds only block/rug/exercise_equipment). Two tabs
+  // sharing a glyph reads as a bug — keep these two distinct.
+  seating: '🪑', tables: '🍽️', bedroom: '🛏', storage: '🗄', stairs: '🪜', decor: '🖼',
+  plants: '🪴',
   appliance: '🔌', bathroom: '🛁', outdoor: '🌳', theater: '🎬', vehicle: '🚗',
 };
 
@@ -357,6 +361,11 @@ export function buildToolbarModel(p: Planner): ToolCategory[] {
     { id: 'appliance', label: 'Appliances', glyph: '🔌', cards: furnitureCards('appliance') },
     { id: 'bathroom', label: 'Bathroom', glyph: '🛁', cards: furnitureCards('bathroom') },
     { id: 'theater', label: 'Theater', glyph: '🎬', cards: furnitureCards('theater') },
+    // Plants & trees split off Decor (the potted plant) + Outdoor (the whole
+    // tree family) — they read as one shopping category. Sits immediately
+    // before Outdoor, which keeps the remaining yard props (rocks, bird bath,
+    // fountain, bins, mailbox, swing set, lawn furniture).
+    { id: 'plants', label: 'Plants', glyph: CAT_GLYPH.plants, cards: furnitureCards('plants') },
     {
       id: 'outdoor', label: 'Outdoor', glyph: '🌳',
       // Outdoor furniture kinds + the flagpole fixture (yard decor with its own tool).

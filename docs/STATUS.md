@@ -421,6 +421,27 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Plants & trees category + sidebar furniture-list split** (2026-08-09,
+  user-requested "put these into their own categories in the side bar:
+  plants and trees / appliance"; unreleased — on main past v0.63.0). New
+  `plants` FurnitureCat — exactly ten kinds (plant ex-decor; the nine
+  trees/bush/flower_bed ex-outdoor); audited zero runtime gates on
+  'decor'/'outdoor' (all cat gates are 'appliance'-style), so the move is
+  UI classification only. Surfaces: kind-dropdown "Plants & trees"
+  optgroup, a toolbar Plants tab (🪴; `CAT_GLYPH.decor` 🪴→🖼 to break
+  the glyph collision), gallery `CAT_PAGE.plants='outdoor'` (plant's GIF
+  URL moves pages on next regen — one URL, accepted), and the sidebar
+  placed-items list split into THREE sections (Furniture → Plants &
+  Trees → Appliances) with membership via
+  `furnitureCat(resolveFurnitureDef(...))`, owning-section routing for
+  auto-expand + Alt+click identify, and Collapse-all coverage.
+  Agent findings accepted: the toolbar "16 tabs" doc claim was off by
+  one (measured 15 before, genuinely 16 now — pinned by the new I10);
+  a pre-existing SIDEBARORG 152/153 failure was a test-side
+  HOTKEY_BLUR_GRACE_MS race (fixed with the sensor-focus C5 sleep
+  remedy, no production softening). SIDEBARORG 153→175, TOOLBAR 85→93,
+  TREE 74/74 (A6 cat pin updated), YARD 4/4.
+
 - **Mower unstick: room-exit doorway routing + GPS ground-truth
   relocation** (2026-08-09, user-reported "the robotic mower has shown
   as going inside the house and stopped inside" with a mid-wall-edit

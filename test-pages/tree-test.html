@@ -110,8 +110,11 @@
     ok('A5 TREE_KINDS ∩ STAIRS_KINDS = ∅ (both consume Furniture.ht)',
        overlap.length === 0 && G.TREE_KINDS.size === 7, `overlap=${overlap} size=${G.TREE_KINDS.size}`);
   }
-  ok('A6 every tree kind is a real FURNITURE_KINDS entry in the outdoor cat',
-     ALL_TREES.every(k => G.FURNITURE_KINDS[k] && G.FURNITURE_KINDS[k].cat === 'outdoor'));
+  // 2026-08-08: the tree family moved outdoor → the new `plants` cat (sidebar
+  // "Plants & Trees" section + Plants toolbar tab). Kind ids are unchanged, so
+  // TREE_KINDS / treeHeightMm / the builders are untouched by the move.
+  ok('A6 every tree kind is a real FURNITURE_KINDS entry in the plants cat',
+     ALL_TREES.every(k => G.FURNITURE_KINDS[k] && G.FURNITURE_KINDS[k].cat === 'plants'));
 
   // ══ (B) pure treeHeightMm ═════════════════════════════════════════════════
   const TH = G.treeHeightMm;

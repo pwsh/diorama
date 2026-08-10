@@ -183,7 +183,8 @@ const SECTION_SLUGS: string[] = [
   'sensors', 'motion', 'env', 'info', 'actions', 'ble', 'alarm', 'calendar',
   'thermostats', 'safety', 'alertbeacons', 'robots', 'cameras', 'projectors',
   'valves', 'sprinklers', 'flagpoles', 'solar', 'plugs', 'pzones', 'ground', 'pools',
-  'voids', 'people', 'roamers', 'doors', 'windows', 'furniture', 'custom',
+  'voids', 'people', 'roamers', 'doors', 'windows',
+  'furniture', 'plants', 'appliances', 'custom',
   'rooms', 'fixtures', 'geo', 'neighborhood', 'model3d', 'bg',
 ];
 
@@ -205,8 +206,8 @@ const IDENTIFY_SECTION: Record<string, string> = {
 // The IDENTIFY_SECTION slugs whose lists render through `_groupedList` — those
 // also need their `<slug>/<roomId>` sub-key expanded before the row exists.
 const IDENTIFY_GROUPED_SECTIONS = new Set([
-  'actions', 'alarm', 'alertbeacons', 'ble', 'calendar', 'cameras', 'doors', 'env',
-  'fixtures', 'flagpoles', 'furniture', 'info', 'motion', 'plugs', 'projectors',
+  'actions', 'alarm', 'alertbeacons', 'appliances', 'ble', 'calendar', 'cameras', 'doors', 'env',
+  'fixtures', 'flagpoles', 'furniture', 'info', 'motion', 'plants', 'plugs', 'projectors',
   'robots', 'safety', 'sensors', 'solar', 'sprinklers', 'thermostats', 'valves', 'windows',
 ]);
 
@@ -356,7 +357,14 @@ export class Sidebar extends LitElement {
     const fx = this.planner.identifyFx;
     if (!fx) { this._identifyRetries = 0; return; }
     if (fx.at === this._identifyHandled) return;
-    const slug = IDENTIFY_SECTION[fx.kind];
+    // Furniture's list is split three ways, so IDENTIFY_SECTION's static
+    // 'furniture' entry is only the fallback — route to the section that
+    // actually OWNS the identified piece (a fridge lives under Appliances).
+    let slug = IDENTIFY_SECTION[fx.kind];
+    if (fx.kind === 'furniture') {
+      const piece = (this.planner.floor().furniture ?? []).find(pc => pc.id === fx.id);
+      if (piece) slug = this._furnSectionSlug(piece);
+    }
     if (!slug) { this._identifyHandled = fx.at; return; }
     let changed = this._collapsed.delete(slug);
     if (IDENTIFY_GROUPED_SECTIONS.has(slug)) {
@@ -528,8 +536,16 @@ export class Sidebar extends LitElement {
       voids: p.activeVoidAreaId ?? null,
       people: p.activePersonId ?? null,
       roamers: p.activeRoamerId ?? null,
-      furniture: p.activeFurnitureId ?? null,
+      // The placed-furniture list is split three ways — only the section that
+      // OWNS the active piece gets the id, the other two read null. That keeps
+      // the expand-only-on-CHANGE semantics exactly: selecting a fridge then a
+      // sofa expands 'appliances' then 'furniture', each once.
+      furniture: null, plants: null, appliances: null,
     };
+    if (p.activeFurnitureId) {
+      const piece = (p.floor().furniture ?? []).find(pc => pc.id === p.activeFurnitureId);
+      if (piece) cur[this._furnSectionSlug(piece)] = p.activeFurnitureId;
+    }
     const snap = this._lastActiveSnapshot;
     for (const slug of Object.keys(cur)) {
       if (cur[slug] && cur[slug] !== snap[slug]) expand(slug);
@@ -1175,6 +1191,7 @@ export class Sidebar extends LitElement {
       { cat: 'storage', label: 'Storage' },
       { cat: 'stairs', label: 'Stairs & platforms' },
       { cat: 'decor', label: 'Decor & misc' },
+      { cat: 'plants', label: 'Plants & trees' },
       { cat: 'appliance', label: 'Appliances' },
       { cat: 'bathroom', label: 'Bathroom' },
       { cat: 'outdoor', label: 'Outdoor' },
@@ -5715,15 +5732,38 @@ export class Sidebar extends LitElement {
     }));
   }
 
-  // ── Furniture section ─────────────────────────────────────────────────
+  // ── Furniture sections ────────────────────────────────────────────────
   @state() private _furnExpanded = new Set<string>();
+
+  // The placed-items list is SPLIT three ways by resolved cat: Furniture →
+  // Plants & Trees → Appliances. Everything that isn't 'plants'/'appliance'
+  // (custom objects, vehicles, theater, bathroom, outdoor, seating, …) stays in
+  // Furniture — the `!== 'appliance'` house rule, never a positive
+  // `cat === 'furniture'` test. Membership must resolve through
+  // resolveFurnitureDef, not FURNITURE_KINDS[kind]: a vehicle/custom piece keeps
+  // kind 'block' only as its unloaded-pack fallback.
+  private _furnSectionSlug(piece: Furniture): string {
+    const cat = furnitureCat(resolveFurnitureDef(piece, this.planner.store.customObjects));
+    return cat === 'plants' ? 'plants' : cat === 'appliance' ? 'appliances' : 'furniture';
+  }
 
   private _furnitureSection() {
     const p = this.planner;
     const f = p.floor();
     if (f.furniture.length === 0) return nothing;
-    return this._section('furniture', 'Furniture', () =>
-      this._groupedList('furniture', f.furniture, piece => this._furnitureItem(piece, f.furniture.indexOf(piece))));
+    // All three sections render whenever the floor has ANY furniture — a
+    // section never vanishes because its own bucket happens to be empty, so
+    // "where did Appliances go?" can't happen while you're placing pieces.
+    // `indexOf` into the FULL array (not the filtered one) is what keeps
+    // _furnitureItem's index safe under filtering.
+    const bucket = (slug: string) => f.furniture.filter(pc => this._furnSectionSlug(pc) === slug);
+    const list = (slug: string) =>
+      this._groupedList(slug, bucket(slug), piece => this._furnitureItem(piece, f.furniture.indexOf(piece)));
+    return html`
+      ${this._section('furniture', 'Furniture', () => list('furniture'))}
+      ${this._section('plants', 'Plants & Trees', () => list('plants'))}
+      ${this._section('appliances', 'Appliances', () => list('appliances'))}
+    `;
   }
 
   private _furnitureItem(piece: Furniture, idx: number) {

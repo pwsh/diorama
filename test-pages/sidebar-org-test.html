@@ -438,6 +438,13 @@
     ok('I1 clicking a section header leaves focus on <body>',
        document.activeElement === document.body || document.activeElement === null,
        document.activeElement ? document.activeElement.tagName : 'null');
+    // Section H ended on `roomInput.blur()`, which stamps _lastEditableBlurAt —
+    // plain-key bindings are DEAD for HOTKEY_BLUR_GRACE_MS (1000 ms) after focus
+    // leaves an editable (typing-protection v3). I2's whole point is the LIVE
+    // binding, so wait the grace out first; without this the assertion measured
+    // the grace, not the leak (pre-existing failure, same remedy as
+    // sensor-focus-test C5). I3+ only get stricter for it.
+    await sleep(1120);
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'm' }));
     await frames(1);
     ok('I2 …and a plain key then DOES pick a tool (hotkeys ON) — the reported leak',
@@ -680,6 +687,124 @@
          Math.abs(t2 - t0) <= 1, `Δ=${(t2 - t0).toFixed(2)}px`);
     }
     sb.querySelector('[data-expand-all]').click(); await frames(3);
+
+    // ── M: the placed-furniture list SPLIT three ways (2026-08-08) ────────
+    // Furniture → Plants & Trees → Appliances, membership by the piece's
+    // RESOLVED cat ('plants' / 'appliance' / everything-else).
+    {
+      const mkFurn = (id, kind, x, y) => ({ id, kind, x, y, w: 800, h: 800, rotation: 0 });
+      p.floor().furniture.push(
+        mkFurn('fu_sofa',   'sofa',      1000, 1000),
+        mkFurn('fu_oak',    'oak_tree',  2000, 1000),
+        mkFurn('fu_plant',  'plant',     2500, 1000),
+        mkFurn('fu_fridge', 'fridge',    3000, 1000),
+        mkFurn('fu_car',    'car',       4000, 1000),   // vehicle cat → Furniture
+      );
+      p.save(); p.emitConfig();
+      await frames(4);
+
+      const secOf = title => [...sb.querySelectorAll('.section')]
+        .find(s => (s.querySelector('h3')?.textContent || '').trim() === title);
+      const titlesNow = sectionTitles(sb);
+      const iF = titlesNow.indexOf('Furniture');
+      const iP = titlesNow.indexOf('Plants & Trees');
+      const iA = titlesNow.indexOf('Appliances');
+      ok('M1 all three furniture sections render, in order Furniture → Plants → Appliances',
+         iF >= 0 && iP === iF + 1 && iA === iP + 1,
+         `F=${iF} P=${iP} A=${iA} | ${titlesNow.join(' | ')}`);
+      ok('M1b each of the three titles appears exactly once',
+         ['Furniture', 'Plants & Trees', 'Appliances']
+           .every(t => titlesNow.filter(x => x === t).length === 1),
+         titlesNow.join(' | '));
+
+      // Membership routing — each row renders inside its OWNING section only.
+      const rowIn = (title, id) => !!secOf(title)?.querySelector(`[data-item-row="${id}"]`);
+      const rowAnywhere = id => sb.querySelectorAll(`[data-item-row="${id}"]`).length;
+      ok('M2 a sofa row lives under Furniture', rowIn('Furniture', 'fu_sofa'));
+      ok('M2b an oak_tree row lives under Plants & Trees', rowIn('Plants & Trees', 'fu_oak'));
+      ok('M2c a plant row lives under Plants & Trees (moved off Decor)',
+         rowIn('Plants & Trees', 'fu_plant'));
+      ok('M2d a fridge row lives under Appliances', rowIn('Appliances', 'fu_fridge'));
+      ok('M2e a vehicle-cat piece stays in Furniture (never a positive cat==="furniture" test)',
+         rowIn('Furniture', 'fu_car'));
+      ok('M2f every piece renders in EXACTLY one section',
+         ['fu_sofa', 'fu_oak', 'fu_plant', 'fu_fridge', 'fu_car']
+           .every(id => rowAnywhere(id) === 1),
+         ['fu_sofa','fu_oak','fu_plant','fu_fridge','fu_car'].map(rowAnywhere).join(','));
+      ok('M2g no plant/appliance row leaks into Furniture',
+         !rowIn('Furniture', 'fu_oak') && !rowIn('Furniture', 'fu_plant')
+         && !rowIn('Furniture', 'fu_fridge'));
+
+      // Independent collapse + device-local persistence.
+      secOf('Plants & Trees').querySelector('h3').click(); await frames(3);
+      ok('M3 collapsing Plants leaves Furniture + Appliances expanded',
+         secOf('Plants & Trees').querySelector('h3').getAttribute('aria-expanded') === 'false'
+         && secOf('Furniture').querySelector('h3').getAttribute('aria-expanded') === 'true'
+         && secOf('Appliances').querySelector('h3').getAttribute('aria-expanded') === 'true');
+      ok('M3b the collapsed Plants section renders no rows',
+         !secOf('Plants & Trees').querySelector('[data-item-row]'));
+      ok('M3c "plants" persisted device-local, "furniture"/"appliances" did not',
+         collapsedSet().has('plants') && !collapsedSet().has('furniture')
+         && !collapsedSet().has('appliances'),
+         [...collapsedSet()].join(','));
+      secOf('Plants & Trees').querySelector('h3').click(); await frames(3);
+      ok('M3d re-expanding Plants clears the key',
+         !collapsedSet().has('plants') && !!secOf('Plants & Trees').querySelector('[data-item-row]'),
+         [...collapsedSet()].join(','));
+
+      // Collapse-all / Expand-all must cover the two NEW slugs.
+      sb.querySelector('[data-collapse-all]').click(); await frames(3);
+      ok('M4 Collapse all covers plants + appliances',
+         collapsedSet().has('plants') && collapsedSet().has('appliances')
+         && collapsedSet().has('furniture'), [...collapsedSet()].join(','));
+      sb.querySelector('[data-expand-all]').click(); await frames(3);
+      ok('M4b Expand all clears them again',
+         !collapsedSet().has('plants') && !collapsedSet().has('appliances'),
+         [...collapsedSet()].join(','));
+
+      // Auto-expand must route to the section OWNING the newly-active piece,
+      // and only that one (expand-only-on-CHANGE semantics preserved).
+      sb.querySelector('[data-collapse-all]').click(); await frames(3);
+      p.activeFurnitureId = 'fu_fridge'; p.emitConfig(); await frames(4);
+      ok('M5 selecting a fridge expands Appliances only',
+         !collapsedSet().has('appliances') && collapsedSet().has('furniture')
+         && collapsedSet().has('plants'), [...collapsedSet()].join(','));
+      p.activeFurnitureId = 'fu_oak'; p.emitConfig(); await frames(4);
+      ok('M5b then selecting an oak_tree expands Plants (Furniture untouched)',
+         !collapsedSet().has('plants') && collapsedSet().has('furniture'),
+         [...collapsedSet()].join(','));
+      // Re-collapsing while the SAME piece stays active must stick.
+      secOf('Plants & Trees').querySelector('h3').click(); await frames(4);
+      p.emitConfig(); await frames(4);
+      ok('M5c collapsing while the same piece stays active sticks',
+         collapsedSet().has('plants'), [...collapsedSet()].join(','));
+      sb.querySelector('[data-expand-all]').click(); await frames(3);
+
+      // The kind DROPDOWN optgroups follow the same split.
+      secOf('Plants & Trees').querySelector('[data-item-row="fu_oak"] .icon-btn').click();
+      await frames(4);
+      const sel = sb.querySelector('[data-item-row="fu_oak"] select');
+      const groups = sel ? [...sel.querySelectorAll('optgroup')] : [];
+      const gp = groups.find(g => g.label === 'Plants & trees');
+      ok('M6 the kind dropdown has a "Plants & trees" optgroup with 10 options',
+         !!gp && gp.querySelectorAll('option').length === 10,
+         gp ? gp.querySelectorAll('option').length : groups.map(g => g.label).join(','));
+      const go = groups.find(g => g.label === 'Outdoor');
+      const gd = groups.find(g => g.label === 'Decor & misc');
+      const optTexts = g => [...(g?.querySelectorAll('option') ?? [])].map(o => o.textContent.trim());
+      ok('M6b "Outdoor" no longer contains Oak tree (but keeps Rock cluster)',
+         !!go && !optTexts(go).includes('Oak tree') && optTexts(go).includes('Rock cluster'),
+         optTexts(go).join(','));
+      ok('M6c "Decor & misc" no longer contains Plant (but keeps Rug)',
+         !!gd && !optTexts(gd).includes('Plant') && optTexts(gd).includes('Rug'),
+         optTexts(gd).join(','));
+      ok('M6d the optgroup order puts Plants & trees between Decor and Appliances',
+         groups.findIndex(g => g.label === 'Decor & misc') + 1
+           === groups.findIndex(g => g.label === 'Plants & trees')
+         && groups.findIndex(g => g.label === 'Plants & trees') + 1
+           === groups.findIndex(g => g.label === 'Appliances'),
+         groups.map(g => g.label).join(' | '));
+    }
   } catch (err) {
     ok('harness threw', false, (err && (err.stack || err.message)) || String(err));
   }
