@@ -1,6 +1,6 @@
 # Project status & pick-up guide
 
-Last updated: 2026-08-07, at **v0.63.0**. This is the single document to
+Last updated: 2026-08-09, at **v0.64.0**. This is the single document to
 read (alongside `CLAUDE.md`) to resume work with full context.
 
 ## Where things stand
@@ -417,13 +417,37 @@ instance.
   change tools + rebindable/disable-able keyboard shortcuts; solar
   per-axis tracking switches + sun-position display; the in-app Recent
   Releases list in Settings fed by the new src/changelog.ts runbook
-  step).
+  step)
+  → v0.64.0 upstairs, downstairs (the stairs + fixes wave: stairs get the
+  real-world step-down default (n treads = n+1 risers, `stairsTopFlush`
+  restores flush), a per-piece step-count entry, raked side walls up to
+  the storey ceiling, riser boards / newel posts / handrails as
+  independent toggles, closed stringers under open flights, and
+  `snapStairEdges` v2 — burial-rejecting welds plus elevation
+  auto-compose so two half flights and a landing line up in one drag;
+  stairs exempted from the wall push-out with Alt suspending every drop
+  resolver; the home-theater wave — three plush leather recliners, a
+  projector with a real ceiling-mount body yawed onto its aim plus an
+  always-visible 2D aim chevron and a Theater-tab home, and wall +
+  retractable ceiling projection screens with full TV parity via
+  `isScreenKind`; three mower fixes — the garage/indoor-dock exception
+  with doorway routing, room-exit routing + movement-based GPS
+  relocation for a mower shut indoors, and docked-state ground truth
+  snapping a wedged mower into its dock; interactive curtains in 2D and
+  3D; floor voids rendering as real open shafts (`clipVoidToLoop` —
+  concave stairwell voids were losing 58 % of their area); the weather
+  chip minimizing to a pill; Plants & Trees as its own category with the
+  sidebar furniture list split three ways; bathroom vanity lights (bar /
+  Hollywood / backlit mirror) with the first per-kind mount-height
+  table; the queen bed corrected to a real 1524×2032; and user-toggle
+  avatar immunity — an avatar can no longer undo a device you just
+  switched, the real cause of the "can't turn the firepit off" report).
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
 - **Theater wave: 3 plush leather recliners + projector body/orientation/
   Theater-tab move + 2 projection screens with TV parity** (2026-08-09,
-  four user asks; unreleased — on main past v0.63.0). Plush kinds
+  four user asks; v0.64.0). Plush kinds
   (single/console-loveseat/row-3, one parametric builder + ONE pure
   `plushReclinerLayout` feeding build, SitSpots 1/2/3 and the 2D branch);
   projector = real ceiling-mount assembly yawed onto its aim, beam from
@@ -441,7 +465,7 @@ instance.
   FLOORPLANS 425/425 (physical.mjs WALL_HUGGING += projector_screen).
 
 - **User-toggle avatar immunity** (2026-08-09, the REAL fix for "can
-  turn a firepit on but cannot turn it off"; unreleased). The firepit
+  turn a firepit on but cannot turn it off"; v0.64.0). The firepit
   click was never broken (probe-disproved — the body-group backstop tag
   resolved flame clicks all along; direct tags added as hardening +
   fireplace/heatlamp audit, FIREPIT 52→65): a synthetic avatar was
@@ -454,7 +478,7 @@ instance.
   AVINTERACT 26→42.
 
 - **Queen bed corrected to real dimensions** (2026-08-09, user-reported
-  "sizes and orientations appear incorrect"; unreleased). The 2026-08-07
+  "sizes and orientations appear incorrect"; v0.64.0). The 2026-08-07
   relabel had carried the legacy generic-double footprint — the queen
   rendered 2000×1500, SIDEWAYS and short. Now 1524×2032 (60×80 in);
   both renderers verified dim-generic (no draw changes); placed pieces
@@ -465,7 +489,7 @@ instance.
   interior-design store staged queen, starship med bunk).
 
 - **Docked-mower ground-truth relocation** (2026-08-09, user-reported
-  "the mower docking still is not aligned"; unreleased). The deck-side
+  "the mower docking still is not aligned"; v0.64.0). The deck-side
   approach crossed the long wall far from its end and wedged at the
   corner; `docked` never takes the GPS branch so it had no Prong-B
   backstop. Now `dockTruth` (docked + bound) keeps its own stuck
@@ -476,7 +500,7 @@ instance.
   stops only occur in slots narrower than the turning circle. ROBOT
   257→278 (§f, four harness-only negative controls).
 
-- **Bathroom vanity lights** (2026-08-09, user-requested; unreleased).
+- **Bathroom vanity lights** (2026-08-09, user-requested; v0.64.0).
   Three LightIconKinds: `vanity_bar` 💄 (3 globes), `vanity_hollywood`
   🎬 (5-globe marquee), `mirror_light` 🪞 (backlit mirror w/ emissive
   rim). Wall-flush snap (`snapVanityToWall`), no floor pool (sconce
@@ -493,7 +517,7 @@ instance.
 
 - **Plants & trees category + sidebar furniture-list split** (2026-08-09,
   user-requested "put these into their own categories in the side bar:
-  plants and trees / appliance"; unreleased — on main past v0.63.0). New
+  plants and trees / appliance"; v0.64.0). New
   `plants` FurnitureCat — exactly ten kinds (plant ex-decor; the nine
   trees/bush/flower_bed ex-outdoor); audited zero runtime gates on
   'decor'/'outdoor' (all cat gates are 'appliance'-style), so the move is
@@ -515,7 +539,7 @@ instance.
 - **Mower unstick: room-exit doorway routing + GPS ground-truth
   relocation** (2026-08-09, user-reported "the robotic mower has shown
   as going inside the house and stopped inside" with a mid-wall-edit
-  screenshot; unreleased — on main past v0.63.0). Orchestrator
+  screenshot; v0.64.0). Orchestrator
   root-caused against the user's LIVE config (SMB, local-only): today's
   fix projects OUTSIDE and dock→carrot runs clean, so the stuck body is
   a TRAP state — once indoors (walls closed around it via `wasInside`
@@ -542,8 +566,7 @@ instance.
   (robotStates is runtime-only).
 
 - **Stair anatomy: step-down default + side walls to the level above +
-  riser/newel/handrail toggles** (2026-08-09, three user asks; unreleased
-  — on main past v0.63.0). First batch under the TIGHTENED model routing
+  riser/newel/handrail toggles** (2026-08-09, three user asks; v0.64.0). First batch under the TIGHTENED model routing
   (user: "ensure fable is just being used for orchestration, architecture
   and logic" — the small-fix lane is closed; recorded in memory):
   Sonnet wrote `docs/research/stair-anatomy.md` (270 lines, the
@@ -581,7 +604,7 @@ instance.
   asks from one real staircase — "cannot get 2 half flights and a
   landing to line up", "there should also be an entry for the number of
   stairs", "'open underneath' … steps are shown as floating" over rooms
-  under an enclosed stairwell; unreleased — on main past v0.63.0).
+  under an enclosed stairwell; v0.64.0).
   (1) `Furniture.stairTreads?` overrides the derived tread count
   (clamp 1–60; wins over both derivations) via `stairsTreadCount`'s new
   trailing param, passed by ALL THREE consumers (3D builder, 2D glyph,
@@ -618,8 +641,7 @@ instance.
 - **Stairs exempt from the wall push-out + Alt free placement covers the
   drop resolvers** (2026-08-09, user-reported "I have a set of half
   stairs that goes under a closet… it will not allow me to extend the
-  lower stairway under this room even while holding alt"; unreleased —
-  on main past v0.63.0). The interactive `resolveFurnitureWallCollision`
+  lower stairway under this room even while holding alt"; v0.64.0). The interactive `resolveFurnitureWallCollision`
   call sites had no kind exemptions and never consulted Alt, so every
   release shoved an extended flight back out of the wall band — while
   the floorplans validator's `wallCollidable` (physical.mjs) had always
@@ -633,8 +655,7 @@ instance.
   release-path matrix via a hand-armed furnMove drag).
 
 - **Weather chip minimize-to-pill** (2026-08-08, user-requested "allow
-  minimizing to just the current conditions"; unreleased — on main past
-  v0.63.0). A chevron on the current-conditions row (own click target,
+  minimizing to just the current conditions"; v0.64.0). A chevron on the current-conditions row (own click target,
   the alert-badge idiom; only shown when panel content exists) collapses
   the grown panel — extra rows + hourly/daily strips — to the bare pill.
   Device-local `diorama:weather:min` (toolbar-collapse idiom; kiosk
@@ -645,8 +666,7 @@ instance.
   stub, no real Planner.
 
 - **Floor voids render as real openings** (2026-08-08, user-reported
-  "floor voids do not appear to be rendering as open areas"; unreleased —
-  on main past v0.63.0). Reproduced on the user's actual plan (offline
+  "floor voids do not appear to be rendering as open areas"; v0.64.0). Reproduced on the user's actual plan (offline
   CDP boot of their config): two defects. (1) The void hole clipper was
   Sutherland–Hodgman with the VOID as the clip region — exact only for
   convex voids; their concave 8-pt stairwell void clipped to its convex
@@ -667,8 +687,7 @@ instance.
   122 green.
 
 - **Interactive curtains (2D + 3D)** (2026-08-08, user-requested "curtains
-  are not able to be controlled via the 2D or 3D interface"; unreleased —
-  on main past v0.63.0). `Planner.toggleCurtain`: bound cover →
+  are not able to be controlled via the 2D or 3D interface"; v0.64.0). `Planner.toggleCurtain`: bound cover →
   state-picked open/close_cover (valve precedent), switch → toggle,
   binary_sensor display-only, unbound → curtainPos 0↔100 (kiosk
   session-only, view refuses). 3D: `'curtain'` joined the click union (19
@@ -686,7 +705,7 @@ instance.
 
 - **Mower indoor-dock garage exception + doorway routing** (2026-08-08,
   user-reported "the mower is showing parked past the wall instead of
-  inside the dock"; unreleased — on main past v0.63.0). The 2026-08-05
+  inside the dock"; v0.64.0). The 2026-08-05
   outdoor-containment design declared every building interior forbidden,
   so a dock in the user's Four Seasons sunroom parked the mower at the
   nearest OUTDOOR point — past the wall. Now the dock's own loop is

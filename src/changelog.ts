@@ -23,6 +23,16 @@ export const CHANGELOG_DISPLAY_COUNT = 10;
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: 'v0.64.0', name: 'upstairs, downstairs', date: '2026-08-09',
+    notes: [
+      'Stairs, properly built: start-a-step-down by default, a step-count entry, side walls up to the level above, risers/newel posts/handrails, stringers under open flights — and half-flights that line up and set their own elevation',
+      'Home theater: plush leather recliners (single/loveseat/row of three), a projector with a real body that shows where it aims, and wall + retractable ceiling projection screens that display everything a TV can',
+      'The mower stays outside and parks straight: doorway routing out of rooms it gets shut into, and a docked mower that snaps into its dock instead of wedging at a wall',
+      'Curtains are clickable in both views, floor voids render as real open shafts, and the weather chip minimizes to a pill',
+      'Plants & trees get their own category, bathroom vanity lights (bar, Hollywood, backlit mirror), the queen bed is a real queen, and avatars stop switching off what you just switched on',
+    ],
+  },
+  {
     version: 'v0.63.0', name: 'home improvement', date: '2026-08-07',
     notes: [
       'Garage doors: 9 styles incl. windowed sectionals, locks, open-% readout, tracks & opener motor, opening height, door & window colors',
