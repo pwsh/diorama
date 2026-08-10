@@ -10,7 +10,7 @@ import {
   climateTempUnit, fmtTempNum,
   actionButtonSize, actionButtonColor, actionButtonIcon,
   safetyColor, safetyGlyph, safetyIsFloor, safetyIsPlate, SAFETY_DEFAULTS, leakPuddleRadiusMm,
-  robotGlyph, robotColor, robotProgress, dockParkedHeading, ROBOT_DEFAULTS,
+  robotGlyph, robotColor, robotProgress, dockParkedHeading, dockParkedPoint, ROBOT_DEFAULTS,
   presenceZoneColor, cameraFov, cameraRange, cameraStateColor, cameraColor,
   projectorProjecting, projectorAim, projectorBeamColor, projectorThrow, screenCenterHeight, biasLightColor,
   isScreenKind, plushReclinerLayout,
@@ -2557,9 +2557,11 @@ function drawRobots(ctx: CanvasRenderingContext2D, p: Planner, view: View): void
     ctx.restore();
 
     // ── Moving robot body ──
-    // No controller state yet → draw the robot parked in its dock, nose toward
-    // the back wall (the same pose _spawnRobot seeds for a mower).
-    const bx = rs ? rs.x : r.x, by = rs ? rs.y : r.y;
+    // No controller state yet → draw the robot parked in its dock, seated at
+    // dockParkedPoint with its nose OUT of the opening (the same pose
+    // _spawnRobot seeds for a mower; the vacuum's point IS the dock origin).
+    const park = dockParkedPoint(r);
+    const bx = rs ? rs.x : park.x, by = rs ? rs.y : park.y;
     const bHead = rs ? rs.heading : dockParkedHeading(r.rotation);
     const bc = mmToPx(view, bx, by);
     // `bodyR` stays the layout radius everything else anchors off (LED dot,

@@ -78,30 +78,48 @@ export function build() {
 
   const furniture = [
     // Living / Dining
-    furn('tv_stand', 3100, 300, { rotation: 0 }),
-    furn('tv', 3100, 300, { rotation: 0, localState: 'off' }),
+    // The whole living group faces SOUTH→NORTH: screens on the south wall
+    // (rot 180 = front into the room), sofa backed onto wall F facing them.
+    furn('tv_stand', 3100, 300, { rotation: 180 }),
+    furn('tv', 3100, 300, { rotation: 180, localState: 'off' }),
     furn('coffee_table', 3100, 2400, { rotation: 0 }),
-    furn('sofa', 3100, 3800, { rotation: 180, w: 2000, h: 900 }),
-    furn('chair', 1600, 2600, { rotation: 90, w: 800, h: 800, label: 'Accent chair' }),
+    // Turned to face the TV (was rot 180, back to it). Do NOT move this sofa
+    // north: the free strip between its inflated nav footprint and wall F is
+    // exactly ONE 150 mm cell (row y≈4575) and it is the living room's only
+    // link to the kitchen/hallway region — check 11 fails the moment it closes.
+    furn('sofa', 3100, 3800, { rotation: 0, w: 2000, h: 900 }),
+    furn('chair', 1600, 2600, { rotation: 270, w: 800, h: 800, label: 'Accent chair' }),
     furn('rug', 3100, 2900, { rotation: 0, w: 2600, h: 2200 }),
     furn('table', 4900, 3500, { rotation: 0, w: 1500, h: 900, label: 'Dining' }),
     furn('chair', 4900, 3050, { rotation: 0 }),
     furn('chair', 4900, 3950, { rotation: 180 }),
-    furn('chair', 4500, 3500, { rotation: 90 }),
+    // Second chair on the long south side rather than the west end: at the west
+    // end settleSeats tucks it to x 4000, where it merged 350 mm into the sofa.
+    furn('chair', 4300, 2900, { rotation: 180 }),
     furn('chair', 5300, 3500, { rotation: 270 }),
-    furn('bookshelf', 200, 4600, { rotation: 180 }),
+    furn('bookshelf', 200, 4600, { rotation: 0 }),   // open shelves face the room, back on wall F
     furn('plant', 5700, 4700, { rotation: 0 }),
     // Entry / Foyer
-    furn('bench', 6300, 1150, { rotation: 180, w: 700, h: 400 }),
+    // rot 0 = seat front south into the entry; at 180 the bench faced wall C
+    // 0 mm away with the whole foyer behind its back.
+    furn('bench', 6300, 1150, { rotation: 0, w: 700, h: 400 }),
     furn('rug', 6600, 800, { rotation: 0, w: 1000, h: 1000 }),
     // Kitchen (galley + peninsula)
-    furn('counter', 8250, 2000, { rotation: 270, w: 1000, h: 650 }),
-    furn('kitchen_sink', 8250, 2700, { rotation: 270 }),
-    furn('counter', 8250, 3350, { rotation: 270, w: 900, h: 650 }),
-    furn('dishwasher', 8000, 3350, { rotation: 270 }),
-    furn('stove', 6300, 1550, { rotation: 0 }),
-    furn('microwave', 6300, 1650, { rotation: 0, elevation: 1400 }),
-    furn('fridge', 8100, 1650, { rotation: 0 }),
+    // East-wall galley: rot 90 = front (local −Z) toward −X, i.e. into the
+    // kitchen. These were all rot 270, facing their own back wall.
+    furn('counter', 8250, 2000, { rotation: 90, w: 1000, h: 650 }),
+    // x 8175 = 550 mm carcass flush on the east wall face. At 8250 the basin
+    // poked 75 mm through the wall under the kitchen window, which excises that
+    // run from check 10's solid-wall set.
+    furn('kitchen_sink', 8175, 2700, { rotation: 90 }),
+    furn('counter', 8250, 3350, { rotation: 90, w: 900, h: 650 }),
+    furn('dishwasher', 8000, 3350, { rotation: 90 }),
+    // North (wall C) run: rot 180 = front into the kitchen.
+    furn('stove', 6300, 1550, { rotation: 180 }),
+    furn('microwave', 6300, 1650, { rotation: 180, elevation: 1400 }),
+    // Fridge pulled 800 mm west along wall C: at x 8100 the settle push-out off
+    // the east wall drove it 650 mm into the corner counter.
+    furn('fridge', 7300, 1830, { rotation: 180 }),
     furn('counter', 6050, 2700, { rotation: 270, w: 1400, h: 650, label: 'Peninsula' }),
     furn('stool', 5700, 2500, { rotation: 90 }),
     furn('stool', 5700, 2900, { rotation: 90 }),
@@ -115,11 +133,13 @@ export function build() {
     furn('toilet', 7400, 6900, { rotation: 0 }),
     furn('sink_vanity', 7350, 6150, { rotation: 270, label: 'Vanity' }),
     // Bedroom
-    furn('bed', 2350, 7450, { rotation: 180, w: 2000, h: 1500 }),
+    // Canonical queen (1524 × 2032), headboard flush on the north wall — was a
+    // 2000 × 1500 slab lying sideways with its head pointing INTO the room.
+    furn('bed', 2350, 7134, { rotation: 0 }),
     furn('nightstand', 1300, 7450, { rotation: 180 }),
     furn('nightstand', 3400, 7450, { rotation: 180 }),
     furn('dresser', 4300, 5300, { rotation: 270 }),
-    furn('desk', 600, 5300, { rotation: 90 }),
+    furn('desk', 600, 5300, { rotation: 270 }),
     furn('chair', 900, 5300, { rotation: 270, label: 'Desk chair' }),
     furn('rug', 2350, 6800, { rotation: 0, w: 2400, h: 2000 }),
     // Bedroom Closet

@@ -100,7 +100,9 @@ export function build() {
   const furniture = [
     // ── EV bay (west end of the storefront band, served by the delivery bay) ─
     furn('car', 3300, 2400, { rotation: 90, label: 'Display EV' }),
-    furn('ev_charger', 250, 1100, { rotation: 90, label: 'Home charger' }),
+    // rot 270 = cable/face east into the EV bay; at 90 the charger presented its
+    // face to the west wall 75 mm away.
+    furn('ev_charger', 250, 1100, { rotation: 270, label: 'Home charger' }),
 
     // ── Front of house · checkout + order desk + media wall (y ≈ 1800) ──────
     furn('island', 13200, 2000, { rotation: 0, w: 2600, h: 1100, label: 'Checkout island', color: '#37474f' }),
@@ -156,7 +158,7 @@ export function build() {
     furn('plant', 12200, 9900, { rotation: 0 }),
 
     // ── Lighting gallery props (the fixtures themselves are lights) ─────────
-    furn('bookshelf', 13250, 10400, { rotation: 90, label: 'Fixture shelving' }),
+    furn('bookshelf', 13250, 10400, { rotation: 270, label: 'Fixture shelving' }),
     furn('rug', 14800, 12600, { rotation: 0, w: 2600, h: 1800 }),
     furn('ottoman', 14800, 12400, { rotation: 0 }),
     furn('plant', 13300, 13400, { rotation: 0 }),
@@ -166,19 +168,21 @@ export function build() {
     furn('rock_cluster', 17000, 11800, { rotation: 0 }),
 
     // ── Bath & Vanity Studio ────────────────────────────────────────────────
-    furn('shower', 900, 6000, { rotation: 0, label: 'Walk-in shower' }),
-    furn('toilet', 2900, 5700, { rotation: 0 }),
+    // rot 180 = opening south into the studio (matching the toilet on the same
+    // wall); at 0 it opened onto the north partition 295 mm away.
+    furn('shower', 900, 6000, { rotation: 180, label: 'Walk-in shower' }),
+    furn('toilet', 2900, 5700, { rotation: 180 }),
     furn('sink_vanity', 2900, 7300, { rotation: 0, label: 'Vanity sink' }),
     furn('bathtub', 1200, 7700, { rotation: 0, label: 'Soaking tub' }),
     furn('towel_warmer', 3940, 7800, { rotation: 90, elevation: 900, label: 'Towel warmer', localState: 'on' }),
     furn('wall_radiator', 110, 5700, { rotation: 90, elevation: 400, label: 'Wall radiator', localState: 'on' }),
 
     // ── Sales Office ────────────────────────────────────────────────────────
-    furn('desk', 1200, 9200, { rotation: 0, label: 'Sales desk' }),
+    furn('desk', 1200, 9200, { rotation: 180, label: 'Sales desk' }),
     furn('chair', 1200, 9900, { rotation: 0 }),
     officeCredenza,
     furn('printer_3d', 2500, 10800, { rotation: 0, elevation: 900, mountOnId: officeCredenza.id, label: 'Parts printer', localState: 'on' }),
-    furn('bookshelf', 2900, 8700, { rotation: 0, label: 'Spec binders' }),
+    furn('bookshelf', 2900, 8700, { rotation: 180, label: 'Spec binders' }),
     furn('plant', 3600, 10900, { rotation: 0 }),
 
     // ── Mechanical Room — a working plant room AND the display of record ────

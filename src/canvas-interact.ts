@@ -1,5 +1,5 @@
 import { vehicleRecipe } from './vehicles.js';
-import { snap, snapVertex15, distMM, worldToLocal, localToWorld, FURNITURE_KINDS, furnitureCorners, furnitureLocalToWorld, furnitureWorldToLocal, resolveFurnitureDef, resolveFurnitureWallCollision, resolveSeatTableCollision, seatBelongsToTable, snapStepLightToSurface, snapFireplaceToWall, snapFloodlightToWall, snapVanityToWall, snapExhaustToWall, snapSwitchToWall, snapAlarmToWall, snapCalendarToWall, snapThermostatToWall, snapPlugToWall, snapInfoCardToWall, snapActionButtonToWall, isBinKind, isScreenKind, isWetBathKind, isStairsKind, stairsRiseMm, rectPenetrationMm, defaultFurnitureElevation, nearestAlign, bestAlignShift, ALIGN_DRAG_KINDS, ALIGN_POLY_DRAG_KINDS, envScale, ENV_SCALE_MIN, ENV_SCALE_MAX, GRID_MM, floorContentBbox, resolveFloorEdgeDrag, DOOR_DEFAULT_W, doorDefaultWidth, windowDefaultWidth, isBoundaryWallKind } from './geometry.js';
+import { snap, snapVertex15, distMM, worldToLocal, localToWorld, FURNITURE_KINDS, furnitureCorners, furnitureLocalToWorld, furnitureWorldToLocal, resolveFurnitureDef, resolveFurnitureWallCollision, resolveSeatTableCollision, seatBelongsToTable, TABLE_CARRY_MARGIN_MM, isTableSeatKind, snapStepLightToSurface, snapFireplaceToWall, snapFloodlightToWall, snapVanityToWall, snapExhaustToWall, snapSwitchToWall, snapAlarmToWall, snapCalendarToWall, snapThermostatToWall, snapPlugToWall, snapInfoCardToWall, snapActionButtonToWall, isBinKind, isScreenKind, isWetBathKind, isStairsKind, stairsRiseMm, rectPenetrationMm, defaultFurnitureElevation, nearestAlign, bestAlignShift, ALIGN_DRAG_KINDS, ALIGN_POLY_DRAG_KINDS, envScale, ENV_SCALE_MIN, ENV_SCALE_MAX, GRID_MM, floorContentBbox, resolveFloorEdgeDrag, DOOR_DEFAULT_W, doorDefaultWidth, windowDefaultWidth, isBoundaryWallKind } from './geometry.js';
 import { newId } from './storage.js';
 import {
   pxToMm, type View,
@@ -24,7 +24,7 @@ import {
 } from './canvas-hit.js';
 import type { Planner, Drag, IdentifyKind } from './planner.js';
 import { NEW_ROOM, NEW_LANDMARK } from './planner.js';
-import type { Vec2, Furniture, ObjectRecipe, Light, WindowKind, DoorKind, RulerEnd } from './types.js';
+import type { Vec2, Furniture, ObjectRecipe, Light, Wall, WindowKind, DoorKind, RulerEnd } from './types.js';
 
 // ── Smart alignment guides (universal, cross-category) ─────────────────────
 // The pool is EVERY structural reference point on the current floor — wall
@@ -264,9 +264,16 @@ function snapFurnitureToSurface(f: { furniture: Furniture[] }, piece: Furniture,
 // delta so a dining set moves as a unit. Host predicate matches the seat-resolve
 // (a def whose `activity` is 'eat_at_table' | 'work_at_desk' — tables/desks/
 // picnic tables, NOT counters/islands). Chair predicate matches the forward path
-// (seat-bearing def). Locked chairs stay put. Release-time only. `oldPos` is the
+// (seat-bearing def, minus `NON_TABLE_SEAT_KINDS` — a toilet is not a chair).
+// Locked chairs stay put. Release-time only. `oldPos` is the
 // table's position at drag start; the table's CURRENT x/y is its settled spot.
-function carryTuckedSeatsWithTable(f: { furniture: Furniture[] }, table: Furniture,
+//
+// WALL-AWARE (2026-08-09, user-reported via a floorplan audit): `f.walls` is
+// passed to `seatBelongsToTable`, so a capture box that reaches through a
+// partition no longer grabs — and re-aims — furniture in the next room. Both
+// the OLD-position capture test and the new-position re-settle get the walls;
+// doorways are opaque to a capture (see seatWallBlocked in geometry.ts).
+function carryTuckedSeatsWithTable(f: { furniture: Furniture[]; walls: Wall[] }, table: Furniture,
                                    oldPos: { x: number; y: number },
                                    customObjects?: ObjectRecipe[]): void {
   const act = resolveFurnitureDef(table, customObjects).activity;
@@ -276,12 +283,13 @@ function carryTuckedSeatsWithTable(f: { furniture: Furniture[] }, table: Furnitu
   for (const chair of f.furniture) {
     if (chair.id === table.id || chair.locked) continue;
     if (!resolveFurnitureDef(chair, customObjects).seat) continue;
-    // Was this seat tucked to the table's OLD position?
+    if (!isTableSeatKind(chair.kind)) continue;
+    // Was this seat tucked to the table's OLD position, with no wall between?
     if (!seatBelongsToTable(oldPos.x, oldPos.y, table.rotation, table.w, table.h,
-                            chair.x, chair.y)) continue;
+                            chair.x, chair.y, TABLE_CARRY_MARGIN_MM, f.walls)) continue;
     chair.x += dx; chair.y += dy;
     // Re-settle against the table's new position (keeps the tuck clearance clean).
-    resolveSeatTableCollision(chair, f.furniture, customObjects);
+    resolveSeatTableCollision(chair, f.furniture, customObjects, 2, f.walls);
   }
 }
 
@@ -2450,7 +2458,10 @@ export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement, e?: Mouse
         if (!piece.locked && !piece.mountOnId && !free) {
           if (!isStairsKind(piece.kind)) resolveFurnitureWallCollision(piece, f.walls);
           // Then keep a tucked seat from sinking into the tabletop it serves.
-          resolveSeatTableCollision(piece, f.furniture, p.store.customObjects);
+          // Wall-aware (a table across a partition never shoves this seat) and
+          // skipped entirely for NON_TABLE_SEAT_KINDS (a toilet is not a chair).
+          if (isTableSeatKind(piece.kind))
+            resolveSeatTableCollision(piece, f.furniture, p.store.customObjects, 2, f.walls);
         }
         if (drag.kind === 'furnMove') {
           // Group-move: a moved table/desk carries the chairs tucked to it.
@@ -3143,7 +3154,9 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
     snapFurnitureToSurface(f, piece, p.store.customObjects);
     if (!piece.locked && !piece.mountOnId && !e.altKey) {
       if (!isStairsKind(piece.kind)) resolveFurnitureWallCollision(piece, f.walls);
-      resolveSeatTableCollision(piece, f.furniture, p.store.customObjects);
+      // Wall-aware tuck; NON_TABLE_SEAT_KINDS (toilet/swingset) never tuck.
+      if (isTableSeatKind(piece.kind))
+        resolveSeatTableCollision(piece, f.furniture, p.store.customObjects, 2, f.walls);
     }
     p.save(); p.setTool('select'); p.emitConfig(); return;
   }

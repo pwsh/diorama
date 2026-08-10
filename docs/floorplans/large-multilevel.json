@@ -1,7 +1,7 @@
 {
   "diorama": 2,
   "name": "Large Multilevel — Aldergate",
-  "exportedAt": "2026-07-30T00:00:00.000Z",
+  "exportedAt": "2026-08-10T00:00:00.000Z",
   "store": {
     "v": 2,
     "floors": [
@@ -190,22 +190,22 @@
             "w": 1300,
             "h": 180,
             "kind": "wall_tv",
-            "rotation": 180,
             "elevation": 600,
             "localState": "off"
           },
           {
             "id": "large-multilevel-fn5",
             "x": 9200,
-            "y": 1600,
+            "y": 2000,
             "w": 2600,
             "h": 2000,
-            "kind": "sofa_u"
+            "kind": "sofa_u",
+            "rotation": 180
           },
           {
             "id": "large-multilevel-fn6",
             "x": 9200,
-            "y": 2600,
+            "y": 3400,
             "w": 700,
             "h": 700,
             "kind": "ottoman"
@@ -213,7 +213,7 @@
           {
             "id": "large-multilevel-fn7",
             "x": 8300,
-            "y": 700,
+            "y": 450,
             "w": 500,
             "h": 500,
             "kind": "chair",
@@ -222,7 +222,7 @@
           {
             "id": "large-multilevel-fn8",
             "x": 10100,
-            "y": 700,
+            "y": 450,
             "w": 500,
             "h": 500,
             "kind": "chair",
@@ -235,7 +235,7 @@
             "w": 800,
             "h": 350,
             "kind": "bookshelf",
-            "rotation": 90,
+            "rotation": 270,
             "label": "AV storage"
           },
           {
@@ -303,29 +303,26 @@
           {
             "id": "large-multilevel-fn17",
             "x": 14950,
-            "y": 3148,
-            "w": 1500,
-            "h": 2000,
-            "kind": "bed",
-            "rotation": 180
+            "y": 3132,
+            "w": 1524,
+            "h": 2032,
+            "kind": "bed"
           },
           {
             "id": "large-multilevel-fn18",
             "x": 13700,
-            "y": 3600,
+            "y": 3850,
             "w": 500,
             "h": 400,
-            "kind": "nightstand",
-            "rotation": 180
+            "kind": "nightstand"
           },
           {
             "id": "large-multilevel-fn19",
             "x": 16300,
-            "y": 2400,
+            "y": 3850,
             "w": 500,
             "h": 400,
-            "kind": "nightstand",
-            "rotation": 180
+            "kind": "nightstand"
           },
           {
             "id": "large-multilevel-fn20",
@@ -351,7 +348,8 @@
             "y": 400,
             "w": 480,
             "h": 700,
-            "kind": "toilet"
+            "kind": "toilet",
+            "rotation": 180
           },
           {
             "id": "large-multilevel-fn23",
@@ -360,7 +358,6 @@
             "w": 760,
             "h": 550,
             "kind": "sink_vanity",
-            "rotation": 180,
             "label": "Vanity"
           },
           {
@@ -438,7 +435,7 @@
           {
             "id": "large-multilevel-fn32",
             "x": 17800,
-            "y": 6798,
+            "y": 5400,
             "w": 2000,
             "h": 900,
             "kind": "sofa",
@@ -459,7 +456,6 @@
             "w": 1300,
             "h": 180,
             "kind": "wall_tv",
-            "rotation": 180,
             "elevation": 1000,
             "localState": "off"
           },
@@ -470,7 +466,7 @@
             "w": 900,
             "h": 400,
             "kind": "cabinet",
-            "rotation": 90,
+            "rotation": 270,
             "label": "Game storage"
           },
           {
@@ -1073,8 +1069,7 @@
             "y": 6300,
             "w": 900,
             "h": 400,
-            "kind": "cabinet",
-            "rotation": 180
+            "kind": "cabinet"
           },
           {
             "id": "large-multilevel-fn41",
@@ -1082,8 +1077,7 @@
             "y": 6300,
             "w": 900,
             "h": 400,
-            "kind": "cabinet",
-            "rotation": 180
+            "kind": "cabinet"
           },
           {
             "id": "large-multilevel-fn42",
@@ -1092,7 +1086,6 @@
             "w": 1800,
             "h": 650,
             "kind": "counter",
-            "rotation": 180,
             "label": "Workbench"
           },
           {
@@ -1102,7 +1095,7 @@
             "w": 1500,
             "h": 400,
             "kind": "bench",
-            "rotation": 90
+            "rotation": 270
           },
           {
             "id": "large-multilevel-fn44",
@@ -1111,7 +1104,7 @@
             "w": 1200,
             "h": 600,
             "kind": "wardrobe",
-            "rotation": 270
+            "rotation": 90
           },
           {
             "id": "large-multilevel-fn45",
@@ -1119,7 +1112,8 @@
             "y": 7000,
             "w": 480,
             "h": 700,
-            "kind": "toilet"
+            "kind": "toilet",
+            "rotation": 180
           },
           {
             "id": "large-multilevel-fn46",
@@ -1128,7 +1122,7 @@
             "w": 760,
             "h": 550,
             "kind": "sink_vanity",
-            "rotation": 270,
+            "rotation": 90,
             "label": "Vanity"
           },
           {
@@ -1196,8 +1190,7 @@
             "y": 3700,
             "w": 2000,
             "h": 900,
-            "kind": "sofa",
-            "rotation": 180
+            "kind": "sofa"
           },
           {
             "id": "large-multilevel-fn55",
@@ -1214,7 +1207,7 @@
             "w": 500,
             "h": 500,
             "kind": "chair",
-            "rotation": 90,
+            "rotation": 270,
             "label": "Accent chair"
           },
           {
@@ -1224,7 +1217,7 @@
             "w": 500,
             "h": 500,
             "kind": "chair",
-            "rotation": 270,
+            "rotation": 90,
             "label": "Accent chair"
           },
           {
@@ -1329,7 +1322,7 @@
             "w": 900,
             "h": 400,
             "kind": "cabinet",
-            "rotation": 90
+            "rotation": 270
           },
           {
             "id": "large-multilevel-fn70",
@@ -1338,7 +1331,7 @@
             "w": 900,
             "h": 400,
             "kind": "cabinet",
-            "rotation": 270
+            "rotation": 90
           },
           {
             "id": "large-multilevel-fn71",
@@ -1354,7 +1347,8 @@
             "y": 4582,
             "w": 760,
             "h": 660,
-            "kind": "stove"
+            "kind": "stove",
+            "rotation": 180
           },
           {
             "id": "large-multilevel-fn73",
@@ -1363,6 +1357,7 @@
             "w": 520,
             "h": 390,
             "kind": "microwave",
+            "rotation": 180,
             "elevation": 1400
           },
           {
@@ -1372,7 +1367,7 @@
             "w": 910,
             "h": 760,
             "kind": "fridge",
-            "rotation": 90
+            "rotation": 270
           },
           {
             "id": "large-multilevel-fn75",
@@ -1399,7 +1394,7 @@
             "w": 900,
             "h": 400,
             "kind": "cabinet",
-            "rotation": 90
+            "rotation": 270
           },
           {
             "id": "large-multilevel-fn78",
@@ -1423,7 +1418,7 @@
             "id": "large-multilevel-fn80",
             "x": 18300,
             "y": 5400,
-            "w": 1200,
+            "w": 800,
             "h": 1200,
             "kind": "table",
             "label": "Breakfast"
@@ -1431,7 +1426,7 @@
           {
             "id": "large-multilevel-fn81",
             "x": 18300,
-            "y": 4700,
+            "y": 4650,
             "w": 500,
             "h": 500,
             "kind": "chair",
@@ -1440,14 +1435,14 @@
           {
             "id": "large-multilevel-fn82",
             "x": 18300,
-            "y": 6100,
+            "y": 6150,
             "w": 500,
             "h": 500,
             "kind": "chair"
           },
           {
             "id": "large-multilevel-fn83",
-            "x": 17600,
+            "x": 17750,
             "y": 5400,
             "w": 500,
             "h": 500,
@@ -1456,7 +1451,7 @@
           },
           {
             "id": "large-multilevel-fn84",
-            "x": 19000,
+            "x": 18850,
             "y": 5400,
             "w": 500,
             "h": 500,
@@ -1504,8 +1499,7 @@
             "y": 9550,
             "w": 800,
             "h": 350,
-            "kind": "bookshelf",
-            "rotation": 180
+            "kind": "bookshelf"
           },
           {
             "id": "large-multilevel-fn90",
@@ -1523,7 +1517,7 @@
             "w": 500,
             "h": 500,
             "kind": "chair",
-            "rotation": 180,
+            "rotation": 90,
             "label": "Reading chair"
           },
           {
@@ -2439,11 +2433,10 @@
           {
             "id": "large-multilevel-fn98",
             "x": 1700,
-            "y": 3548,
-            "w": 1500,
-            "h": 2000,
-            "kind": "bed",
-            "rotation": 180
+            "y": 3532,
+            "w": 1524,
+            "h": 2032,
+            "kind": "bed"
           },
           {
             "id": "large-multilevel-fn99",
@@ -2451,8 +2444,7 @@
             "y": 3800,
             "w": 500,
             "h": 400,
-            "kind": "nightstand",
-            "rotation": 180
+            "kind": "nightstand"
           },
           {
             "id": "large-multilevel-fn100",
@@ -2460,8 +2452,7 @@
             "y": 3800,
             "w": 500,
             "h": 400,
-            "kind": "nightstand",
-            "rotation": 180
+            "kind": "nightstand"
           },
           {
             "id": "large-multilevel-fn101",
@@ -2469,7 +2460,8 @@
             "y": 600,
             "w": 1200,
             "h": 500,
-            "kind": "dresser"
+            "kind": "dresser",
+            "rotation": 180
           },
           {
             "id": "large-multilevel-fn102",
@@ -2494,7 +2486,8 @@
             "y": 700,
             "w": 480,
             "h": 700,
-            "kind": "toilet"
+            "kind": "toilet",
+            "rotation": 180
           },
           {
             "id": "large-multilevel-fn105",
@@ -2503,13 +2496,12 @@
             "w": 760,
             "h": 550,
             "kind": "sink_vanity",
-            "rotation": 180,
             "label": "Vanity"
           },
           {
             "id": "large-multilevel-fn106",
             "x": 5900,
-            "y": 1800,
+            "y": 1500,
             "w": 900,
             "h": 900,
             "kind": "shower",
@@ -2543,11 +2535,10 @@
           {
             "id": "large-multilevel-fn110",
             "x": 1700,
-            "y": 8698,
-            "w": 1500,
-            "h": 2000,
-            "kind": "bed",
-            "rotation": 180
+            "y": 8682,
+            "w": 1524,
+            "h": 2032,
+            "kind": "bed"
           },
           {
             "id": "large-multilevel-fn111",
@@ -2555,8 +2546,7 @@
             "y": 8950,
             "w": 500,
             "h": 400,
-            "kind": "nightstand",
-            "rotation": 180
+            "kind": "nightstand"
           },
           {
             "id": "large-multilevel-fn112",
@@ -2564,8 +2554,7 @@
             "y": 8950,
             "w": 500,
             "h": 400,
-            "kind": "nightstand",
-            "rotation": 180
+            "kind": "nightstand"
           },
           {
             "id": "large-multilevel-fn113",
@@ -2573,7 +2562,8 @@
             "y": 6300,
             "w": 1200,
             "h": 500,
-            "kind": "dresser"
+            "kind": "dresser",
+            "rotation": 180
           },
           {
             "id": "large-multilevel-fn114",
@@ -2581,7 +2571,8 @@
             "y": 6400,
             "w": 1400,
             "h": 700,
-            "kind": "desk"
+            "kind": "desk",
+            "rotation": 180
           },
           {
             "id": "large-multilevel-fn115",
@@ -2603,11 +2594,10 @@
           {
             "id": "large-multilevel-fn117",
             "x": 9450,
-            "y": 3098,
-            "w": 2000,
-            "h": 2100,
-            "kind": "bed",
-            "rotation": 180
+            "y": 3133,
+            "w": 1930,
+            "h": 2030,
+            "kind": "bed_king"
           },
           {
             "id": "large-multilevel-fn118",
@@ -2615,8 +2605,7 @@
             "y": 3600,
             "w": 500,
             "h": 400,
-            "kind": "nightstand",
-            "rotation": 180
+            "kind": "nightstand"
           },
           {
             "id": "large-multilevel-fn119",
@@ -2624,8 +2613,7 @@
             "y": 3600,
             "w": 500,
             "h": 400,
-            "kind": "nightstand",
-            "rotation": 180
+            "kind": "nightstand"
           },
           {
             "id": "large-multilevel-fn120",
@@ -2639,7 +2627,7 @@
           {
             "id": "large-multilevel-fn121",
             "x": 9450,
-            "y": 2200,
+            "y": 1800,
             "w": 1500,
             "h": 400,
             "kind": "bench"
@@ -2660,7 +2648,6 @@
             "w": 500,
             "h": 500,
             "kind": "chair",
-            "rotation": 180,
             "label": "Accent chair"
           },
           {
@@ -2670,6 +2657,7 @@
             "w": 500,
             "h": 500,
             "kind": "chair",
+            "rotation": 180,
             "label": "Accent chair"
           },
           {
@@ -2687,16 +2675,15 @@
             "w": 800,
             "h": 350,
             "kind": "bookshelf",
-            "rotation": 90
+            "rotation": 270
           },
           {
             "id": "large-multilevel-fn127",
             "x": 15700,
-            "y": 3148,
-            "w": 1500,
-            "h": 2000,
-            "kind": "bed",
-            "rotation": 180
+            "y": 3132,
+            "w": 1524,
+            "h": 2032,
+            "kind": "bed"
           },
           {
             "id": "large-multilevel-fn128",
@@ -2704,8 +2691,7 @@
             "y": 3600,
             "w": 500,
             "h": 400,
-            "kind": "nightstand",
-            "rotation": 180
+            "kind": "nightstand"
           },
           {
             "id": "large-multilevel-fn129",
@@ -2713,8 +2699,7 @@
             "y": 2600,
             "w": 500,
             "h": 400,
-            "kind": "nightstand",
-            "rotation": 180
+            "kind": "nightstand"
           },
           {
             "id": "large-multilevel-fn130",
@@ -2740,7 +2725,8 @@
             "y": 400,
             "w": 480,
             "h": 700,
-            "kind": "toilet"
+            "kind": "toilet",
+            "rotation": 180
           },
           {
             "id": "large-multilevel-fn133",
@@ -2749,7 +2735,6 @@
             "w": 760,
             "h": 550,
             "kind": "sink_vanity",
-            "rotation": 180,
             "label": "Vanity"
           },
           {
@@ -2827,10 +2812,11 @@
           {
             "id": "large-multilevel-fn142",
             "x": 14450,
-            "y": 6352,
-            "w": 1500,
-            "h": 2000,
-            "kind": "bed"
+            "y": 6368,
+            "w": 1524,
+            "h": 2032,
+            "kind": "bed",
+            "rotation": 180
           },
           {
             "id": "large-multilevel-fn143",
@@ -2838,7 +2824,8 @@
             "y": 6300,
             "w": 500,
             "h": 400,
-            "kind": "nightstand"
+            "kind": "nightstand",
+            "rotation": 180
           },
           {
             "id": "large-multilevel-fn144",
@@ -2846,7 +2833,8 @@
             "y": 6300,
             "w": 500,
             "h": 400,
-            "kind": "nightstand"
+            "kind": "nightstand",
+            "rotation": 180
           },
           {
             "id": "large-multilevel-fn145",
@@ -2854,8 +2842,7 @@
             "y": 8198,
             "w": 1200,
             "h": 500,
-            "kind": "dresser",
-            "rotation": 180
+            "kind": "dresser"
           },
           {
             "id": "large-multilevel-fn146",
@@ -2863,8 +2850,7 @@
             "y": 8100,
             "w": 1400,
             "h": 700,
-            "kind": "desk",
-            "rotation": 180
+            "kind": "desk"
           },
           {
             "id": "large-multilevel-fn147",
@@ -2881,7 +2867,8 @@
             "y": 5800,
             "w": 480,
             "h": 700,
-            "kind": "toilet"
+            "kind": "toilet",
+            "rotation": 180
           },
           {
             "id": "large-multilevel-fn149",
@@ -2915,13 +2902,12 @@
             "y": 9248,
             "w": 2000,
             "h": 900,
-            "kind": "sofa",
-            "rotation": 180
+            "kind": "sofa"
           },
           {
             "id": "large-multilevel-fn153",
-            "x": 17000,
-            "y": 8900,
+            "x": 14000,
+            "y": 9250,
             "w": 1100,
             "h": 600,
             "kind": "coffee_table"
@@ -2932,8 +2918,7 @@
             "y": 9400,
             "w": 800,
             "h": 350,
-            "kind": "bookshelf",
-            "rotation": 180
+            "kind": "bookshelf"
           },
           {
             "id": "large-multilevel-fn155",

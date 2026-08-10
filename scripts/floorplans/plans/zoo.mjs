@@ -136,8 +136,10 @@ export function build() {
     furn('picnic_table', 11900, 1600, { rotation: 0 }),
     furn('palm_tree', 1900, 2000, { rotation: 0, label: 'Plaza palm' }),
     furn('ramp', 10100, 4700, { rotation: 0, label: 'Spine accessibility ramp' }),
-    furn('lawn_chair', 13500, 1600, { rotation: 0 }),
-    furn('lawn_chair', 14400, 1600, { rotation: 0 }),
+    // rot 180 = seats face the open grounds; at 0 they faced the north fence
+    // 250 mm away with the whole picnic lawn behind them.
+    furn('lawn_chair', 13500, 1600, { rotation: 180 }),
+    furn('lawn_chair', 14400, 1600, { rotation: 180 }),
     furn('bird_bath', 15300, 2000, { rotation: 0 }),
 
     // Savanna Paddock.
@@ -175,10 +177,10 @@ export function build() {
     furn('rock_cluster', 15800, 5500, { rotation: 0 }),
 
     // Keeper hut interior.
-    furn('desk', 7300, 4000, { rotation: 0, label: 'Keeper desk' }),
+    furn('desk', 7300, 4000, { rotation: 180, label: 'Keeper desk' }),
     furn('chair', 7300, 4750, { rotation: 0 }),
     furn('cabinet', 8650, 4000, { rotation: 90, label: 'Feed store' }),
-    furn('bookshelf', 6700, 4600, { rotation: 90, label: 'Vet manuals' }),
+    furn('bookshelf', 6700, 4600, { rotation: 270, label: 'Vet manuals' }),
 
     // Promenade planting.
     furn('tree', 1250, 7400, { rotation: 0 }),

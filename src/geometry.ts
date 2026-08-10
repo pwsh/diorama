@@ -2214,13 +2214,59 @@ export function robotColor(kind: 'vacuum' | 'mower'): string {
 // `RobotFixture.rotation` is the repo-standard screen-CW degrees where 0 = the
 // piece's local +Y faces world +Y, and the dock's functional FRONT (the opening
 // the robot drives out of) is local −Y — exactly the furniture convention, so
-// `frontVectorPlan(rotation)` is the outward direction. A parked robot points
-// the other way, INTO the dock: world direction of dock-local +Y = (sinθ, cosθ),
-// hence heading = atan2(cosθ, sinθ). Checks: 0 → +π/2 (+Y), 90 → 0 (+X),
-// 180 → −π/2 (−Y), 270 → π (−X).
+// `frontVectorPlan(rotation)` IS the outward direction.
+//
+// A parked mower faces OUT, along that front vector — nose at the mouth, ready
+// to drive away. **This reversed in 2026-08-09** (user-reported "the mower is
+// docked 180 degrees incorrectly in the dock so it ends up intersecting the
+// wall"): the original convention pointed the nose INTO the dock, i.e. straight
+// at the dock's back wall and at whatever the dock is backed against. Measured
+// on the real rigs, that is not merely a look: the 3D mower's front reach is
+// 276 mm (chamfered nose) against a dock back-wall inner face at 230 mm, so the
+// nose was buried 46 mm inside it — the most prominent part of the body, dead
+// centre of view. Nosing out puts the shorter rear (270 mm) at that end instead
+// and points the visible nose at the yard, agreeing with the dock's own front
+// chevron (2D) / emissive entry strip (3D). See MOWER_DOCK_PARK_OFFSET_MM for
+// the position half of the same fix. Do NOT flip this back — a mower that
+// stares at the wall reads as broken even where it geometrically fits.
+// Checks: 0 → −π/2 (−Y), 90 → π (−X), 180 → +π/2 (+Y), 270 → 0 (+X).
 export function dockParkedHeading(rotationDeg?: number): number {
-  const t = (rotationDeg ?? 0) * Math.PI / 180;
-  return Math.atan2(Math.cos(t), Math.sin(t));
+  const f = frontVectorPlan(rotationDeg);   // hoisted; the single front-axis source
+  return Math.atan2(f.y, f.x);
+}
+
+// How far FORWARD (out of the opening, along frontVectorPlan) a parked mower's
+// centre sits from its dock origin, mm.
+//
+// The drawn rig is ~546 mm nose-to-tail — its chamfered nose, drive wheels and
+// side skirts all overhang the nominal 450 mm `bodyD` box — while the dock's
+// usable depth is only ~494 mm (front lip at −264 to the back wall's inner face
+// at +230). A body parked ON the dock origin therefore ALWAYS buries ~40 mm of
+// itself in the back wall whichever way it faces; that is the "intersecting the
+// wall" half of the 2026-08-09 report, and no heading flip can fix it. Pushing
+// the centre 60 mm toward the mouth seats the whole body clear (rear reach
+// 270 − 60 = 210 < 230) and lets the nose poke out of the opening — which is
+// what a real mower parked in its carport looks like.
+//
+// 60 mm is far inside MOWER_KINEMATICS.arriveMm (420), so every arrival test
+// against the dock ORIGIN still passes; it only moves where the body rests.
+export const MOWER_DOCK_PARK_OFFSET_MM = 60;
+
+/**
+ * Where a robot's BODY rests when parked — the point the docked steering target,
+ * the spawn pose and the no-controller-state 2D fallback all use.
+ *
+ * Mowers sit `MOWER_DOCK_PARK_OFFSET_MM` forward of the dock origin (see above).
+ * Vacuums return the origin unchanged: the puck is round (no nose to aim) and
+ * already overhangs its shallow 260 mm dock symmetrically, so an offset would
+ * only break the golden controller probes without seating anything better.
+ */
+export function dockParkedPoint(
+  r: { x: number; y: number; rotation?: number; kind?: 'vacuum' | 'mower' },
+): Vec2 {
+  if (r.kind !== 'mower') return { x: r.x, y: r.y };
+  const f = frontVectorPlan(r.rotation);
+  return { x: r.x + f.x * MOWER_DOCK_PARK_OFFSET_MM, y: r.y + f.y * MOWER_DOCK_PARK_OFFSET_MM };
 }
 
 // Task-progress percent (0..100) for a robot's body progress strip/ring, or null
@@ -4218,11 +4264,64 @@ export function resolveFurnitureWallCollision(
 // `!piece.locked` guard keeps locked seats put. Mutates piece.x/y; returns
 // whether it moved.
 const SEAT_TUCK_CLEAR_MM = 150;  // outward gap so a seated torso clears the slab
+
+// ── Seat↔table WALL AWARENESS (shared by the tuck + the carry) ──────────────
+// Both seat/table relations are pure footprint-proximity tests, so before this
+// they reached straight THROUGH a partition into the next room (user-reported
+// via a floorplan audit: a bedroom desk's capture box crossed a partition and
+// silently re-aimed a hall-bath toilet). `walls` is a TRAILING OPTIONAL on both
+// entry points — ABSENT ⇒ byte-identical to the wall-blind behaviour, so every
+// stale caller (scripts/floorplans/lib.mjs's settle pass, physical.mjs check 12)
+// keeps computing exactly what it computes today until it opts in.
+//
+// DOORWAYS DO NOT LET A CAPTURE THROUGH — deliberate. We call
+// `segCrossesSolidWall` with EMPTY doors/windows arrays, so every non-invisible
+// wall run is opaque along its full length. A chair standing on the far side of
+// an open doorway is not "at" the table: it must not be dragged along when the
+// table moves, and it must not be shoved by a tuck. (Contrast the robot/avatar
+// consumers of the same helper, which legitimately drive/walk through a door.)
+// Invisible walls stay passable — they are planning boundaries, not partitions,
+// exactly as `segCrossesSolidWall` already treats them.
+//
+// The probe is host CENTRE → seat CENTRE. Both are furniture centres, so a
+// legitimate tucked chair's probe stays inside the room the table is in.
+// LIMIT (documented, not worked around): `segmentsIntersect` needs a PROPER
+// crossing, so a host whose centre sits exactly ON a wall centerline is not
+// detected. `resolveFurnitureWallCollision` keeps every table at least
+// WALL_HALF + FLUSH off a wall face, so that only arises under Alt free
+// placement — and the pre-existing check-10 (furniture-vs-solid-wall overlap)
+// already flags such a piece.
+function seatWallBlocked(
+  walls: { points: Vec2[]; kind?: WallKind }[] | undefined,
+  hostX: number, hostY: number, seatX: number, seatY: number,
+): boolean {
+  if (!walls || walls.length === 0) return false;
+  return segCrossesSolidWall(walls, [], [], hostX, hostY, seatX, seatY);
+}
+
+// Seat-bearing kinds that are NEVER dining/desk seating: a plumbed or anchored
+// fixture whose `seat` exists only so an avatar can use the piece ITSELF.
+// `toilet` carries its own `activity: 'toilet'` (and a 480×700 footprint that a
+// 450 mm capture margin happily swallows next to a desk); `swingset` is a
+// 2800×1600 fixed play frame that a yard `picnic_table` (an eat_at_table host)
+// would otherwise capture. Everything else with a `seat` — incl. benches at a
+// picnic table and bar stools at a counter — stays capturable.
+//
+// Kind-based on purpose: a custom recipe carrying `seat` keeps today's
+// behaviour (its `kind` is the `block` fallback, which is not in the set).
+// Applied at the CALL SITES (canvas-interact), NOT inside the geometry helpers,
+// so this constant is inert for every existing consumer until it opts in.
+export const NON_TABLE_SEAT_KINDS: ReadonlySet<string> = new Set(['toilet', 'swingset']);
+export function isTableSeatKind(kind: FurnitureKind | undefined): boolean {
+  return kind == null || !NON_TABLE_SEAT_KINDS.has(kind);
+}
+
 export function resolveSeatTableCollision(
   piece: Furniture,
   furniture: Furniture[],
   customObjects?: ObjectRecipe[],
   passes = 2,
+  walls?: { points: Vec2[]; kind?: WallKind }[],
 ): boolean {
   if (!resolveFurnitureDef(piece, customObjects).seat) return false;
   let movedAny = false;
@@ -4232,6 +4331,8 @@ export function resolveSeatTableCollision(
       if (host.id === piece.id) continue;
       const ha = resolveFurnitureDef(host, customObjects).activity;
       if (ha !== 'eat_at_table' && ha !== 'work_at_desk') continue;
+      // A host on the far side of a partition never shoves this seat (opt-in).
+      if (seatWallBlocked(walls, host.x, host.y, piece.x, piece.y)) continue;
       // Seat center in the host's local frame (rotation-aware).
       const l = furnitureWorldToLocal(host.rotation, piece.x - host.x, piece.y - host.y);
       const hx = host.w / 2, hy = host.h / 2;
@@ -4263,14 +4364,22 @@ export function resolveSeatTableCollision(
 // captures a tucked chair plus slack without grabbing chairs across the room.
 // The caller measures against the table's OLD position so dragging a dining
 // table carries only the chairs that were actually set at it. Pure.
+//
+// `walls` is the TRAILING OPTIONAL wall guard (see `seatWallBlocked` above):
+// absent = today's wall-blind box test, byte-identical; present = the capture
+// additionally requires clear line-of-sight from the host centre to the seat
+// centre across every non-invisible wall run, with DOORWAYS opaque.
 export const TABLE_CARRY_MARGIN_MM = 450;
 export function seatBelongsToTable(
   hostX: number, hostY: number, hostRotation: number | undefined,
   hostW: number, hostH: number,
   seatX: number, seatY: number, captureMm = TABLE_CARRY_MARGIN_MM,
+  walls?: { points: Vec2[]; kind?: WallKind }[],
 ): boolean {
   const l = furnitureWorldToLocal(hostRotation, seatX - hostX, seatY - hostY);
-  return Math.abs(l.x) <= hostW / 2 + captureMm && Math.abs(l.y) <= hostH / 2 + captureMm;
+  if (!(Math.abs(l.x) <= hostW / 2 + captureMm && Math.abs(l.y) <= hostH / 2 + captureMm))
+    return false;
+  return !seatWallBlocked(walls, hostX, hostY, seatX, seatY);
 }
 
 // Clip a simple polygon `loop` against the convex quad `rect` (Sutherland–

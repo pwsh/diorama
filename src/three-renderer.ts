@@ -3302,7 +3302,17 @@ export class ThreeDRenderer {
     // Registered BEFORE the tap gate purely for readability — the two are
     // independent (the tap gate discards anything past its movement slop).
     this._installPivotRotate(dom);
-    let downX = 0, downY = 0, downT = 0, lastTapT = 0, downTouch = false;
+    // `lastTapT` MUST start at -Infinity, never 0. `e.timeStamp` is measured
+    // from the document's time origin, so with a 0 seed the dblclick test
+    // `now - lastTapT < 350` is TRUE for the page's whole first 350 ms — the
+    // very first tap in that window is routed to _onFixtureDblClick (for an
+    // unbound light: the entity picker) instead of toggling, and the toggle is
+    // lost silently. -Infinity can never satisfy the test, so a first tap is
+    // always a click. Same reasoning and same seed as canvas-2d's
+    // `_lastSyntheticClick`. Reachable from automation / a late-created panel
+    // element in an iframe (its own time origin), and it is what a headless
+    // click harness hits on its first tap.
+    let downX = 0, downY = 0, downT = 0, lastTapT = -Infinity, downTouch = false;
     dom.addEventListener('pointerdown', e => {
       downX = e.clientX; downY = e.clientY; downT = e.timeStamp;
       downTouch = e.pointerType === 'touch';
@@ -3351,8 +3361,48 @@ export class ThreeDRenderer {
     this._onFixtureDblClick = fn;
   }
 
+  // Bring world matrices up to date before a PICK.
+  //
+  // LOAD-BEARING (2026-08-09, user-reported "I can turn a firepit on but cannot
+  // turn it off" — root-caused against the reporting user's own store). Raycasts
+  // read `object.matrixWorld`, which is only recomputed by `scene.updateMatrixWorld()`
+  // inside `renderer.render()`. A freshly CONSTRUCTED Object3D has an identity
+  // `matrix`/`matrixWorld` AND `matrixWorldNeedsUpdate === false` (the flag is
+  // only raised by `updateMatrix()`), so between a rebuild and the next render a
+  // rebuilt fixture's world matrix says it sits at the SCENE ORIGIN. A ray aimed
+  // where the user can see it misses everything.
+  //
+  // Normally invisible, because a group is rebuilt only when its dirty key
+  // changes and a render follows long before the next click. It becomes a
+  // PERMANENT dead zone for the fixtures whose groups are FORCE-rebuilt EVERY
+  // FRAME: a lit fireplace / heatlamp / firepit (flicker needs `Math.random()`
+  // per frame), an ALARMING safety sensor, an ACTIVE alert beacon, a flashing
+  // logic light. Those rebuild in three-view's rAF tick, which is a SEPARATE rAF
+  // callback from the renderer's own `_animate`/render — so for most of every
+  // frame the newest geometry has never been through a render, and a pick lands
+  // in that window essentially always. Measured on the reporting user's plan:
+  // 60/60 raycasts at the pit's own pixel MISSED while lit, 60/60 HIT while dark,
+  // and end-to-end clicks turned it ON 12/12 but OFF 0/12. The ON→OFF asymmetry
+  // IS the bug: an unlit pit is not force-rebuilt, so lighting it always works
+  // and putting it out never does.
+  //
+  // `_raycastFlightNear` needs no call: `getWorldPosition()` self-updates its
+  // ancestor chain. The camera is not a child of the scene, so it is updated
+  // separately (it matters while a camera ease is in flight). Cost is one matrix
+  // walk per CLICK — human-frequency, and measured at 1.0 ms on the reporting
+  // user's 2440-object two-floor scene (0.7 % of one frame there), so it is
+  // deliberately unconditional rather than guarded by a staleness flag: the
+  // "have we rendered since the last rebuild?" bookkeeping would have to be
+  // correct at every build site, and getting it wrong reintroduces a silently
+  // dead click.
+  private _syncPickMatrices(): void {
+    this._scene?.updateMatrixWorld(false);
+    this._camera?.updateMatrixWorld(false);
+  }
+
   private _raycastFixture(clientX: number, clientY: number): FixtureClickInfo | null {
     if (!this._renderer || !this._camera) return null;
+    this._syncPickMatrices();
     const rect = this._renderer.domElement.getBoundingClientRect();
     const ndc = new THREE.Vector2(
       ((clientX - rect.left) / rect.width) * 2 - 1,
@@ -6053,6 +6103,10 @@ export class ThreeDRenderer {
   // calls this after _raycastFixture misses. Returns the robot + segment id.
   private _raycastVacSeg(clientX: number, clientY: number): { robotId: string; segId: string } | null {
     if (!this._renderer || !this._camera || !this._vacMapGroup.visible) return null;
+    // Same stale-world-matrix hazard as _raycastFixture — see _syncPickMatrices.
+    // The map overlay rebuilds whenever a fresh MapData frame lands, so a tap can
+    // arrive between that rebuild and the next render.
+    this._syncPickMatrices();
     const rect = this._renderer.domElement.getBoundingClientRect();
     const ndc = new THREE.Vector2(
       ((clientX - rect.left) / rect.width) * 2 - 1,

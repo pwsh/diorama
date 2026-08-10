@@ -150,7 +150,7 @@ export function build() {
     furn('island', 1500, 2200, { rotation: 0, w: 2000, h: 1000, label: 'Checkout', color: '#4e6b3a' }),
     furn('counter', 1500, 3800, { rotation: 0, w: 2200, h: 700, label: 'Wrap counter' }),
     furn('counter', 3600, 4400, { rotation: 0, w: 1800, h: 650, label: 'Seed & bulb counter' }),
-    furn('cabinet', 300, 900, { rotation: 90, label: 'Tool wall' }),
+    furn('cabinet', 300, 900, { rotation: 270, label: 'Tool wall' }),
     furn('bookshelf', 5700, 1000, { rotation: 90, label: 'Pot shelving' }),
     furn('bookshelf', 5700, 1900, { rotation: 90, label: 'Fertiliser shelving' }),
     furn('utility_sink', 5600, 4300, { rotation: 0, label: 'Shop potting sink' }),
@@ -205,7 +205,7 @@ export function build() {
     // ── Potting shed interior ─────────────────────────────────────────────
     furn('counter', 13000, 10400, { rotation: 0, w: 1600, h: 650, label: 'Potting bench' }),
     furn('utility_sink', 14200, 10400, { rotation: 0, label: 'Shed sink' }),
-    furn('bookshelf', 12400, 9400, { rotation: 90, label: 'Seed store' }),
+    furn('bookshelf', 12400, 9400, { rotation: 270, label: 'Seed store' }),
     furn('plant', 14200, 9200, { rotation: 0 }),
 
     // ── West lawn (bulk yard behind the shop) ─────────────────────────────
@@ -216,8 +216,10 @@ export function build() {
     furn('pine_tree', 1200, 9200, { rotation: 0 }),
     furn('pine_tree', 2600, 10400, { rotation: 0 }),
     furn('tree', 4600, 9600, { rotation: 0 }),
-    furn('lawn_chair', 1200, 11200, { rotation: 180, label: 'Lounger display' }),
-    furn('lawn_chair', 2200, 11200, { rotation: 180, label: 'Lounger display' }),
+    // rot 0 = seat front out into the aisle; at 180 both loungers faced the south
+    // wall 150 mm away with 5.7 m of open shop floor behind them.
+    furn('lawn_chair', 1200, 11200, { rotation: 0, label: 'Lounger display' }),
+    furn('lawn_chair', 2200, 11200, { rotation: 0, label: 'Lounger display' }),
     // Specimen stock: balled-and-burlapped birch, priced to move.
     furn('birch_tree', 4900, 5800, { rotation: 0, label: 'Birch — specimen stock' }),
     furn('birch_tree', 2100, 7900, { rotation: 0, label: 'Birch — specimen stock' }),

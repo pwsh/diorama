@@ -8,7 +8,7 @@ import { slugToName, normMac, localToWorld, segCrossesSolidWall, mowerSweepWaypo
          MOWER_KINEMATICS, MOWER_ROW_MM, MOWER_CONTAINMENT, stepBicycle,
          mowerWaypointReached, wrapAngle, buildingWallLoops, pointInAnyLoop,
          nearestPointOutsideLoops, pointInPolygon, doorSpanCenter,
-         ROBOT_DEFAULTS, robotLedColor, dockParkedHeading, parseVacuumPosition, vacuumRawToWorld,
+         ROBOT_DEFAULTS, robotLedColor, dockParkedHeading, dockParkedPoint, parseVacuumPosition, vacuumRawToWorld,
          vacuumRawHeadingRad, isStairsKind, logicLightState, actionButtonKind,
          furnitureKind, normalizeLockState, valveIsOpen, cameraColor, slugifyFrigateName,
          closedWallLoops, envKindOf, tempToCelsius, aggregateRoomTemps,
@@ -7783,11 +7783,14 @@ export class Planner extends EventTarget {
     // Desync multiple robots' demo cycles by hashing the id.
     let h = 0;
     for (let i = 0; i < r.id.length; i++) h = (h * 31 + r.id.charCodeAt(i)) & 0xffff;
+    // A mower spawns PARKED IN its dock: seated `MOWER_DOCK_PARK_OFFSET_MM`
+    // forward of the dock origin with its nose OUT of the opening (see
+    // dockParkedHeading / dockParkedPoint — 2026-08-09). The vacuum keeps the
+    // dock origin and heading 0 (its puck is round and the controller's golden
+    // probes are pinned to that seed).
+    const park = dockParkedPoint(r);
     return {
-      // A mower spawns PARKED IN its dock: nose toward the dock's back wall (see
-      // dockParkedHeading). The vacuum keeps heading 0 (its puck is round and the
-      // controller's golden probes are pinned to that seed).
-      x: r.x, y: r.y,
+      x: park.x, y: park.y,
       heading: r.kind === 'mower' ? dockParkedHeading(r.rotation) : 0,
       phase: h % 100,
       activity: 'docked', led: robotLedColor('docked'),
@@ -8428,7 +8431,14 @@ export class Planner extends EventTarget {
       // that lands a dock inside a DIFFERENT room's sliver: there it still
       // parks at the nearest legal point instead of grinding on the wall.
       // Sidebar: mowerDockIndoors warns only when no doorway exists at all.
-      const home = nearestPointOutsideLoops(dockLoops, r.x, r.y, MOWER_CONTAINMENT.clampMarginMm);
+      // The steering target is the PARKED POINT, not the dock origin: a mower is
+      // longer than its dock is deep, so resting on the origin buries ~40 mm of
+      // the body in the back wall (2026-08-09 — see MOWER_DOCK_PARK_OFFSET_MM).
+      // The offset (60 mm) is far inside `arriveMm` (420), so "has it arrived at
+      // its dock?" is unchanged everywhere; only where it comes to rest moves.
+      // Clamped from the parked point so containment semantics are unchanged.
+      const park = dockParkedPoint(r);
+      const home = nearestPointOutsideLoops(dockLoops, park.x, park.y, MOWER_CONTAINMENT.clampMarginMm);
       // Outside the dock's room? Steer at the doorway first — the greedy
       // deflection steerer cannot find an opening that is not roughly on the
       // straight line, and stalls against the wall instead. Deliberately WITHOUT

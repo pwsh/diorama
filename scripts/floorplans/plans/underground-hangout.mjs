@@ -71,28 +71,28 @@ export function build() {
     furn('rug', 3400, 3300, { rotation: 0, w: 4600, h: 3000, color: '#1a1420' }),
 
     // ── Arcade / game zone ────────────────────────────────────────────────
-    furn('cabinet', 1300, 6200, { rotation: 90, label: 'Arcade cabinet', color: '#2b1b46' }),
-    furn('cabinet', 1300, 7300, { rotation: 90, label: 'Arcade cabinet', color: '#123a46' }),
+    furn('cabinet', 1300, 6200, { rotation: 270, label: 'Arcade cabinet', color: '#2b1b46' }),
+    furn('cabinet', 1300, 7300, { rotation: 270, label: 'Arcade cabinet', color: '#123a46' }),
     furn('table', 3400, 6900, { rotation: 0, w: 1400, h: 800, label: 'Foosball table', color: '#20303a' }),
     furn('bookshelf', 5800, 6400, { rotation: 90, label: 'Game shelf' }),
-    furn('desk', 2000, 8800, { rotation: 180, label: 'Battlestation 1' }),
+    furn('desk', 2000, 8800, { rotation: 0, label: 'Battlestation 1' }),
     furn('chair', 2000, 8100, { rotation: 180 }),
-    furn('tv', 2000, 9000, { rotation: 180, w: 700, h: 200, elevation: 750, localState: 'on', label: 'Monitor 1' }),
-    furn('desk', 4200, 8800, { rotation: 180, label: 'Battlestation 2' }),
+    furn('tv', 2000, 9000, { rotation: 0, w: 700, h: 200, elevation: 750, localState: 'on', label: 'Monitor 1' }),
+    furn('desk', 4200, 8800, { rotation: 0, label: 'Battlestation 2' }),
     furn('chair', 4200, 8100, { rotation: 180 }),
-    furn('tv', 4200, 9000, { rotation: 180, w: 700, h: 200, elevation: 750, localState: 'on', label: 'Monitor 2' }),
+    furn('tv', 4200, 9000, { rotation: 0, w: 700, h: 200, elevation: 750, localState: 'on', label: 'Monitor 2' }),
     furn('rug', 3400, 8000, { rotation: 0, w: 2800, h: 1600, color: '#141b26' }),
 
     // ── Bar lounge ────────────────────────────────────────────────────────
-    furn('counter', 9000, 1300, { rotation: 0, w: 3000, h: 700, label: 'Bar', color: '#2a1d16' }),
+    furn('counter', 9000, 1300, { rotation: 180, w: 3000, h: 700, label: 'Bar', color: '#2a1d16' }),
     furn('stool', 7800, 2100, { rotation: 180 }),
     furn('stool', 8600, 2100, { rotation: 180 }),
     furn('stool', 9400, 2100, { rotation: 180 }),
     furn('stool', 10200, 2100, { rotation: 180 }),
     furn('fridge', 11200, 1300, { rotation: 180, localState: 'on', label: 'Bar fridge' }),
     furn('microwave', 11200, 1300, { rotation: 180, elevation: 1900 }),
-    furn('cabinet', 12600, 1200, { rotation: 0, label: 'Glassware' }),
-    furn('sofa', 7600, 5000, { rotation: 90 }),
+    furn('cabinet', 12600, 1200, { rotation: 180, label: 'Glassware' }),
+    furn('sofa', 7600, 5000, { rotation: 270 }),
     furn('coffee_table', 8800, 5000, { rotation: 0 }),
     furn('tv_stand', 10600, 5000, { rotation: 270 }),
     furn('tv', 10600, 5000, { rotation: 270, elevation: 550, localState: 'playing', label: 'Lounge TV' }),
@@ -100,7 +100,7 @@ export function build() {
     furn('speaker_tower', 10600, 6200, { rotation: 270 }),
     furn('rug', 9000, 5000, { rotation: 0, w: 3200, h: 2600, color: '#181d2a' }),
     furn('bookshelf', 13200, 3000, { rotation: 90, label: 'Vinyl wall' }),
-    furn('plant', 12800, 8600, { rotation: 0 }),
+    furn('plant', 12100, 9000, { rotation: 0 }),
     furn('stairs', STAIR_X, STAIR_Y, { rotation: 0, w: 1000, h: 3600, stairLinkId: 'bunker-l1l2' }),
   ];
 
@@ -187,10 +187,10 @@ export function build() {
 
   const shedFurniture = [
     furn('stairs', STAIR_X, STAIR_Y, { rotation: 180, w: 1000, h: 3600, stairLinkId: 'bunker-l1l2' }),
-    furn('desk', 11600, 8800, { rotation: 180, label: 'Workbench' }),
+    furn('desk', 11600, 8800, { rotation: 0, label: 'Workbench' }),
     furn('chair', 11600, 8100, { rotation: 180 }),
-    furn('cabinet', 10800, 6200, { rotation: 90, label: 'Parts cabinet' }),
-    furn('bookshelf', 10500, 7400, { rotation: 90, label: 'Tool shelves' }),
+    furn('cabinet', 10800, 6200, { rotation: 270, label: 'Parts cabinet' }),
+    furn('bookshelf', 10500, 7400, { rotation: 270, label: 'Tool shelves' }),
     furn('trash_bin', 12000, 6000, { rotation: 0 }),
   ];
 

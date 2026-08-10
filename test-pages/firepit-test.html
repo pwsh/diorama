@@ -28,11 +28,21 @@
     printf "export * from './canvas-render.js';\nexport * from './canvas-hit.js';\n" > "$T"/canvas2d-entry.ts
     npx esbuild "$T"/planner.ts        --bundle --format=esm --outfile="$H"/planner.mod.js
     npx esbuild "$T"/canvas2d-entry.ts --bundle --format=esm --outfile="$H"/canvas-render.mod.js
+    # §E drives the REAL <diorama-three-view>; it needs the lit + three aliases
+    # (the card-test / sensor-focus recipe) and the tsconfig, or esbuild leaves
+    # raw decorators and the bundle fails to parse. esbuild inlines three-view's
+    # dynamic three-renderer import, so the mounted view gets a live renderer.
+    cp test-pages/firepit-view-entry.ts "$T"/firepit-view-entry.ts
+    npx esbuild "$T"/firepit-view-entry.ts --bundle --format=esm --tsconfig="$T"/tsconfig.json \
+      --alias:lit=$PWD/node_modules/lit/index.js \
+      --alias:lit/decorators.js=$PWD/node_modules/lit/decorators.js \
+      --alias:three=$PWD/node_modules/three \
+      --outfile="$H"/fpview.mod.js
   Run headless (serve over http — Chrome blocks dynamic module imports on file://):
     (cd "$H" && python3 -m http.server 8947 &)
     google-chrome --headless=new --disable-gpu --use-angle=swiftshader \
       --enable-unsafe-swiftshader --run-all-compositor-stages-before-draw \
-      --window-size=1200,900 --virtual-time-budget=30000 --dump-dom \
+      --window-size=1200,900 --virtual-time-budget=120000 --dump-dom \
       "http://localhost:8947/firepit-test.html" | grep -o "<title>[^<]*"
 -->
 <script type="module">
@@ -340,10 +350,12 @@
 
   // ═══ 3. 2D plan: real Planner + the real drawAll / hitFixture ═════════════
   class FakeHa {
-    constructor(seed) { this.map = new Map(); for (const [k, v] of Object.entries(seed || {})) this.map.set(k, JSON.parse(JSON.stringify(v))); this.states = {}; this._s = []; this._c = []; }
+    constructor(seed) { this.map = new Map(); for (const [k, v] of Object.entries(seed || {})) this.map.set(k, JSON.parse(JSON.stringify(v))); this.states = {}; this._s = []; this._c = []; this.calls = []; }
     connect() { for (const cb of this._c) cb('connected'); for (const cb of this._s) cb(this.states, undefined); }
     onState(fn) { this._s.push(fn); } onConn(fn) { this._c.push(fn); }
-    callService() { return Promise.resolve(); }
+    // `calls` records `<domain>.<service>` so §E can assert that a BOUND pit
+    // dispatches a real service instead of flipping localState.
+    callService(domain, service) { this.calls.push(`${domain}.${service}`); return Promise.resolve(); }
     async getHistory() { return {}; } async getWeatherForecasts() { return null; }
     async getDevices() { return []; } async getEntityRegistry() { return []; } async updateEntityRegistry() { return true; }
     async getAreaRegistry() { return []; } async getFloorRegistry() { return []; }
@@ -425,6 +437,401 @@
     ok('D5 …the same click misses an ordinary bulb', at(pBulb, 420) === null, JSON.stringify(at(pBulb, 420)));
     ok('D6 a click well outside the pit still misses', at(pPit, 700) === null, JSON.stringify(at(pPit, 700)));
     ok('D7 dead-centre still hits both', at(pPit, 0)?.kind === 'light' && at(pBulb, 0)?.kind === 'light');
+  }
+
+  // ═══ 4. END-TO-END 3D CLICK PATH (real PointerEvents → real Planner) ══════
+  // Sections 1–3 exercise the pieces; this one pins the WHOLE user gesture:
+  // pointerdown/pointerup on the WebGL canvas → the renderer's tap gate →
+  // _raycastFixture → three-view's onFixtureClick → Planner.toggleItem → the
+  // per-frame rebuild that makes the fire appear/disappear. Written after two
+  // wrong root-cause diagnoses of "I can turn a fire pit on but cannot turn it
+  // off" (2026-08-09): reading the code was not evidence, so the click is now
+  // driven end to end for both pit kinds, in both directions.
+  //
+  // Frame driver: three-view owns a rAF loop, but headless Chrome produces
+  // frames at ~2 fps, which starves it and makes every timing assertion racy.
+  // The section therefore calls the REAL `_tickOnce` (the same entry the rAF
+  // calls) directly and forces the matrix state a real render would have
+  // produced (`sync`) before projecting or raycasting — deterministic, and it
+  // exercises exactly the app's code.
+  {
+    const { Planner: VPlanner } = await import('./fpview.mod.js' + V);
+    const host = document.createElement('div');
+    host.style.cssText = 'position:absolute;left:0;top:0;width:900px;height:640px';
+    document.body.appendChild(host);
+    const view = document.createElement('diorama-three-view');
+    view.style.cssText = 'position:absolute;inset:0;display:block';
+    host.appendChild(view);
+
+    const FW3 = 9000, FD3 = 7000;
+    const mkFloor3 = (lights) => ({
+      id: 'f1', name: 'Home', w: FW3, d: FD3, walls: [], furniture: [], lights, switches: [],
+      sensors: [], motionSensors: [], envSensors: [], bleProxies: [], doors: [], windows: [],
+      rooms: [], groundAreas: [], voidAreas: [], pools: [], bg: null, model3d: null, look3d: null,
+    });
+    const mkVPlanner = async (lights, states) => {
+      localStorage.removeItem('diorama:store:v1'); localStorage.removeItem('diorama:configs');
+      const pl = new VPlanner();
+      const fake = new FakeHa({ diorama: {
+        v: 2, floors: [mkFloor3(lights)], currentFloorId: 'f1', activeSensorId: null,
+        coverage: false, imperial: false, showDetails: false, useRawTargets: false,
+        scene3d: { preset: 'night', floorColor: '#3a3f4a', floorTex: 'none',
+                   wallColor: '#7a8494', groundLevelMm: 0 },
+      } });
+      fake.states = states || {};
+      pl.connectWith(fake);
+      await waitFor(() => pl.configIndex !== null);
+      return { pl, fake };
+    };
+
+    let vp = await mkVPlanner([]);
+    view.planner = vp.pl;
+    await view.updateComplete;
+    await waitFor(() => !!view._renderer, 900);
+    const vr = view._renderer;
+    ok('E0 three-view mounted a live renderer', !!vr && !!vr._renderer, String(!!vr));
+    vr.resize(900, 640);
+    const cvs3 = vr._renderer.domElement;
+
+    const sync = () => {
+      vr._scene.updateMatrixWorld(true);
+      vr._camera.updateMatrixWorld(true);
+      vr._camera.matrixWorldInverse.copy(vr._camera.matrixWorld).invert();
+    };
+    const ticks = (n = 3) => { for (let i = 0; i < n; i++) view._tickOnce(); sync(); };
+    const useStore = async (lights, states) => {
+      vp = await mkVPlanner(lights, states);
+      view.planner = vp.pl;
+      view.requestUpdate();
+      await view.updateComplete;
+      view._keyFloor = ''; view._keyLights = ''; view._keyGround = '';
+      ticks(3);
+    };
+    const pitLight = () => vp.pl.floor().lights[vp.pl.floor().lights.length - 1];
+    const pitBody = () => {
+      const gs = vr._lightGroup.children.filter(c => c.type === 'Group');
+      return gs[gs.length - 1];
+    };
+    const liveFlames = () => {
+      const b = pitBody();
+      return b ? b.children.filter(c => c.isMesh && c.userData && c.userData.firepitFlame).length : -1;
+    };
+    // One tap = a pointerdown/pointerup pair at the same pixel. `stamp` forces
+    // BOTH events' timeStamp, which is how the gate's dblclick window is tested
+    // without depending on how long the page has been open (Event.timeStamp is
+    // a prototype getter; an own property shadows it).
+    const rawTap = (x, y, stamp) => {
+      for (const type of ['pointerdown', 'pointerup']) {
+        const ev = new PointerEvent(type,
+          { clientX: x, clientY: y, bubbles: true, pointerType: 'mouse', pointerId: 1 });
+        if (stamp != null) Object.defineProperty(ev, 'timeStamp', { value: stamp });
+        cvs3.dispatchEvent(ev);
+      }
+    };
+    // Project a point `dy` mm above the pit body's origin and tap it. Projection
+    // and dispatch happen in ONE synchronous block so the app's own rAF (camera
+    // pivot easing) cannot slide the view between them. Returns what the SAME
+    // raycast the gate runs would resolve at that pixel.
+    const tapPit = (dy = 180, opts = {}) => {
+      sync();
+      const b = pitBody();
+      const v3 = b.position.clone(); v3.y += dy; v3.project(vr._camera);
+      const rc = cvs3.getBoundingClientRect();
+      const x = rc.left + (v3.x * 0.5 + 0.5) * rc.width;
+      const y = rc.top + (-v3.y * 0.5 + 0.5) * rc.height;
+      const pre = vr._raycastFixture(x, y);
+      if (opts.rebuildBetween) {
+        cvs3.dispatchEvent(new PointerEvent('pointerdown',
+          { clientX: x, clientY: y, bubbles: true, pointerType: 'mouse', pointerId: 1 }));
+        ticks(2);
+        cvs3.dispatchEvent(new PointerEvent('pointerup',
+          { clientX: x, clientY: y, bubbles: true, pointerType: 'mouse', pointerId: 1 }));
+      } else rawTap(x, y, opts.stamp);
+      return pre;
+    };
+    // A tap within 350 ms of the previous one is a DBLCLICK by design, so every
+    // "next click" in this section is spaced past that window first.
+    const spaced = async () => { await sleep(430); ticks(1); };
+
+    const L3 = (kind, over = {}) => Object.assign(
+      { id: 'fp', x: FW3 / 2, y: FD3 / 2, entity_id: null, iconKind: kind, label: 'Pit' }, over);
+
+    for (const kind of KINDS) {
+      await useStore([L3(kind)]);
+      vr.applyViewPreset('iso'); ticks(2);
+      await spaced();
+      const ray = tapPit(180); ticks(3);
+      ok(`E1 ${kind}: a real tap on the rim turns it ON`,
+         pitLight().localState === 'on' && liveFlames() >= 4,
+         `${pitLight().localState}/fl${liveFlames()}/${ray ? ray.kind + ':' + ray.fixtureId : 'MISS'}`);
+      // While LIT the builder reruns every frame (three-view forces it), so the
+      // OFF tap lands on a scene that is being torn down and rebuilt underneath.
+      const before = vr._lightGroup.children.length;
+      ticks(6);
+      ok(`E2 ${kind}: the lit pit keeps rebuilding every frame`,
+         vr._lightGroup.children.length === before && liveFlames() >= 4, String(before));
+      await spaced();
+      const ray2 = tapPit(180); ticks(3);
+      ok(`E3 ${kind}: a second real tap turns it OFF`,
+         pitLight().localState === 'off' && liveFlames() === 0,
+         `${pitLight().localState}/fl${liveFlames()}/${ray2 ? ray2.kind + ':' + ray2.fixtureId : 'MISS'}`);
+    }
+
+    // Clicking the FIRE itself (the tallest geometry, ~900 mm over a 260 mm rim)
+    // must resolve to the pit and put it out — that is the gesture a user makes.
+    {
+      await useStore([L3('firepit_round')]);
+      vr.applyViewPreset('iso'); ticks(2);
+      await spaced(); tapPit(180); ticks(3);
+      await spaced();
+      const ray = tapPit(620); ticks(3);
+      ok('E4 a click on the FLAME resolves to the pit and puts it out',
+         !!ray && ray.kind === 'light' && ray.fixtureId === 'fp'
+         && pitLight().localState === 'off' && liveFlames() === 0,
+         `${ray ? ray.kind + ':' + ray.fixtureId : 'MISS'}/${pitLight().localState}`);
+    }
+
+    // Six camera poses — the pit is a ground fixture whose click sphere is
+    // centred at grade, so a grazing / overhead view must still resolve it.
+    {
+      await useStore([L3('firepit_square')]);
+      let posesOk = 0; const poseNames = [];
+      const b0 = pitBody();
+      const poses = {
+        iso: null, top: null,
+        low: [[b0.position.x + 300, 900, b0.position.z + 4200], [b0.position.x, 400, b0.position.z]],
+        grazing: [[b0.position.x + 2600, 380, b0.position.z + 2600], [b0.position.x, 400, b0.position.z]],
+        high: [[b0.position.x + 1800, 9000, b0.position.z + 1800], [b0.position.x, 400, b0.position.z]],
+        near: [[b0.position.x + 900, 1400, b0.position.z + 900], [b0.position.x, 400, b0.position.z]],
+      };
+      for (const [name, pose] of Object.entries(poses)) {
+        if (pose) vr.setCameraView(pose[0], pose[1]);
+        else vr.applyViewPreset(name);
+        ticks(2);
+        const want = pitLight().localState === 'on' ? 'off' : 'on';
+        await spaced();
+        tapPit(180); ticks(3);
+        if (pitLight().localState === want) posesOk++; else poseNames.push(name);
+      }
+      ok('E5 the tap toggles from every camera pose', posesOk === 6, poseNames.join(',') || '6/6');
+    }
+
+    // A rebuild landing BETWEEN pointerdown and pointerup must not break the tap
+    // (a lit pit rebuilds the whole light group every frame).
+    {
+      await useStore([L3('firepit_round', { localState: 'on' })]);
+      vr.applyViewPreset('iso'); ticks(3);
+      await spaced();
+      tapPit(180, { rebuildBetween: true }); ticks(3);
+      ok('E6 a rebuild between pointerdown and pointerup still toggles',
+         pitLight().localState === 'off' && liveFlames() === 0, pitLight().localState);
+    }
+
+    // ── Tap gate semantics (FRESH renderer — the seed is a constructor-local) ─
+    // The FIRST tap of a renderer's life must be a CLICK. `lastTapT` seeds at
+    // -Infinity for exactly this reason: seeded at 0, `now - lastTapT < 350` is
+    // true for the document's whole first 350 ms, so an early tap was routed to
+    // _onFixtureDblClick (for an unbound light: the entity picker) and the
+    // toggle vanished silently. Forcing `timeStamp` (a prototype getter — an own
+    // property shadows it) makes this independent of how long the page has been
+    // open. It MUST run on a renderer nobody has tapped yet: `lastTapT` is a
+    // closure variable, and a forced-small stamp after a real one would compare
+    // as a large NEGATIVE delta and read as a dblclick regardless of the seed.
+    {
+      const host2 = document.createElement('div');
+      host2.style.cssText = 'position:absolute;left:0;top:0;width:900px;height:640px';
+      document.body.appendChild(host2);
+      const r2 = new mod.ThreeDRenderer(host2);
+      await r2.load();
+      r2.resize(900, 640);
+      const gp = { id: 'fp', x: FW / 2, y: FD / 2, entity_id: null, iconKind: 'firepit_round', label: '' };
+      r2.updateFloor(floor3d([gp]), scene3d);
+      r2.updateLightsSwitches([gp], [], () => null);
+      r2.applyViewPreset('iso');
+      let clicks2 = 0, dbls2 = 0;
+      r2.onFixtureClick(() => { clicks2++; });
+      r2.onFixtureDblClick(() => { dbls2++; });
+      const c2 = r2._renderer.domElement;
+      r2._scene.updateMatrixWorld(true); r2._camera.updateMatrixWorld(true);
+      r2._camera.matrixWorldInverse.copy(r2._camera.matrixWorld).invert();
+      const b2 = r2._lightGroup.children.find(c => c.type === 'Group');
+      const v2 = b2.position.clone(); v2.y += 180; v2.project(r2._camera);
+      const rc2 = c2.getBoundingClientRect();
+      const gx = rc2.left + (v2.x * 0.5 + 0.5) * rc2.width;
+      const gy = rc2.top + (-v2.y * 0.5 + 0.5) * rc2.height;
+      const stampTap = (t) => {
+        for (const type of ['pointerdown', 'pointerup']) {
+          const ev = new PointerEvent(type,
+            { clientX: gx, clientY: gy, bubbles: true, pointerType: 'mouse', pointerId: 1 });
+          Object.defineProperty(ev, 'timeStamp', { value: t });
+          c2.dispatchEvent(ev);
+        }
+      };
+      ok('E7 the pit is under the probe pixel on a fresh renderer',
+         !!r2._raycastFixture(gx, gy), JSON.stringify(r2._raycastFixture(gx, gy)));
+      stampTap(120);
+      ok('E8 a tap at t=120 ms is a CLICK, not a dblclick (lastTapT seeds -Infinity)',
+         clicks2 === 1 && dbls2 === 0, `click=${clicks2} dbl=${dbls2}`);
+      stampTap(220);
+      ok('E9 …and the 350 ms dblclick window still works (2nd tap is a dbl)',
+         clicks2 === 1 && dbls2 === 1, `click=${clicks2} dbl=${dbls2}`);
+      stampTap(2000);
+      ok('E10 …a well-spaced third tap is a click again',
+         clicks2 === 2 && dbls2 === 1, `click=${clicks2} dbl=${dbls2}`);
+      r2.destroy(); host2.remove();
+    }
+
+    // A store whose light id is NOT a string (hand-edited / third-party JSON —
+    // `newId()` never produces one) used to be silently DEAD in 3D forever: the
+    // ray resolved, `String(ud.fixtureId)` handed three-view "7", and
+    // `x.id === "7"` never matched the number 7. 2D kept working because
+    // `hitFixture` resolves by ARRAY INDEX — the exact "works in 2D, dead in 3D"
+    // shape of the report. See byFixtureId in three-view.ts.
+    {
+      await useStore([L3('firepit_round', { id: 7 })]);
+      vr.applyViewPreset('iso'); ticks(2);
+      await spaced();
+      const ray = tapPit(180); ticks(3);
+      ok('E11 a NON-STRING fixture id still toggles from 3D',
+         pitLight().localState === 'on' && liveFlames() >= 4,
+         `${ray ? ray.kind + ':' + JSON.stringify(ray.fixtureId) : 'MISS'}/${pitLight().localState}`);
+      await spaced();
+      tapPit(180); ticks(3);
+      ok('E12 …and back off', pitLight().localState === 'off' && liveFlames() === 0,
+         String(pitLight().localState));
+    }
+
+    // A BOUND pit dispatches the entity service instead of flipping localState —
+    // by domain, both directions (never a blind localState write).
+    for (const [eid, want] of [['switch.pit', 'switch.toggle'], ['light.pit', 'light.toggle']]) {
+      await useStore([L3('firepit_round', { entity_id: eid })],
+                     { [eid]: { state: 'off', attributes: {}, entity_id: eid } });
+      vr.applyViewPreset('iso'); ticks(2);
+      vp.fake.calls.length = 0;
+      await spaced(); tapPit(180); ticks(2);
+      await spaced(); tapPit(180); ticks(2);
+      ok(`E13 bound to ${eid} dispatches ${want} on both taps`,
+         vp.fake.calls.length === 2 && vp.fake.calls.every(c => c === want),
+         JSON.stringify(vp.fake.calls));
+      ok(`E14 bound to ${eid} never writes localState`,
+         pitLight().localState === undefined, String(pitLight().localState));
+    }
+
+    host.remove();
+  }
+
+  // ═══ 5. STALE WORLD MATRIX: a rebuild that has not been RENDERED yet ══════
+  // The real root cause of "I can turn a firepit on but cannot turn it off"
+  // (2026-08-09, root-caused against the reporting user's own store; the two
+  // earlier theories — untagged flame meshes, a roamer relighting it — were both
+  // disproven).
+  //
+  // A raycast reads `object.matrixWorld`, which only `renderer.render()`
+  // recomputes (via `scene.updateMatrixWorld()`). A freshly CONSTRUCTED Object3D
+  // has an identity `matrix`/`matrixWorld` AND `matrixWorldNeedsUpdate === false`
+  // — the flag is raised by `updateMatrix()`, which has never run — so between a
+  // rebuild and the next render the rebuilt fixture's world matrix claims it sits
+  // at the SCENE ORIGIN, and a ray aimed where it is VISIBLE hits nothing.
+  //
+  // Ordinarily invisible: a group rebuilds only when its dirty key changes, and a
+  // render always follows long before the next click. It becomes PERMANENT for
+  // the fixtures three-view force-rebuilds EVERY FRAME — a lit fireplace /
+  // heatlamp / firepit, an alarming safety sensor, an active alert beacon — whose
+  // rebuild happens in three-view's rAF tick, a SEPARATE rAF callback from the
+  // renderer's own render. Measured on the reporting user's plan: 60/60 raycasts
+  // at the pit's own pixel MISSED while lit, 60/60 HIT while dark, end-to-end
+  // clicks turned it ON 12/12 and OFF 0/12. The asymmetry IS the report: an unlit
+  // pit is not force-rebuilt, so lighting it always worked.
+  //
+  // Everything below runs in ONE synchronous block after the rebuild so the
+  // renderer's own rAF cannot slip a render in and heal the matrices — that is
+  // what makes the fixture deterministic instead of a timing race. F2 is the
+  // NEGATIVE CONTROL: it asserts the hazard is genuinely present (the world
+  // matrix really is stale at that moment), so F3/F4/F6 can only pass because
+  // `_syncPickMatrices` bridges it. Delete that call and F3/F4/F6 fail while F2
+  // still passes.
+  {
+    const host3 = document.createElement('div');
+    host3.style.cssText = 'position:absolute;left:0;top:0;width:900px;height:640px';
+    document.body.appendChild(host3);
+    const r3 = new mod.ThreeDRenderer(host3);
+    await r3.load();
+    r3.resize(900, 640);
+    // OFF-CENTRE ON PURPOSE. `_w` maps the floor centre to the SCENE ORIGIN,
+    // which is exactly where a stale identity matrixWorld puts a fixture — a
+    // centred pit makes F2 unable to tell "stale" from "correct" (it caught the
+    // first draft of this fixture doing precisely that).
+    const litPit = { id: 'fp', x: FW / 2 + 2000, y: FD / 2 + 1500, entity_id: null,
+                     iconKind: 'firepit_round', label: '', localState: 'on' };
+    const noState = () => null;
+    r3.updateFloor(floor3d([litPit]), scene3d);
+    r3.updateLightsSwitches([litPit], [], noState);
+    r3.applyViewPreset('iso');
+    let clicked = null;
+    r3.onFixtureClick(info => { clicked = info; });
+    const c3 = r3._renderer.domElement;
+    const bodyOf = () => r3._lightGroup.children.find(c => c.type === 'Group');
+    // Aim ONCE against fully-synced matrices — the pose never changes again, so
+    // this pixel stays correct for the rest of the section.
+    r3._scene.updateMatrixWorld(true); r3._camera.updateMatrixWorld(true);
+    const aimV = bodyOf().position.clone(); aimV.y += 180; aimV.project(r3._camera);
+    const rc3 = c3.getBoundingClientRect();
+    const ax = rc3.left + (aimV.x * 0.5 + 0.5) * rc3.width;
+    const ay = rc3.top + (-aimV.y * 0.5 + 0.5) * rc3.height;
+    ok('F1 the lit pit is under the probe pixel once matrices are synced',
+       r3._raycastFixture(ax, ay)?.fixtureId === 'fp',
+       JSON.stringify(r3._raycastFixture(ax, ay)));
+
+    // ── the hazard, reproduced deterministically ───────────────────────────
+    r3.updateLightsSwitches([litPit], [], noState);   // rebuild; NO render since
+    const mw = bodyOf().matrixWorld.elements;
+    const staleDist = Math.hypot(mw[12], mw[13], mw[14]);
+    const realDist = bodyOf().position.length();
+    ok('F2 (negative control) a rebuild with no render leaves matrixWorld STALE',
+       staleDist < 1 && realDist > 1000,
+       `matrixWorld=(${mw[12].toFixed(0)},${mw[13].toFixed(0)},${mw[14].toFixed(0)}) position.len=${realDist.toFixed(0)}`);
+    ok('F3 …yet the raycast still resolves the pit (it syncs before picking)',
+       r3._raycastFixture(ax, ay)?.fixtureId === 'fp',
+       JSON.stringify(r3._raycastFixture(ax, ay)));
+    const mw2 = bodyOf().matrixWorld.elements;
+    ok('F4 …and the pick is what brought the world matrix up to date',
+       Math.hypot(mw2[12] - bodyOf().position.x, mw2[13] - bodyOf().position.y,
+                  mw2[14] - bodyOf().position.z) < 1e-6,
+       `${mw2[12].toFixed(0)},${mw2[13].toFixed(0)},${mw2[14].toFixed(0)}`);
+
+    // ── end to end: a real tap immediately after an un-rendered rebuild ────
+    r3.updateLightsSwitches([litPit], [], noState);
+    clicked = null;
+    for (const type of ['pointerdown', 'pointerup']) {
+      const ev = new PointerEvent(type,
+        { clientX: ax, clientY: ay, bubbles: true, pointerType: 'mouse', pointerId: 1 });
+      Object.defineProperty(ev, 'timeStamp', { value: 900000 });
+      c3.dispatchEvent(ev);
+    }
+    ok('F5 a real tap on a just-rebuilt lit pit reaches onFixtureClick',
+       !!clicked && clicked.kind === 'light' && clicked.fixtureId === 'fp',
+       JSON.stringify(clicked));
+
+    // ── generality: the same hazard covers every force-rebuilt group ───────
+    // An ALARMING smoke detector is rebuilt every frame for its pulse rings, so
+    // it lived in the same dead zone — you could not acknowledge an alarm from
+    // 3D at the one moment you would want to.
+    const det = { id: 'sd', x: FW / 2 - 1800, y: FD / 2 - 1200, kind: 'smoke',
+                  entity_id: null, label: '', localState: 'on' };   // off-centre, see F2
+    r3.updateSafetySensors([det], noState);
+    r3._scene.updateMatrixWorld(true); r3._camera.updateMatrixWorld(true);
+    const sBody = r3._safetyGroup.children.find(c => c.type === 'Group') || r3._safetyGroup.children[0];
+    const sv = sBody.position.clone(); sv.y += 40; sv.project(r3._camera);
+    const sx = rc3.left + (sv.x * 0.5 + 0.5) * rc3.width;
+    const sy = rc3.top + (-sv.y * 0.5 + 0.5) * rc3.height;
+    ok('F6a (negative control) the rebuilt detector body is off the scene origin',
+       sBody.position.length() > 1000, sBody.position.length().toFixed(0));
+    ok('F6 an ALARMING detector is pickable right after an un-rendered rebuild',
+       (r3.updateSafetySensors([det], noState),
+        r3._raycastFixture(sx, sy)?.fixtureId === 'sd'),
+       JSON.stringify(r3._raycastFixture(sx, sy)));
+
+    r3.destroy(); host3.remove();
   }
 
   let pass = 0; const fails = [];

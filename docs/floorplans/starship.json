@@ -1,7 +1,7 @@
 {
   "diorama": 2,
   "name": "SSV Diorama — Starship Deck",
-  "exportedAt": "2026-07-30T00:00:00.000Z",
+  "exportedAt": "2026-08-10T00:00:00.000Z",
   "store": {
     "v": 2,
     "floors": [
@@ -184,7 +184,7 @@
             "w": 900,
             "h": 400,
             "kind": "cabinet",
-            "rotation": 90,
+            "rotation": 270,
             "label": "Spares locker"
           },
           {
@@ -233,7 +233,7 @@
             "y": 3050,
             "w": 900,
             "h": 1900,
-            "kind": "bed",
+            "kind": "bed_twin",
             "label": "Bunk 1",
             "sharedBedCovers": false
           },
@@ -243,7 +243,7 @@
             "y": 3050,
             "w": 900,
             "h": 1900,
-            "kind": "bed",
+            "kind": "bed_twin",
             "label": "Bunk 2",
             "sharedBedCovers": false
           },
@@ -254,7 +254,7 @@
             "w": 1200,
             "h": 500,
             "kind": "dresser",
-            "rotation": 270,
+            "rotation": 90,
             "label": "Crew lockers"
           },
           {
@@ -307,7 +307,6 @@
             "w": 910,
             "h": 760,
             "kind": "fridge",
-            "rotation": 180,
             "label": "Galley cooler",
             "localState": "on"
           },
@@ -318,7 +317,6 @@
             "w": 520,
             "h": 390,
             "kind": "microwave",
-            "rotation": 180,
             "elevation": 1900,
             "label": "Rehydrator"
           },
@@ -329,16 +327,16 @@
             "w": 800,
             "h": 550,
             "kind": "kitchen_sink",
-            "rotation": 270,
+            "rotation": 90,
             "label": "Galley sink"
           },
           {
             "id": "starship-fn19",
-            "x": 8900,
-            "y": 3100,
-            "w": 2000,
-            "h": 1500,
-            "kind": "bed",
+            "x": 9200,
+            "y": 3000,
+            "w": 990,
+            "h": 1910,
+            "kind": "bed_twin",
             "rotation": 90,
             "label": "Med bunk",
             "sharedBedCovers": false
@@ -350,7 +348,7 @@
             "w": 900,
             "h": 400,
             "kind": "cabinet",
-            "rotation": 90,
+            "rotation": 270,
             "label": "Pharmacy"
           },
           {
@@ -370,7 +368,6 @@
             "w": 560,
             "h": 470,
             "kind": "sink",
-            "rotation": 180,
             "label": "Scrub sink"
           },
           {
@@ -392,7 +389,7 @@
             "w": 900,
             "h": 400,
             "kind": "cabinet",
-            "rotation": 90,
+            "rotation": 270,
             "label": "EVA suit locker"
           },
           {

@@ -48,6 +48,32 @@ const IDENTIFY_KIND_FOR_CLICK: Record<string, IdentifyKind> = {
   curtain: 'window',
 };
 
+// Resolve the placed item a 3D raycast hit, by id.
+//
+// LOAD-BEARING STRINGIFICATION: `_raycastFixture` builds its FixtureClickInfo
+// with `fixtureId: String(ud.fixtureId)`, so the id arriving here is ALWAYS a
+// string. A plain `x.id === fixtureId` therefore compares a string against
+// whatever the store happens to hold, and a store carrying a NON-STRING id
+// (hand-edited or third-party JSON — `importConfig` validates no ids, and
+// `newId()` is the only in-app generator, so well-formed stores are unaffected)
+// silently resolves to `undefined`: the click is routed, the ray is correct,
+// and NOTHING happens. It is invisible from the 3D side and it never
+// self-heals. It is also ASYMMETRIC — the 2D path resolves fixtures by ARRAY
+// INDEX (`canvas-hit.hitFixture` returns `{kind, idx}`), so the very same
+// fixture keeps toggling in the plan view. That "works in 2D, dead in 3D" shape
+// is exactly what a firepit-interaction report looks like. Comparing the
+// stringified id costs nothing and is byte-identical for well-formed stores.
+//
+// Deliberately NOT solved here: DUPLICATE ids. First-match-wins would toggle
+// the wrong fixture, but the id is the key for every id-keyed subsystem
+// (dirty-key hashes, `_userToggleAt` immunity, sit-spot claims, `_plantBlend`,
+// `_curtainBlend`), so papering over it at the click site would hide a store
+// that is broken everywhere else.
+function byFixtureId<T extends { id: unknown }>(
+  arr: readonly T[] | undefined, id: string): T | undefined {
+  return arr?.find(x => x.id != null && String(x.id) === id);
+}
+
 @customElement('diorama-three-view')
 export class ThreeView extends LitElement {
   @property({ attribute: false }) planner!: Planner;
@@ -362,7 +388,7 @@ export class ThreeView extends LitElement {
       // Action button → fire its configured HA service (kiosk fires; view refuses
       // inside fireAction). Also stamps the 3D cap-press animation.
       if (kind === 'action') {
-        const b = p.floor().actionButtons?.find(x => x.id === fixtureId);
+        const b = byFixtureId(p.floor().actionButtons, fixtureId);
         if (b) { p.fireAction(b); this._renderer?.pressActionButton(b.id); }
         return;
       }
@@ -370,7 +396,7 @@ export class ThreeView extends LitElement {
       // (or flip localState when unbound). Smoke/CO/gas/leak detector → unbound:
       // manual test trigger (flip localState); bound: display-only no-op.
       if (kind === 'safety') {
-        const s = p.floor().safetySensors?.find(x => x.id === fixtureId);
+        const s = byFixtureId(p.floor().safetySensors, fixtureId);
         if (!s) return;
         if (s.kind === 'siren') { p.triggerSiren(s); return; }
         if (p.uiMode === 'view' || entity_id) return;
@@ -380,46 +406,46 @@ export class ThreeView extends LitElement {
       // Alert beacon → acknowledge (bound alert.*) or demo-flip (unbound).
       // acknowledgeAlertBeacon refuses in view mode; kiosk allowed.
       if (kind === 'alert') {
-        const ab = p.floor().alertBeacons?.find(x => x.id === fixtureId);
+        const ab = byFixtureId(p.floor().alertBeacons, fixtureId);
         if (ab) p.acknowledgeAlertBeacon(ab);
         return;
       }
       // Robot → run/dock (bound) or demo toggle (unbound). Refuses in view mode.
       if (kind === 'robot') {
-        const ro = p.floor().robots?.find(x => x.id === fixtureId);
+        const ro = byFixtureId(p.floor().robots, fixtureId);
         if (ro) p.toggleRobot(ro);
         return;
       }
       // Projector → toggle projecting (bound entity / unbound localState).
       // toggleItem refuses in view mode; kiosk flips are session-only.
       if (kind === 'projector') {
-        const pr = p.floor().projectors?.find(x => x.id === fixtureId);
+        const pr = byFixtureId(p.floor().projectors, fixtureId);
         if (pr) p.toggleItem(pr);
         return;
       }
       // Water valve → open/close (toggleValve gates allowControl + domain dispatch;
       // valve.* picks open_valve/close_valve by state, never a blind toggle).
       if (kind === 'valve') {
-        const vv = p.floor().valves?.find(x => x.id === fixtureId);
+        const vv = byFixtureId(p.floor().valves, fixtureId);
         if (vv) p.toggleValve(vv);
         return;
       }
       // Smart plug → toggle the outlet (like a switch), gated by allowControl.
       if (kind === 'plug') {
-        const pg = p.floor().plugs?.find(x => x.id === fixtureId);
+        const pg = byFixtureId(p.floor().plugs, fixtureId);
         if (pg && pg.allowControl !== false) p.toggleItem(pg);
         return;
       }
       // Sprinkler head → toggle (bound switch/valve via toggleEntity, or unbound flip).
       if (kind === 'sprinkler') {
-        const sz = p.floor().sprinklerZones?.find(x => x.id === fixtureId);
+        const sz = byFixtureId(p.floor().sprinklerZones, fixtureId);
         if (sz) p.toggleItem(sz);
         return;
       }
       // Door lock deadbolt → toggle lock.lock/unlock (bound) or lockLocalState
       // (unbound). Refuses in view mode (handled inside toggleDoorLock).
       if (kind === 'lock') {
-        const dr = p.floor().doors?.find(x => x.id === fixtureId);
+        const dr = byFixtureId(p.floor().doors, fixtureId);
         if (dr) p.toggleDoorLock(dr);
         return;
       }
@@ -431,7 +457,7 @@ export class ThreeView extends LitElement {
       // in view mode; kiosk fires (session-only — save() no-ops outside edit).
       // The lock deadbolt keeps its own 'lock' tag and is resolved above.
       if (kind === 'door') {
-        const dr = p.floor().doors.find(x => x.id === fixtureId);
+        const dr = byFixtureId(p.floor().doors, fixtureId);
         if (dr) p.toggleItem(dr);
         return;
       }
@@ -442,7 +468,7 @@ export class ThreeView extends LitElement {
       // switch toggle / display-only binary_sensor / unbound curtainPos flip)
       // and refuses in view mode.
       if (kind === 'curtain') {
-        const wn = p.floor().windows.find(x => x.id === fixtureId);
+        const wn = byFixtureId(p.floor().windows, fixtureId);
         if (wn) p.toggleCurtain(wn);
         return;
       }
@@ -450,7 +476,7 @@ export class ThreeView extends LitElement {
       // span-based, so any part of the window assembly (sash, mullion, bay
       // casework, roller shade) maps to the one window toggle.
       if (kind === 'window') {
-        const wn = p.floor().windows.find(x => x.id === fixtureId);
+        const wn = byFixtureId(p.floor().windows, fixtureId);
         if (wn) p.toggleItem(wn);
         return;
       }
@@ -458,7 +484,7 @@ export class ThreeView extends LitElement {
       // The on/off entity binding is reached via dblclick / sidebar, not here.
       if (kind === 'appliance') {
         if (p.uiMode === 'view') return;
-        const fu = p.floor().furniture.find(x => x.id === fixtureId);
+        const fu = byFixtureId(p.floor().furniture, fixtureId);
         if (fu) { fu.doorOpen = !fu.doorOpen; p.save(); p.emitConfig(); }
         return;
       }
@@ -467,9 +493,9 @@ export class ThreeView extends LitElement {
       // Unbound fixture → local control: resolve the item by kind + id and flip
       // its localState (media = TV/wall_tv furniture).
       const f = p.floor();
-      const item = kind === 'light' ? f.lights.find(x => x.id === fixtureId)
-        : kind === 'switch' ? f.switches.find(x => x.id === fixtureId)
-        : f.furniture.find(x => x.id === fixtureId);
+      const item = kind === 'light' ? byFixtureId(f.lights, fixtureId)
+        : kind === 'switch' ? byFixtureId(f.switches, fixtureId)
+        : byFixtureId(f.furniture, fixtureId);
       if (item) p.toggleItem(item);
     });
     // Avatar device interaction: a synthetic rig finished its reach at an UNBOUND
@@ -481,9 +507,9 @@ export class ThreeView extends LitElement {
       const p = this.planner;
       const f = p.floor();
       const prefix = id[0], raw = id.slice(1);
-      const item = prefix === 'L' ? f.lights.find(x => x.id === raw)
-        : prefix === 'S' ? f.switches.find(x => x.id === raw)
-        : prefix === 'F' ? f.furniture.find(x => x.id === raw)
+      const item = prefix === 'L' ? byFixtureId(f.lights, raw)
+        : prefix === 'S' ? byFixtureId(f.switches, raw)
+        : prefix === 'F' ? byFixtureId(f.furniture, raw)
         : undefined;
       if (item) p.avatarToggleItem(item);
     });
@@ -494,7 +520,7 @@ export class ThreeView extends LitElement {
       if (!this.interactive) return;   // view-mode card: no device interaction
       if (p.uiMode === 'view') return;
       if (this._lastAltKey && p.uiMode === 'edit') return;   // Alt = identify, not clean
-      const ro = p.floor().robots?.find(x => x.id === robotId);
+      const ro = byFixtureId(p.floor().robots, robotId);
       if (!ro) return;
       const map = p.vacuumMaps[robotId];
       const seg = map?.segments.find(s => s.id === segId);
@@ -521,7 +547,7 @@ export class ThreeView extends LitElement {
       // edit → pick a media_player entity (only reachable in 2D today since
       // unbound TVs aren't raycast targets, but kept for symmetry).
       if (kind === 'media') {
-        const fu0 = f.furniture.find(x => x.id === fixtureId);
+        const fu0 = byFixtureId(f.furniture, fixtureId);
         // Mailbox reuses the 'media' click tag (single click raises/lowers the
         // flag via toggleItem) but its REAL bindings (count + flag sensors)
         // live on mailCount in the sidebar's _mailboxRows, not entity_id — so
@@ -592,7 +618,7 @@ export class ThreeView extends LitElement {
             bubbles: true, composed: true, detail: { entityId: entity_id },
           }));
         } else if (p.uiMode === 'edit') {
-          const fu = f.furniture.find(x => x.id === fixtureId);
+          const fu = byFixtureId(f.furniture, fixtureId);
           if (fu) this.dispatchEvent(new CustomEvent('open-entity-picker', {
             bubbles: true, composed: true,
             detail: {
@@ -608,7 +634,7 @@ export class ThreeView extends LitElement {
       // oven door). Bound → no config modal exists, so no-op.
       if (kind === 'appliance') {
         if (p.uiMode !== 'edit') return;
-        const fu = f.furniture.find(x => x.id === fixtureId);
+        const fu = byFixtureId(f.furniture, fixtureId);
         if (fu && !fu.entity_id) this.dispatchEvent(new CustomEvent('open-entity-picker', {
           bubbles: true, composed: true,
           detail: {
@@ -621,7 +647,7 @@ export class ThreeView extends LitElement {
 
       // Fan / fan_light light-fixtures: open the combined light+fan control.
       if (kind === 'light') {
-        const l = f.lights.find(x => x.id === fixtureId);
+        const l = byFixtureId(f.lights, fixtureId);
         if (l && (l.iconKind === 'fan' || l.iconKind === 'fan_light')) {
           const lightEnt = p.isLightEntity(l.entity_id) ? l.entity_id : null;
           const fanEnt = l.fanEntity
@@ -652,7 +678,7 @@ export class ThreeView extends LitElement {
         return;  // kiosk: no binding pickers
       } else if (!entity_id) {
         const arr = kind === 'light' ? f.lights : f.switches;
-        const it = arr.find(x => x.id === fixtureId);
+        const it = byFixtureId(arr, fixtureId);
         if (!it) return;
         this.dispatchEvent(new CustomEvent('open-entity-picker', {
           bubbles: true, composed: true,

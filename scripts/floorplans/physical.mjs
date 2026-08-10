@@ -287,6 +287,247 @@ export function lightWallOverlaps(f, geom) {
   return bad;
 }
 
+// ── 2c. Pairwise body interpenetration (check 14) ───────────────────────────
+//
+// Checks 9–13 all measure a piece against WALLS or DOORS; nothing ever compared
+// two pieces of furniture to each other, so 305–650 mm merges (a dishwasher
+// inside a fridge, a coffee table inside an ottoman, a nightstand half-buried in
+// a king bed) sailed through 425/425. Two solid bodies at the same elevation
+// that share a quarter-metre of plan footprint render as ONE lump under flat
+// toon shading — that is what this catches.
+//
+// THRESHOLD (from the data): the pre-fix library's legitimate non-exempt laps
+// all sit at ≤ 205 mm (a fitted appliance nudged a few cm into its neighbour, an
+// armchair kissing a sofa corner, a nightstand touching a bed rail); every
+// hand-confirmed defect sits at ≥ 252 mm. 250 mm is the gap between them and is
+// also a physically meaningful line — a quarter metre of merged volume is
+// visible from any camera angle, below it the abutting faces hide it.
+export const BODY_OVERLAP_TOL = 250;
+// Below this elevation difference two pieces occupy the same slab of air; above
+// it one is STACKED on the other (a dryer on a washer at 990, recliners on a
+// riser at 220) and a plan overlap is the whole point.
+export const STACK_ELEVATION_MM = 100;
+
+// A continuous fitted casework run — the kitchen/laundry idiom where a worktop
+// and the appliances set INTO it deliberately share footprint lengthwise (200–
+// 512 mm in this library). Spreading them end-to-end would produce six separate
+// boxes with visible seams, which is exactly the look the run is hiding.
+// An ANCHOR (worktop / base-cabinet carcass) must be one half of the pair: two
+// free appliances merging into each other (dishwasher inside a fridge) is a real
+// defect and stays reportable.
+const WORKTOP_ANCHOR_KINDS = new Set(['counter', 'island', 'cabinet']);
+const FITTED_RUN_KINDS = new Set([...WORKTOP_ANCHOR_KINDS,
+  'kitchen_sink', 'sink', 'sink_vanity', 'pedestal_sink', 'utility_sink',
+  'dishwasher', 'fridge', 'stove', 'washer', 'dryer', 'coffee_maker', 'toaster',
+  'water_heater', 'boiler']);
+// An L/U sectional's rotated BOUNDING BOX is not its body — the re-entrant
+// corner is empty, and that is precisely where a coffee table / ottoman / lamp
+// belongs. No footprint test can tell the difference, so the whole family opts
+// out.
+const SECTIONAL_KINDS = new Set(['sofa_l_left', 'sofa_l_right', 'sofa_u']);
+// Vertical stacks authored at one elevation (the piece rides its host's top in
+// 3D but both are elevation 0 in the plan).
+const STACKED_PAIRS = new Set(['tv|tv_stand']);
+// A bush at the base of a tree is correct planting, not interpenetration.
+const PLANTING_KINDS = new Set(['plant', 'flower_bed', 'bush', 'tree', 'pine_tree',
+  'oak_tree', 'birch_tree', 'palm_tree', 'willow_tree', 'spruce_tree']);
+const SEAT_HOST_ACTIVITIES = new Set(['eat_at_table', 'work_at_desk']);
+
+/** Is this piece a floor-standing solid body the overlap test applies to? */
+function isSolidBody(fu, geom, customObjects) {
+  const def = geom.resolveFurnitureDef(fu, customObjects);
+  if (!def) return false;
+  if (def.rug) return false;              // 5 mm of cloth on the floor
+  if (def.mountable) return false;        // rides a surface host
+  if (geom.isStairsKind(fu.kind)) return false;   // structure
+  if (geom.isRiserKind(fu.kind)) return false;    // walkable deck, things stand ON it
+  return true;
+}
+
+export function bodyOverlaps(f, geom, customObjects) {
+  const items = (f.furniture ?? []).filter(fu => isSolidBody(fu, geom, customObjects));
+  const bad = [];
+  for (let i = 0; i < items.length; i++) {
+    const a = items[i];
+    const ka = a.kind ?? 'block';
+    const da = geom.resolveFurnitureDef(a, customObjects);
+    for (let j = i + 1; j < items.length; j++) {
+      const b = items[j];
+      const kb = b.kind ?? 'block';
+      const db = geom.resolveFurnitureDef(b, customObjects);
+      if (Math.abs((a.elevation ?? 0) - (b.elevation ?? 0)) >= STACK_ELEVATION_MM) continue;
+      if (SECTIONAL_KINDS.has(ka) || SECTIONAL_KINDS.has(kb)) continue;
+      if (FITTED_RUN_KINDS.has(ka) && FITTED_RUN_KINDS.has(kb) &&
+          (WORKTOP_ANCHOR_KINDS.has(ka) || WORKTOP_ANCHOR_KINDS.has(kb))) continue;
+      if (STACKED_PAIRS.has([ka, kb].sort().join('|'))) continue;
+      if (PLANTING_KINDS.has(ka) && PLANTING_KINDS.has(kb)) continue;
+      // A tucked seat lapping its table / counter is check 12's business (it owns
+      // the ±200 mm SEAT_TABLE_OVERLAP_TOL); double-reporting it here would just
+      // be noise.
+      const seatAt = (ds, dh) => !!ds.seat && (!!dh.surface || SEAT_HOST_ACTIVITIES.has(dh.activity));
+      if (seatAt(da, db) || seatAt(db, da)) continue;
+      const pen = convexPenetration(
+        rectCorners(a.x, a.y, a.w, a.h, a.rotation),
+        rectCorners(b.x, b.y, b.w, b.h, b.rotation));
+      if (pen > BODY_OVERLAP_TOL) {
+        bad.push(`${fname(a)}(${a.id}) ∩ ${fname(b)}(${b.id}) ${fmt(pen)}mm`);
+      }
+    }
+  }
+  return bad;
+}
+
+// ── 2d. Reversed wall-backers (check 15) ────────────────────────────────────
+//
+// The systemic defect the 2026-08-09 correction pass fixed: a piece whose
+// FUNCTIONAL FRONT (local −Z in 3D = `frontVector(rotation)` in plan) is jammed
+// against a wall while the whole room sits behind its back. Every downstream
+// system reads that front — the 2D chevron, the humanoid facing, the standing
+// activity anchor, cabinet doors, screens, seat openings — so a reversed piece
+// puts the avatar inside the wall and shows the viewer the back of the sofa.
+//
+// SIGN CONVENTION (an agent inverted this once): frontVector(r) = (−sin r,
+// −cos r) ⇒ r 0 faces −Y, r 90 faces −X (WEST), r 180 faces +Y, r 270 faces +X
+// (EAST). Do not "simplify" it.
+//
+// GATE: 450 mm of front clearance, not 150. A 150 mm gate under-reports badly —
+// it only sees pieces literally touching the wall, and a reversed piece parked
+// 300 mm off the wall is just as wrong. 450 mm is the person-width band
+// (PERSON_R·2 + slack) below which nobody can stand in front of the piece.
+export const BACKER_FRONT_GATE = 450;
+// …and the room must genuinely be BEHIND it. Without this, every piece in a
+// narrow alcove (a fridge in a 700 mm nook, a vanity between two walls) would
+// report, because both faces are near a wall and neither orientation is
+// "reversed" — the piece simply has no room on either side.
+export const BACKER_BACK_MIN = 600;
+// The wall has to be roughly PARALLEL to the face for the piece to be "backing
+// onto" it; a perpendicular stub crossing the ray a few hundred mm away is a
+// corner, not a backing wall.
+const BACKER_PARALLEL_COS = Math.cos(30 * Math.PI / 180);
+const BACKER_MAX_RAY = 6000;
+// Five samples across the face, ALL of which must be blocked. A single centre
+// ray reports a counter whose middle happens to line up with a partition end
+// while three quarters of its front looks into the open room.
+const BACKER_SAMPLES = [-0.4, -0.2, 0, 0.2, 0.4];
+// `block` is the shapeless fallback kind — a plain box has no functional front
+// even though the def carries the default frontArrow.
+const NO_FUNCTIONAL_FRONT_KINDS = new Set(['block']);
+
+/** First hit distance from (px,py) along unit (dx,dy) into any wall-run slab. */
+function rayWallRuns(px, py, dx, dy, runs, requireParallel) {
+  let best = Infinity;
+  for (const r of runs) {
+    const ex = r.b.x - r.a.x, ey = r.b.y - r.a.y;
+    const len = Math.hypot(ex, ey) || 1;
+    const ux = ex / len, uy = ey / len, nx = -uy, ny = ux;
+    if (requireParallel && Math.abs(dx * nx + dy * ny) < BACKER_PARALLEL_COS) continue;
+    const rx = px - r.a.x, ry = py - r.a.y;
+    // Slab intersection in the run's own frame: |normal| ≤ WALL_HALF, 0 ≤ axis ≤ len.
+    let t0 = 0, t1 = BACKER_MAX_RAY, dead = false;
+    for (const [c, dd, mn, mx] of [
+      [rx * nx + ry * ny, dx * nx + dy * ny, -WALL_HALF, WALL_HALF],
+      [rx * ux + ry * uy, dx * ux + dy * uy, 0, len],
+    ]) {
+      if (Math.abs(dd) < 1e-9) { if (c < mn || c > mx) { dead = true; break; } continue; }
+      let a = (mn - c) / dd, b = (mx - c) / dd;
+      if (a > b) { const t = a; a = b; b = t; }
+      if (a > t0) t0 = a;
+      if (b < t1) t1 = b;
+    }
+    if (dead || t0 > t1 || t1 < 0) continue;
+    if (t0 < best) best = Math.max(0, t0);
+  }
+  return best;
+}
+
+/** Gaps from the front (sign +1) or back (−1) face, sampled across its width. */
+function faceGaps(fu, sign, runs, requireParallel) {
+  const fv = frontVector(fu.rotation);
+  const lx = -fv.y, ly = fv.x;               // lateral unit
+  const half = fu.h / 2;
+  return BACKER_SAMPLES.map((t) => rayWallRuns(
+    fu.x + fv.x * sign * half + lx * fu.w * t,
+    fu.y + fv.y * sign * half + ly * fu.w * t,
+    fv.x * sign, fv.y * sign, runs, requireParallel));
+}
+
+/**
+ * A table used from every edge has no meaningful "front" — exempt an
+ * eat_at_table / work_at_desk host that has a seat captured BEHIND it.
+ */
+function usedFromBothSides(host, f, geom) {
+  const act = geom.FURNITURE_KINDS[host.kind ?? 'block']?.activity;
+  if (!SEAT_HOST_ACTIVITIES.has(act)) return false;
+  const cap = geom.TABLE_CARRY_MARGIN_MM ?? 450;
+  for (const s of (f.furniture ?? [])) {
+    if (s.id === host.id) continue;
+    if (!geom.FURNITURE_KINDS[s.kind ?? 'block']?.seat) continue;
+    if (geom.isTableSeatKind && !geom.isTableSeatKind(s.kind ?? 'block')) continue;
+    if (!geom.seatBelongsToTable(host.x, host.y, host.rotation, host.w, host.h, s.x, s.y, cap,
+                                 f.walls ?? [])) continue;
+    // Host-local +y is BEHIND (front is local −y).
+    if (geom.furnitureWorldToLocal(host.rotation, s.x - host.x, s.y - host.y).y > host.h / 2) return true;
+  }
+  return false;
+}
+
+export function reversedBackers(f, geom, customObjects) {
+  const runs = solidWallRuns(f, geom);
+  const bad = [];
+  for (const fu of (f.furniture ?? [])) {
+    const k = fu.kind ?? 'block';
+    const def = geom.resolveFurnitureDef(fu, customObjects);
+    if (!def || def.frontArrow === false) continue;   // no functional front by design
+    if (def.rug || def.mountable) continue;
+    if (NO_FUNCTIONAL_FRONT_KINDS.has(k)) continue;
+    if (geom.isStairsKind(k) || geom.isRiserKind(k)) continue;
+    const front = faceGaps(fu, 1, runs, true);
+    if (!front.every(g => g < BACKER_FRONT_GATE)) continue;
+    const back = Math.min(...faceGaps(fu, -1, runs, false));
+    if (back < BACKER_BACK_MIN) continue;
+    if (usedFromBothSides(fu, f, geom)) continue;
+    const worstFront = Math.max(...front);
+    bad.push(`${fname(fu)}(${fu.id}) r${fu.rotation ?? 0} front ${fmt(worstFront)}mm to wall, `
+      + `back ${back === Infinity ? 'open' : fmt(back) + 'mm'}`);
+  }
+  return bad;
+}
+
+// ── 2e. Furniture buried in a wall plane behind an OPENING (check 16) ───────
+//
+// Check 10 measures against `solidWallRuns`, where `wallCutsForSegment` has
+// EXCISED every door and window — deliberately, because a window seat or a
+// radiator under a bay genuinely lives in the opening's void. The side effect is
+// a blind spot the width of every opening: a bookshelf shoved into the wall
+// plane BEHIND a window measures exactly 0 mm of penetration and check 10 says
+// nothing. Two such pieces were found by hand in two-story-colonial; seven more
+// were hiding across the library.
+//
+// This measures the same footprints against the UNEXCISED wall centerlines, so
+// the only pieces it can add over check 10 are the ones sitting in an opening.
+// Same exemption set (`wallCollidable`) and same tolerance, so a piece that is
+// legitimately flush against a wall face still reads 0.
+export function openingWallBurials(f, geom) {
+  const raw = [];
+  for (const wall of (f.walls ?? [])) {
+    if ((wall.kind ?? 'full') === 'invisible') continue;
+    const pts = wall.points ?? [];
+    for (let i = 0; i < pts.length - 1; i++) {
+      if (Math.hypot(pts[i + 1].x - pts[i].x, pts[i + 1].y - pts[i].y) < 1) continue;
+      raw.push({ a: pts[i], b: pts[i + 1] });
+    }
+  }
+  const bad = [];
+  for (const fu of (f.furniture ?? [])) {
+    if (!wallCollidable(fu, geom)) continue;
+    const worst = worstWallPenetration(rectCorners(fu.x, fu.y, fu.w, fu.h, fu.rotation), raw);
+    // Saturates at the wall thickness (100 mm) — a piece straddling the plane
+    // cannot report more, which is fine: anything over the tolerance is wrong.
+    if (worst > WALL_OVERLAP_TOL) bad.push(`${fname(fu)}(${fu.id}) ${fmt(worst)}mm`);
+  }
+  return bad;
+}
+
 // ── 3. Nav reachability ─────────────────────────────────────────────────────
 
 /**
@@ -445,7 +686,7 @@ export function roomRegions(f, geom, customObjects) {
 // ── 4. Chair / seat alignment ───────────────────────────────────────────────
 
 export function seatAlignment(f, geom) {
-  const { FURNITURE_KINDS, seatBelongsToTable, TABLE_CARRY_MARGIN_MM } = geom;
+  const { FURNITURE_KINDS, seatBelongsToTable, TABLE_CARRY_MARGIN_MM, isTableSeatKind } = geom;
   const items = f.furniture ?? [];
   const isHost = (fu) => {
     const a = FURNITURE_KINDS[fu.kind ?? 'block']?.activity;
@@ -455,12 +696,17 @@ export function seatAlignment(f, geom) {
   for (const seat of items) {
     const def = FURNITURE_KINDS[seat.kind ?? 'block'];
     if (!def?.seat) continue;
+    // A plumbed/anchored seat (toilet, swingset) is never dining/desk seating.
+    if (isTableSeatKind && !isTableSeatKind(seat.kind ?? 'block')) continue;
     // Nearest host this seat belongs to (capture rect, rotation-aware).
     let host = null, hostD = Infinity;
     for (const h of items) {
       if (h.id === seat.id || !isHost(h)) continue;
+      // 9th arg = the wall guard (stale-geometry tolerant): a host across a
+      // partition never captures. Check 12 can only SHED findings from this.
       const belongs = seatBelongsToTable
-        ? seatBelongsToTable(h.x, h.y, h.rotation, h.w, h.h, seat.x, seat.y, TABLE_CARRY_MARGIN_MM ?? 450)
+        ? seatBelongsToTable(h.x, h.y, h.rotation, h.w, h.h, seat.x, seat.y, TABLE_CARRY_MARGIN_MM ?? 450,
+                             f.walls ?? [])
         : false;
       if (!belongs) continue;
       const d = Math.hypot(h.x - seat.x, h.y - seat.y);

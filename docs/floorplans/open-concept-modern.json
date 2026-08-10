@@ -1,7 +1,7 @@
 {
   "diorama": 2,
   "name": "Open-Concept Modern",
-  "exportedAt": "2026-08-02T00:00:00.000Z",
+  "exportedAt": "2026-08-10T00:00:00.000Z",
   "store": {
     "v": 2,
     "floors": [
@@ -284,7 +284,6 @@
             "w": 800,
             "h": 350,
             "kind": "bookshelf",
-            "rotation": 180,
             "label": "Storage"
           },
           {
@@ -294,7 +293,6 @@
             "w": 800,
             "h": 350,
             "kind": "bookshelf",
-            "rotation": 180,
             "label": "Storage"
           },
           {
@@ -304,7 +302,7 @@
             "w": 900,
             "h": 400,
             "kind": "cabinet",
-            "rotation": 90,
+            "rotation": 270,
             "label": "Tool cabinet"
           },
           {
@@ -313,8 +311,7 @@
             "y": 8198,
             "w": 690,
             "h": 700,
-            "kind": "washer",
-            "rotation": 180
+            "kind": "washer"
           },
           {
             "id": "open-concept-modern-fn5",
@@ -322,8 +319,7 @@
             "y": 8198,
             "w": 690,
             "h": 700,
-            "kind": "dryer",
-            "rotation": 180
+            "kind": "dryer"
           },
           {
             "id": "open-concept-modern-fn6",
@@ -332,6 +328,7 @@
             "w": 560,
             "h": 470,
             "kind": "sink",
+            "rotation": 180,
             "label": "Utility sink"
           },
           {
@@ -341,7 +338,7 @@
             "w": 800,
             "h": 350,
             "kind": "bookshelf",
-            "rotation": 90,
+            "rotation": 270,
             "label": "Shelving"
           },
           {
@@ -351,7 +348,7 @@
             "w": 800,
             "h": 350,
             "kind": "bookshelf",
-            "rotation": 270,
+            "rotation": 90,
             "label": "Shelving"
           },
           {
@@ -370,7 +367,7 @@
             "w": 3200,
             "h": 650,
             "kind": "counter",
-            "rotation": 90
+            "rotation": 270
           },
           {
             "id": "open-concept-modern-fn11",
@@ -379,7 +376,7 @@
             "w": 910,
             "h": 760,
             "kind": "fridge",
-            "rotation": 90
+            "rotation": 270
           },
           {
             "id": "open-concept-modern-fn12",
@@ -388,7 +385,7 @@
             "w": 760,
             "h": 660,
             "kind": "stove",
-            "rotation": 90
+            "rotation": 270
           },
           {
             "id": "open-concept-modern-fn13",
@@ -397,7 +394,7 @@
             "w": 520,
             "h": 390,
             "kind": "microwave",
-            "rotation": 90,
+            "rotation": 270,
             "elevation": 1400
           },
           {
@@ -406,7 +403,8 @@
             "y": 2162,
             "w": 610,
             "h": 620,
-            "kind": "dishwasher"
+            "kind": "dishwasher",
+            "rotation": 180
           },
           {
             "id": "open-concept-modern-fn15",
@@ -537,7 +535,6 @@
             "w": 500,
             "h": 500,
             "kind": "chair",
-            "rotation": 180,
             "label": "Reading chair"
           },
           {
@@ -563,7 +560,7 @@
             "w": 900,
             "h": 300,
             "kind": "coffee_table",
-            "rotation": 90,
+            "rotation": 270,
             "label": "Console"
           },
           {
@@ -598,14 +595,14 @@
             "w": 800,
             "h": 350,
             "kind": "bookshelf",
-            "rotation": 270
+            "rotation": 90
           },
           {
             "id": "open-concept-modern-fn37",
             "x": 18200,
-            "y": 5198,
-            "w": 1500,
-            "h": 2100,
+            "y": 5232,
+            "w": 1524,
+            "h": 2032,
             "kind": "bed"
           },
           {
@@ -630,7 +627,8 @@
             "y": 3400,
             "w": 1200,
             "h": 500,
-            "kind": "dresser"
+            "kind": "dresser",
+            "rotation": 180
           },
           {
             "id": "open-concept-modern-fn41",
@@ -639,7 +637,7 @@
             "w": 1200,
             "h": 600,
             "kind": "wardrobe",
-            "rotation": 90,
+            "rotation": 270,
             "label": "Reach-in"
           },
           {
@@ -658,7 +656,7 @@
             "w": 480,
             "h": 700,
             "kind": "toilet",
-            "rotation": 90
+            "rotation": 270
           },
           {
             "id": "open-concept-modern-fn44",
@@ -667,7 +665,6 @@
             "w": 760,
             "h": 550,
             "kind": "sink_vanity",
-            "rotation": 180,
             "label": "Double vanity"
           },
           {
@@ -676,15 +673,14 @@
             "y": 7473,
             "w": 1700,
             "h": 750,
-            "kind": "bathtub",
-            "rotation": 180
+            "kind": "bathtub"
           },
           {
             "id": "open-concept-modern-fn46",
-            "x": 17898,
-            "y": 10098,
-            "w": 1500,
-            "h": 2100,
+            "x": 17886,
+            "y": 10132,
+            "w": 1524,
+            "h": 2032,
             "kind": "bed"
           },
           {
@@ -710,7 +706,7 @@
             "w": 1400,
             "h": 700,
             "kind": "desk",
-            "rotation": 90
+            "rotation": 270
           },
           {
             "id": "open-concept-modern-fn50",
@@ -734,11 +730,10 @@
           {
             "id": "open-concept-modern-fn52",
             "x": 16150,
-            "y": 14848,
-            "w": 2000,
-            "h": 2200,
-            "kind": "bed",
-            "rotation": 180
+            "y": 14933,
+            "w": 1930,
+            "h": 2030,
+            "kind": "bed_king"
           },
           {
             "id": "open-concept-modern-fn53",
@@ -746,8 +741,7 @@
             "y": 15200,
             "w": 500,
             "h": 400,
-            "kind": "nightstand",
-            "rotation": 180
+            "kind": "nightstand"
           },
           {
             "id": "open-concept-modern-fn54",
@@ -755,8 +749,7 @@
             "y": 15200,
             "w": 500,
             "h": 400,
-            "kind": "nightstand",
-            "rotation": 180
+            "kind": "nightstand"
           },
           {
             "id": "open-concept-modern-fn55",
@@ -803,7 +796,7 @@
             "w": 480,
             "h": 700,
             "kind": "toilet",
-            "rotation": 90
+            "rotation": 270
           },
           {
             "id": "open-concept-modern-fn60",
@@ -820,7 +813,8 @@
             "y": 14152,
             "w": 1200,
             "h": 600,
-            "kind": "wardrobe"
+            "kind": "wardrobe",
+            "rotation": 180
           },
           {
             "id": "open-concept-modern-fn62",
@@ -829,7 +823,7 @@
             "w": 1200,
             "h": 600,
             "kind": "wardrobe",
-            "rotation": 270
+            "rotation": 90
           },
           {
             "id": "open-concept-modern-fn63",
@@ -922,7 +916,6 @@
             "w": 220,
             "h": 520,
             "kind": "mailbox",
-            "rotation": 180,
             "label": "Curbside mailbox"
           }
         ],

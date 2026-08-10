@@ -1,7 +1,7 @@
 {
   "diorama": 2,
   "name": "Two-Story Colonial",
-  "exportedAt": "2026-08-02T00:00:00.000Z",
+  "exportedAt": "2026-08-10T00:00:00.000Z",
   "store": {
     "v": 2,
     "floors": [
@@ -179,7 +179,7 @@
             "w": 500,
             "h": 500,
             "kind": "chair",
-            "rotation": 225,
+            "rotation": 135,
             "label": "Armchair"
           },
           {
@@ -196,8 +196,7 @@
             "y": 3900,
             "w": 1600,
             "h": 450,
-            "kind": "tv_stand",
-            "rotation": 180
+            "kind": "tv_stand"
           },
           {
             "id": "two-story-colonial-fn5",
@@ -206,7 +205,6 @@
             "w": 1450,
             "h": 250,
             "kind": "tv",
-            "rotation": 180,
             "localState": "off"
           },
           {
@@ -216,7 +214,7 @@
             "w": 800,
             "h": 350,
             "kind": "bookshelf",
-            "rotation": 90
+            "rotation": 270
           },
           {
             "id": "two-story-colonial-fn7",
@@ -268,7 +266,7 @@
             "w": 1500,
             "h": 400,
             "kind": "bench",
-            "rotation": 90
+            "rotation": 270
           },
           {
             "id": "two-story-colonial-fn13",
@@ -353,7 +351,7 @@
             "w": 900,
             "h": 400,
             "kind": "cabinet",
-            "rotation": 270,
+            "rotation": 90,
             "label": "China cabinet"
           },
           {
@@ -396,7 +394,6 @@
             "w": 560,
             "h": 470,
             "kind": "sink",
-            "rotation": 180,
             "label": "Vanity"
           },
           {
@@ -405,7 +402,8 @@
             "y": 4702,
             "w": 690,
             "h": 700,
-            "kind": "washer"
+            "kind": "washer",
+            "rotation": 180
           },
           {
             "id": "two-story-colonial-fn29",
@@ -413,7 +411,8 @@
             "y": 4702,
             "w": 690,
             "h": 700,
-            "kind": "dryer"
+            "kind": "dryer",
+            "rotation": 180
           },
           {
             "id": "two-story-colonial-fn30",
@@ -421,7 +420,8 @@
             "y": 4600,
             "w": 900,
             "h": 400,
-            "kind": "bench"
+            "kind": "bench",
+            "rotation": 180
           },
           {
             "id": "two-story-colonial-fn31",
@@ -429,8 +429,7 @@
             "y": 5448,
             "w": 900,
             "h": 400,
-            "kind": "cabinet",
-            "rotation": 180
+            "kind": "cabinet"
           },
           {
             "id": "two-story-colonial-fn32",
@@ -439,6 +438,7 @@
             "w": 3200,
             "h": 2000,
             "kind": "sofa_u",
+            "rotation": 180,
             "label": "Sectional"
           },
           {
@@ -456,7 +456,7 @@
             "w": 500,
             "h": 500,
             "kind": "chair",
-            "rotation": 270,
+            "rotation": 90,
             "label": "Armchair"
           },
           {
@@ -465,8 +465,7 @@
             "y": 8900,
             "w": 1600,
             "h": 450,
-            "kind": "tv_stand",
-            "rotation": 180
+            "kind": "tv_stand"
           },
           {
             "id": "two-story-colonial-fn36",
@@ -475,12 +474,11 @@
             "w": 1450,
             "h": 250,
             "kind": "tv",
-            "rotation": 180,
             "localState": "off"
           },
           {
             "id": "two-story-colonial-fn37",
-            "x": 200,
+            "x": 500,
             "y": 8600,
             "w": 800,
             "h": 350,
@@ -509,7 +507,7 @@
             "w": 1000,
             "h": 600,
             "kind": "counter",
-            "rotation": 90
+            "rotation": 270
           },
           {
             "id": "two-story-colonial-fn41",
@@ -517,7 +515,8 @@
             "y": 6150,
             "w": 2200,
             "h": 650,
-            "kind": "counter"
+            "kind": "counter",
+            "rotation": 180
           },
           {
             "id": "two-story-colonial-fn42",
@@ -525,7 +524,8 @@
             "y": 6150,
             "w": 760,
             "h": 660,
-            "kind": "stove"
+            "kind": "stove",
+            "rotation": 180
           },
           {
             "id": "two-story-colonial-fn43",
@@ -534,24 +534,25 @@
             "w": 520,
             "h": 390,
             "kind": "microwave",
+            "rotation": 180,
             "elevation": 1400
           },
           {
             "id": "two-story-colonial-fn44",
-            "x": 9300,
+            "x": 9600,
             "y": 6150,
             "w": 610,
             "h": 620,
-            "kind": "dishwasher"
+            "kind": "dishwasher",
+            "rotation": 180
           },
           {
             "id": "two-story-colonial-fn45",
             "x": 8600,
-            "y": 9700,
+            "y": 9570,
             "w": 800,
             "h": 550,
-            "kind": "kitchen_sink",
-            "rotation": 180
+            "kind": "kitchen_sink"
           },
           {
             "id": "two-story-colonial-fn46",
@@ -568,7 +569,7 @@
             "w": 910,
             "h": 760,
             "kind": "fridge",
-            "rotation": 90
+            "rotation": 270
           },
           {
             "id": "two-story-colonial-fn48",
@@ -576,7 +577,8 @@
             "y": 5950,
             "w": 900,
             "h": 400,
-            "kind": "cabinet"
+            "kind": "cabinet",
+            "rotation": 180
           },
           {
             "id": "two-story-colonial-fn49",
@@ -637,7 +639,7 @@
             "w": 900,
             "h": 400,
             "kind": "cabinet",
-            "rotation": 270
+            "rotation": 90
           },
           {
             "id": "two-story-colonial-fn56",
@@ -646,7 +648,7 @@
             "w": 1400,
             "h": 700,
             "kind": "desk",
-            "rotation": 90,
+            "rotation": 270,
             "label": "Workbench"
           },
           {
@@ -656,7 +658,7 @@
             "w": 800,
             "h": 350,
             "kind": "bookshelf",
-            "rotation": 270,
+            "rotation": 90,
             "label": "Shelving"
           },
           {
@@ -690,7 +692,6 @@
             "w": 220,
             "h": 520,
             "kind": "mailbox",
-            "rotation": 180,
             "label": "Curbside mailbox"
           }
         ],
@@ -1446,8 +1447,8 @@
             "id": "two-story-colonial-fn62",
             "x": 1700,
             "y": 1100,
-            "w": 1500,
-            "h": 2000,
+            "w": 1524,
+            "h": 2032,
             "kind": "bed",
             "rotation": 180
           },
@@ -1476,7 +1477,7 @@
             "w": 1200,
             "h": 500,
             "kind": "dresser",
-            "rotation": 90
+            "rotation": 270
           },
           {
             "id": "two-story-colonial-fn66",
@@ -1485,7 +1486,7 @@
             "w": 1400,
             "h": 700,
             "kind": "desk",
-            "rotation": 270
+            "rotation": 90
           },
           {
             "id": "two-story-colonial-fn67",
@@ -1513,7 +1514,7 @@
             "w": 500,
             "h": 500,
             "kind": "chair",
-            "rotation": 90,
+            "rotation": 270,
             "label": "Reading chair"
           },
           {
@@ -1552,20 +1553,18 @@
           {
             "id": "two-story-colonial-fn74",
             "x": 8750,
-            "y": 3100,
-            "w": 1350,
-            "h": 1900,
-            "kind": "bed",
-            "rotation": 180
+            "y": 3290,
+            "w": 1370,
+            "h": 1910,
+            "kind": "bed_full"
           },
           {
             "id": "two-story-colonial-fn75",
             "x": 7750,
-            "y": 3100,
+            "y": 3700,
             "w": 500,
             "h": 400,
-            "kind": "nightstand",
-            "rotation": 180
+            "kind": "nightstand"
           },
           {
             "id": "two-story-colonial-fn76",
@@ -1573,7 +1572,8 @@
             "y": 700,
             "w": 1200,
             "h": 500,
-            "kind": "dresser"
+            "kind": "dresser",
+            "rotation": 180
           },
           {
             "id": "two-story-colonial-fn77",
@@ -1581,7 +1581,8 @@
             "y": 700,
             "w": 1400,
             "h": 700,
-            "kind": "desk"
+            "kind": "desk",
+            "rotation": 180
           },
           {
             "id": "two-story-colonial-fn78",
@@ -1598,8 +1599,7 @@
             "y": 5298,
             "w": 480,
             "h": 700,
-            "kind": "toilet",
-            "rotation": 180
+            "kind": "toilet"
           },
           {
             "id": "two-story-colonial-fn80",
@@ -1608,7 +1608,6 @@
             "w": 560,
             "h": 470,
             "kind": "sink",
-            "rotation": 180,
             "label": "Vanity"
           },
           {
@@ -1617,7 +1616,8 @@
             "y": 4650,
             "w": 1600,
             "h": 600,
-            "kind": "bathtub"
+            "kind": "bathtub",
+            "rotation": 180
           },
           {
             "id": "two-story-colonial-fn82",
@@ -1635,7 +1635,7 @@
             "w": 480,
             "h": 700,
             "kind": "toilet",
-            "rotation": 90
+            "rotation": 270
           },
           {
             "id": "two-story-colonial-fn84",
@@ -1644,7 +1644,7 @@
             "w": 560,
             "h": 470,
             "kind": "sink",
-            "rotation": 90,
+            "rotation": 270,
             "label": "Vanity"
           },
           {
@@ -1653,7 +1653,8 @@
             "y": 4700,
             "w": 1600,
             "h": 700,
-            "kind": "bathtub"
+            "kind": "bathtub",
+            "rotation": 180
           },
           {
             "id": "two-story-colonial-fn86",
@@ -1662,7 +1663,7 @@
             "w": 800,
             "h": 800,
             "kind": "shower",
-            "rotation": 270
+            "rotation": 90
           },
           {
             "id": "two-story-colonial-fn87",
@@ -1670,7 +1671,8 @@
             "y": 4700,
             "w": 1200,
             "h": 600,
-            "kind": "wardrobe"
+            "kind": "wardrobe",
+            "rotation": 180
           },
           {
             "id": "two-story-colonial-fn88",
@@ -1688,15 +1690,15 @@
             "w": 1200,
             "h": 500,
             "kind": "dresser",
-            "rotation": 270
+            "rotation": 90
           },
           {
             "id": "two-story-colonial-fn90",
             "x": 2325,
             "y": 8700,
-            "w": 1900,
-            "h": 2100,
-            "kind": "bed"
+            "w": 1930,
+            "h": 2030,
+            "kind": "bed_king"
           },
           {
             "id": "two-story-colonial-fn91",
@@ -1721,7 +1723,7 @@
             "w": 1200,
             "h": 500,
             "kind": "dresser",
-            "rotation": 90
+            "rotation": 270
           },
           {
             "id": "two-story-colonial-fn94",
@@ -1730,7 +1732,7 @@
             "w": 500,
             "h": 500,
             "kind": "chair",
-            "rotation": 270,
+            "rotation": 90,
             "label": "Reading chair"
           },
           {
@@ -1754,8 +1756,8 @@
             "id": "two-story-colonial-fn97",
             "x": 8700,
             "y": 8700,
-            "w": 1500,
-            "h": 2000,
+            "w": 1524,
+            "h": 2032,
             "kind": "bed"
           },
           {
@@ -1790,7 +1792,7 @@
             "w": 1400,
             "h": 700,
             "kind": "desk",
-            "rotation": 90
+            "rotation": 270
           },
           {
             "id": "two-story-colonial-fn102",

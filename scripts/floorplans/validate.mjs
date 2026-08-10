@@ -5,7 +5,9 @@
 import { loadGeom } from './geom.mjs';
 import {
   doorwayBlockers, wallOverlaps, roomRegions, seatAlignment, lightWallOverlaps,
+  bodyOverlaps, reversedBackers, openingWallBurials,
   DOOR_CLEAR, SEAT_FACE_TOL_DEG, MIN_STANDING_CELLS,
+  BODY_OVERLAP_TOL, BACKER_FRONT_GATE, WALL_OVERLAP_TOL,
 } from './physical.mjs';
 
 // Perpendicular distance from (px,py) to segment (ax,ay)-(bx,by).
@@ -152,6 +154,22 @@ export function validatePlan(env, geom) {
     //     wall. Check 10 only sees furniture; the settle pass wall-snaps these.
     const lo = lightWallOverlaps(f, geom);
     ok(lo.length === 0, `${tag}: no light fixture overlaps a wall` + (lo.length ? ` — overlapping: ${lo.join('; ')}` : ''));
+
+    // 14. No two floor-standing solid bodies may merge into one another. Checks
+    //     9–13 only ever measured a piece against walls/doors, so appliance and
+    //     seating pileups were invisible.
+    const bo = bodyOverlaps(f, geom, store.customObjects);
+    ok(bo.length === 0, `${tag}: no furniture bodies interpenetrate (>${BODY_OVERLAP_TOL}mm)` + (bo.length ? ` — merged: ${bo.join('; ')}` : ''));
+
+    // 15. No piece may present its FUNCTIONAL FRONT to a wall with the room
+    //     behind it (the reversed-wall-backer defect).
+    const rb = reversedBackers(f, geom, store.customObjects);
+    ok(rb.length === 0, `${tag}: no reversed wall-backers (front ≥${BACKER_FRONT_GATE}mm clear)` + (rb.length ? ` — reversed: ${rb.join('; ')}` : ''));
+
+    // 16. Check 10's openings-excised walls are blind to a piece buried in the
+    //     wall plane BEHIND a window/door; measure the unexcised centerlines.
+    const ob = openingWallBurials(f, geom);
+    ok(ob.length === 0, `${tag}: no furniture buried in a wall behind an opening (>${WALL_OVERLAP_TOL}mm)` + (ob.length ? ` — buried: ${ob.join('; ')}` : ''));
   }
 
   // 7. Multi-floor: stairs stairLinkId pairs match exactly across floors.

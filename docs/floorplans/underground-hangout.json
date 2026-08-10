@@ -1,7 +1,7 @@
 {
   "diorama": 2,
   "name": "The Bunker — Underground Hangout",
-  "exportedAt": "2026-07-30T00:00:00.000Z",
+  "exportedAt": "2026-08-10T00:00:00.000Z",
   "store": {
     "v": 2,
     "floors": [
@@ -193,7 +193,7 @@
             "w": 900,
             "h": 400,
             "kind": "cabinet",
-            "rotation": 90,
+            "rotation": 270,
             "label": "Arcade cabinet",
             "color": "#2b1b46"
           },
@@ -204,7 +204,7 @@
             "w": 900,
             "h": 400,
             "kind": "cabinet",
-            "rotation": 90,
+            "rotation": 270,
             "label": "Arcade cabinet",
             "color": "#123a46"
           },
@@ -235,7 +235,6 @@
             "w": 1400,
             "h": 700,
             "kind": "desk",
-            "rotation": 180,
             "label": "Battlestation 1"
           },
           {
@@ -254,7 +253,6 @@
             "w": 700,
             "h": 200,
             "kind": "tv",
-            "rotation": 180,
             "elevation": 750,
             "label": "Monitor 1",
             "localState": "on"
@@ -266,7 +264,6 @@
             "w": 1400,
             "h": 700,
             "kind": "desk",
-            "rotation": 180,
             "label": "Battlestation 2"
           },
           {
@@ -285,7 +282,6 @@
             "w": 700,
             "h": 200,
             "kind": "tv",
-            "rotation": 180,
             "elevation": 750,
             "label": "Monitor 2",
             "localState": "on"
@@ -306,6 +302,7 @@
             "w": 3000,
             "h": 700,
             "kind": "counter",
+            "rotation": 180,
             "label": "Bar",
             "color": "#2a1d16"
           },
@@ -373,6 +370,7 @@
             "w": 900,
             "h": 400,
             "kind": "cabinet",
+            "rotation": 180,
             "label": "Glassware"
           },
           {
@@ -382,7 +380,7 @@
             "w": 2000,
             "h": 900,
             "kind": "sofa",
-            "rotation": 90
+            "rotation": 270
           },
           {
             "id": "underground-hangout-fn33",
@@ -452,8 +450,8 @@
           },
           {
             "id": "underground-hangout-fn40",
-            "x": 12800,
-            "y": 8600,
+            "x": 12100,
+            "y": 9000,
             "w": 400,
             "h": 400,
             "kind": "plant"
@@ -906,7 +904,6 @@
             "w": 1400,
             "h": 700,
             "kind": "desk",
-            "rotation": 180,
             "label": "Workbench"
           },
           {
@@ -925,7 +922,7 @@
             "w": 900,
             "h": 400,
             "kind": "cabinet",
-            "rotation": 90,
+            "rotation": 270,
             "label": "Parts cabinet"
           },
           {
@@ -935,7 +932,7 @@
             "w": 800,
             "h": 350,
             "kind": "bookshelf",
-            "rotation": 90,
+            "rotation": 270,
             "label": "Tool shelves"
           },
           {

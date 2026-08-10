@@ -1,7 +1,7 @@
 {
   "diorama": 2,
   "name": "Appliance Showroom — Watt’s Cooking",
-  "exportedAt": "2026-07-30T00:00:00.000Z",
+  "exportedAt": "2026-08-10T00:00:00.000Z",
   "store": {
     "v": 2,
     "floors": [
@@ -133,7 +133,7 @@
             "w": 350,
             "h": 250,
             "kind": "ev_charger",
-            "rotation": 90,
+            "rotation": 270,
             "label": "Home charger"
           },
           {
@@ -545,7 +545,7 @@
             "w": 800,
             "h": 350,
             "kind": "bookshelf",
-            "rotation": 90,
+            "rotation": 270,
             "label": "Fixture shelving"
           },
           {
@@ -604,6 +604,7 @@
             "w": 910,
             "h": 910,
             "kind": "shower",
+            "rotation": 180,
             "label": "Walk-in shower"
           },
           {
@@ -612,7 +613,8 @@
             "y": 5700,
             "w": 480,
             "h": 700,
-            "kind": "toilet"
+            "kind": "toilet",
+            "rotation": 180
           },
           {
             "id": "appliance-showroom-fn53",
@@ -663,6 +665,7 @@
             "w": 1400,
             "h": 700,
             "kind": "desk",
+            "rotation": 180,
             "label": "Sales desk"
           },
           {
@@ -701,6 +704,7 @@
             "w": 800,
             "h": 350,
             "kind": "bookshelf",
+            "rotation": 180,
             "label": "Spec binders"
           },
           {

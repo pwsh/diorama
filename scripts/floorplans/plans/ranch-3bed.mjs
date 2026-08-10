@@ -104,64 +104,80 @@ export function buildRanchBones(b) {
   const furniture = [
     // Living Room
     furn('sofa', 11950, 900, { rotation: 180 }),
-    furn('chair', 9200, 1500, { rotation: 90, label: 'Armchair' }),
-    furn('chair', 14700, 1500, { rotation: 270, label: 'Armchair' }),
+    // Front (local −Y in plan) faces the coffee table, not the side wall.
+    furn('chair', 9200, 1500, { rotation: 270, label: 'Armchair' }),
+    furn('chair', 14700, 1500, { rotation: 90, label: 'Armchair' }),
     furn('coffee_table', 11950, 1900, { rotation: 0 }),
     furn('tv_stand', 11950, 3550, { rotation: 0 }),
     furn('tv', 11950, 3550, { rotation: 0, localState: 'off' }),
-    furn('bookshelf', 8100, 3200, { rotation: 90 }),
+    furn('bookshelf', 8100, 3200, { rotation: 270 }),
     furn('rug', 11950, 1900, { rotation: 0, w: 2400, h: 1700 }),
     furn('plant', 15700, 3500, { rotation: 0 }),
     // Foyer
     furn('bench', 4000, 300, { rotation: 180 }),
     furn('coffee_table', 7300, 300, { rotation: 180, label: 'Console' }),
     furn('plant', 6600, 1500, { rotation: 0 }),
-    // Bedroom 2
-    furn('bed', 1700, 1050, { rotation: 180, w: 1500, h: 2000 }),
+    // Bedroom 2 — canonical queen footprint (1524 × 2032), headboard (local +Y) on
+    // the front wall under the window.
+    furn('bed', 1700, 1050, { rotation: 180 }),
     furn('nightstand', 700, 700, { rotation: 180 }),
     furn('nightstand', 2700, 700, { rotation: 180 }),
-    furn('dresser', 300, 2900, { rotation: 90 }),
-    furn('bookshelf', 2900, 3400, { rotation: 270 }),
+    furn('dresser', 300, 2900, { rotation: 270 }),
+    furn('bookshelf', 2900, 3400, { rotation: 90 }),
     furn('rug', 1700, 2200, { rotation: 0, w: 1800, h: 1400, color: carpetT }),
-    // Bedroom 3
-    furn('bed', 6200, 2650, { rotation: 180, w: 1350, h: 1900 }),
+    // Bedroom 3 — canonical full footprint (1370 × 1910)
+    furn('bed_full', 6200, 2650, { rotation: 180 }),
     furn('nightstand', 5300, 2200, { rotation: 180 }),
-    furn('dresser', 7700, 4900, { rotation: 270 }),
+    furn('dresser', 7700, 4900, { rotation: 90 }),
     furn('desk', 5000, 5300, { rotation: 0 }),
     furn('rug', 6200, 3800, { rotation: 0, w: 1600, h: 1300, color: carpetT }),
-    // Primary Bedroom
-    furn('bed', 1700, 4950, { rotation: 180, w: 1900, h: 2100 }),
-    furn('nightstand', 600, 4300, { rotation: 180 }),
-    furn('nightstand', 2500, 4300, { rotation: 180 }),
-    furn('dresser', 300, 7300, { rotation: 90 }),
+    // Primary Bedroom — canonical king footprint (1930 × 2030)
+    furn('bed_king', 1700, 4950, { rotation: 180 }),
+    // The canonical king is 1930 wide (x 735–2665); at 600/2500 the flanking
+    // nightstands sat 115 / 400 mm INSIDE the mattress. Moved out to 460/2940
+    // (25 mm off each bed rail, 160 mm clear of each wall) and made 300 mm deep
+    // at y 4000 so the east one also clears the Primary Bedroom door's approach
+    // zone, which starts at y 4200.
+    furn('nightstand', 460, 4000, { rotation: 180, h: 300 }),
+    furn('nightstand', 2940, 4000, { rotation: 180, h: 300 }),
+    furn('dresser', 300, 7300, { rotation: 270 }),
     furn('bench', 1700, 6100, { rotation: 180 }),
     furn('wall_tv', 3300, 6000, { rotation: 90 }),
     furn('rug', 1700, 6000, { rotation: 0, w: 2200, h: 1800, color: carpetP }),
     furn('plant', 3100, 7000, { rotation: 0 }),
-    // Primary Bath
-    furn('toilet', 400, 9700, { rotation: 180 }),
-    furn('sink', 300, 9000, { rotation: 90, label: 'Vanity' }),
+    // Primary Bath — tank/back to the wall, bowl facing into the room.
+    furn('toilet', 400, 9700, { rotation: 0 }),
+    furn('sink', 300, 9000, { rotation: 270, label: 'Vanity' }),
     furn('shower', 1600, 9700, { rotation: 180, w: 900, h: 900 }),
     // Primary Walk-in Closet
     furn('wardrobe', 2700, 9600, { rotation: 0, w: 1200, h: 600 }),
-    furn('wardrobe', 3050, 8750, { rotation: 0, w: 600, h: 600 }),
-    // Hall Bath
-    furn('toilet', 5000, 6000, { rotation: 90 }),
-    furn('sink', 7500, 6200, { rotation: 270, label: 'Vanity' }),
-    furn('bathtub', 6200, 7900, { rotation: 180, w: 1700, h: 750 }),
+    furn('wardrobe', 3050, 8750, { rotation: 180, w: 600, h: 600 }),
+    // Hall Bath. NB the toilet sits at y 6150, not 6000: lib.mjs's settle pass
+    // captures any `seat`-bearing piece inside a table/desk's TABLE_CARRY_MARGIN
+    // box WITHOUT testing for a wall between them, and the Bedroom-3 desk's box
+    // reaches y 6100 straight through the y=5700 partition — a toilet at 6000 got
+    // silently re-aimed at that desk. 6150 clears the box and keeps the tank on
+    // the partition with the bowl facing into the bath.
+    furn('toilet', 5000, 6150, { rotation: 180 }),
+    furn('sink', 7500, 6200, { rotation: 90, label: 'Vanity' }),
+    // rot 0 = apron (local −Z) north into the bath. At 180 the step-over side was
+    // 2 mm off the south wall the tub backs onto, with the whole room behind it.
+    furn('bathtub', 6200, 7900, { rotation: 0, w: 1700, h: 750 }),
     // Office Nook
     furn('desk', 6200, 9700, { rotation: 0 }),
     furn('chair', 6200, 9300, { rotation: 180 }),
-    furn('bookshelf', 7700, 8900, { rotation: 270 }),
+    furn('bookshelf', 7700, 8900, { rotation: 90 }),
     // Kitchen
-    furn('counter', 8100, 4200, { rotation: 90 }),
+    furn('counter', 8100, 4200, { rotation: 270 }),
     furn('counter', 9200, 4000, { rotation: 180 }),
     furn('stove', 9400, 4000, { rotation: 180 }),
     furn('microwave', 8700, 4100, { rotation: 180, elevation: 1400 }),
-    furn('cabinet', 8100, 5200, { rotation: 90 }),
+    furn('cabinet', 8100, 5200, { rotation: 270 }),
     furn('island', 9600, 5600, { rotation: 0 }),
-    furn('kitchen_sink', 9600, 5800, { rotation: 180 }),
-    furn('dishwasher', 9200, 5800, { rotation: 180 }),
+    // Sink offset right of the island centre so the dishwasher fits beside it
+    // instead of inside it (the two bodies used to interpenetrate 305 mm).
+    furn('kitchen_sink', 9700, 5800, { rotation: 180 }),
+    furn('dishwasher', 8920, 5800, { rotation: 180 }),
     furn('fridge', 8200, 6800, { rotation: 180 }),
     // Dining
     furn('table', 12500, 5400, { rotation: 0, label: 'Dining table' }),
@@ -171,7 +187,7 @@ export function buildRanchBones(b) {
     furn('chair', 11600, 5700, { rotation: 90 }),
     furn('chair', 13400, 5100, { rotation: 270 }),
     furn('chair', 13400, 5700, { rotation: 270 }),
-    furn('cabinet', 14100, 4200, { rotation: 270, label: 'Buffet' }),
+    furn('cabinet', 14100, 4200, { rotation: 90, label: 'Buffet' }),
     furn('rug', 12500, 5400, { rotation: 0, w: 2700, h: 2100 }),
     furn('plant', 11500, 6800, { rotation: 0 }),
     // Laundry / Mudroom
@@ -185,21 +201,23 @@ export function buildRanchBones(b) {
     furn('tv', 11000, 7200, { rotation: 180, localState: 'off' }),
     furn('coffee_table', 9500, 8600, { rotation: 0 }),
     furn('ottoman', 10200, 9200, { rotation: 0 }),
-    furn('bookshelf', 8100, 9700, { rotation: 90 }),
+    furn('bookshelf', 8100, 9700, { rotation: 270 }),
     furn('exercise_equipment', 14300, 9500, { rotation: 270 }),  // clear of the patio slider
     furn('rug', 9700, 8800, { rotation: 0, w: 3000, h: 2200 }),
     furn('plant', 15700, 7300, { rotation: 0 }),
     furn('plant', 8100, 7300, { rotation: 90 }),
     // Garage
-    furn('cabinet', 21600, 1800, { rotation: 270 }),
-    furn('desk', 16400, 3000, { rotation: 90, label: 'Workbench' }),
-    furn('bookshelf', 21600, 5500, { rotation: 270, label: 'Shelving' }),
+    furn('cabinet', 21600, 1800, { rotation: 90 }),
+    furn('desk', 16400, 3000, { rotation: 270, label: 'Workbench' }),
+    furn('bookshelf', 21600, 5500, { rotation: 90, label: 'Shelving' }),
     // Yard dressing (outside every wall loop — bare ground)
     furn('trash_bin', 15000, -600, { rotation: 0 }),
     furn('recycle_bin', 15700, -600, { rotation: 0 }),
     furn('tree', 3000, -700, { rotation: 0 }),
     furn('tree', 8500, -700, { rotation: 0 }),
-    furn('mailbox', 6400, -500, { rotation: 180, label: 'Curbside mailbox' }),
+    // rot 0 = door/flag toward the street (−Y). At 180 the door faced the house
+    // wall 190 mm away — the carrier would have to reach through the front wall.
+    furn('mailbox', 6400, -500, { rotation: 0, label: 'Curbside mailbox' }),
     // Patio set pulled clear of the slider's keep-clear zone.
     furn('lawn_chair', 17400, 7800, { rotation: 270 }),
     furn('lawn_chair', 17400, 9100, { rotation: 270 }),

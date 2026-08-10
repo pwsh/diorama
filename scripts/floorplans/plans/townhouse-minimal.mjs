@@ -21,11 +21,12 @@ export function build() {
   // ---------- Ground — flex room as a calm reading corner ----------
   const groundFurn = [
     ...g.stairs,
-    furn('bench', 5850, 900, { rotation: 270 }),
-    furn('cabinet', 600, 6100, { rotation: 180, label: 'Storage' }),
-    furn('chair', 1400, 10400, { rotation: 180, label: 'Reading chair' }),
+    furn('bench', 5850, 900, { rotation: 90 }),
+    furn('cabinet', 600, 6100, { rotation: 0, label: 'Storage' }),
+    // Reading chair faces its ottoman (and the room), back to the rear window wall.
+    furn('chair', 1400, 10400, { rotation: 0, label: 'Reading chair' }),
     furn('ottoman', 1400, 9700, { rotation: 0 }),
-    furn('bookshelf', 300, 10700, { rotation: 90 }),
+    furn('bookshelf', 300, 10700, { rotation: 270 }),
     furn('plant', 5500, 10500, { rotation: 0 }),
     furn('rug', 3000, 9500, { rotation: 0, w: 2400, h: 2000 }),
   ];
@@ -39,11 +40,11 @@ export function build() {
   // ---------- Middle — one low sofa, a small table, a bare-bones kitchen ----------
   const middleFurn = [
     ...m.stairs,
-    furn('sofa', 2200, 700, { rotation: 0, w: 2400, h: 900 }),
+    furn('sofa', 2200, 700, { rotation: 180, w: 2400, h: 900 }),
     furn('coffee_table', 2200, 1700, { rotation: 0 }),
     furn('rug', 2400, 1500, { rotation: 0, w: 3000, h: 2200 }),
     furn('plant', 4200, 5800, { rotation: 0 }),
-    furn('toilet', 5600, 1100, { rotation: 270 }),
+    furn('toilet', 5600, 1100, { rotation: 90 }),
     furn('sink', 5250, 350, { rotation: 180 }),
     furn('table', 3000, 7300, { rotation: 0, w: 1400, h: 900, label: 'Dining table' }),
     furn('chair', 2400, 7300, { rotation: 270 }),
@@ -51,10 +52,10 @@ export function build() {
     furn('chair', 3000, 6800, { rotation: 0 }),
     furn('chair', 3000, 7800, { rotation: 180 }),
     // Pared-back kitchen run
-    furn('stove', 900, 10700, { rotation: 180 }),
-    furn('kitchen_sink', 2200, 10700, { rotation: 180 }),
-    furn('counter', 1500, 10700, { rotation: 180, w: 2400, h: 600 }),
-    furn('fridge', 5700, 10300, { rotation: 270 }),
+    furn('stove', 900, 10700, { rotation: 0 }),
+    furn('kitchen_sink', 2200, 10700, { rotation: 0 }),
+    furn('counter', 1500, 10700, { rotation: 0, w: 2400, h: 600 }),
+    furn('fridge', 5700, 10300, { rotation: 90 }),
   ];
   const middleLights = [
     light(2200, 1600, { iconKind: 'bulb', label: 'Living' }),
@@ -66,19 +67,22 @@ export function build() {
   // ---------- Top — just the essentials in each room ----------
   const topFurn = [
     ...t.stairs,
-    furn('bed', 1200, 900, { rotation: 0, w: 1400, h: 2000 }),
-    furn('nightstand', 350, 300, { rotation: 0 }),
+    // Canonical full footprint (1370 × 1910); headboard (local +Y) on the front
+    // wall under the window, nightstand beside the head.
+    furn('bed_full', 1200, 900, { rotation: 180 }),
+    furn('nightstand', 350, 300, { rotation: 180 }),
     furn('rug', 1200, 1500, { rotation: 0, w: 1800, h: 1600 }),
-    furn('sink', 4650, 300, { rotation: 0 }),
+    furn('sink', 4650, 300, { rotation: 180 }),
     furn('toilet', 5500, 1350, { rotation: 90 }),
-    furn('washer', 300, 3700, { rotation: 90 }),
-    furn('dryer', 300, 4700, { rotation: 90 }),
-    furn('bed', 2100, 10400, { rotation: 180, w: 1900, h: 2100 }),
-    furn('nightstand', 900, 10400, { rotation: 180 }),
-    furn('nightstand', 3300, 10400, { rotation: 180 }),
+    furn('washer', 300, 3700, { rotation: 270 }),
+    furn('dryer', 300, 4700, { rotation: 270 }),
+    // Canonical king footprint (1930 × 2030); headboard on the rear wall.
+    furn('bed_king', 2100, 10400, { rotation: 0 }),
+    furn('nightstand', 900, 10400, { rotation: 0 }),
+    furn('nightstand', 3300, 10400, { rotation: 0 }),
     furn('rug', 2100, 9800, { rotation: 0, w: 2400, h: 2200 }),
-    furn('wardrobe', 5350, 7200, { rotation: 270 }),
-    furn('sink_vanity', 4500, 8600, { rotation: 90, w: 1200, h: 550 }),
+    furn('wardrobe', 5350, 7200, { rotation: 90 }),
+    furn('sink_vanity', 4500, 8600, { rotation: 270, w: 1200, h: 550 }),
     furn('shower', 5550, 10700, { rotation: 180 }),
   ];
   const topLights = [

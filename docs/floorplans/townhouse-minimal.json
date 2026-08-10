@@ -1,7 +1,7 @@
 {
   "diorama": 2,
   "name": "Townhouse — Minimalist",
-  "exportedAt": "2026-07-30T00:00:00.000Z",
+  "exportedAt": "2026-08-10T00:00:00.000Z",
   "store": {
     "v": 2,
     "floors": [
@@ -119,7 +119,7 @@
             "w": 1500,
             "h": 400,
             "kind": "bench",
-            "rotation": 270
+            "rotation": 90
           },
           {
             "id": "townhouse-minimal-fn6",
@@ -128,7 +128,6 @@
             "w": 900,
             "h": 400,
             "kind": "cabinet",
-            "rotation": 180,
             "label": "Storage"
           },
           {
@@ -138,7 +137,6 @@
             "w": 500,
             "h": 500,
             "kind": "chair",
-            "rotation": 180,
             "label": "Reading chair"
           },
           {
@@ -156,7 +154,7 @@
             "w": 800,
             "h": 350,
             "kind": "bookshelf",
-            "rotation": 90
+            "rotation": 270
           },
           {
             "id": "townhouse-minimal-fn10",
@@ -492,7 +490,8 @@
             "y": 700,
             "w": 2400,
             "h": 900,
-            "kind": "sofa"
+            "kind": "sofa",
+            "rotation": 180
           },
           {
             "id": "townhouse-minimal-fn13",
@@ -525,7 +524,7 @@
             "w": 480,
             "h": 700,
             "kind": "toilet",
-            "rotation": 270
+            "rotation": 90
           },
           {
             "id": "townhouse-minimal-fn17",
@@ -586,8 +585,7 @@
             "y": 10618,
             "w": 760,
             "h": 660,
-            "kind": "stove",
-            "rotation": 180
+            "kind": "stove"
           },
           {
             "id": "townhouse-minimal-fn24",
@@ -595,8 +593,7 @@
             "y": 10673,
             "w": 800,
             "h": 550,
-            "kind": "kitchen_sink",
-            "rotation": 180
+            "kind": "kitchen_sink"
           },
           {
             "id": "townhouse-minimal-fn25",
@@ -604,8 +601,7 @@
             "y": 10648,
             "w": 2400,
             "h": 600,
-            "kind": "counter",
-            "rotation": 180
+            "kind": "counter"
           },
           {
             "id": "townhouse-minimal-fn26",
@@ -614,7 +610,7 @@
             "w": 910,
             "h": 760,
             "kind": "fridge",
-            "rotation": 270
+            "rotation": 90
           }
         ],
         "lights": [
@@ -984,10 +980,11 @@
           {
             "id": "townhouse-minimal-fn27",
             "x": 1200,
-            "y": 1052,
-            "w": 1400,
-            "h": 2000,
-            "kind": "bed"
+            "y": 1007,
+            "w": 1370,
+            "h": 1910,
+            "kind": "bed_full",
+            "rotation": 180
           },
           {
             "id": "townhouse-minimal-fn28",
@@ -995,7 +992,8 @@
             "y": 300,
             "w": 500,
             "h": 400,
-            "kind": "nightstand"
+            "kind": "nightstand",
+            "rotation": 180
           },
           {
             "id": "townhouse-minimal-fn29",
@@ -1011,7 +1009,8 @@
             "y": 300,
             "w": 560,
             "h": 470,
-            "kind": "sink"
+            "kind": "sink",
+            "rotation": 180
           },
           {
             "id": "townhouse-minimal-fn31",
@@ -1029,7 +1028,7 @@
             "w": 690,
             "h": 700,
             "kind": "washer",
-            "rotation": 90
+            "rotation": 270
           },
           {
             "id": "townhouse-minimal-fn33",
@@ -1038,16 +1037,15 @@
             "w": 690,
             "h": 700,
             "kind": "dryer",
-            "rotation": 90
+            "rotation": 270
           },
           {
             "id": "townhouse-minimal-fn34",
             "x": 2100,
-            "y": 9898,
-            "w": 1900,
-            "h": 2100,
-            "kind": "bed",
-            "rotation": 180
+            "y": 9933,
+            "w": 1930,
+            "h": 2030,
+            "kind": "bed_king"
           },
           {
             "id": "townhouse-minimal-fn35",
@@ -1055,8 +1053,7 @@
             "y": 10400,
             "w": 500,
             "h": 400,
-            "kind": "nightstand",
-            "rotation": 180
+            "kind": "nightstand"
           },
           {
             "id": "townhouse-minimal-fn36",
@@ -1064,8 +1061,7 @@
             "y": 10400,
             "w": 500,
             "h": 400,
-            "kind": "nightstand",
-            "rotation": 180
+            "kind": "nightstand"
           },
           {
             "id": "townhouse-minimal-fn37",
@@ -1082,7 +1078,7 @@
             "w": 1200,
             "h": 600,
             "kind": "wardrobe",
-            "rotation": 270
+            "rotation": 90
           },
           {
             "id": "townhouse-minimal-fn39",
@@ -1091,7 +1087,7 @@
             "w": 1200,
             "h": 550,
             "kind": "sink_vanity",
-            "rotation": 90
+            "rotation": 270
           },
           {
             "id": "townhouse-minimal-fn40",

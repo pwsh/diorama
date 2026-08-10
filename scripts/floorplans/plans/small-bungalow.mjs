@@ -112,22 +112,33 @@ export function bungalowGeometry(b, { dx = 0, dy = 0 } = {}) {
 
   const furniture = [
     // Living Room
-    fu('sofa', 2600, 3100, { rotation: 90, w: 2200, h: 900 }),
+    // rot 270 = front (local −Z) toward +X, i.e. at the coffee table + TV wall.
+    fu('sofa', 2600, 3100, { rotation: 270, w: 2200, h: 900 }),
     fu('chair', 2600, 1800, { rotation: 270, w: 800, h: 800, label: 'Armchair' }),
     fu('coffee_table', 3700, 3100, { rotation: 0 }),
     fu('tv_stand', 5500, 3100, { rotation: 90 }),
     fu('tv', 5500, 3150, { rotation: 90, localState: 'off' }),
-    fu('bookshelf', 150, 700, { rotation: 90 }),
+    fu('bookshelf', 150, 700, { rotation: 270 }),   // open shelves face the room, back on the west wall
     fu('rug', 2900, 2600, { rotation: 0, w: 2600, h: 2200 }),
     fu('plant', 5400, 4100, { rotation: 0 }),
     // Kitchen (tile-look rug first, then fixtures on top)
     fu('rug', 7725, 1300, { rotation: 0, w: 3850, h: 2400, color: KITCHEN_TILE, label: 'Kitchen floor' }),
-    fu('kitchen_sink', 9450, 1350, { rotation: 0 }),
+    // rot 90 = basin front (local −Z) west into the kitchen; x 9425 sets the
+    // 550 mm carcass flush on the east wall face. Authored at 9450/rot 0 the box
+    // straddled the wall centerline (100 mm clear through), which check 10 could
+    // not see because window W5 excises that run.
+    fu('kitchen_sink', 9425, 1350, { rotation: 90 }),
     fu('dishwasher', 9450, 1900, { rotation: 0 }),
-    fu('fridge', 9450, 2350, { rotation: 0 }),
-    fu('stove', 7000, 300, { rotation: 180 }),
-    fu('microwave', 7000, 320, { rotation: 180, elevation: 1400 }),
-    fu('counter', 9450, 700, { rotation: 0, w: 900, h: 650 }),
+    // Fridge moved off the east run onto the P2 wall: on the east wall the
+    // settle push-out drove it 422 mm THROUGH the dishwasher (the run is
+    // 2580 mm of appliance in a 2500 mm bay). Back flush on y=2600, door into
+    // the kitchen; 33 mm clear of the dishwasher.
+    fu('fridge', 8600, 2165, { rotation: 0 }),
+    // y 380 = flush on the south wall face; at y 300 the range poked 80 mm out
+    // through the wall under window W4 (invisible to check 10 — W4 excises it).
+    fu('stove', 7000, 380, { rotation: 180 }),
+    fu('microwave', 7000, 400, { rotation: 180, elevation: 1400 }),  // over-range, follows the stove
+    fu('counter', 9450, 700, { rotation: 180, w: 900, h: 650 }),
     fu('cabinet', 7800, 300, { rotation: 180 }),
     // Dining Nook
     fu('rug', 6900, 3450, { rotation: 0, w: 2200, h: 1600, color: NOOK_SAGE, label: 'Nook rug' }),
@@ -137,14 +148,17 @@ export function bungalowGeometry(b, { dx = 0, dy = 0 } = {}) {
     fu('chair', 6900, 2950, { rotation: 0 }),
     // Mudroom / Laundry
     fu('rug', 9125, 3450, { rotation: 0, w: 1050, h: 1500, color: MUD_TILE, label: 'Mudroom floor' }),
-    fu('washer', 8950, 3900, { rotation: 180 }),
-    fu('dryer', 8950, 3900, { rotation: 180, elevation: 990 }),
+    fu('washer', 8950, 3900, { rotation: 0 }),   // doors face the mudroom, backs on the north wall
+    fu('dryer', 8950, 3900, { rotation: 0, elevation: 990 }),
     fu('bench', 9500, 3900, { rotation: 90, w: 700, h: 400 }),
     // Primary Bedroom
-    fu('bed', 1800, 6700, { rotation: 0, w: 2000, h: 1500 }),
-    fu('nightstand', 600, 7500, { rotation: 0 }),
-    fu('nightstand', 2800, 7500, { rotation: 0 }),
-    fu('dresser', 300, 5300, { rotation: 90 }),
+    // Canonical queen (1524 × 2032). Head edge stays on y=7450 rather than going
+    // flush to the y=7900 wall: flush would push the foot 550 mm into the
+    // Primary Closet door's approach zone (today it is 150 mm, unchanged here).
+    fu('bed', 1800, 6434, { rotation: 0 }),
+    fu('nightstand', 600, 7500, { rotation: 0 }),   // x pinned left of the closet-door zone (x 900..1700)
+    fu('nightstand', 3000, 7500, { rotation: 0 }),  // 188 mm off the bed, matching fn27's gap
+    fu('dresser', 300, 5300, { rotation: 270 }),    // drawers face the room, back on the west wall
     fu('chair', 3300, 5000, { rotation: 180, w: 800, h: 800, label: 'Reading chair' }),
     // Primary Closet
     fu('wardrobe', 900, 8900, { rotation: 0 }),
@@ -161,16 +175,24 @@ export function bungalowGeometry(b, { dx = 0, dy = 0 } = {}) {
     fu('bookshelf', 6700, 9200, { rotation: 90 }),
     fu('cabinet', 4950, 8200, { rotation: 270 }),
     // Bedroom 2
-    fu('bed', 8325, 6900, { rotation: 0, w: 1400, h: 1900 }),
-    fu('nightstand', 7400, 6200, { rotation: 0 }),
+    fu('bed_full', 8325, 6895, { rotation: 0 }),    // canonical full (1370 × 1910), headboard flush on y=7900
+    // Nightstand moved from the FOOT (y 6200) to the head half, and to the east
+    // side of the bed: the west strip is swallowed by the Bedroom 2 door's
+    // approach zone (x 6300..7500 × y 6500..7300) and the head strip by the BR2
+    // Closet (x 7400..8200) + Storage Closet (x 8800..9600) zones, all of which a
+    // nav-blocking nightstand must clear (validator check 9). y 6900 is the
+    // highest legal centre — 750 mm below the headboard instead of 1450 mm.
+    fu('nightstand', 9290, 6900, { rotation: 0 }),
     fu('desk', 7700, 4600, { rotation: 180 }),
-    fu('dresser', 9500, 5200, { rotation: 270 }),
+    fu('dresser', 9500, 5200, { rotation: 90 }),    // drawers face the room, back on the east wall
     // Bedroom 2 Closet
     fu('wardrobe', 7650, 8900, { rotation: 0 }),
     // Storage Closet
     fu('bookshelf', 9075, 8700, { rotation: 0, label: 'Storage shelving' }),
     // Hallway
-    fu('bench', 3850, 7200, { rotation: 90, w: 900, h: 400 }),
+    // rot 270 = seat front east into the hallway; at 90 it faced wall P5
+    // 0 mm away with the whole hallway behind its back.
+    fu('bench', 3850, 7200, { rotation: 270, w: 900, h: 400 }),
   ];
 
   const lights = [

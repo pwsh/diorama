@@ -1,7 +1,7 @@
 {
   "diorama": 2,
   "name": "Ranch — Smart Home",
-  "exportedAt": "2026-08-02T00:00:00.000Z",
+  "exportedAt": "2026-08-10T00:00:00.000Z",
   "store": {
     "v": 2,
     "floors": [
@@ -261,7 +261,7 @@
             "w": 500,
             "h": 500,
             "kind": "chair",
-            "rotation": 90,
+            "rotation": 270,
             "label": "Armchair"
           },
           {
@@ -271,7 +271,7 @@
             "w": 500,
             "h": 500,
             "kind": "chair",
-            "rotation": 270,
+            "rotation": 90,
             "label": "Armchair"
           },
           {
@@ -306,7 +306,7 @@
             "w": 800,
             "h": 350,
             "kind": "bookshelf",
-            "rotation": 90
+            "rotation": 270
           },
           {
             "id": "ranch-smart-home-fn8",
@@ -354,9 +354,9 @@
           {
             "id": "ranch-smart-home-fn13",
             "x": 1700,
-            "y": 1050,
-            "w": 1500,
-            "h": 2000,
+            "y": 1068,
+            "w": 1524,
+            "h": 2032,
             "kind": "bed",
             "rotation": 180
           },
@@ -385,7 +385,7 @@
             "w": 1200,
             "h": 500,
             "kind": "dresser",
-            "rotation": 90
+            "rotation": 270
           },
           {
             "id": "ranch-smart-home-fn17",
@@ -394,7 +394,7 @@
             "w": 800,
             "h": 350,
             "kind": "bookshelf",
-            "rotation": 270
+            "rotation": 90
           },
           {
             "id": "ranch-smart-home-fn18",
@@ -408,10 +408,10 @@
           {
             "id": "ranch-smart-home-fn19",
             "x": 6200,
-            "y": 2902,
-            "w": 1350,
-            "h": 1900,
-            "kind": "bed",
+            "y": 2907,
+            "w": 1370,
+            "h": 1910,
+            "kind": "bed_full",
             "rotation": 180
           },
           {
@@ -430,7 +430,7 @@
             "w": 1200,
             "h": 500,
             "kind": "dresser",
-            "rotation": 270
+            "rotation": 90
           },
           {
             "id": "ranch-smart-home-fn22",
@@ -453,26 +453,26 @@
             "id": "ranch-smart-home-fn24",
             "x": 1700,
             "y": 4950,
-            "w": 1900,
-            "h": 2100,
-            "kind": "bed",
+            "w": 1930,
+            "h": 2030,
+            "kind": "bed_king",
             "rotation": 180
           },
           {
             "id": "ranch-smart-home-fn25",
-            "x": 600,
-            "y": 4300,
+            "x": 460,
+            "y": 4000,
             "w": 500,
-            "h": 400,
+            "h": 300,
             "kind": "nightstand",
             "rotation": 180
           },
           {
             "id": "ranch-smart-home-fn26",
-            "x": 2500,
-            "y": 4300,
+            "x": 2940,
+            "y": 4000,
             "w": 500,
-            "h": 400,
+            "h": 300,
             "kind": "nightstand",
             "rotation": 180
           },
@@ -483,7 +483,7 @@
             "w": 1200,
             "h": 500,
             "kind": "dresser",
-            "rotation": 90
+            "rotation": 270
           },
           {
             "id": "ranch-smart-home-fn28",
@@ -526,8 +526,7 @@
             "y": 9598,
             "w": 480,
             "h": 700,
-            "kind": "toilet",
-            "rotation": 180
+            "kind": "toilet"
           },
           {
             "id": "ranch-smart-home-fn33",
@@ -536,7 +535,7 @@
             "w": 560,
             "h": 470,
             "kind": "sink",
-            "rotation": 90,
+            "rotation": 270,
             "label": "Vanity"
           },
           {
@@ -562,15 +561,17 @@
             "y": 8750,
             "w": 600,
             "h": 600,
-            "kind": "wardrobe"
+            "kind": "wardrobe",
+            "rotation": 180
           },
           {
             "id": "ranch-smart-home-fn37",
             "x": 5000,
-            "y": 6102,
+            "y": 6150,
             "w": 480,
             "h": 700,
-            "kind": "toilet"
+            "kind": "toilet",
+            "rotation": 180
           },
           {
             "id": "ranch-smart-home-fn38",
@@ -579,7 +580,7 @@
             "w": 560,
             "h": 470,
             "kind": "sink",
-            "rotation": 270,
+            "rotation": 90,
             "label": "Vanity"
           },
           {
@@ -588,8 +589,7 @@
             "y": 7773,
             "w": 1700,
             "h": 750,
-            "kind": "bathtub",
-            "rotation": 180
+            "kind": "bathtub"
           },
           {
             "id": "ranch-smart-home-fn40",
@@ -615,7 +615,7 @@
             "w": 800,
             "h": 350,
             "kind": "bookshelf",
-            "rotation": 270
+            "rotation": 90
           },
           {
             "id": "ranch-smart-home-fn43",
@@ -624,7 +624,7 @@
             "w": 1800,
             "h": 650,
             "kind": "counter",
-            "rotation": 90
+            "rotation": 270
           },
           {
             "id": "ranch-smart-home-fn44",
@@ -661,7 +661,7 @@
             "w": 900,
             "h": 400,
             "kind": "cabinet",
-            "rotation": 90
+            "rotation": 270
           },
           {
             "id": "ranch-smart-home-fn48",
@@ -673,7 +673,7 @@
           },
           {
             "id": "ranch-smart-home-fn49",
-            "x": 9600,
+            "x": 9700,
             "y": 5800,
             "w": 800,
             "h": 550,
@@ -682,7 +682,7 @@
           },
           {
             "id": "ranch-smart-home-fn50",
-            "x": 9200,
+            "x": 8920,
             "y": 5800,
             "w": 610,
             "h": 620,
@@ -767,7 +767,7 @@
             "w": 900,
             "h": 400,
             "kind": "cabinet",
-            "rotation": 270,
+            "rotation": 90,
             "label": "Buffet"
           },
           {
@@ -872,7 +872,7 @@
             "w": 800,
             "h": 350,
             "kind": "bookshelf",
-            "rotation": 90
+            "rotation": 270
           },
           {
             "id": "ranch-smart-home-fn72",
@@ -915,7 +915,7 @@
             "w": 900,
             "h": 400,
             "kind": "cabinet",
-            "rotation": 270
+            "rotation": 90
           },
           {
             "id": "ranch-smart-home-fn77",
@@ -924,7 +924,7 @@
             "w": 1400,
             "h": 700,
             "kind": "desk",
-            "rotation": 90,
+            "rotation": 270,
             "label": "Workbench"
           },
           {
@@ -934,7 +934,7 @@
             "w": 800,
             "h": 350,
             "kind": "bookshelf",
-            "rotation": 270,
+            "rotation": 90,
             "label": "Shelving"
           },
           {
@@ -976,7 +976,6 @@
             "w": 220,
             "h": 520,
             "kind": "mailbox",
-            "rotation": 180,
             "label": "Curbside mailbox"
           },
           {

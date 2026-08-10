@@ -118,7 +118,7 @@ export function build() {
     furn('sofa', 2200, 4400, { rotation: 0, w: 2000, h: 900, label: 'Staged sofa', color: '#5c6b73' }),
     furn('coffee_table', 2200, 3200, { rotation: 0 }),
     furn('chair', 700, 3400, { rotation: 270, label: 'Accent chair' }),
-    furn('bookshelf', 300, 1600, { rotation: 90, label: 'Styled shelf' }),
+    furn('bookshelf', 300, 1600, { rotation: 270, label: 'Styled shelf' }),
     furn('tv_stand', 4100, 2400, { rotation: 90, label: 'Media console' }),
     furn('tv', 4100, 2400, { rotation: 90, elevation: 550, localState: 'off' }),
     furn('rug', 2200, 3800, { rotation: 0, w: 3000, h: 2200, color: '#7a5c48' }),
@@ -144,7 +144,7 @@ export function build() {
     furn('rug', 10600, 2200, { rotation: 0, w: 2800, h: 2200, color: '#4f5a63' }),
 
     // ── Bedroom vignette (NW) ─────────────────────────────────────────────
-    furn('bed', 2200, 9400, { rotation: 0, w: 2000, h: 1500, label: 'Staged queen bed' }),
+    furn('bed', 2200, 9800, { rotation: 0, label: 'Staged queen bed' }),
     furn('nightstand', 900, 9400, { rotation: 0 }),
     furn('nightstand', 3500, 9400, { rotation: 0 }),
     furn('dresser', 700, 6600, { rotation: 0, w: 1200, h: 500 }),
@@ -156,8 +156,8 @@ export function build() {
     // ── Reading nook + checkout (N centre) ────────────────────────────────
     furn('desk', 7600, 6500, { rotation: 0, w: 2000, h: 800, label: 'Checkout desk' }),
     furn('chair', 7600, 7500, { rotation: 0 }),
-    furn('bookshelf', 4700, 8600, { rotation: 90, label: 'Nook shelf' }),
-    furn('bookshelf', 4700, 9600, { rotation: 90, label: 'Nook shelf' }),
+    furn('bookshelf', 4700, 8600, { rotation: 270, label: 'Nook shelf' }),
+    furn('bookshelf', 4700, 9600, { rotation: 270, label: 'Nook shelf' }),
     furn('rocking_chair', 5800, 9400, { rotation: 0, label: 'Reading rocker' }),
     furn('ottoman', 5800, 8400, { rotation: 0 }),
     furn('rug', 5700, 8900, { rotation: 0, w: 2600, h: 2600, color: '#6d5f4f' }),

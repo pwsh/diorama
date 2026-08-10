@@ -22,6 +22,7 @@
   <!-- Renderer canvas (rig geometry + progress) + a hidden 2D canvas (drawAll). -->
   <div id="rc" style="width:900px;height:600px;position:absolute;left:-9999px;top:0"></div>
   <div id="rc2" style="width:600px;height:400px;position:absolute;left:-9999px;top:1300px"></div>
+  <div id="rc3" style="width:600px;height:400px;position:absolute;left:-9999px;top:1750px"></div>
   <canvas id="c2d" width="800" height="600" style="position:absolute;left:-9999px;top:620px"></canvas>
 
   <!-- Harness build (from the repo root; NEVER reuse stale bundles). The pure
@@ -54,7 +55,8 @@
       pointInPolygon, closedWallLoops, robotLedColor, robotProgress, ROBOT_DEFAULTS,
       MOWER_KINEMATICS, MOWER_ROW_MM, stepBicycle, mowerWaypointReached, wrapAngle,
       parseVacuumPosition, vacuumRawToWorld, vacuumRawHeadingRad, solveVacuumDockOffset,
-      dockParkedHeading, frontVectorPlan, furnitureWorldToLocal,
+      dockParkedHeading, dockParkedPoint, MOWER_DOCK_PARK_OFFSET_MM,
+      frontVectorPlan, furnitureWorldToLocal,
       hexToInt,
     } from './geometry.mod.js';
     import { fitGeoTransform, latLonToPlan, planToLatLon, clampToBoundary } from './geo.mod.js';
@@ -62,6 +64,10 @@
     const tests = [];
     const ok = (name, cond, detail) => tests.push({ name, ok: !!cond, detail });
     const near = (a, b, e = 1) => Math.abs(a - b) <= e;
+    // Angles: rotation 90 puts the parked heading exactly on ±π, where the two
+    // representations are the same direction — compare on the circle, always.
+    const nearAng = (a, b, e = 1e-9) =>
+      Math.abs(Math.atan2(Math.sin(a - b), Math.cos(a - b))) <= e;
 
     // ── Fixtures: two rooms split by a wall with a DOORWAY gap ────────────────
     // Left room 0..3000, right room 3000..6000; divider wall at x=3000 with a
@@ -794,15 +800,20 @@
       rsge.demoPhase = 'return'; rsge.demoTimer = 999999;
       // Run until it docks (the unbound demo machine flips 'return' → 'dock' on
       // arrival and would later send it back out to mow, so stop at the arrival).
+      // Arrival is measured against the PARKED POINT, not the dock origin: since
+      // 2026-08-09 the mower seats MOWER_DOCK_PARK_OFFSET_MM out of the mouth
+      // (see dockParkedPoint), so that IS "at its dock". The tolerance is
+      // unchanged — only the reference point moved with the resting pose.
+      const parkG = dockParkedPoint(rge);
       let crossG = 0, arriveStep = -1;
       for (let i = 0; i < 8000; i++) {                    // ≤400 s @ 20 Hz
         const px = rsge.x, py = rsge.y;
         pge.stepRobots(0.05);
         if (segCrossesSolidWall(fge.walls, fge.doors, [], px, py, rsge.x, rsge.y)) crossG++;
-        if (Math.hypot(rsge.x - rge.x, rsge.y - rge.y) < K.arriveMm) { arriveStep = i; break; }
+        if (Math.hypot(rsge.x - parkG.x, rsge.y - parkG.y) < K.arriveMm) { arriveStep = i; break; }
       }
       ok('garage: the mower reaches the dock INSIDE the room',
-         Math.hypot(rsge.x - rge.x, rsge.y - rge.y) < K.arriveMm &&
+         Math.hypot(rsge.x - parkG.x, rsge.y - parkG.y) < K.arriveMm &&
          pointInAnyLoop(loopsG1, rsge.x, rsge.y),
          `(${rsge.x.toFixed(0)},${rsge.y.toFixed(0)}) arrived@step=${arriveStep}`);
       ok('garage: it never drove through a wall getting there (every step)',
@@ -812,15 +823,15 @@
       rsge.demoPhase = 'dock'; rsge.demoTimer = 999999;
       for (let i = 0; i < 400; i++) pge.stepRobots(0.05);
       const wantH = dockParkedHeading(rge.rotation);
-      ok('garage: docked, the heading settles toward the dock facing',
+      ok('garage: docked, the heading settles OUT of the dock mouth',
          Math.abs(wrapAngle(rsge.heading - wantH)) < 0.12 && rsge.speed < 20,
          `Δ=${Math.abs(wrapAngle(rsge.heading - wantH)).toFixed(3)} rad v=${rsge.speed.toFixed(1)}`);
       // …and it STAYS parked in the dock — the user-reported failure was the
       // mower settling on the far side of the wall instead.
       ok('garage: it stays parked at the dock, inside the room',
          pointInAnyLoop(loopsG1, rsge.x, rsge.y) &&
-         Math.hypot(rsge.x - rge.x, rsge.y - rge.y) < K.arriveMm,
-         `(${rsge.x.toFixed(0)},${rsge.y.toFixed(0)}) dock=(${rge.x},${rge.y})`);
+         Math.hypot(rsge.x - parkG.x, rsge.y - parkG.y) < K.arriveMm,
+         `(${rsge.x.toFixed(0)},${rsge.y.toFixed(0)}) park=(${parkG.x.toFixed(0)},${parkG.y.toFixed(0)})`);
 
       // (d) MOWING stays strictly outdoors: `wasInside` forgiveness lets it leave
       // the garage, and after that first exit it never re-enters any interior.
@@ -896,12 +907,13 @@
       const rsa = pa.robotStates.ma;
       rsa.x = 2000; rsa.y = 8500; rsa.heading = 0; rsa.speed = 0;    // NW of the building
       rsa.demoPhase = 'return'; rsa.demoTimer = 999999;
+      const parkA = dockParkedPoint(ra);     // the resting pose, see the garage note
       let crossA = 0, arriveA = -1;
       for (let i = 0; i < 20000; i++) {                    // ≤1000 s @ 20 Hz
         const px = rsa.x, py = rsa.y;
         pa.stepRobots(0.05);
         if (segCrossesSolidWall(fa.walls, fa.doors, [], px, py, rsa.x, rsa.y)) crossA++;
-        if (Math.hypot(rsa.x - ra.x, rsa.y - ra.y) < K.arriveMm) { arriveA = i; break; }
+        if (Math.hypot(rsa.x - parkA.x, rsa.y - parkA.y) < K.arriveMm) { arriveA = i; break; }
       }
       ok('adversarial: the mower threads the off-line doorway and reaches the dock',
          arriveA >= 0 && pointInAnyLoop(loopsA, rsa.x, rsa.y),
@@ -1439,7 +1451,7 @@
       // A relocation is a SNAP and is trivially separable from driving: a docked
       // drive caps at maxSpeedMm × dt = 21 mm/step.
       const JUMP_MM = 200;
-      const DOCK_ROT = 90;                       // parked heading 0 rad (due east)
+      const DOCK_ROT = 90;                       // opening faces −X ⇒ parked heading π (due west)
 
       const wall = (x0, y0, x1, y1) => ({ points: [{ x: x0, y: y0 }, { x: x1, y: y1 }] });
       // The reported geometry. A long east-west house wall (2000..14000 at
@@ -1522,12 +1534,18 @@
            t1.jumpAt >= relocSteps, `jumpAt=${t1.jumpAt} window=${relocSteps} steps`);
         ok('dock wedge: …and fires once wedged (drive in, then one window)',
            t1.jumpAt < 600, `jumpAt=${t1.jumpAt}`);
-        ok('dock wedge: it lands EXACTLY on the dock, stopped',
-           Math.abs(t1.rs.x - DOCK.x) < 1e-9 && Math.abs(t1.rs.y - DOCK.y) < 1e-9 &&
-           t1.rs.speed === 0,
-           `(${t1.rs.x},${t1.rs.y}) v=${t1.rs.speed}`);
+        // EXACTLY on the parked point — the dock origin pushed
+        // MOWER_DOCK_PARK_OFFSET_MM out of the opening (2026-08-09); the snap
+        // targets the same `home` the drive does, so the two can never disagree.
+        {
+          const pk = dockParkedPoint({ x: DOCK.x, y: DOCK.y, rotation: DOCK_ROT, kind: 'mower' });
+          ok('dock wedge: it lands EXACTLY on the parked point, stopped',
+             Math.abs(t1.rs.x - pk.x) < 1e-9 && Math.abs(t1.rs.y - pk.y) < 1e-9 &&
+             t1.rs.speed === 0,
+             `(${t1.rs.x},${t1.rs.y}) want(${pk.x},${pk.y}) v=${t1.rs.speed}`);
+        }
         ok('dock wedge: ALIGNED — the parked heading is applied outright',
-           near(t1.rs.heading, dockParkedHeading(DOCK_ROT), 1e-12),
+           nearAng(t1.rs.heading, dockParkedHeading(DOCK_ROT), 1e-12),
            `${t1.rs.heading} vs ${dockParkedHeading(DOCK_ROT)}`);
         ok('dock wedge: no kinematic step ever crossed a wall',
            t1.cross === 0, `crossings=${t1.cross}`);
@@ -1801,24 +1819,51 @@
     // `RobotFixture.rotation` (screen-CW degrees, 0 = local +Y along world +Y —
     // the furniture convention) turns the dock in BOTH views; the dock's FRONT
     // (the opening) is local −Y, so frontVectorPlan(rotation) is the outward
-    // direction and dockParkedHeading is the opposite (nose into the dock).
+    // direction — and since 2026-08-09 dockParkedHeading IS that direction: a
+    // parked mower noses OUT of the mouth, ready to drive away, instead of
+    // staring into the dock's back wall (the user-reported "docked 180 degrees
+    // incorrectly … intersecting the wall"). §g below pins the reversal against
+    // the real 3D dock geometry, with the old convention as a negative control.
     {
-      ok('dockParkedHeading: absent rotation → +Y (π/2)',
-         near(dockParkedHeading(undefined), Math.PI / 2, 1e-12), String(dockParkedHeading(undefined)));
-      ok('dockParkedHeading: 0° → π/2 (+Y)', near(dockParkedHeading(0), Math.PI / 2, 1e-12));
-      ok('dockParkedHeading: 90° → 0 (+X)', near(dockParkedHeading(90), 0, 1e-12),
+      ok('dockParkedHeading: absent rotation → −π/2 (−Y, out of the mouth)',
+         near(dockParkedHeading(undefined), -Math.PI / 2, 1e-12), String(dockParkedHeading(undefined)));
+      ok('dockParkedHeading: 0° → −π/2 (−Y)', near(dockParkedHeading(0), -Math.PI / 2, 1e-12));
+      ok('dockParkedHeading: 90° → π (−X)', near(Math.abs(dockParkedHeading(90)), Math.PI, 1e-12),
          String(dockParkedHeading(90)));
-      ok('dockParkedHeading: 180° → −π/2 (−Y)', near(dockParkedHeading(180), -Math.PI / 2, 1e-12),
+      ok('dockParkedHeading: 180° → π/2 (+Y)', near(dockParkedHeading(180), Math.PI / 2, 1e-12),
          String(dockParkedHeading(180)));
-      ok('dockParkedHeading: 270° → π (−X)',
-         near(Math.abs(dockParkedHeading(270)), Math.PI, 1e-12), String(dockParkedHeading(270)));
-      // The parked nose is EXACTLY opposite the dock opening, at every angle.
-      let opp = true;
+      ok('dockParkedHeading: 270° → 0 (+X)', near(dockParkedHeading(270), 0, 1e-12),
+         String(dockParkedHeading(270)));
+      // The parked nose IS the dock opening's outward direction, at every angle.
+      let alongFront = true, oppFront = false;
       for (const deg of [0, 30, 45, 90, 137, 180, 250, 315]) {
         const h = dockParkedHeading(deg), fv = frontVectorPlan(deg);
-        if (!near(Math.cos(h), -fv.x, 1e-9) || !near(Math.sin(h), -fv.y, 1e-9)) opp = false;
+        if (!near(Math.cos(h), fv.x, 1e-9) || !near(Math.sin(h), fv.y, 1e-9)) alongFront = false;
+        if (near(Math.cos(h), -fv.x, 1e-9) && near(Math.sin(h), -fv.y, 1e-9)) oppFront = true;
       }
-      ok('dockParkedHeading: nose is exactly −frontVectorPlan at every angle', opp);
+      ok('dockParkedHeading: nose is exactly +frontVectorPlan at every angle', alongFront);
+      ok('dockParkedHeading NEGATIVE: it is never −frontVectorPlan (the pre-fix rule)',
+         oppFront === false);
+      // dockParkedPoint: the mower seats forward of the origin, the vacuum does not.
+      for (const deg of [0, 90, 180, 270, 117]) {
+        const fv = frontVectorPlan(deg);
+        const pk = dockParkedPoint({ x: 1000, y: 2000, rotation: deg, kind: 'mower' });
+        ok(`dockParkedPoint: mower @${deg}° sits ${MOWER_DOCK_PARK_OFFSET_MM}mm along the front vector`,
+           near(pk.x, 1000 + fv.x * MOWER_DOCK_PARK_OFFSET_MM, 1e-9) &&
+           near(pk.y, 2000 + fv.y * MOWER_DOCK_PARK_OFFSET_MM, 1e-9),
+           `(${pk.x.toFixed(2)},${pk.y.toFixed(2)})`);
+      }
+      {
+        const pv = dockParkedPoint({ x: 1000, y: 2000, rotation: 90, kind: 'vacuum' });
+        ok('dockParkedPoint: a vacuum keeps the dock origin (round puck, no nose)',
+           pv.x === 1000 && pv.y === 2000, `(${pv.x},${pv.y})`);
+        const pa = dockParkedPoint({ x: 0, y: 0, kind: 'mower' });   // rotation absent
+        ok('dockParkedPoint: absent rotation → straight out −Y',
+           near(pa.x, 0, 1e-9) && near(pa.y, -MOWER_DOCK_PARK_OFFSET_MM, 1e-9), `(${pa.x},${pa.y})`);
+        ok('dockParkedPoint: the offset is smaller than arriveMm (arrival tests unmoved)',
+           MOWER_DOCK_PARK_OFFSET_MM < MOWER_KINEMATICS.arriveMm,
+           `${MOWER_DOCK_PARK_OFFSET_MM} < ${MOWER_KINEMATICS.arriveMm}`);
+      }
     }
 
     try {
@@ -1989,16 +2034,52 @@
         const r = { id: 'pk', kind: 'mower', x: 2000, y: 2000, rotation: 90 };
         f.robots = [r];
         p.stepRobots(0.05);
-        ok('parked: a fresh mower spawns nose-into its dock',
-           near(p.robotStates.pk.heading, dockParkedHeading(90), 1e-9),
+        ok('parked: a fresh mower spawns nose-OUT of its dock',
+           nearAng(p.robotStates.pk.heading, dockParkedHeading(90)),
            String(p.robotStates.pk.heading));
+        {
+          const pk0 = dockParkedPoint(r);
+          ok('parked: …and spawns seated at the parked point, not the dock origin',
+             near(p.robotStates.pk.x, pk0.x, 1e-9) && near(p.robotStates.pk.y, pk0.y, 1e-9) &&
+             Math.hypot(pk0.x - r.x, pk0.y - r.y) > 1,
+             `(${p.robotStates.pk.x},${p.robotStates.pk.y}) want(${pk0.x},${pk0.y})`);
+        }
         // Turn the dock under a settled mower → the nose eases onto the new pose
         // (bounded yaw rate — a car never spins on the spot).
         r.rotation = 180;
         for (let i = 0; i < 600; i++) p.stepRobots(0.05);
         ok('parked: it eases onto a re-aimed dock',
-           near(p.robotStates.pk.heading, dockParkedHeading(180), 1e-3),
+           nearAng(p.robotStates.pk.heading, dockParkedHeading(180), 1e-3),
            String(p.robotStates.pk.heading));
+        // …and it EASES: a parked mower is a car, so the re-aim must stay under
+        // the min-speed yaw ceiling (wMax = minSpeedMm / turnRadiusMm) every
+        // step and take many of them. A 180° re-aim is the worst case and the
+        // one the 2026-08-09 convention flip makes reachable in one edit.
+        {
+          const p3 = new Planner();
+          const f3 = p3.floor();
+          f3.w = 8000; f3.d = 6000; f3.walls = [];
+          const r3 = { id: 'ez', kind: 'mower', x: 2000, y: 2000, rotation: 0 };
+          f3.robots = [r3];
+          p3.stepRobots(0.05);
+          r3.rotation = 180;                       // flip the dock under it
+          // Ceiling = max(minSpeedMm, bs.speed) / turnRadiusMm, so the bound is
+          // the CRUISE one: flipping the dock also moves its parked point (by
+          // 2·MOWER_DOCK_PARK_OFFSET_MM), and the mower drives that short leg
+          // rather than pivoting, picking up speed on the way.
+          const cap = MOWER_KINEMATICS.maxSpeedMm / MOWER_KINEMATICS.turnRadiusMm * 0.05;
+          let maxStep = 0, settled = -1;
+          for (let i = 0; i < 900; i++) {
+            const h0 = p3.robotStates.ez.heading;
+            p3.stepRobots(0.05);
+            maxStep = Math.max(maxStep, Math.abs(wrapAngle(p3.robotStates.ez.heading - h0)));
+            if (settled < 0 && nearAng(p3.robotStates.ez.heading, dockParkedHeading(180), 1e-3))
+              settled = i;
+          }
+          ok('parked: the re-aim never exceeds the min-speed yaw rate (no spin in place)',
+             maxStep <= cap + 1e-9 && settled > 100,
+             `maxΔ=${maxStep.toFixed(5)} cap=${cap.toFixed(5)} settled@${settled}`);
+        }
         // A vacuum's seed heading is UNCHANGED (its golden probes depend on it).
         const pv = new Planner();
         pv.floor().robots = [{ id: 'sv', kind: 'vacuum', x: 900, y: 900, rotation: 90 }];
@@ -2054,6 +2135,253 @@
       R2.destroy();
     } catch (e) {
       ok('renderer dock rotation tests threw', false, String(e && e.message || e));
+    }
+
+    // ── §g Parked pose vs the REAL dock geometry (2026-08-09) ────────────────
+    // The user-reported defect: "the mower is also docked 180 degrees
+    // incorrectly in the dock so it ends up intersecting the wall". Both halves
+    // are measured here against the built renderer's own meshes rather than
+    // against constants — the nose must come OUT of the mouth, and the seated
+    // body must clear the dock's back wall. Every pin carries a negative
+    // control computing the PRE-FIX pose (nose = −frontVectorPlan, body on the
+    // dock origin) and asserting it fails the same invariant.
+    try {
+      const rmod = await import('./assets/three-renderer.js?v=' + Date.now());
+      const R3 = new rmod.ThreeDRenderer(document.getElementById('rc3'));
+      await R3.load();
+      const FW = 20000, FD = 20000;
+      const scene3dG = { preset: 'day', floorColor: '#223344', floorTex: 'none', wallColor: '#bbb' };
+      // scene = (fw/2 − wx, h, wy − fd/2) ⇒ world = (fw/2 − sx, sz + fd/2).
+      const s2w = (sx, sz) => ({ x: FW / 2 - sx, y: sz + FD / 2 });
+      // World-plan bbox corners of a subtree's SOLID meshes. Outline shells are
+      // inverted hulls of what they wrap and the blob shadow is a ground decal —
+      // neither is body, so neither may set the seating envelope.
+      const solidCorners = (root, opts) => {
+        const pts = [];
+        root.updateMatrixWorld(true);
+        root.traverse(o => {
+          if (!o.isMesh || !o.geometry) return;
+          if (o.userData && o.userData.outline) return;
+          if (o.geometry.type === 'PlaneGeometry') return;      // blob shadow
+          o.geometry.computeBoundingBox();
+          const bb = o.geometry.boundingBox, e = o.matrixWorld.elements;
+          let yMax = -1e9;
+          for (const cy of [bb.min.y, bb.max.y]) {
+            for (const cx of [bb.min.x, bb.max.x]) for (const cz of [bb.min.z, bb.max.z])
+              yMax = Math.max(yMax, e[1] * cx + e[5] * cy + e[9] * cz + e[13]);
+          }
+          if (opts && opts.minTopY != null && yMax < opts.minTopY) return;
+          for (const cx of [bb.min.x, bb.max.x]) for (const cy of [bb.min.y, bb.max.y])
+            for (const cz of [bb.min.z, bb.max.z]) {
+              const sx = e[0] * cx + e[4] * cy + e[8] * cz + e[12];
+              const sz = e[2] * cx + e[6] * cy + e[10] * cz + e[14];
+              pts.push(s2w(sx, sz));
+            }
+        });
+        return pts;
+      };
+
+      const DOCK_XY = { x: 10000, y: 10000 };
+      let noseOk = true, noseBad = true, clearOk = true, clearBad = true;
+      let noseDetail = '', clearDetail = '';
+      for (const rot of [0, 90, 180, 270, 143]) {
+        const fx = { id: 'g1', kind: 'mower', x: DOCK_XY.x, y: DOCK_XY.y, rotation: rot, entity_id: null };
+        R3.updateFloor({ id: 'fg', name: 'G', w: FW, d: FD, walls: [], furniture: [], lights: [],
+          switches: [], sensors: [], motionSensors: [], envSensors: [], doors: [], windows: [],
+          bg: null, model3d: null, look3d: null, rooms: [], robots: [fx] }, scene3dG);
+        R3.updateRobotDocks([fx]);
+        const dockGrp = R3._robotGroup.children[0];
+        const fv = frontVectorPlan(rot);                 // out of the mouth
+        const back = { x: -fv.x, y: -fv.y };             // toward the back wall
+
+        // The dock's first REARWARD obstruction at body height: the back wall.
+        // Filtered by top height so the flat base plate (which spans the whole
+        // footprint) and the roof (clears the body entirely) are not mistaken
+        // for it; measured, never hard-coded.
+        let obstruct = Infinity;
+        for (const q of solidCorners(dockGrp, { minTopY: 260 })) {
+          const d = (q.x - DOCK_XY.x) * back.x + (q.y - DOCK_XY.y) * back.y;
+          if (d > 0) obstruct = Math.min(obstruct, d);
+        }
+
+        // Two poses: the shipped one, and the pre-fix control.
+        const poses = {
+          fixed: { p: dockParkedPoint(fx), h: dockParkedHeading(rot) },
+          prefix: { p: { x: fx.x, y: fx.y }, h: Math.atan2(-fv.y, -fv.x) },
+        };
+        for (const key of ['fixed', 'prefix']) {
+          const pose = poses[key];
+          R3.updateRobotRigs([fx], { g1: { x: pose.p.x, y: pose.p.y, heading: pose.h,
+            phase: 0, activity: 'docked', led: '#ffca28' } }, {});
+          const rig = R3._robotRigs['g1'];
+          // (1) NOSE: local −Z through the group yaw, back into the plan frame.
+          const a = rig.group.rotation.y;
+          const nsx = -Math.sin(a), nsz = -Math.cos(a);
+          const nose = { x: -nsx, y: nsz };
+          const alongFront = nose.x * fv.x + nose.y * fv.y;    // +1 = out of the mouth
+          // (2) SEATING: how deep the body reaches toward the back wall.
+          let reach = -Infinity;
+          for (const q of solidCorners(rig.group))
+            reach = Math.max(reach, (q.x - DOCK_XY.x) * back.x + (q.y - DOCK_XY.y) * back.y);
+          if (key === 'fixed') {
+            if (alongFront < 0.999) noseOk = false;
+            if (reach >= obstruct) clearOk = false;
+            noseDetail += `${rot}:${alongFront.toFixed(3)} `;
+            clearDetail += `${rot}:${reach.toFixed(0)}<${obstruct.toFixed(0)} `;
+          } else {
+            if (alongFront > -0.999) noseBad = false;          // control really is flipped
+            if (reach < obstruct) clearBad = false;            // …and really does bury itself
+          }
+          // Rig rebuilds are keyed on kind only, so drop it between poses.
+          R3._disposeRobotRig(rig); delete R3._robotRigs['g1'];
+        }
+      }
+      ok('parked3d: the drawn nose points OUT of the dock mouth at every rotation',
+         noseOk, noseDetail.trim());
+      ok('parked3d NEGATIVE: the pre-fix pose points the nose INTO the dock',
+         noseBad);
+      ok('parked3d: the seated body clears the dock back wall at every rotation',
+         clearOk, clearDetail.trim());
+      ok('parked3d NEGATIVE: the pre-fix pose buries the body in the back wall',
+         clearBad);
+      R3.destroy();
+
+      // ── §g2 The MOVING mower's drawn nose tracks its direction of travel ───
+      // Guards against "fixing" the parked pose by flipping a convention that
+      // was actually right: if the rig's forward axis disagreed with `heading`,
+      // a driving mower would render backwards too.
+      const R4 = new rmod.ThreeDRenderer(document.getElementById('rc3'));
+      await R4.load();
+      const mv = { id: 'mv', kind: 'mower', x: 4000, y: 4000, entity_id: null };
+      R4.updateFloor({ id: 'fm', name: 'M', w: 20000, d: 20000, walls: [], furniture: [], lights: [],
+        switches: [], sensors: [], motionSensors: [], envSensors: [], doors: [], windows: [],
+        bg: null, model3d: null, look3d: null, rooms: [], robots: [mv] }, scene3dG);
+      let travOk = true, travDetail = '';
+      for (const deg of [0, 45, 90, 180, 270, 117]) {
+        const h = deg * Math.PI / 180;
+        R4.updateRobotRigs([mv], { mv: { x: 4000, y: 4000, heading: h, phase: 0,
+          activity: 'mowing', led: '#43a047' } }, {});
+        const a = R4._robotRigs['mv'].group.rotation.y;
+        const nx = -(-Math.sin(a)), ny = -Math.cos(a);      // local −Z → world plan
+        const dot = nx * Math.cos(h) + ny * Math.sin(h);
+        if (dot < 0.9999) travOk = false;
+        travDetail += `${deg}:${dot.toFixed(4)} `;
+      }
+      ok('parked3d: a MOVING mower\'s nose points along its heading (forward axis intact)',
+         travOk, travDetail.trim());
+      R4.destroy();
+    } catch (e) {
+      ok('parked pose (§g) tests threw', false, String(e && e.message || e));
+    }
+
+    // ── §h 2D: the drawn nose bar agrees with 3D, parked and moving ──────────
+    // The 2D mower is a heading-rotated rounded rect whose leading edge carries
+    // a bright white nose bar. Measured by pixel centroid, so a sign slip in
+    // either renderer shows up as a ~180° disagreement rather than passing on a
+    // shared constant.
+    try {
+      const { Planner } = await import('./planner.mod.js?v=' + Date.now());
+      const C4 = await import('./canvas-render.mod.js?v=' + Date.now());
+      const p2 = new Planner();
+      const f2 = p2.floor();
+      f2.w = 8000; f2.d = 6000; f2.walls = [];
+      const rb = { id: 'nb', kind: 'mower', x: 3000, y: 3000, rotation: 0, entity_id: null };
+      f2.robots = [rb];
+      p2.hass = { states: {} };
+      const cvN = document.getElementById('c2d'), ctxN = cvN.getContext('2d');
+      const viewN = C4.computeView(cvN, f2.w, f2.d, p2.viewCenter, p2.zoom);
+      const px = (x, y) => C4.mmToPx(viewN, x, y);
+      const bodyRpx = Math.hypot(Math.max(9, ROBOT_DEFAULTS.mower.bodyD * viewN.scale),
+                                 Math.max(7, ROBOT_DEFAULTS.mower.bodyW * viewN.scale)) / 2;
+      // Centroid of the near-white nose bar, as a WORLD-plan direction from the
+      // body centre. The bar is white at 0.9 alpha, so every channel lands ≥225;
+      // nothing else in the body disc does (the green body is 102,187,106, the
+      // amber docked LED ring has b=40, the caption sits outside the disc). The
+      // loose spread guard is belt-and-braces only — do NOT tighten it: the bar
+      // overlays the state-coloured body stroke, so an amber docked ring tints
+      // it to 255,250,234 and a 14-point spread test silently finds nothing.
+      const noseDir2d = (ctr) => {
+        const c = px(ctr.x, ctr.y);
+        const d = ctxN.getImageData(0, 0, cvN.width, cvN.height).data;
+        let sx = 0, sy = 0, n = 0;
+        for (let yy = 0; yy < cvN.height; yy++) for (let xx = 0; xx < cvN.width; xx++) {
+          if (Math.hypot(xx - c.x, yy - c.y) > bodyRpx * 0.95) continue;
+          const i = (yy * cvN.width + xx) * 4;
+          const r = d[i], g = d[i + 1], b = d[i + 2];
+          if (r < 225 || g < 225 || b < 225) continue;
+          if (Math.max(r, g, b) - Math.min(r, g, b) > 40) continue;
+          sx += xx; sy += yy; n++;
+        }
+        if (!n) return null;
+        return { x: sx / n - c.x, y: -(sy / n - c.y), n };   // canvas Y is flipped
+      };
+      // (a) MOVING: the bar leads along the heading.
+      let mvOk = true, mvDetail = '';
+      for (const deg of [0, 90, 180, 270, 117]) {
+        const h = deg * Math.PI / 180;
+        p2.robotStates = { nb: { x: 3000, y: 3000, heading: h, phase: 0,
+          activity: 'mowing', led: '#43a047' } };
+        ctxN.clearRect(0, 0, cvN.width, cvN.height);
+        C4.drawAll(ctxN, p2, viewN, null);
+        const v = noseDir2d({ x: 3000, y: 3000 });
+        if (!v) { mvOk = false; mvDetail += `${deg}:none `; continue; }
+        const L = Math.hypot(v.x, v.y) || 1;
+        const dot = (v.x / L) * Math.cos(h) + (v.y / L) * Math.sin(h);
+        if (dot < 0.95) mvOk = false;
+        mvDetail += `${deg}:${dot.toFixed(3)} `;
+      }
+      ok('parked2d: the moving nose bar leads along the heading', mvOk, mvDetail.trim());
+      // (b) PARKED (no controller state): the bar points OUT of the dock mouth,
+      //     and the body sits forward of the dock origin.
+      let pkOk = true, pkBad = true, pkDetail = '', negDetail = '';
+      for (const deg of [0, 90, 180, 270, 143]) {
+        rb.rotation = deg;
+        p2.robotStates = {};
+        ctxN.clearRect(0, 0, cvN.width, cvN.height);
+        C4.drawAll(ctxN, p2, viewN, null);
+        const pk = dockParkedPoint(rb);
+        const v = noseDir2d(pk);
+        const fv = frontVectorPlan(deg);
+        if (!v) { pkOk = false; pkDetail += `${deg}:none `; continue; }
+        const L = Math.hypot(v.x, v.y) || 1;
+        const dot = (v.x / L) * fv.x + (v.y / L) * fv.y;
+        if (dot < 0.95) pkOk = false;
+        pkDetail += `${deg}:${dot.toFixed(3)} `;
+        // NEGATIVE control: draw the PRE-FIX pose explicitly (nose into the
+        // dock, body on the origin) and require the same measurement to fail.
+        p2.robotStates = { nb: { x: rb.x, y: rb.y, heading: Math.atan2(-fv.y, -fv.x),
+          phase: 0, activity: 'docked', led: '#ffca28' } };
+        ctxN.clearRect(0, 0, cvN.width, cvN.height);
+        C4.drawAll(ctxN, p2, viewN, null);
+        const vb = noseDir2d({ x: rb.x, y: rb.y });
+        const Lb = vb ? (Math.hypot(vb.x, vb.y) || 1) : 1;
+        const dotB = vb ? (vb.x / Lb) * fv.x + (vb.y / Lb) * fv.y : 0;
+        if (dotB > -0.95) pkBad = false;
+        negDetail += `${deg}:${dotB.toFixed(3)}${vb ? '' : '(none)'} `;
+      }
+      ok('parked2d: the parked nose bar points OUT of the dock mouth', pkOk, pkDetail.trim());
+      ok('parked2d NEGATIVE: the pre-fix pose measures as nose-IN (≈ −1)', pkBad,
+         negDetail.trim());
+      // The drawn body really moved off the dock origin (a nose flip alone
+      // would leave it centred and still inside the back wall).
+      {
+        rb.rotation = 0;
+        p2.robotStates = {};
+        ctxN.clearRect(0, 0, cvN.width, cvN.height);
+        C4.drawAll(ctxN, p2, viewN, null);
+        const atPark = noseDir2d(dockParkedPoint(rb));
+        const atOrigin = noseDir2d({ x: rb.x, y: rb.y });
+        // Same bar, measured from two centres: from the parked point it is
+        // dead ahead (−Y); from the dock origin it is further away, because the
+        // whole body sits MOWER_DOCK_PARK_OFFSET_MM forward of it.
+        const dPark = atPark ? Math.hypot(atPark.x, atPark.y) : -1;
+        const dOrigin = atOrigin ? Math.hypot(atOrigin.x, atOrigin.y) : -1;
+        ok('parked2d: the body is seated forward of the dock origin',
+           dPark > 0 && dOrigin > dPark + MOWER_DOCK_PARK_OFFSET_MM * viewN.scale * 0.8,
+           `dPark=${dPark.toFixed(1)}px dOrigin=${dOrigin.toFixed(1)}px`);
+      }
+    } catch (e) {
+      ok('2D parked-nose (§h) tests threw', false, String(e && e.message || e));
     }
 
     // ── run + report ─────────────────────────────────────────────────────────

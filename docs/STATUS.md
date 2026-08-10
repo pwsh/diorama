@@ -445,6 +445,101 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **STALE PICK MATRICES — the real "can turn the firepit on but not
+  off" root cause** (2026-08-09, user-reported THREE times; the first
+  two diagnoses were wrong; unreleased — on main past v0.64.0).
+  A raycast reads `object.matrixWorld`, which only `renderer.render()`
+  recomputes, and a freshly CONSTRUCTED `Object3D` has an identity
+  matrixWorld with `matrixWorldNeedsUpdate === false` (that flag is
+  raised by `updateMatrix()`, which never ran). three-view
+  force-rebuilds the light group EVERY frame while a fire is lit
+  (flicker), in a rAF callback SEPARATE from the renderer's render — so
+  for most of every frame the newest geometry has never been rendered
+  and its world matrix claims the scene ORIGIN. **That is the whole
+  asymmetry: an unlit pit is not force-rebuilt, so lighting it always
+  worked; putting it out never did.** Reproduced on the user's real
+  store (read-only, no data in the repo): 60/60 raycast MISS while lit
+  vs 60/60 hit while unlit; real clicks 12/12 ON but **0/12 OFF** →
+  12/12 after; a never-rebuilt `wall_sconce` 40/40 throughout.
+  Blast radius was every force-rebuilt fixture — **an ALARMING safety
+  sensor and an ACTIVE alert beacon were unclickable in 3D at exactly
+  the moment they mattered.** Fix: unconditional `_syncPickMatrices()`
+  at the top of `_raycastFixture` + `_raycastVacSeg` (0.997 ms on a
+  2440-object scene; a "rendered since rebuild?" flag would have to be
+  right at every build site). FIREPIT 85 → **92/92**, §F rebuilds and
+  picks in ONE synchronous block so the rAF cannot heal it.
+  Same hunt, two real fixes that were NOT this bug: the tap gate's
+  `lastTapT` seeded at `0` made every tap in a page's first 350 ms a
+  dblclick (→ `-Infinity`), and three-view now resolves hits via
+  `byFixtureId` because the renderer stringifies ids while 2D resolves
+  by ARRAY INDEX — a non-string id was silently dead in 3D forever.
+  **Both earlier theories are recorded as disproven in CLAUDE.md** so
+  nobody re-runs them: untagged flame meshes (probe-disproven) and a
+  roamer re-lighting the pit (the user's store has all 8 roamers
+  DISABLED — the user said so and was right).
+
+- **Demo floorplan library audit: ~400 furniture corrections + validator
+  checks 14–16 + wall-aware seat capture** (2026-08-09, user-requested
+  "review all the demo floorplans for wall and object overlapping
+  interactions and orientation and replace the existing beds with the
+  updated dimensions"; unreleased — on main past v0.64.0). One read-only
+  Opus survey, three parallel Opus fix agents on disjoint plan modules,
+  one engine agent, one validator agent.
+  **What was wrong**: the settle pass only ever auto-corrected pieces
+  carrying `def.seat`, so the "+Y = front" authoring defect CLAUDE.md
+  already recorded for seats survived untouched in EVERYTHING ELSE.
+  All 36 beds hand-authored their dims and NONE matched a real bed size;
+  15 had the headboard in the room (the nightstands were placed
+  correctly — the authors knew where the head went and gave the bed the
+  opposite rotation); **232 wall-backers faced the wall they should back
+  onto** (26 bookshelves showing the room a blank back, dresser fronts
+  and pulls buried 28 mm inside walls — under check 10's 40 mm
+  tolerance, which is why nothing fired; 17 toilets tank-out; a home
+  theater whose TV and sofa faced directly away from each other); 48
+  seats turned from their coffee table (check 12's host set is only
+  `table`/`desk`); 19 solid-body interpenetrations to 650 mm.
+  **Every one passed a green 425/425 run.** Beds now sit on canonical
+  kinds with the dims dropped; ~400 furniture entries changed across all
+  18 plans with **ZERO non-furniture diffs** in any generated store.
+  **Checks 14/15/16 close the gap** (pairwise body interpenetration;
+  reversed wall-backers; furniture buried behind an opening, which
+  check 10 structurally cannot see because `wallCutsForSegment` excises
+  the opening) — negative-controlled 19/232/9 pre-fix → 0/0/0 after.
+  **425 → 503/503.** Two methodology findings worth keeping: the
+  150 mm front-gap gate under-reports (207 vs 232 — two agents
+  confirmed independently), and every "reversal" fix is provably safe
+  because a ±180° rotation leaves a rectangle's footprint identical.
+  **The audit also found a real APP bug**: `seatBelongsToTable` is a
+  rotated-AABB test with no wall check, and it backs the live
+  table-carry drag — dragging a desk near a partition could grab and
+  re-aim a chair (or a toilet) in the next room. Fixed with a trailing
+  optional `walls` param proven byte-identical when absent over 169 662
+  differential cases, plus `NON_TABLE_SEAT_KINDS` (toilet/swingset).
+  SEATWALL 32/32; chairs 137, stairs-fit 208, align-guides 162,
+  wall-edit 55, vertex-insert 110, ruler-dims 107, roadmap-geom 33.
+
+- **Mower parked pose: nose OUT of the dock + a 60 mm forward seat**
+  (2026-08-09, user-reported "the mower is also docked 180 degrees
+  incorrectly in the dock so it ends up intersecting the wall";
+  unreleased — on main past v0.64.0). `dockParkedHeading` REVERSED to
+  `+frontVectorPlan` (0 → −π/2 … 270 → 0) — the shipped convention had
+  aimed the nose INTO the dock, at its back wall. Measured, not
+  argued: the 3D rig's front reach is 276 mm vs a dock back-wall inner
+  face at 230 mm (nose 46 mm inside it). **The heading was only half**
+  — the drawn rig is ~546 mm nose-to-tail (nose/wheels/skirts overhang
+  the nominal 450 mm `bodyD`) against ~494 mm of usable dock depth, so
+  a centre-parked body buried ~40 mm of itself EITHER way; new pure
+  `dockParkedPoint` + `MOWER_DOCK_PARK_OFFSET_MM` (60) seat a mower
+  forward (rear 270 − 60 = 210 < 230), vacuums keep the origin (round
+  puck, golden probes). Three sites: spawn pose, the docked/returning
+  `home` target (clamped FROM the parked point so ease/arrival/snap
+  can't disagree), the 2D no-state fallback; `calibrateMowerToDock`
+  deliberately still targets the dock ORIGIN. Both renderers' forward
+  axis MEASURED correct (dot 1.0000) and now pinned, so nobody
+  "fixes" a parking complaint by flipping the driving convention.
+  ROBOT 278 → **298/298**, every new pin negative-controlled against a
+  full pre-fix rebuild (two variants: heading+offset, offset-only).
+
 - **Theater wave: 3 plush leather recliners + projector body/orientation/
   Theater-tab move + 2 projection screens with TV parity** (2026-08-09,
   four user asks; v0.64.0). Plush kinds

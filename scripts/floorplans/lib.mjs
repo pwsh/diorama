@@ -58,7 +58,8 @@ const SEAT_TUCK_CLEAR = 150;   // matches geometry.ts resolveSeatTableCollision
 const SEAT_LAP_TOL = 200;      // a tucked chair laps its table ~100 mm by design
 
 function settleSeats(spec) {
-  const { FURNITURE_KINDS, furnitureWorldToLocal, seatBelongsToTable, TABLE_CARRY_MARGIN_MM } = GEOM;
+  const { FURNITURE_KINDS, furnitureWorldToLocal, seatBelongsToTable, TABLE_CARRY_MARGIN_MM,
+          isTableSeatKind } = GEOM;
   const items = spec.furniture ?? [];
   const isHost = (fu) => {
     const a = FURNITURE_KINDS[fu.kind ?? 'block']?.activity;
@@ -66,10 +67,14 @@ function settleSeats(spec) {
   };
   for (const seat of items) {
     if (!FURNITURE_KINDS[seat.kind ?? 'block']?.seat) continue;
+    // A plumbed/anchored seat (toilet, swingset) is never dining/desk seating.
+    if (isTableSeatKind && !isTableSeatKind(seat.kind ?? 'block')) continue;
     let host = null, hostD = Infinity;
     for (const h of items) {
       if (h === seat || !isHost(h)) continue;
-      if (!seatBelongsToTable(h.x, h.y, h.rotation, h.w, h.h, seat.x, seat.y, TABLE_CARRY_MARGIN_MM)) continue;
+      // 9th arg = the wall guard: a host across a partition never captures.
+      if (!seatBelongsToTable(h.x, h.y, h.rotation, h.w, h.h, seat.x, seat.y, TABLE_CARRY_MARGIN_MM,
+                              spec.walls ?? [])) continue;
       const d = Math.hypot(h.x - seat.x, h.y - seat.y);
       if (d < hostD) { hostD = d; host = h; }
     }

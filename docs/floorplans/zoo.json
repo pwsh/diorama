@@ -1,7 +1,7 @@
 {
   "diorama": 2,
   "name": "Pocket Zoo — Toon Safari",
-  "exportedAt": "2026-07-30T00:00:00.000Z",
+  "exportedAt": "2026-08-10T00:00:00.000Z",
   "store": {
     "v": 2,
     "floors": [
@@ -303,7 +303,8 @@
             "y": 1600,
             "w": 700,
             "h": 1200,
-            "kind": "lawn_chair"
+            "kind": "lawn_chair",
+            "rotation": 180
           },
           {
             "id": "zoo-fn12",
@@ -311,7 +312,8 @@
             "y": 1600,
             "w": 700,
             "h": 1200,
-            "kind": "lawn_chair"
+            "kind": "lawn_chair",
+            "rotation": 180
           },
           {
             "id": "zoo-fn13",
@@ -524,6 +526,7 @@
             "w": 1400,
             "h": 700,
             "kind": "desk",
+            "rotation": 180,
             "label": "Keeper desk"
           },
           {
@@ -551,7 +554,7 @@
             "w": 800,
             "h": 350,
             "kind": "bookshelf",
-            "rotation": 90,
+            "rotation": 270,
             "label": "Vet manuals"
           },
           {

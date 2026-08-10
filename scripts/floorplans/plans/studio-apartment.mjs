@@ -46,26 +46,40 @@ export function build() {
 
   const furniture = [
     // Bathroom
-    furn('bathtub', 2400, 1000, { rotation: 270 }),
+    // rot 90 = apron (local −Z) toward −X, into the bathroom. Was 270, which
+    // put the step-over side flush against the east wall it backs onto.
+    furn('bathtub', 2400, 1000, { rotation: 90 }),
     furn('toilet', 1300, 1500, { rotation: 270 }),
     furn('sink', 1300, 700, { rotation: 270, label: 'Vanity' }),
     // Utility — stacked washer/dryer at one footprint (see spec §5)
-    furn('washer', 3250, 350, { rotation: 0 }),
-    furn('dryer', 3250, 350, { rotation: 0, elevation: 990 }),
-    // Kitchen (west-wall galley run)
-    furn('stove', 325, 1750, { rotation: 90 }),
-    furn('microwave', 325, 1750, { rotation: 90, elevation: 1400 }),
-    furn('dishwasher', 300, 2550, { rotation: 90 }),
-    furn('kitchen_sink', 325, 3000, { rotation: 90 }),
-    furn('counter', 325, 2300, { rotation: 90, w: 600, h: 650 }),
-    furn('counter', 325, 3650, { rotation: 90, w: 1200, h: 650 }),
-    furn('fridge', 375, 4450, { rotation: 90 }),
-    // Dining nook (small 2-top)
-    furn('table', 1700, 4200, { rotation: 0, w: 800, h: 800, label: 'Dining' }),
-    furn('chair', 1700, 3900, { rotation: 0 }),
-    furn('chair', 1700, 4500, { rotation: 180 }),
-    // Bedroom nook (north wall)
-    furn('bed', 1850, 5300, { rotation: 180, w: 1700, h: 2100 }),
+    furn('washer', 3250, 350, { rotation: 180 }),   // doors face the utility door on wall F
+    furn('dryer', 3250, 350, { rotation: 180, elevation: 990 }),
+    // Kitchen (west-wall galley run) — rot 270 = front (local −Z) toward +X, into
+    // the great room. The whole run was rot 90, facing the wall it backs onto.
+    furn('stove', 325, 1750, { rotation: 270 }),
+    furn('microwave', 325, 1750, { rotation: 270, elevation: 1400 }),
+    // x 360 = flush on the west wall face. At x 300 it poked 60 mm THROUGH the
+    // wall, invisible to check 10 because the kitchen window excises that run.
+    // y 2445 slots it between the stove (ends 2130) and the sink (starts 2600);
+    // at y 2550 it merged 255 mm into the sink basin.
+    furn('dishwasher', 360, 2445, { rotation: 270 }),
+    furn('kitchen_sink', 325, 3000, { rotation: 270 }),
+    furn('counter', 325, 2300, { rotation: 270, w: 600, h: 650 }),
+    furn('counter', 325, 3650, { rotation: 270, w: 1200, h: 650 }),
+    furn('fridge', 375, 4450, { rotation: 270 }),
+    // Dining nook (small 2-top) — pulled 350 mm south and re-seated EAST/WEST.
+    // A canonical queen against the north wall reaches y 4268; the old N/S
+    // seating put the north chair 500 mm inside the mattress and the table 402 mm
+    // into it. E/W seating needs only 500 mm of depth, so the whole nook now
+    // clears the bed foot (table 18 mm, chairs 168 mm) and still sits under its
+    // pendant at y 4200.
+    furn('table', 1700, 3850, { rotation: 0, w: 800, h: 800, label: 'Dining' }),
+    furn('chair', 1150, 3850, { rotation: 270 }),
+    furn('chair', 2250, 3850, { rotation: 90 }),
+    // Bedroom nook (north wall) — canonical queen (1524 × 2032, the notes call it
+    // a queen), headboard flush on the north wall. Was 1700 × 2100 with the head
+    // pointing INTO the room and the foot at the wall.
+    furn('bed', 1850, 5284, { rotation: 0 }),
     furn('nightstand', 900, 5300, { rotation: 180 }),
     furn('nightstand', 2800, 5300, { rotation: 180 }),
     furn('dresser', 3600, 6000, { rotation: 0, w: 1200, h: 550 }),
@@ -73,7 +87,9 @@ export function build() {
     // Living area (entry pocket + extension)
     furn('rug', 5300, 1900, { rotation: 0, w: 2600, h: 2200 }),
     furn('sofa', 5000, 1800, { rotation: 270, w: 2000, h: 850 }),
-    furn('coffee_table', 5800, 1800, { rotation: 0 }),
+    // Long axis N/S (parallel to the east-facing sofa). At rot 0 the 1100 mm
+    // span bridged sofa→TV console and merged 252 mm into the console.
+    furn('coffee_table', 5760, 1800, { rotation: 90 }),
     furn('tv_stand', 6450, 1800, { rotation: 90 }),
     furn('tv', 6450, 1800, { rotation: 90, localState: 'off' }),
     furn('bookshelf', 4050, 2200, { rotation: 90 }),

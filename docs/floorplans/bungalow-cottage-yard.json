@@ -1,7 +1,7 @@
 {
   "diorama": 2,
   "name": "Bungalow — Cottage + Yard",
-  "exportedAt": "2026-08-02T00:00:00.000Z",
+  "exportedAt": "2026-08-10T00:00:00.000Z",
   "store": {
     "v": 2,
     "floors": [
@@ -240,7 +240,7 @@
             "w": 2200,
             "h": 900,
             "kind": "sofa",
-            "rotation": 90
+            "rotation": 270
           },
           {
             "id": "bungalow-cottage-yard-fn2",
@@ -286,7 +286,7 @@
             "w": 800,
             "h": 350,
             "kind": "bookshelf",
-            "rotation": 90
+            "rotation": 270
           },
           {
             "id": "bungalow-cottage-yard-fn7",
@@ -316,11 +316,12 @@
           },
           {
             "id": "bungalow-cottage-yard-fn10",
-            "x": 12450,
+            "x": 12425,
             "y": 4350,
             "w": 800,
             "h": 550,
-            "kind": "kitchen_sink"
+            "kind": "kitchen_sink",
+            "rotation": 90
           },
           {
             "id": "bungalow-cottage-yard-fn11",
@@ -332,8 +333,8 @@
           },
           {
             "id": "bungalow-cottage-yard-fn12",
-            "x": 12243,
-            "y": 5168,
+            "x": 11600,
+            "y": 5165,
             "w": 910,
             "h": 760,
             "kind": "fridge"
@@ -341,7 +342,7 @@
           {
             "id": "bungalow-cottage-yard-fn13",
             "x": 10000,
-            "y": 3300,
+            "y": 3380,
             "w": 760,
             "h": 660,
             "kind": "stove",
@@ -350,7 +351,7 @@
           {
             "id": "bungalow-cottage-yard-fn14",
             "x": 10000,
-            "y": 3320,
+            "y": 3400,
             "w": 520,
             "h": 390,
             "kind": "microwave",
@@ -363,7 +364,8 @@
             "y": 3700,
             "w": 900,
             "h": 650,
-            "kind": "counter"
+            "kind": "counter",
+            "rotation": 180
           },
           {
             "id": "bungalow-cottage-yard-fn16",
@@ -434,8 +436,7 @@
             "y": 6900,
             "w": 690,
             "h": 700,
-            "kind": "washer",
-            "rotation": 180
+            "kind": "washer"
           },
           {
             "id": "bungalow-cottage-yard-fn24",
@@ -444,7 +445,6 @@
             "w": 690,
             "h": 700,
             "kind": "dryer",
-            "rotation": 180,
             "elevation": 990
           },
           {
@@ -459,9 +459,9 @@
           {
             "id": "bungalow-cottage-yard-fn26",
             "x": 4800,
-            "y": 9700,
-            "w": 2000,
-            "h": 1500,
+            "y": 9434,
+            "w": 1524,
+            "h": 2032,
             "kind": "bed"
           },
           {
@@ -474,7 +474,7 @@
           },
           {
             "id": "bungalow-cottage-yard-fn28",
-            "x": 5800,
+            "x": 6000,
             "y": 10500,
             "w": 500,
             "h": 400,
@@ -487,7 +487,7 @@
             "w": 1200,
             "h": 500,
             "kind": "dresser",
-            "rotation": 90
+            "rotation": 270
           },
           {
             "id": "bungalow-cottage-yard-fn30",
@@ -593,15 +593,15 @@
           {
             "id": "bungalow-cottage-yard-fn41",
             "x": 11325,
-            "y": 9900,
-            "w": 1400,
-            "h": 1900,
-            "kind": "bed"
+            "y": 9895,
+            "w": 1370,
+            "h": 1910,
+            "kind": "bed_full"
           },
           {
             "id": "bungalow-cottage-yard-fn42",
-            "x": 10400,
-            "y": 9200,
+            "x": 12290,
+            "y": 9900,
             "w": 500,
             "h": 400,
             "kind": "nightstand"
@@ -622,7 +622,7 @@
             "w": 1200,
             "h": 500,
             "kind": "dresser",
-            "rotation": 270
+            "rotation": 90
           },
           {
             "id": "bungalow-cottage-yard-fn45",
@@ -648,7 +648,7 @@
             "w": 900,
             "h": 400,
             "kind": "bench",
-            "rotation": 90
+            "rotation": 270
           },
           {
             "id": "bungalow-cottage-yard-fn48",

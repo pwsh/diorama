@@ -117,25 +117,25 @@ export function build() {
   const carpet = '#DCD5C8';  // warm greige stand-in for bedroom carpet
 
   const furniture = [
-    // Garage
-    furn('bookshelf', 2600, 6100, { rotation: 180, label: 'Storage' }),
-    furn('bookshelf', 5200, 6100, { rotation: 180, label: 'Storage' }),
-    furn('cabinet', 300, 3200, { rotation: 90, label: 'Tool cabinet' }),
+    // Garage. Storage / cabinetry backs onto its wall, open face into the room.
+    furn('bookshelf', 2600, 6100, { rotation: 0, label: 'Storage' }),
+    furn('bookshelf', 5200, 6100, { rotation: 0, label: 'Storage' }),
+    furn('cabinet', 300, 3200, { rotation: 270, label: 'Tool cabinet' }),
     // Laundry
-    furn('washer', 900, 8300, { rotation: 180 }),
-    furn('dryer', 2000, 8300, { rotation: 180 }),
-    furn('sink', 2600, 6700, { rotation: 0, label: 'Utility sink' }),
-    // Walk-in Pantry
-    furn('bookshelf', 3700, 6700, { rotation: 90, label: 'Shelving' }),
-    furn('bookshelf', 5700, 6700, { rotation: 270, label: 'Shelving' }),
+    furn('washer', 900, 8300, { rotation: 0 }),
+    furn('dryer', 2000, 8300, { rotation: 0 }),
+    furn('sink', 2600, 6700, { rotation: 180, label: 'Utility sink' }),
+    // Walk-in Pantry — two runs backed onto opposite walls, facing the aisle.
+    furn('bookshelf', 3700, 6700, { rotation: 270, label: 'Shelving' }),
+    furn('bookshelf', 5700, 6700, { rotation: 90, label: 'Shelving' }),
     // Foyer
     furn('bench', 10000, 1600, { rotation: 180 }),
     // Kitchen (west-wall galley run + island)
-    furn('counter', 6700, 3000, { rotation: 90, w: 3200, h: 650 }),
-    furn('fridge', 6700, 2100, { rotation: 90 }),
-    furn('stove', 6700, 4300, { rotation: 90 }),
-    furn('microwave', 6700, 4300, { rotation: 90, elevation: 1400 }),
-    furn('dishwasher', 8600, 1950, { rotation: 0 }),
+    furn('counter', 6700, 3000, { rotation: 270, w: 3200, h: 650 }),
+    furn('fridge', 6700, 2100, { rotation: 270 }),
+    furn('stove', 6700, 4300, { rotation: 270 }),
+    furn('microwave', 6700, 4300, { rotation: 270, elevation: 1400 }),
+    furn('dishwasher', 8600, 1950, { rotation: 180 }),
     furn('island', 8200, 4200, { rotation: 0, w: 2400, h: 1100 }),
     furn('kitchen_sink', 8200, 3800, { rotation: 0 }),
     // Dining (seats 6)
@@ -152,48 +152,53 @@ export function build() {
     furn('coffee_table', 10600, 8600, { rotation: 0 }),
     furn('tv_stand', 13200, 7800, { rotation: 90 }),
     furn('tv', 13200, 7800, { rotation: 90, localState: 'off' }),
-    furn('chair', 7200, 10200, { rotation: 180, label: 'Reading chair' }),
+    furn('chair', 7200, 10200, { rotation: 0, label: 'Reading chair' }),
     furn('plant', 7000, 10800, { rotation: 0 }),
     furn('rug', 9800, 8600, { rotation: 0, w: 3600, h: 2400 }),
     // Hallway
-    furn('coffee_table', 13850, 4000, { rotation: 90, w: 900, h: 300, label: 'Console' }),
+    // rot 270 = face into the room. At 90 the console's face was 50 mm off the
+    // wall it backs onto, with the whole room behind it.
+    furn('coffee_table', 13850, 4000, { rotation: 270, w: 900, h: 300, label: 'Console' }),
     furn('plant', 13900, 900, { rotation: 0 }),
     // Office / Den
     furn('desk', 19500, 800, { rotation: 180 }),
     furn('chair', 19500, 1300, { rotation: 0 }),
-    furn('bookshelf', 20700, 2600, { rotation: 270 }),
-    // Bedroom 2
-    furn('bed', 18200, 6000, { rotation: 0, w: 1500, h: 2100 }),
+    furn('bookshelf', 20700, 2600, { rotation: 90 }),
+    // Bedroom 2 — canonical queen footprint (1524 × 2032)
+    furn('bed', 18200, 6000, { rotation: 0 }),
     furn('nightstand', 16900, 6000, { rotation: 0 }),
     furn('nightstand', 19500, 6000, { rotation: 0 }),
-    furn('dresser', 16500, 3400, { rotation: 0 }),
-    furn('wardrobe', 15400, 4300, { rotation: 90, label: 'Reach-in' }),
+    furn('dresser', 16500, 3400, { rotation: 180 }),
+    furn('wardrobe', 15400, 4300, { rotation: 270, label: 'Reach-in' }),
     furn('rug', 18000, 4650, { rotation: 0, w: 2000, h: 1600, color: carpet }),
     // Bath 2 (shared)
-    furn('toilet', 15200, 6700, { rotation: 90 }),
-    furn('sink_vanity', 16800, 7500, { rotation: 180, label: 'Double vanity' }),
-    furn('bathtub', 19800, 7500, { rotation: 180, w: 1700, h: 750 }),
-    // Bedroom 3
-    furn('bed', 18200, 10200, { rotation: 0, w: 1500, h: 2100 }),
+    furn('toilet', 15200, 6700, { rotation: 270 }),
+    furn('sink_vanity', 16800, 7500, { rotation: 0, label: 'Double vanity' }),
+    // rot 0 = apron north into the bath; at 180 the step-over side was 2 mm off
+    // the south wall the tub backs onto.
+    furn('bathtub', 19800, 7500, { rotation: 0, w: 1700, h: 750 }),
+    // Bedroom 3 — canonical queen footprint (1524 × 2032)
+    furn('bed', 18200, 10200, { rotation: 0 }),
     furn('nightstand', 16900, 10200, { rotation: 0 }),
     furn('nightstand', 19500, 10200, { rotation: 0 }),
-    furn('desk', 15400, 8800, { rotation: 90 }),
+    furn('desk', 15400, 8800, { rotation: 270 }),
     furn('wardrobe', 16000, 10900, { rotation: 90, label: 'Reach-in' }),
     furn('rug', 18000, 9550, { rotation: 0, w: 2000, h: 1600, color: carpet }),
-    // Primary Bedroom
-    furn('bed', 16150, 15200, { rotation: 180, w: 2000, h: 2200 }),
-    furn('nightstand', 14700, 15200, { rotation: 180 }),
-    furn('nightstand', 17600, 15200, { rotation: 180 }),
+    // Primary Bedroom — canonical king footprint (1930 × 2030); headboard
+    // (local +Y) under the rear picture window, nightstands flanking the head.
+    furn('bed_king', 16150, 15200, { rotation: 0 }),
+    furn('nightstand', 14700, 15200, { rotation: 0 }),
+    furn('nightstand', 17600, 15200, { rotation: 0 }),
     furn('dresser', 14100, 12500, { rotation: 90 }),
     furn('chair', 17600, 12200, { rotation: 270, label: 'Reading chair' }),
     furn('rug', 16150, 13800, { rotation: 0, w: 3000, h: 2400, color: carpet }),
     // Primary Bath
     furn('sink_vanity', 18950, 11500, { rotation: 180, label: 'Double vanity' }),
-    furn('toilet', 18950, 13500, { rotation: 90 }),
+    furn('toilet', 18950, 13500, { rotation: 270 }),
     furn('shower', 20500, 12600, { rotation: 270 }),
     // Primary Walk-in Closet
-    furn('wardrobe', 19000, 14000, { rotation: 0 }),
-    furn('wardrobe', 20700, 15600, { rotation: 270 }),
+    furn('wardrobe', 19000, 14000, { rotation: 180 }),
+    furn('wardrobe', 20700, 15600, { rotation: 90 }),
     // Covered patio + side yard dressing (outside the enclosed loops — bare ground)
     furn('picnic_table', 10000, 13500, { rotation: 0 }),
     furn('lawn_chair', 7600, 12500, { rotation: 90 }),
@@ -206,7 +211,8 @@ export function build() {
     furn('birch_tree', 2500, 9700, { rotation: 0, label: 'Paper birch' }),
     furn('trash_bin', 6300, -600, { rotation: 0 }),
     furn('recycle_bin', 7000, -600, { rotation: 0 }),
-    furn('mailbox', 8000, -600, { rotation: 180, label: 'Curbside mailbox' }),
+    // rot 0 = door/flag toward the street (−Y); at 180 it faced the house wall.
+    furn('mailbox', 8000, -600, { rotation: 0, label: 'Curbside mailbox' }),
   ];
 
   const lights = [

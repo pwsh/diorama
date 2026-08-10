@@ -128,7 +128,7 @@ export function build() {
     // ── Engineering (stern, starboard) ─────────────────────────────────────
     custom('ssv-warp-core', 2000, 2900, { w: 1200, h: 1200, label: 'Warp core' }),
     custom('ssv-console', 3400, 2500, { rotation: 0, w: 1600, h: 700, label: 'Reactor console' }),
-    furn('cabinet', 1150, 2600, { rotation: 90, label: 'Spares locker' }),
+    furn('cabinet', 1150, 2600, { rotation: 270, label: 'Spares locker' }),
     furn('bookshelf', 4150, 3400, { rotation: 90, label: 'Data racks' }),
 
     // ── Cargo Hold (stern, port) ───────────────────────────────────────────
@@ -137,9 +137,9 @@ export function build() {
     furn('block', 3950, 6200, { w: 700, h: 1000, label: 'Supply pod', color: '#3f4954' }),
 
     // ── Crew Quarters (starboard) ──────────────────────────────────────────
-    furn('bed', 5100, 3050, { rotation: 0, w: 900, h: 1900, label: 'Bunk 1', sharedBedCovers: false }),
-    furn('bed', 6400, 3050, { rotation: 0, w: 900, h: 1900, label: 'Bunk 2', sharedBedCovers: false }),
-    furn('dresser', 7250, 2750, { rotation: 270, label: 'Crew lockers' }),
+    furn('bed_twin', 5100, 3050, { rotation: 0, w: 900, h: 1900, label: 'Bunk 1', sharedBedCovers: false }),
+    furn('bed_twin', 6400, 3050, { rotation: 0, w: 900, h: 1900, label: 'Bunk 2', sharedBedCovers: false }),
+    furn('dresser', 7250, 2750, { rotation: 90, label: 'Crew lockers' }),
     furn('chair', 7250, 3800, { rotation: 0 }),
     furn('rug', 5750, 3000, { rotation: 0, w: 2600, h: 1600, color: '#1b2430' }),
 
@@ -147,19 +147,19 @@ export function build() {
     furn('table', 5300, 6700, { rotation: 0, w: 1200, h: 800, label: 'Mess table' }),
     furn('bench', 5250, 7350, { rotation: 0 }),
     furn('chair', 6200, 6700, { rotation: 0 }),
-    furn('fridge', 7000, 7150, { rotation: 180, localState: 'on', label: 'Galley cooler' }),
-    furn('microwave', 7000, 7150, { rotation: 180, elevation: 1900, label: 'Rehydrator' }),
-    furn('kitchen_sink', 7250, 6250, { rotation: 270, label: 'Galley sink' }),
+    furn('fridge', 7000, 7150, { rotation: 0, localState: 'on', label: 'Galley cooler' }),
+    furn('microwave', 7000, 7150, { rotation: 0, elevation: 1900, label: 'Rehydrator' }),
+    furn('kitchen_sink', 7250, 6250, { rotation: 90, label: 'Galley sink' }),
 
     // ── Med Bay (starboard) ────────────────────────────────────────────────
-    furn('bed', 8900, 3100, { rotation: 90, w: 2000, h: 1500, label: 'Med bunk', sharedBedCovers: false }),
-    furn('cabinet', 7900, 2600, { rotation: 90, label: 'Pharmacy' }),
+    furn('bed_twin', 9200, 3000, { rotation: 90, label: 'Med bunk', sharedBedCovers: false }),
+    furn('cabinet', 7900, 2600, { rotation: 270, label: 'Pharmacy' }),
     furn('cabinet', 10500, 2600, { rotation: 90, label: 'Instruments' }),
-    furn('sink', 10300, 3800, { rotation: 180, label: 'Scrub sink' }),
+    furn('sink', 10300, 3800, { rotation: 0, label: 'Scrub sink' }),
     furn('tv', 9800, 2400, { rotation: 180, w: 700, h: 200, elevation: 1500, localState: 'on', label: 'Vitals display' }),
 
     // ── Airlock (port) — deliberately empty apart from the suit lockers ────
-    furn('cabinet', 7900, 6600, { rotation: 90, label: 'EVA suit locker' }),
+    furn('cabinet', 7900, 6600, { rotation: 270, label: 'EVA suit locker' }),
     furn('cabinet', 10700, 6600, { rotation: 90, label: 'EVA suit locker' }),
     furn('speaker_bookshelf', 9300, 7450, { rotation: 180, elevation: 1900, label: 'Lock intercom' }),
 

@@ -1,0 +1,358 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>seat wall test</title>
+<style>html,body{margin:0;background:#111;color:#ccc;font:12px sans-serif}</style>
+<!--
+  SEAT↔TABLE WALL AWARENESS (2026-08-09, user-reported via a floorplan audit:
+  "a bedroom desk's capture box crossed a partition and silently re-aimed a
+  hall-bath toilet in the next room").
+
+  `seatBelongsToTable` (the table-carry group move) and `resolveSeatTableCollision`
+  (the on-drop tuck) were pure footprint-proximity tests with NO wall awareness,
+  so a host's capture box reached straight THROUGH a partition into the next room.
+  The fix adds a TRAILING OPTIONAL `walls` argument to both — ABSENT ⇒ byte-
+  identical to the old wall-blind behaviour (so scripts/floorplans/lib.mjs and
+  physical.mjs keep computing exactly what they compute today until they opt in)
+  — plus the exported `NON_TABLE_SEAT_KINDS` / `isTableSeatKind` (toilet, swingset:
+  seat-bearing fixtures that are never dining/desk seating), applied at the APP
+  call sites in canvas-interact.ts.
+
+  Modules (transpile into the harness dir before serving):
+    npx esbuild src/geometry.ts        --bundle --format=esm --outfile=<harness>/geometry.mod.js
+    npx esbuild src/canvas-interact.ts --bundle --format=esm --outfile=<harness>/canvas-interact.mod.js
+    # and the PRE-CHANGE reference build (a copy of src/ with only this task's
+    # three geometry.ts edits reverted — see the task's build-ref.py):
+    npx esbuild <base-src>/geometry.ts --bundle --format=esm --outfile=<harness>/geometry-base.mod.js
+
+  Sections:
+   (A) GOLDEN BYTE-IDENTITY with the parameter ABSENT: a differential sweep of
+       BOTH functions against the pre-change build over a broad host/rotation/
+       offset matrix. A3 is the harness's own negative control (the differ CAN
+       see a difference) so A1/A2 are not vacuous.
+   (B) `seatBelongsToTable` wall guard, incl. the doorway decision (a doorway is
+       OPAQUE to a capture) and the real small-bungalow.json desk↔chair case.
+   (C) `resolveSeatTableCollision` wall guard.
+   (D) the NON_TABLE_SEAT_KINDS exclusion (derived from FURNITURE_KINDS, not a
+       hand list).
+   (E) END-TO-END through the app's real release path (`onCanvasMouseUp` with a
+       duck-typed Planner): a dragged table carries its own chairs and nothing
+       through a wall; a toilet is never carried or shoved.
+
+  Every new assertion in B/C/D/E is NEGATIVE-CONTROLLED in place — the same
+  fixture is re-run against the pre-fix behaviour (walls omitted / wall removed /
+  kind swapped) and must give the opposite answer.
+-->
+<pre id="out">running…</pre>
+<script type="module">
+const G  = await import('./geometry.mod.js');
+const B  = await import('./geometry-base.mod.js');
+const CI = await import('./canvas-interact.mod.js');
+
+const tests = [];
+const ok = (name, cond, detail) => tests.push({ name, ok: !!cond, detail: detail || '' });
+
+// ───────────────────────────── fixtures ─────────────────────────────────────
+// Two rooms split by a solid partition at y = 4300 (x 0..10000).
+const WALL_ID = 'w-part';
+const partition = () => ({ id: WALL_ID, points: [{ x: 0, y: 4300 }, { x: 10000, y: 4300 }] });
+// A desk in the SOUTH room; its 450 mm capture margin reaches |y| in [3900,5500],
+// i.e. 400 mm past the partition into the NORTH room.
+const DESK = { id: 'd1', kind: 'desk', x: 5000, y: 4700, w: 1400, h: 700, rotation: 0 };
+// A chair standing in the NORTH room, inside the box but across the wall.
+const FAR  = { id: 'c-far', kind: 'chair', x: 5000, y: 4000, w: 500, h: 500 };
+// A chair legitimately tucked to the desk's south edge (same room).
+const NEAR = { id: 'c-near', kind: 'chair', x: 5000, y: 5200, w: 500, h: 500 };
+const clone = o => JSON.parse(JSON.stringify(o));
+
+// ══════════════════════════ (A) golden byte-identity ════════════════════════
+// A1 — seatBelongsToTable over a broad matrix, parameter ABSENT.
+{
+  let n = 0, bad = null;
+  const hosts = [[1400, 700], [1500, 900], [1800, 1500], [600, 600], [3000, 1200]];
+  const rots  = [undefined, 0, 15, 30, 45, 90, 137.5, 180, 270, -45, 360];
+  const caps  = [undefined, 0, 450, 1200];
+  for (const [hw, hh] of hosts) for (const rot of rots) for (const cap of caps) {
+    for (let dx = -2600; dx <= 2600; dx += 200) for (let dy = -2600; dy <= 2600; dy += 200) {
+      const a = G.seatBelongsToTable(1234.5, -678.25, rot, hw, hh, 1234.5 + dx, -678.25 + dy, cap);
+      const b = B.seatBelongsToTable(1234.5, -678.25, rot, hw, hh, 1234.5 + dx, -678.25 + dy, cap);
+      n++;
+      if (a !== b && !bad) bad = `hw=${hw} hh=${hh} rot=${rot} cap=${cap} d=(${dx},${dy}) new=${a} base=${b}`;
+    }
+  }
+  ok(`A1 seatBelongsToTable (walls ABSENT) === pre-change build over ${n} cases`, !bad, bad || `${n} identical`);
+}
+// A2 — resolveSeatTableCollision over a matrix of scenes, parameter ABSENT.
+{
+  let n = 0, bad = null;
+  const rots = [undefined, 0, 30, 90, 180, 250];
+  const kinds = ['chair', 'bar_stool', 'bench', 'ottoman', 'toilet', 'sofa', 'dresser'];
+  for (const rot of rots) for (const kind of kinds) {
+    for (let dx = -1200; dx <= 1200; dx += 150) for (let dy = -900; dy <= 900; dy += 150) {
+      const host = { id: 'h', kind: 'table', x: 2000, y: 3000, w: 1500, h: 900, rotation: rot };
+      const mk = () => [host, { id: 's', kind, x: 2000 + dx, y: 3000 + dy, w: 500, h: 500 }];
+      const fa = mk(), fb = mk();
+      const ra = G.resolveSeatTableCollision(fa[1], fa);
+      const rb = B.resolveSeatTableCollision(fb[1], fb);
+      n++;
+      if ((ra !== rb || fa[1].x !== fb[1].x || fa[1].y !== fb[1].y) && !bad)
+        bad = `rot=${rot} kind=${kind} d=(${dx},${dy}) new=(${fa[1].x},${fa[1].y},${ra}) base=(${fb[1].x},${fb[1].y},${rb})`;
+    }
+  }
+  ok(`A2 resolveSeatTableCollision (walls ABSENT) === pre-change build over ${n} cases`, !bad, bad || `${n} identical`);
+}
+// A3 — NEGATIVE CONTROL for the differ itself: the same comparison, but with the
+// new call PASSING walls, must report a difference (else A1/A2 prove nothing).
+{
+  const walls = [partition()];
+  const a = G.seatBelongsToTable(DESK.x, DESK.y, DESK.rotation, DESK.w, DESK.h, FAR.x, FAR.y, undefined, walls);
+  const b = B.seatBelongsToTable(DESK.x, DESK.y, DESK.rotation, DESK.w, DESK.h, FAR.x, FAR.y);
+  ok('A3 negative control: the differ DOES see a difference when walls are passed',
+     a === false && b === true, `new=${a} base=${b}`);
+}
+
+// ═════════════════════ (B) seatBelongsToTable wall guard ════════════════════
+const belongs = (seat, walls) =>
+  G.seatBelongsToTable(DESK.x, DESK.y, DESK.rotation, DESK.w, DESK.h, seat.x, seat.y,
+                       G.TABLE_CARRY_MARGIN_MM, walls);
+
+ok('B1 seat across a SOLID wall is NOT captured', belongs(FAR, [partition()]) === false);
+ok('B1n negative control (pre-fix): the SAME seat with walls omitted IS captured',
+   belongs(FAR, undefined) === true);
+ok('B2 negative control: the same seat with the wall REMOVED is captured',
+   belongs(FAR, []) === true);
+ok('B3 a legitimately tucked chair in the SAME room is still captured with walls present',
+   belongs(NEAR, [partition()]) === true);
+{
+  // DOORWAY: a real 800 mm door centred exactly on the host→seat probe line.
+  // rotation 0 ⇒ doorSpanCenter = (x + w/2, y), so hinge (4600,4300) spans 4600..5400.
+  const door = { id: 'dr', x: 4600, y: 4300, w: 800, rotation: 0 };
+  const sc = G.doorSpanCenter(door);
+  const cuts = G.wallCutsForSegment({ x: 0, y: 4300 }, { x: 10000, y: 4300 }, [door], []);
+  const losThroughDoor = G.segCrossesSolidWall([partition()], [door], [], DESK.x, DESK.y, FAR.x, FAR.y);
+  ok('B4a fixture self-check: the door really cuts the partition on the probe line',
+     Math.abs(sc.x - 5000) < 1e-9 && cuts.openings.length === 1 && losThroughDoor === false,
+     `spanCenter=(${sc.x},${sc.y}) openings=${cuts.openings.length} losThroughDoor=${losThroughDoor}`);
+  ok('B4b DOORWAY IS OPAQUE to a capture: seat across an open doorway is NOT captured',
+     belongs(FAR, [partition()]) === false);
+}
+ok('B5 an INVISIBLE wall (planning boundary) does NOT block a capture',
+   belongs(FAR, [{ ...partition(), kind: 'invisible' }]) === true);
+{
+  // Fence / hedge / railing DO block (they are ordinary solid runs, exactly as
+  // segCrossesSolidWall + the nav rasterizer treat them).
+  const kinds = ['full', 'half', 'railing', 'fence_picket', 'fence_privacy', 'fence_chainlink', 'hedge'];
+  const blocked = kinds.filter(k => belongs(FAR, [{ ...partition(), kind: k }]) === false);
+  ok('B6 every non-invisible wall kind blocks a capture', blocked.length === kinds.length,
+     `blocked ${blocked.length}/${kinds.length}`);
+}
+{
+  // Legitimate dining set: 4 chairs around a 1500×900 table in an OPEN room
+  // (a distant partition exists but never intervenes). All four must be captured.
+  const t = { x: 5000, y: 8000, w: 1500, h: 900, rotation: 0 };
+  const seats = [{ x: 5000, y: 7400 }, { x: 5000, y: 8600 }, { x: 4100, y: 8000 }, { x: 5900, y: 8000 }];
+  const got = seats.filter(s => G.seatBelongsToTable(t.x, t.y, t.rotation, t.w, t.h, s.x, s.y,
+                                                    G.TABLE_CARRY_MARGIN_MM, [partition()]));
+  ok('B7 all 4 chairs around a dining table are still captured with walls present',
+     got.length === 4, `${got.length}/4`);
+}
+{
+  // Rotated host, legitimate seat: rotate the whole dining pair 37° about the table.
+  const t = { x: 5000, y: 8000, w: 1500, h: 900, rotation: 37 };
+  const l = G.furnitureLocalToWorld(37, 0, -700);
+  const s = { x: t.x + l.x, y: t.y + l.y };
+  ok('B8 rotated host still captures its own rotated seat with walls present',
+     G.seatBelongsToTable(t.x, t.y, t.rotation, t.w, t.h, s.x, s.y, G.TABLE_CARRY_MARGIN_MM, [partition()]) === true);
+}
+{
+  // The REAL case from the shipped demo library (docs/floorplans/small-bungalow.json):
+  // desk `small-bungalow-fn43` captured chair `small-bungalow-fn20` through wall w7.
+  const w7 = { id: 'small-bungalow-w7', points: [{ x: 4800, y: 4300 }, { x: 9750, y: 4300 }] };
+  const desk = { x: 7700, y: 4702, w: 1400, h: 700, rotation: 180 };
+  const chair = { x: 6900, y: 3998 };
+  const before = G.seatBelongsToTable(desk.x, desk.y, desk.rotation, desk.w, desk.h, chair.x, chair.y);
+  const after  = G.seatBelongsToTable(desk.x, desk.y, desk.rotation, desk.w, desk.h, chair.x, chair.y,
+                                      G.TABLE_CARRY_MARGIN_MM, [w7]);
+  ok('B9 real small-bungalow.json desk↔chair cross-wall capture is resolved',
+     before === true && after === false, `wallBlind=${before} wallAware=${after}`);
+}
+
+// ══════════════ (C) resolveSeatTableCollision wall guard ════════════════════
+{
+  // A host whose FOOTPRINT straddles the partition (an Alt-placed table: the
+  // wall push-out normally forbids this), with the seat centre inside the
+  // footprint but on the far side of the wall. NB the host CENTRE must be off
+  // the wall line — the probe is centre→centre (see seatWallBlocked).
+  const mk = () => [
+    { id: 'h', kind: 'table', x: 5000, y: 4600, w: 1500, h: 1600, rotation: 0 },
+    { id: 's', kind: 'chair', x: 5000, y: 4000, w: 500, h: 500 },
+  ];
+  const blind = mk(); const movedBlind = G.resolveSeatTableCollision(blind[1], blind);
+  const aware = mk(); const movedAware = G.resolveSeatTableCollision(aware[1], aware, undefined, 2, [partition()]);
+  ok('C1 a host across a partition no longer SHOVES a seat in the next room',
+     movedAware === false && aware[1].y === 4000, `y ${aware[1].y}`);
+  ok('C1n negative control (pre-fix): the same fixture with walls omitted DOES shove it',
+     movedBlind === true && blind[1].y !== 4000, `y ${blind[1].y}`);
+}
+{
+  // Legitimate tuck in an open room is unchanged when walls ARE passed.
+  const mk = () => [
+    { id: 'h', kind: 'table', x: 5000, y: 8000, w: 1500, h: 900, rotation: 0 },
+    { id: 's', kind: 'chair', x: 5000, y: 8200, w: 500, h: 500 },
+  ];
+  const a = mk(); const ra = G.resolveSeatTableCollision(a[1], a, undefined, 2, [partition()]);
+  const b = mk(); const rb = G.resolveSeatTableCollision(b[1], b);
+  ok('C2 a legitimate tuck is bit-identical with walls passed vs omitted',
+     ra === rb && a[1].x === b[1].x && a[1].y === b[1].y && ra === true,
+     `walls=(${a[1].x},${a[1].y}) none=(${b[1].x},${b[1].y})`);
+}
+
+// ═══════════════ (D) NON_TABLE_SEAT_KINDS exclusion ═════════════════════════
+ok('D1 NON_TABLE_SEAT_KINDS is exported and holds exactly toilet + swingset',
+   G.NON_TABLE_SEAT_KINDS instanceof Set && G.NON_TABLE_SEAT_KINDS.size === 2 &&
+   G.NON_TABLE_SEAT_KINDS.has('toilet') && G.NON_TABLE_SEAT_KINDS.has('swingset'),
+   [...G.NON_TABLE_SEAT_KINDS].join(','));
+ok('D2 isTableSeatKind is false for the excluded kinds',
+   G.isTableSeatKind('toilet') === false && G.isTableSeatKind('swingset') === false);
+{
+  // DERIVED, not a hand list: every OTHER seat-bearing kind must stay capturable.
+  const seatKinds = Object.entries(G.FURNITURE_KINDS).filter(([, d]) => d.seat != null).map(([k]) => k);
+  const excluded = seatKinds.filter(k => !G.isTableSeatKind(k));
+  ok(`D3 all ${seatKinds.length} seat-bearing kinds stay capturable except the 2 excluded`,
+     seatKinds.length > 20 && excluded.length === 2 &&
+     excluded.every(k => G.NON_TABLE_SEAT_KINDS.has(k)),
+     `seatKinds=${seatKinds.length} excluded=${excluded.join(',')}`);
+  ok('D4 the excluded kinds really DO carry a `seat` (so the exclusion is load-bearing)',
+     G.FURNITURE_KINDS.toilet.seat > 0 && G.FURNITURE_KINDS.swingset.seat > 0);
+  ok('D5 representative dining/desk seating is NOT excluded',
+     ['chair', 'bench', 'bar_stool', 'lawn_chair', 'stool', 'office_chair', 'folding_chair']
+       .every(k => G.isTableSeatKind(k)));
+  ok('D6 a custom-recipe piece (kind `block`) and an absent kind stay capturable',
+     G.isTableSeatKind('block') === true && G.isTableSeatKind(undefined) === true);
+}
+
+// ═════════ (E) end-to-end through the app's real release path ═══════════════
+// Duck-typed Planner: canvas-interact only touches `p` structurally at runtime.
+function makePlanner(floor) {
+  return {
+    store: { customObjects: [], layers2d: {} },
+    uiMode: 'edit',
+    drag: null, dragJustEnded: false, alignGuides: [], alignPool: null,
+    wallWeld: true,
+    floor: () => floor,
+    activeSensor: () => null,
+    save() {}, emitConfig() {}, toggleItem() {}, markSelectionHot() {},
+  };
+}
+const fakeCanvas = { style: {} };
+// Drag a table/desk from `from` to its current position and run the real release.
+function releaseFurnMove(floor, pieceId, from) {
+  const p = makePlanner(floor);
+  p.drag = { kind: 'furnMove', idx: floor.furniture.findIndex(f => f.id === pieceId),
+             id: pieceId, start: { x: from.x, y: from.y } };
+  CI.onCanvasMouseUp(p, fakeCanvas, { altKey: false });
+}
+function twoRoomFloor(extra = {}) {
+  return {
+    id: 'f1', w: 10000, d: 10000,
+    walls: extra.noWall ? [] : [partition()],
+    doors: [], windows: [], furniture: [],
+    sensors: [], motionSensors: [], envSensors: [], lights: [], switches: [],
+    rooms: [], groundAreas: [], rulers: [],
+  };
+}
+{
+  // E1 — the legitimate carry: a desk moved +600 mm in X drags its own chair.
+  const f = twoRoomFloor();
+  const desk = { ...clone(DESK), x: 5600 };            // already dragged +600
+  const near = clone(NEAR);
+  f.furniture.push(desk, near);
+  releaseFurnMove(f, 'd1', { x: 5000, y: 4700 });
+  ok('E1 dragging a desk still carries its own tucked chair', near.x === 5600,
+     `chair x ${near.x} (expected 5600 = 5000 + the +600 drag delta)`);
+}
+{
+  // E2 — the bug: a chair in the NEXT ROOM must NOT be carried.
+  const f = twoRoomFloor();
+  const desk = { ...clone(DESK), x: 5600 };
+  const far = clone(FAR);
+  f.furniture.push(desk, far);
+  releaseFurnMove(f, 'd1', { x: 5000, y: 4700 });
+  ok('E2 the same drag does NOT carry a chair across the partition',
+     far.x === 5000 && far.y === 4000, `far now (${far.x},${far.y})`);
+
+  // E2n — NEGATIVE CONTROL: identical fixture with the partition removed.
+  const f2 = twoRoomFloor({ noWall: true });
+  const desk2 = { ...clone(DESK), x: 5600 };
+  const far2 = clone(FAR);
+  f2.furniture.push(desk2, far2);
+  releaseFurnMove(f2, 'd1', { x: 5000, y: 4700 });
+  ok('E2n negative control (pre-fix): with the wall removed the SAME chair IS carried',
+     far2.x !== 5000, `far now (${far2.x},${far2.y})`);
+}
+{
+  // E3 — a toilet within capture range of a moving desk, NO wall between them.
+  const f = twoRoomFloor({ noWall: true });
+  const desk = { ...clone(DESK), x: 5600 };
+  const toilet = { id: 'wc', kind: 'toilet', x: 5000, y: 4000, w: 480, h: 700 };
+  f.furniture.push(desk, toilet);
+  releaseFurnMove(f, 'd1', { x: 5000, y: 4700 });
+  ok('E3 a toilet in capture range is never carried by a desk',
+     toilet.x === 5000 && toilet.y === 4000, `toilet now (${toilet.x},${toilet.y})`);
+
+  // E3n — NEGATIVE CONTROL: the identical fixture as a `chair` IS carried.
+  const f2 = twoRoomFloor({ noWall: true });
+  const desk2 = { ...clone(DESK), x: 5600 };
+  const ch = { id: 'wc', kind: 'chair', x: 5000, y: 4000, w: 480, h: 700 };
+  f2.furniture.push(desk2, ch);
+  releaseFurnMove(f2, 'd1', { x: 5000, y: 4700 });
+  ok('E3n negative control: the same piece as a `chair` IS carried', ch.x !== 5000,
+     `chair now (${ch.x},${ch.y})`);
+}
+{
+  // E4 — the legitimate on-drop tuck still fires: a chair dropped with its
+  // centre inside a table footprint is pushed out to the edge + 150 mm.
+  const f = twoRoomFloor({ noWall: true });
+  const table = { id: 't', kind: 'table', x: 5000, y: 8000, w: 1500, h: 900, rotation: 0 };
+  const ch = { id: 'c', kind: 'chair', x: 5000, y: 8200, w: 500, h: 500 };
+  f.furniture.push(table, ch);
+  releaseFurnMove(f, 'c', { x: 5000, y: 9000 });
+  ok('E4 dropping a chair inside a tabletop still tucks it out to the edge',
+     ch.y === 8600, `chair y ${ch.y} (expected 8600 = 8000 + 450 + 150)`);
+
+  // E4n — NEGATIVE CONTROL: the same drop as a TOILET is not shoved.
+  const f2 = twoRoomFloor({ noWall: true });
+  const table2 = { id: 't', kind: 'table', x: 5000, y: 8000, w: 1500, h: 900, rotation: 0 };
+  const wc = { id: 'c', kind: 'toilet', x: 5000, y: 8200, w: 480, h: 700 };
+  f2.furniture.push(table2, wc);
+  releaseFurnMove(f2, 'c', { x: 5000, y: 9000 });
+  ok('E4n a toilet dropped inside a tabletop is NOT shoved by the tuck',
+     wc.y === 8200, `toilet y ${wc.y}`);
+}
+{
+  // E5 — a dropped chair is not shoved by a table across a partition.
+  const f = twoRoomFloor();
+  // Seat at y 3900 (span 3650..4150) clears the wall face at 4250 by 100 mm, so
+  // resolveFurnitureWallCollision's 55 mm flush push-out does NOT also bite —
+  // any movement here is the seat TUCK and nothing else.
+  const table = { id: 't', kind: 'table', x: 5000, y: 4600, w: 1500, h: 1600, rotation: 0 };
+  const ch = { id: 'c', kind: 'chair', x: 5000, y: 3900, w: 500, h: 500 };
+  f.furniture.push(table, ch);
+  releaseFurnMove(f, 'c', { x: 5000, y: 3000 });
+  ok('E5 a dropped chair is not shoved by a table on the far side of a partition',
+     ch.y === 3900, `chair y ${ch.y}`);
+
+  const f2 = twoRoomFloor({ noWall: true });
+  const table2 = { id: 't', kind: 'table', x: 5000, y: 4600, w: 1500, h: 1600, rotation: 0 };
+  const ch2 = { id: 'c', kind: 'chair', x: 5000, y: 3900, w: 500, h: 500 };
+  f2.furniture.push(table2, ch2);
+  releaseFurnMove(f2, 'c', { x: 5000, y: 3000 });
+  ok('E5n negative control (pre-fix): with no wall the same drop IS shoved',
+     ch2.y !== 3900, `chair y ${ch2.y}`);
+}
+
+// ───────────────────────────── report ───────────────────────────────────────
+const pass = tests.filter(t => t.ok).length;
+document.getElementById('out').textContent =
+  tests.map(t => `${t.ok ? 'PASS' : 'FAIL'}  ${t.name}${t.detail ? '   [' + t.detail + ']' : ''}`).join('\n');
+document.title = `SEATWALL ${pass === tests.length ? 'PASS' : 'FAIL'} ${pass}/${tests.length}`;
+</script>
