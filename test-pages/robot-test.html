@@ -1125,6 +1125,299 @@
       ok('gate passability tests threw', false, String(e && e.message || e));
     }
 
+    // ══ (e) TRAPPED MOWER: room-exit routing + GPS ground-truth relocation ════
+    // User-reported (2026-08-09): "the robotic mower has shown as going inside
+    // the house and stopped inside" — drawn deep in the footprint at an interior
+    // wall junction, status "mowing", not moving. Root cause: the 2026-08-08
+    // doorway router only ever routed across the DOCK's room, and only under the
+    // garage exception. A mower can get inside ANY room (walls drawn around it —
+    // the `wasInside` forgiveness keeps it legally moving — or a fast GPS chase
+    // crossing a line a wall is being dragged onto, since _mowerLoopCache is one
+    // gesture stale by design), and once in, with an OUTDOOR dock, the router was
+    // permanently null: only the greedy escape fan was left, which deadlocks.
+    //
+    // Two prongs, pinned below:
+    //   A. route across whichever room the MOWER is in (mower-anchored door pick);
+    //   B. under GPS, a body that cannot MOVE for stuckRelocateS is a display
+    //      error — the real mower is at the fix — so it SNAPS onto the carrot.
+    {
+      const { buildingWallLoops, pointInAnyLoop, nearestPointOutsideLoops,
+              doorSpanCenter, MOWER_CONTAINMENT } = await import('./geometry.mod.js');
+      // Shared synthetic geo calibration: two landmarks on the plan diagonal, so
+      // any plan point can be turned into the lat/lon a fake tracker reports.
+      // hypot(14000, 10000) = 17204.65 mm → Δlat = 17.20465 m due north.
+      const G1 = { x: 0, y: 0, lat: 40.0, lon: -105.0 };
+      const G2 = { x: 14000, y: 10000, lat: 40.000154553, lon: -105.0 };
+      const gfit = fitGeoTransform([G1, G2]);
+      const landmarks = [
+        { id: 'g1', name: 'G1', x: G1.x, y: G1.y, lat: G1.lat, lon: G1.lon },
+        { id: 'g2', name: 'G2', x: G2.x, y: G2.y, lat: G2.lat, lon: G2.lon }];
+      // A relocation is a SNAP, so it is trivially separable from driving: the
+      // GPS chase caps at maxSpeedMm × 2.5 × dt = 52.5 mm/step.
+      const JUMP_MM = 200;
+
+      // Drive a mower with a faked GPS fix and report the whole trace. `seed`
+      // places the BODY (the trapped state); the dock stays where the fixture
+      // puts it. `noRouter` stubs _mowerDoorWaypoint → the pre-fix behaviour on
+      // an outdoor-dock plan (the router returned null unconditionally there).
+      const drive = async (o) => {
+        const { Planner } = await import('./planner.mod.js?v=' + Date.now());
+        const p = new Planner();
+        const f = p.floor();
+        f.w = 14000; f.d = 10000;
+        f.walls = o.walls; f.doors = o.doors ?? []; f.windows = [];
+        p.store.geo = { landmarks };
+        const r = { id: 'mt', kind: 'mower', x: o.dock.x, y: o.dock.y,
+                    trackerEntity: o.carrot ? 'device_tracker.mt' : undefined };
+        f.robots = [r];
+        if (o.carrot) {
+          const ll = planToLatLon(gfit, o.carrot.x, o.carrot.y);
+          const attrs = { latitude: ll.lat, longitude: ll.lon };
+          if (o.dirDeg != null) attrs.direction = o.dirDeg;
+          p.hass = { states: { 'device_tracker.mt': { state: 'not_home', attributes: attrs } } };
+        }
+        if (o.noRouter) p._mowerDoorWaypoint = () => null;
+        p.stepRobots(0.05);
+        const rs = p.robotStates.mt;
+        rs.x = o.seed.x; rs.y = o.seed.y; rs.heading = o.seed.h ?? 0; rs.speed = 0;
+        rs.demoPhase = 'run'; rs.demoTimer = 999999;
+        const loops = buildingWallLoops(o.walls);
+        const t = { p, r, rs, loops, cross: 0, jumps: 0, jumpAt: -1, maxStuckT: 0,
+                    arriveAt: -1, leftAt: -1, exitedBeforeJump: false, insideEnd: false,
+                    maxStep: 0 };
+        for (let i = 0; i < (o.steps ?? 2000); i++) {
+          const px = rs.x, py = rs.y;
+          p.stepRobots(0.05);
+          const step = Math.hypot(rs.x - px, rs.y - py);
+          const jumped = step > JUMP_MM;
+          if (jumped) { t.jumps++; if (t.jumpAt < 0) t.jumpAt = i; }
+          else {
+            t.maxStep = Math.max(t.maxStep, step);
+            // Crossings are only meaningful for KINEMATIC steps: the relocation
+            // snap deliberately crosses whatever lies between (it is a redraw,
+            // not a drive), which is exactly why it is gated on being stuck.
+            if (segCrossesSolidWall(o.walls, f.doors, [], px, py, rs.x, rs.y)) t.cross++;
+          }
+          t.maxStuckT = Math.max(t.maxStuckT, rs.stuckT ?? 0);
+          const inside = pointInAnyLoop(loops, rs.x, rs.y);
+          if (t.leftAt < 0 && !inside) {
+            t.leftAt = i;
+            if (t.jumpAt < 0) t.exitedBeforeJump = true;    // walked out on its own
+          }
+          if (t.arriveAt < 0 && o.carrot &&
+              Math.hypot(rs.x - o.carrot.x, rs.y - o.carrot.y) < 400) t.arriveAt = i;
+        }
+        t.insideEnd = pointInAnyLoop(loops, rs.x, rs.y);
+        return t;
+      };
+
+      const rect = (x0, y0, x1, y1) => ([{ points: [
+        {x:x0,y:y0},{x:x1,y:y0},{x:x1,y:y1},{x:x0,y:y1},{x:x0,y:y0}] }]);
+      // House 5000..9000 × 4000..7000. The door sits at the SOUTH end of the WEST
+      // run (hinge y 4800 / rotation 90 → span y 4000..4800): the b3 alignment
+      // trap, mirrored — from the NE corner every straight line to an eastern
+      // carrot meets a doorless wall.
+      const house = rect(5000, 4000, 9000, 7000);
+      const wdoor = [{ x: 5000, y: 4800, w: 800, rotation: 90 }];
+
+      try {
+        // ── (e1) Room-exit routing: trapped in a NON-dock room, dock outdoors ──
+        const t1 = await drive({ walls: house, doors: wdoor, dock: { x: 1000, y: 1000 },
+                                 seed: { x: 8500, y: 6500 }, carrot: { x: 12000, y: 6500 },
+                                 steps: 2000 });
+        ok('trapped/exit: the fixture really does start the mower inside a room…',
+           pointInAnyLoop(t1.loops, 8500, 6500) === true &&
+           pointInAnyLoop(t1.loops, 1000, 1000) === false,
+           'dock outdoors ⇒ the shipped dock-room router was permanently null here');
+        ok('trapped/exit: it walks OUT through the off-line doorway on its own',
+           t1.exitedBeforeJump && t1.leftAt >= 0, `leftAt=${t1.leftAt} jumpAt=${t1.jumpAt}`);
+        ok('trapped/exit: …crossing no wall on any kinematic step',
+           t1.cross === 0, `crossings=${t1.cross}`);
+        ok('trapped/exit: it reaches the outdoor fix, kinematically (no snap)',
+           t1.arriveAt >= 0 && t1.jumps === 0 && !t1.insideEnd,
+           `arriveAt=${t1.arriveAt} jumps=${t1.jumps}`);
+        ok('trapped/exit: the escape never even armed the relocation timer',
+           t1.maxStuckT < MOWER_CONTAINMENT.stuckRelocateS,
+           `maxStuckT=${t1.maxStuckT.toFixed(2)}s`);
+
+        // NEGATIVE CONTROL — the identical fixture with the router stubbed out
+        // (= the pre-fix code path for an outdoor dock, where doorWp returned
+        // null unconditionally). The greedy deflection steerer alone never finds
+        // the off-line opening: 2000 steps = 100 s and it is still in the room.
+        // Note it does NOT get rescued by Prong B either, and that is by design:
+        // it keeps CIRCLING (net movement far past stuckMoveMm), and a moving
+        // body is not "stuck". Prong A is the fix for this class; Prong B covers
+        // only the traps where the body genuinely stops (e2 below).
+        const t1n = await drive({ walls: house, doors: wdoor, dock: { x: 1000, y: 1000 },
+                                  seed: { x: 8500, y: 6500 }, carrot: { x: 12000, y: 6500 },
+                                  steps: 2000, noRouter: true });
+        ok('trapped/exit NEGATIVE: without routing it never walks out',
+           !t1n.exitedBeforeJump && t1n.leftAt === -1 && t1n.insideEnd,
+           `leftAt=${t1n.leftAt} in=${t1n.insideEnd}`);
+        ok('trapped/exit NEGATIVE: …and never reaches the fix — the shipped deadlock',
+           t1n.arriveAt === -1 && t1n.jumps === 0 && t1n.cross === 0,
+           `arriveAt=${t1n.arriveAt} jumps=${t1n.jumps}`);
+      } catch (e) {
+        ok('trapped mower room-exit tests threw', false, String(e && e.message || e));
+      }
+
+      try {
+        // ── (e2) DOORLESS trap + GPS relocation ────────────────────────────────
+        // No door at all: no routing can help, and driving through the wall is
+        // (rightly) forbidden. The mower is wedged in the NE corner — the shape
+        // of the user's screenshot. After stuckRelocateS the drawn body snaps
+        // onto the clamped carrot: the REAL mower is out there.
+        const relocSteps = MOWER_CONTAINMENT.stuckRelocateS / 0.05;   // 160 @ 20 Hz
+        const t2 = await drive({ walls: house, doors: [], dock: { x: 1000, y: 1000 },
+                                 seed: { x: 8800, y: 6800, h: 0.78 },
+                                 carrot: { x: 12000, y: 5500 }, dirDeg: 90, steps: 600 });
+        ok('trapped/doorless: never crosses a wall on any kinematic step',
+           t2.cross === 0, `crossings=${t2.cross}`);
+        ok('trapped/doorless: it never drives out (there is no opening)',
+           !t2.exitedBeforeJump, `leftAt=${t2.leftAt} jumpAt=${t2.jumpAt}`);
+        ok('trapped/doorless: exactly ONE discontinuity — the relocation',
+           t2.jumps === 1, `jumps=${t2.jumps}`);
+        ok('trapped/doorless: it does NOT fire before the window elapses',
+           t2.jumpAt >= relocSteps, `jumpAt=${t2.jumpAt} window=${relocSteps} steps`);
+        ok('trapped/doorless: …and fires promptly after it (one window, not two)',
+           t2.jumpAt < relocSteps * 2, `jumpAt=${t2.jumpAt}`);
+        ok('trapped/doorless: it lands exactly ON the clamped carrot, stopped',
+           Math.hypot(t2.rs.x - 12000, t2.rs.y - 5500) < 1 && t2.rs.speed === 0 &&
+           !t2.insideEnd,
+           `(${t2.rs.x.toFixed(1)},${t2.rs.y.toFixed(1)}) v=${t2.rs.speed}`);
+        // A tracker-reported travel direction is adopted on the snap (the body is
+        // being re-placed from ground truth, heading included).
+        const hDeg = t2.p.robotPosInfo(t2.r).headingDeg;
+        ok('trapped/doorless: the reported heading is adopted with the position',
+           hDeg != null && near(t2.rs.heading * 180 / Math.PI, hDeg, 1e-6),
+           `rs=${(t2.rs.heading * 180 / Math.PI).toFixed(3)}° gps=${hDeg?.toFixed(3)}°`);
+        ok('trapped/doorless: the stuck accounting resets after relocating',
+           (t2.rs.stuckT ?? 0) === 0, `stuckT=${t2.rs.stuckT}`);
+      } catch (e) {
+        ok('trapped mower doorless-relocation tests threw', false, String(e && e.message || e));
+      }
+
+      try {
+        // ── (e3) INTERIOR-CARROT HOLD: relocation refuses an illegal carrot ────
+        // The exact e2 trap with ONE difference — where the carrot lands. Two
+        // rooms share the wall x=9000; a fix just inside the FAR room has BOTH of
+        // nearestPointOutsideLoops' margin candidates inside a loop, so its
+        // two-sided fallback returns the boundary point ITSELF: a point ON an
+        // interior wall, deep in the footprint and unreachable. Snapping there
+        // would DRAW the mower inside the house — the very bug — so the mower
+        // holds, and the honest read is "GPS says something impossible".
+        const twoRooms = [...rect(5000, 4000, 9000, 7000), ...rect(9000, 4000, 13000, 7000)];
+        const loops2 = buildingWallLoops(twoRooms);
+        const fix = { x: 9300, y: 5500 };
+        const clamped = nearestPointOutsideLoops(loops2, fix.x, fix.y,
+                                                 MOWER_CONTAINMENT.clampMarginMm);
+        ok('interior-carrot: the fixture reproduces the two-sided fallback',
+           loops2.length === 2 && near(clamped.x, 9000, 1) && near(clamped.y, 5500, 1),
+           `clamped=(${clamped.x.toFixed(0)},${clamped.y.toFixed(0)})`);
+        ok('interior-carrot: that clamped point is itself illegal (inside a loop)',
+           pointInAnyLoop(loops2, clamped.x, clamped.y) === true);
+        const t3 = await drive({ walls: twoRooms, doors: [], dock: { x: 1000, y: 1000 },
+                                 seed: { x: 8800, y: 6800, h: 0.78 }, carrot: fix,
+                                 steps: 1200 });
+        ok('interior-carrot: the timer runs WELL past the window…',
+           t3.maxStuckT > MOWER_CONTAINMENT.stuckRelocateS,
+           `maxStuckT=${t3.maxStuckT.toFixed(2)}s`);
+        ok('interior-carrot: …yet the mower NEVER relocates onto it (the guard)',
+           t3.jumps === 0, `jumps=${t3.jumps} jumpAt=${t3.jumpAt}`);
+        ok('interior-carrot: it holds put, crossing no wall',
+           t3.cross === 0 && t3.leftAt === -1,
+           `crossings=${t3.cross} end=(${t3.rs.x.toFixed(0)},${t3.rs.y.toFixed(0)})`);
+      } catch (e) {
+        ok('trapped mower interior-carrot tests threw', false, String(e && e.message || e));
+      }
+
+      try {
+        // ── (e4) DETOUR NON-REGRESSION: a long way round is not "stuck" ────────
+        // The metric is MOVEMENT, not progress: a mower rounding the building to
+        // reach a carrot on the far side keeps moving the whole way, so it must
+        // never trip the relocation however long the detour takes.
+        const t4 = await drive({ walls: house, doors: [], dock: { x: 1000, y: 1000 },
+                                 seed: { x: 2000, y: 5500 }, carrot: { x: 12000, y: 5500 },
+                                 steps: 1500 });
+        ok('detour: it rounds the building and reaches the far-side fix',
+           t4.arriveAt >= 0, `arriveAt=${t4.arriveAt}`);
+        ok('detour: the whole path is continuous — no relocation ever fires',
+           t4.jumps === 0 && t4.maxStep <= MOWER_KINEMATICS.maxSpeedMm * 2.5 * 0.05 + 1e-6,
+           `jumps=${t4.jumps} maxStep=${t4.maxStep.toFixed(1)}mm`);
+        ok('detour: the stuck timer never reaches the threshold',
+           t4.maxStuckT < MOWER_CONTAINMENT.stuckRelocateS,
+           `maxStuckT=${t4.maxStuckT.toFixed(2)}s`);
+        ok('detour: never inside the house on the way round',
+           t4.leftAt === -1 || t4.cross === 0, `crossings=${t4.cross}`);
+      } catch (e) {
+        ok('trapped mower detour tests threw', false, String(e && e.message || e));
+      }
+
+      try {
+        // ── (e5) SIM trap stays put: a synthetic body never teleports ─────────
+        // No GPS binding ⇒ no ground truth ⇒ no relocation. A simulated mower
+        // sealed in a doorless room simply keeps working the room: it must never
+        // cross a wall it could not have crossed (the humanoid synthetic-rig
+        // rule — only ground-truth rigs are re-placed at an unreachable goal).
+        const t5 = await drive({ walls: house, doors: [], dock: { x: 1000, y: 1000 },
+                                 seed: { x: 8800, y: 6800, h: 0.78 }, steps: 1200 });
+        ok('sim trap: the simulated mower stays inside — no teleport out',
+           t5.insideEnd && t5.leftAt === -1 && t5.jumps === 0,
+           `leftAt=${t5.leftAt} jumps=${t5.jumps} in=${t5.insideEnd}`);
+        ok('sim trap: and crosses no wall over the whole budget',
+           t5.cross === 0, `crossings=${t5.cross}`);
+        ok('sim trap: the GPS stuck accounting stays cleared on the sim path',
+           t5.maxStuckT === 0 && (t5.rs.stuckT ?? 0) === 0 &&
+           t5.rs.stuckRefX === undefined,
+           `maxStuckT=${t5.maxStuckT}`);
+      } catch (e) {
+        ok('trapped mower sim-trap tests threw', false, String(e && e.message || e));
+      }
+
+      try {
+        // ── (e6) Door-pick ANCHOR: the compatibility rule, pinned purely ───────
+        // _mowerDoorWaypoint picks the door nearest an ANCHOR that DEFAULTS to
+        // the dock (the shipped approach-from-outside behaviour — a stable pick
+        // that cannot oscillate as the mower rounds the building). The new
+        // mower-room EXIT call passes the mower instead, so a body trapped in a
+        // room it does not dock in heads for ITS nearest exit. A mower standing
+        // in the DOCK's own room keeps the dock anchor, which is what makes the
+        // garage-exception matrix above byte-identical.
+        const { Planner } = await import('./planner.mod.js?v=' + Date.now());
+        const p6 = new Planner();
+        const f6 = p6.floor();
+        f6.w = 14000; f6.d = 10000; f6.walls = house;
+        // Two doors on opposite runs: south end of the WEST run, north end of the
+        // EAST run (hinge y 7000 / rotation 90 → span y 6200..7000).
+        const dW = { x: 5000, y: 4800, w: 800, rotation: 90 };
+        const dE = { x: 9000, y: 7000, w: 800, rotation: 90 };
+        f6.doors = [dW, dE];
+        const dock6 = { id: 'm6', kind: 'mower', x: 5400, y: 4400 };   // beside the WEST door
+        f6.robots = [dock6];
+        const loops6 = buildingWallLoops(house);
+        const doors6 = [dW, dE];
+        const out = { x: 12000, y: 2000 };                              // outdoors
+        const near6 = (wp, d) => Math.hypot(wp.x - doorSpanCenter(d).x,
+                                            wp.y - doorSpanCenter(d).y);
+        const wpDefault = p6._mowerDoorWaypoint(f6, loops6, doors6, dock6, 8600, 6700, out.x, out.y);
+        ok('anchor: the DEFAULT anchor is the dock (shipped pick, unchanged)',
+           wpDefault && near6(wpDefault, dW) < near6(wpDefault, dE),
+           wpDefault && `(${wpDefault.x.toFixed(0)},${wpDefault.y.toFixed(0)})`);
+        const wpMower = p6._mowerDoorWaypoint(f6, loops6, doors6, dock6, 8600, 6700,
+                                              out.x, out.y, 8600, 6700);
+        ok('anchor: an explicit MOWER anchor takes its own nearest exit instead',
+           wpMower && near6(wpMower, dE) < near6(wpMower, dW),
+           wpMower && `(${wpMower.x.toFixed(0)},${wpMower.y.toFixed(0)})`);
+        ok('anchor: same-side calls still return null (the phase transition)',
+           p6._mowerDoorWaypoint(f6, loops6, doors6, dock6, 6000, 5000, 7000, 6000, 6000, 5000) === null &&
+           p6._mowerDoorWaypoint(f6, loops6, doors6, dock6, 1000, 1000, out.x, out.y) === null);
+        ok('anchor: no doors ⇒ no waypoint, whatever the anchor',
+           p6._mowerDoorWaypoint(f6, loops6, [], dock6, 8600, 6700, out.x, out.y, 8600, 6700) === null);
+      } catch (e) {
+        ok('mower door-anchor tests threw', false, String(e && e.message || e));
+      }
+    }
+
     // ── Robots view LAYER + position readout + manual alignment nudges ───────
     // Three related surfaces: `Layers2D.robots` (split off `sensors`, absent =
     // ON), the `RobotFixture.showPosInfo` calibration readout resolved by

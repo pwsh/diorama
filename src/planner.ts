@@ -374,6 +374,10 @@ export interface RobotState {
   goalTimer: number;          // vacuum goal re-pick countdown
   speed: number;              // mm/s — MOWER kinematic velocity (bicycle model);
                               //   unused by the vacuum branch (point-chaser)
+  // MOWER GPS stuck accounting (runtime-only, never persisted; see the Prong-B
+  // block at the end of _stepMower's GPS branch). Reference position the net
+  // displacement is measured from, and how long the body has failed to move it.
+  stuckRefX?: number; stuckRefY?: number; stuckT?: number;
 }
 
 // Calibration diagnostic for one robot (runtime-only, derived — never stored).
@@ -7916,22 +7920,28 @@ export class Planner extends EventTarget {
   // extra controller state, no hysteresis, no latch to reset (a mower pushed
   // back out of the doorway simply re-acquires the waypoint).
   //
-  // The door is picked NEAREST THE DOCK, deliberately not nearest the mower: a
-  // dock sits by its own access door anyway, and a mower-relative pick would
-  // swap between two doors as the mower rounds the building, oscillating the
-  // carrot. Stable target > locally optimal target.
-  private _mowerDoorWaypoint(f: Floor, dockContainLoops: Vec2[][], doors: Door[],
+  // The door is picked NEAREST THE ANCHOR, which defaults to the DOCK and
+  // deliberately not to the mower for the APPROACH-FROM-OUTSIDE case: a dock
+  // sits by its own access door anyway, and a mower-relative pick would swap
+  // between two doors as the mower rounds the building, oscillating the carrot.
+  // Stable target > locally optimal target. The EXIT case — the mower is inside
+  // the room this call is routing across — passes the MOWER's own position
+  // instead (2026-08-09): you are in the room, so nearest-exit is the stable
+  // pick, and a dock-anchored choice could aim at a far door, or at a door of a
+  // different room entirely when the trapping room is not the dock's.
+  private _mowerDoorWaypoint(f: Floor, containLoops: Vec2[][], doors: Door[],
                              dock: RobotFixture,
                              fromX: number, fromY: number,
-                             toX: number, toY: number): Vec2 | null {
+                             toX: number, toY: number,
+                             anchorX = dock.x, anchorY = dock.y): Vec2 | null {
     if (!doors.length) return null;
-    const fromIn = pointInAnyLoop(dockContainLoops, fromX, fromY);
-    const toIn = pointInAnyLoop(dockContainLoops, toX, toY);
+    const fromIn = pointInAnyLoop(containLoops, fromX, fromY);
+    const toIn = pointInAnyLoop(containLoops, toX, toY);
     if (fromIn === toIn) return null;                     // same side: no crossing
     let door = doors[0], bd = Infinity;
     for (const d of doors) {
       const c = doorSpanCenter(d);
-      const dist = Math.hypot(c.x - dock.x, c.y - dock.y);
+      const dist = Math.hypot(c.x - anchorX, c.y - anchorY);
       if (dist < bd) { bd = dist; door = d; }
     }
     const c = doorSpanCenter(door);
@@ -7945,7 +7955,7 @@ export class Planner extends EventTarget {
       for (const s of [1, -1]) {
         const px = c.x + nx * reach * s, py = c.y + ny * reach * s;
         if (px < 0 || py < 0 || px > f.w || py > f.d) continue;
-        if (pointInAnyLoop(dockContainLoops, px, py) === toIn) return { x: px, y: py };
+        if (pointInAnyLoop(containLoops, px, py) === toIn) return { x: px, y: py };
       }
     }
     return { x: c.x, y: c.y };                            // tiny room: aim at the span itself
@@ -8247,10 +8257,38 @@ export class Planner extends EventTarget {
     const dockDoors = this._mowerDockDoors(f, dockRoom);   // [] for an outdoor dock
     const excepted = dockRoom.length > 0 && dockDoors.length > 0;
     const dockLoops = excepted ? loops.filter(lp => !pointInPolygon(r.x, r.y, lp)) : loops;
+    // The room the MOWER is standing in right now (2026-08-09, user-reported
+    // "the mower has shown as going inside the house and stopped inside").
+    // Routing across the DOCK's room alone was not enough: a mower can end up
+    // inside ANY room — walls drawn/closed around it while it stands there (the
+    // `wasInside` forgiveness legitimately keeps it moving) or a fast GPS chase
+    // crossing a line a wall is being dragged onto (_mowerLoopCache is one drag
+    // gesture stale by design). Once in, with no doorway routing, it has only
+    // the greedy escape fan, which deadlocks against walls — the exact failure
+    // class the dock router was built for. Measured on a real 19-room plan:
+    // 13 of 19 in-room starts deadlocked, some still indoors, some wedged in a
+    // concave pocket between wings. So route across whichever room it is in.
+    const mowerRoom = loops.filter(lp => pointInPolygon(rs.x, rs.y, lp));
+    const mowerDoors = mowerRoom.length ? this._mowerDockDoors(f, mowerRoom) : [];
+    // Loop objects come from the same cached array, so identity IS room
+    // identity: standing in the dock's own room keeps the shipped dock-anchored
+    // door pick (that case is already pinned by the garage-exception matrix).
+    const inDockRoom = mowerRoom.some(lp => dockRoom.includes(lp));
     // Doorway router — see _mowerDoorWaypoint. Costs nothing for an outdoor dock
-    // (no doors collected ⇒ every call short-circuits on the empty list).
-    const doorWp = (fx: number, fy: number, tx: number, ty: number): Vec2 | null =>
-      excepted ? this._mowerDoorWaypoint(f, dockRoom, dockDoors, r, fx, fy, tx, ty) : null;
+    // with the mower outdoors (no doors collected ⇒ every call short-circuits on
+    // the empty list). A trapped room with NO door yields no waypoint and the
+    // old grind stands; under GPS the Prong-B relocation below heals it, and a
+    // SIM mower deliberately stays put — a synthetic body must never teleport
+    // across a wall it could not have crossed (the humanoid synthetic-rig rule).
+    const doorWp = (fx: number, fy: number, tx: number, ty: number): Vec2 | null => {
+      if (mowerDoors.length) {
+        const wp = this._mowerDoorWaypoint(f, mowerRoom, mowerDoors, r, fx, fy, tx, ty,
+                                           inDockRoom ? r.x : rs.x,
+                                           inDockRoom ? r.y : rs.y);
+        if (wp) return wp;
+      }
+      return excepted ? this._mowerDoorWaypoint(f, dockRoom, dockDoors, r, fx, fy, tx, ty) : null;
+    };
     const bs: BicycleState = { x: rs.x, y: rs.y, heading: rs.heading, speed: rs.speed ?? 0 };
     const commit = () => { rs.x = bs.x; rs.y = bs.y; rs.heading = bs.heading; rs.speed = bs.speed; };
     // GPS reality (when calibrated + a fix exists) overrides the sim while
@@ -8294,8 +8332,42 @@ export class Planner extends EventTarget {
         bs.speed = Math.max(0, bs.speed - K.accelMm * h);
       }
       commit();
+      // ── Prong B: GPS ground-truth relocation (2026-08-09) ──────────────────
+      // The doorway router heals every trap that HAS a way out; this is the
+      // backstop for the ones that do not (a doorless room, a concave pocket
+      // between wings the greedy steerer cannot round). Under GPS the REAL mower
+      // is at the fix — a drawn body that cannot make progress toward it is a
+      // DISPLAY error, so the correction SNAPS. Same reasoning as the humanoid
+      // rule that respawns a ground-truth rig at a goal unreachable for >3 s:
+      // gliding there would redraw the drive-through-walls artifact the whole
+      // containment guard exists to prevent.
+      const C = MOWER_CONTAINMENT;
+      if (rs.stuckRefX == null || rs.stuckRefY == null) {
+        rs.stuckRefX = rs.x; rs.stuckRefY = rs.y; rs.stuckT = 0;
+      }
+      const dNow = Math.hypot(cx.x - rs.x, cx.y - rs.y);
+      if (dNow <= K.arriveMm ||
+          Math.hypot(rs.x - rs.stuckRefX, rs.y - rs.stuckRefY) > C.stuckMoveMm) {
+        rs.stuckRefX = rs.x; rs.stuckRefY = rs.y; rs.stuckT = 0;
+      } else {
+        rs.stuckT = (rs.stuckT ?? 0) + dt;
+        // Only ever relocate onto a LEGAL carrot. nearestPointOutsideLoops has a
+        // two-sided fallback that returns the boundary point ITSELF when both
+        // margin candidates are inside loops (an interior room's shared wall),
+        // so a fix deep in the footprint can clamp to a point ON an interior
+        // wall — unreachable, and no place to put the body. There the mower
+        // HOLDS: the honest read is "GPS says something impossible".
+        if (rs.stuckT > C.stuckRelocateS && !pointInAnyLoop(dockLoops, cx.x, cx.y)) {
+          rs.x = cx.x; rs.y = cx.y; rs.speed = 0;
+          if (gps.headingRad != null) rs.heading = gps.headingRad;
+          rs.stuckRefX = rs.x; rs.stuckRefY = rs.y; rs.stuckT = 0;
+        }
+      }
       return;
     }
+    // Not the GPS branch this step (sim / docked / no fix): drop the stuck
+    // accounting so a stale timer can never fire into a later GPS session.
+    rs.stuckRefX = undefined; rs.stuckRefY = undefined; rs.stuckT = 0;
     if (act === 'docked' || act === 'returning') {
       // Drive to the dock itself. Under the garage exception the dock's own
       // room is not in `dockLoops`, so the clamp is a NO-OP for the common

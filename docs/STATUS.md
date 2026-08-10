@@ -421,6 +421,35 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Mower unstick: room-exit doorway routing + GPS ground-truth
+  relocation** (2026-08-09, user-reported "the robotic mower has shown
+  as going inside the house and stopped inside" with a mid-wall-edit
+  screenshot; unreleased — on main past v0.63.0). Orchestrator
+  root-caused against the user's LIVE config (SMB, local-only): today's
+  fix projects OUTSIDE and dock→carrot runs clean, so the stuck body is
+  a TRAP state — once indoors (walls closed around it via `wasInside`
+  forgiveness, or the one-drag-stale loop cache), the doorway router
+  only covered the DOCK's room (and the dock now sits ~401 mm OUTSIDE
+  its old sunroom loop, so it wasn't even armed); a 19-room simulation
+  with the real pure functions deadlocked 13/19 in-room starts (some
+  still indoors = the screenshot, some wedged in concave pockets
+  between wings). Fix (Opus): (A) `doorWp` routes across whichever room
+  the mower is IN first (mower-anchored door pick via
+  `_mowerDoorWaypoint`'s new trailing anchor, default dock =
+  byte-identical shipped call sites; dock anchor kept inside the dock's
+  own room); (B) GPS-only movement-based stuck accounting
+  (`stuckMoveMm` 300 / `stuckRelocateS` 8) snaps a genuinely stopped
+  body onto the clamped carrot when legal (the humanoid
+  ground-truth-respawn rule; interior shared-wall carrots HOLD — the
+  `nearestPointOutsideLoops` two-sided fallback is guarded, not fixed);
+  sim mowers never teleport. Agent's measured refinement accepted: a
+  doored trap CIRCLES (movement > 300 mm) so Prong B deliberately never
+  fires there — routing owns that class. ROBOT 226→257 (§e incl.
+  router-nulled negative control, relocation at exactly 8.0 s,
+  interior-carrot hold A/B, detour non-regression at the kinematic
+  step cap). The user's stuck mower also self-heals on panel reload
+  (robotStates is runtime-only).
+
 - **Stair anatomy: step-down default + side walls to the level above +
   riser/newel/handrail toggles** (2026-08-09, three user asks; unreleased
   — on main past v0.63.0). First batch under the TIGHTENED model routing

@@ -2459,6 +2459,17 @@ export const MOWER_CONTAINMENT = {
   // deflection steerer never has to discover the door on its own (which it
   // provably cannot when the straight line meets the wall far from it).
   dockDoorWaypointMm: 700,
+  // ── GPS ground-truth relocation (Planner._stepMower, GPS branch only) ──────
+  // Net displacement below which the mower counts as NOT MOVING, and how long
+  // it may stay that way before the drawn body is snapped onto the (clamped)
+  // GPS carrot. The metric is deliberately MOVEMENT, not progress toward the
+  // carrot: a mower taking a long legitimate detour around the building keeps
+  // moving the whole way and can therefore never trip this, while a body wedged
+  // in a concave pocket or trapped in a room with no doorway trips it on time.
+  // 8 s is generous next to the humanoid's 3 s unreachable-goal respawn because
+  // a braking / wheel-turning mower legitimately dwells for a moment.
+  stuckMoveMm: 300,
+  stuckRelocateS: 8,
 };
 
 // Row pitch for the simulated boustrophedon sweep: ≥ 2·turnRadiusMm (1000 mm)
