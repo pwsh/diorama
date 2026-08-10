@@ -81,8 +81,14 @@
     const dot = exp[0] * d[0] + exp[1] * d[1] + exp[2] * d[2];
     ok('cone_aims_screen', dot > 0.999, dot.toFixed(4));
     // Base radius from the throw ratio: image half-width = dist/(2·ratio).
-    const expR = Math.max(120, len / (2 * projectorThrow(proj)));
+    // 2026-08 body rework: the beam ORIGINATES AT THE LENS BARREL TIP, standing
+    // BARREL_TIP mm off the mount point along the aim, so the throw distance —
+    // and therefore the base radius — shrinks by exactly that standoff.
+    const BARREL_TIP = 218;   // chassisD/2 (140) + barrelL (90) − seat (12)
+    const expR = Math.max(120, (len - BARREL_TIP) / (2 * projectorThrow(proj)));
     ok('cone_spread', near(cone.geometry.parameters.radius, expR, 1), cone.geometry.parameters.radius.toFixed(0));
+    ok('cone_starts_at_lens_tip', near(cone.geometry.parameters.height, len - BARREL_TIP, 1),
+       cone.geometry.parameters.height.toFixed(0));
   }
 
   // Not projecting: body stays, beam + glow gone.

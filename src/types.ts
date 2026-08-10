@@ -102,7 +102,21 @@ export type FurnitureKind =
   | 'center_channel'     // horizontal, mountable under/over a screen
   | 'theater_recliner'   // plush single recliner; watch_tv resolves from the room TV
   | 'recliner_row3'      // three-seat shared-arm recliner row (3 sit spots)
+  // Plush leather theater recliners (2026-08, user: "add models for plush
+  // leather theater reclining chairs"). One parametric builder; the loveseat
+  // carries a center console between its two seats. Like the originals they
+  // leave `activity` undefined — watch_tv resolves from the room's TV.
+  | 'theater_recliner_plush' // single plush recliner, extended footrest (1 sit spot)
+  | 'theater_loveseat_plush' // two plush seats flanking a center console (2 sit spots)
+  | 'recliner_row3_plush'    // three plush seats, shared arms (3 sit spots)
   | 'riser_platform'     // walkable tiered-seating deck; does NOT block nav
+  // Projection screens (cat 'theater'). Full TV-display parity via
+  // SCREEN_SURFACE_KINDS/isScreenKind: news/weather screen surfaces,
+  // now-playing cards, the room-TV (`watch_tv`) resolution and the projector's
+  // aim-target picker all accept them. The ceiling screen RETRACTS when its
+  // bound/local state is off (an eased per-fixture blend, _screenDrop).
+  | 'projector_screen'         // wall-mounted fixed screen (wall-plane piece)
+  | 'projector_screen_ceiling' // ceiling cassette; the panel drops when in use
   // mechanical / utility plant (cat 'appliance'). Bindable via the generic
   // entity_id; each resolves a running state + a GLOW COLOR (heat red / cool
   // blue / fan white) through geometry.mechanicalRun — they are excluded from
@@ -272,13 +286,14 @@ export interface Furniture {
     countEntity?: string;     //   Mail-and-Packages) > 0 → floating count badge + raised flag. flagEntity
     flagEntity?: string;      //   (binary_sensor mailbox-lid) 'on' → lid tilts open. Both optional; unbound /
   };                          //   zero = plain closed mailbox, flag down. Item-level → no repairFloor change.
-  screenMode?: 'off' | 'now_playing' | 'news' | 'weather' | 'auto';  // tv/wall_tv only: what the screen
+  screenMode?: 'off' | 'now_playing' | 'news' | 'weather' | 'auto';  // SCREEN kinds only (isScreenKind: tv /
+                              // wall_tv / projector_screen[_ceiling]): what the screen
                               //   FACE shows when no media_player is presenting media (research doc §4.2).
                               //   'auto' (default when absent) = now-playing while a bound media_player plays,
                               //   else blank. 'news'/'weather' render a scrolling headline ticker / mini
                               //   weather card onto the screen plane while the TV is on + not playing media.
                               //   Item-level → no repairFloor change.
-  newsEntity?: string | null; // tv/wall_tv 'news' screenMode: any sensor.*/event.* whose attributes carry a
+  newsEntity?: string | null; // SCREEN-kind 'news' screenMode: any sensor.*/event.* whose attributes carry a
                               //   headline-shaped payload (feedparser list / event.* single / template). Parsed
                               //   defensively by surfaces.parseHeadlines. Config-path in _isSlowEntity.
   oscillate?: boolean;        // bladed floor fans (floor_fan/retro_fan/modern_fan) only: while running, the
@@ -332,7 +347,10 @@ export type LightIconKind =
   | 'exhaust_wall'    // wall-mount exhaust: round housing + louver shutter, wall-snaps flush, no disc
   | 'exhaust_light'   // ceiling exhaust + center light globe (fan_light precedent)
   | 'firepit_round'   // outdoor fire pit: stone ring + logs, flickering flames (fireplace pattern)
-  | 'firepit_square'; // outdoor fire pit: squared stone bowl + logs, flickering flames
+  | 'firepit_square'  // outdoor fire pit: squared stone bowl + logs, flickering flames
+  | 'vanity_bar'      // bathroom vanity bar: wall backplate + 3 exposed globes (wall-snaps, no floor pool)
+  | 'vanity_hollywood'// marquee vanity strip: longer backplate + 5 smaller globes (wall-snaps, no floor pool)
+  | 'mirror_light';   // backlit LED mirror: rounded-rect panel with a glowing perimeter rim (wall-snaps, no pool)
 
 // Logical-state light binding (Display & Controls arc, batch DC-B). A light
 // whose ON / color / flash derives from ANY entity's state through the shared
@@ -1235,7 +1253,7 @@ export interface PresenceZone {
 }
 
 // Projector fixture (home-theater arc). Ceiling/shelf-mounted body aimed at a
-// projection screen (a `wall_tv`/`tv` furniture piece). Bindable to a
+// projection screen (any isScreenKind furniture piece). Bindable to a
 // media_player.* / switch.* / light.* entity whose 'on'/'playing' state means
 // PROJECTING; unbound pieces carry a localState for click-toggle (same "local
 // control of unbound interactive objects" pattern as Light/Door). While
@@ -1251,7 +1269,7 @@ export interface ProjectorFixture {
   rotation?: number;             // deg screen-CW; aim heading when no screen target (0 = +Y world)
   entity_id?: string | null;     // media_player.* / switch.* / light.* ('on'/'playing' = projecting)
   localState?: string;           // local on/off when UNBOUND ('on'/'off'); inert once bound
-  screenId?: string | null;      // Furniture id (wall_tv/tv) the beam aims at; falls back to `rotation`
+  screenId?: string | null;      // Furniture id (any isScreenKind piece) the beam aims at; else `rotation`
   throwRatio?: number;           // default 1.5 (standard throw); scales the beam spread + default reach
   beamColor?: string;            // hex; default '#dfe8ff' (cool white-blue)
   label?: string;

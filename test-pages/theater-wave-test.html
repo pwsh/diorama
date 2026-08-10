@@ -1,0 +1,571 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>theater wave test</title>
+<style>html,body{margin:0;background:#111;color:#ccc;font:12px sans-serif}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<!--
+  THEATER WAVE (2026-08) — four user requests in one batch:
+   (1) three PLUSH LEATHER theater recliner kinds (single / loveseat-with-
+       console / three-across row), one parametric builder + a shared seat
+       layout so the 3D cushions and the SitSpots can never disagree;
+   (2) the projector CARD moved from the Controls tab to the Theater tab
+       (pinned in toolbar-test, not here);
+   (3) a real projector BODY (stem + chassis + lens barrel + LED) that YAWS
+       onto the same projectorAim the beam uses, so the orientation always
+       reads — projecting or idle;
+   (4) two PROJECTION SCREEN kinds (wall + retractable ceiling) with full
+       TV-display parity via the new SCREEN_SURFACE_KINDS/isScreenKind
+       membership.
+
+  Harness build (from the repo root; NEVER reuse stale bundles):
+    npm run build
+    H=/tmp/diorama-harness-theaterwave
+    rm -rf "$H"; mkdir -p "$H"
+    cp test-pages/theater-wave-test.html "$H"/      # pages FIRST
+    cp -r dist/* "$H"/                              # dist assets SECOND
+    npx esbuild src/geometry.ts      --bundle --format=esm --outfile="$H"/geometry.mod.js
+    npx esbuild src/canvas-render.ts --bundle --format=esm --outfile="$H"/canvas-render.mod.js
+  Serve (detached, its own command) then run headless:
+    (cd "$H" && python3 -m http.server 8977 >/dev/null 2>&1 &)
+    google-chrome --headless=new --disable-gpu --use-angle=swiftshader \
+      --enable-unsafe-swiftshader --run-all-compositor-stages-before-draw \
+      --window-size=1200,900 --virtual-time-budget=30000 --dump-dom \
+      "http://localhost:8977/theater-wave-test.html" | grep -o "<title>[^<]*"
+-->
+<script type="module">
+ try {
+  const V = '?v=' + Date.now();
+  const geo = await import('./geometry.mod.js' + V);
+  const CR  = await import('./canvas-render.mod.js' + V);
+  const mod = await import('./assets/three-renderer.js' + V);
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+
+  const results = [];
+  const ok = (name, cond, detail = '') => results.push(`${cond ? 'PASS' : 'FAIL'} ${name}${detail ? ' (' + detail + ')' : ''}`);
+  const near = (a, b, t = 1e-6) => Number.isFinite(a) && Math.abs(a - b) <= t;
+  const K = geo.FURNITURE_KINDS;
+  const {
+    PLUSH_RECLINER_KINDS, isPlushReclinerKind, plushReclinerSeats, plushReclinerLayout,
+    PLUSH_BODY_DEPTH_FRAC, SCREEN_SURFACE_KINDS, isScreenKind, isProjectorScreenKind,
+    projectorScreenPanelH, screenCenterHeight, projectorAim, projectorHeight, projectorThrow,
+  } = geo;
+
+  const PLUSH = ['theater_recliner_plush', 'theater_loveseat_plush', 'recliner_row3_plush'];
+  const SCREENS = ['projector_screen', 'projector_screen_ceiling'];
+
+  const baseFloor = (furniture, projectors, rooms, walls) => ({
+    id: 'f1', name: 'F', w: 12000, d: 10000,
+    walls: walls || [], furniture: furniture || [], lights: [], switches: [],
+    sensors: [], motionSensors: [], envSensors: [], doors: [], windows: [],
+    bg: null, model3d: null, look3d: null, rooms: rooms || [], projectors: projectors || [],
+  });
+  const scene3d = { preset: 'night', floorColor: '#101820', floorTex: 'none', wallColor: '#bbbbbb' };
+  const build = (furniture, states, rooms, walls) =>
+    r.updateFloor(baseFloor(furniture, [], rooms, walls), scene3d, undefined, undefined, id => (states && states[id]) || null);
+  const findByFixtureId = (grp, id) => { let f = null; grp.traverse(o => { if (!f && o.userData && o.userData.fixtureId === id) f = o; }); return f; };
+  const countFlag = (g, key) => { let n = 0; g.traverse(o => { if (o.userData && o.userData[key]) n++; }); return n; };
+  const findFlag = (g, key) => { let f = null; g.traverse(o => { if (!f && o.userData && o.userData[key]) f = o; }); return f; };
+  // Deterministic advance (the bath-water / sink idiom): pin performance.now so
+  // updateTargets' frameDt is exactly stepS per call.
+  let _clock = 1000;
+  performance.now = () => _clock;
+  const advance = (frames, stepS) => { for (let i = 0; i < frames; i++) { _clock += stepS * 1000; r.updateTargets([]); } };
+
+  // ══ 1. Kind defs ═════════════════════════════════════════════════════════
+  {
+    const SPEC = {
+      theater_recliner_plush: { label: 'Plush recliner',           w: 1100, h: 1700 },
+      theater_loveseat_plush: { label: 'Plush loveseat · console', w: 2300, h: 1700 },
+      recliner_row3_plush:    { label: 'Plush recliner row (3)',   w: 3300, h: 1700 },
+    };
+    for (const k of PLUSH) {
+      const d = K[k];
+      ok(`def ${k} exists`, !!d);
+      ok(`def ${k}: label`, d && d.label === SPEC[k].label, d && d.label);
+      ok(`def ${k}: footprint ${SPEC[k].w}×${SPEC[k].h}`, d && d.w === SPEC[k].w && d.h === SPEC[k].h, d && `${d.w}×${d.h}`);
+      ok(`def ${k}: ht 1100`, d && d.ht === 1100, d && String(d.ht));
+      ok(`def ${k}: cat theater`, d && d.cat === 'theater', d && d.cat);
+      ok(`def ${k}: seat 450 below the body height`, d && d.seat === 450 && d.seat < d.ht, d && String(d.seat));
+      ok(`def ${k}: back tall`, d && d.back === 'tall', d && d.back);
+      ok(`def ${k}: deep leather brown 0x3e2723`, d && d.color === 0x3e2723, d && '0x' + (d.color || 0).toString(16));
+      // NO own activity — watch_tv resolves from the room's TV via the seated
+      // SitSpot path (the theater_recliner precedent), never a standing anchor.
+      ok(`def ${k}: NO own activity`, d && d.activity === undefined, d && String(d.activity));
+      ok(`def ${k}: is a plain seat-bearing kind (no rug/surface/mountable)`,
+        d && !d.rug && !d.surface && !d.mountable);
+    }
+    for (const k of SCREENS) {
+      const d = K[k];
+      ok(`def ${k} exists`, !!d);
+      ok(`def ${k}: 2400×150 footprint`, d && d.w === 2400 && d.h === 150, d && `${d.w}×${d.h}`);
+      ok(`def ${k}: ht 1600`, d && d.ht === 1600, d && String(d.ht));
+      ok(`def ${k}: cat theater`, d && d.cat === 'theater', d && d.cat);
+      ok(`def ${k}: NOT sittable`, d && d.seat === undefined);
+    }
+  }
+
+  // ══ 2. Pure membership + layout ══════════════════════════════════════════
+  {
+    ok('PLUSH_RECLINER_KINDS holds exactly the three plush kinds',
+      PLUSH_RECLINER_KINDS.size === 3 && PLUSH.every(k => PLUSH_RECLINER_KINDS.has(k)));
+    ok('isPlushReclinerKind: true for all three', PLUSH.every(k => isPlushReclinerKind(k)));
+    ok('isPlushReclinerKind: false for the ORIGINAL recliners + undefined',
+      !isPlushReclinerKind('theater_recliner') && !isPlushReclinerKind('recliner_row3') &&
+      !isPlushReclinerKind('sofa') && !isPlushReclinerKind(undefined));
+    ok('plushReclinerSeats: 1 / 2 / 3',
+      plushReclinerSeats('theater_recliner_plush') === 1 &&
+      plushReclinerSeats('theater_loveseat_plush') === 2 &&
+      plushReclinerSeats('recliner_row3_plush') === 3);
+    ok('PLUSH_BODY_DEPTH_FRAC leaves a real footrest band', PLUSH_BODY_DEPTH_FRAC > 0.5 && PLUSH_BODY_DEPTH_FRAC < 0.8);
+
+    for (const k of PLUSH) {
+      const d = K[k];
+      const lay = plushReclinerLayout(k, d.w, d.h);
+      ok(`layout ${k}: seat count matches`, lay.seatXs.length === plushReclinerSeats(k), String(lay.seatXs.length));
+      // Symmetric about the piece centre (the 3D scene mirrors X — an asymmetric
+      // distribution would land on different cushions in 2D vs 3D).
+      const sym = lay.seatXs.every((v, i) => near(v, -lay.seatXs[lay.seatXs.length - 1 - i], 1e-9));
+      ok(`layout ${k}: seat centers are symmetric about 0`, sym, lay.seatXs.map(v => v.toFixed(1)).join(','));
+      // Every cushion sits fully inside the piece, clear of the outer arms.
+      ok(`layout ${k}: cushions clear of the outer arms`,
+        lay.seatXs.every(v => Math.abs(v) + lay.seatW / 2 <= d.w / 2 - lay.armW + 1e-6));
+      ok(`layout ${k}: positive seat width`, lay.seatW > 300, lay.seatW.toFixed(0));
+      ok(`layout ${k}: cushion lz sits behind centre (toward the back)`, lay.seatLz > 0, lay.seatLz.toFixed(0));
+      ok(`layout ${k}: cushion depth inside the body depth`,
+        lay.seatDepth > 0 && lay.seatDepth < d.h * PLUSH_BODY_DEPTH_FRAC + 1e-6, lay.seatDepth.toFixed(0));
+    }
+    // Console exists ONLY on the loveseat, and both cushions clear it.
+    {
+      const lv = plushReclinerLayout('theater_loveseat_plush', K.theater_loveseat_plush.w, K.theater_loveseat_plush.h);
+      ok('layout loveseat: has a center console', lv.consoleW > 0, lv.consoleW.toFixed(0));
+      ok('layout loveseat: NEITHER seat overlaps the console',
+        lv.seatXs.every(v => Math.abs(v) - lv.seatW / 2 >= lv.consoleW / 2 - 1e-6),
+        lv.seatXs.map(v => v.toFixed(0)).join(','));
+      ok('layout single/row3: NO console',
+        plushReclinerLayout('theater_recliner_plush', 1100, 1700).consoleW === 0 &&
+        plushReclinerLayout('recliner_row3_plush', 3300, 1700).consoleW === 0);
+    }
+    // Screen membership + heights.
+    ok('SCREEN_SURFACE_KINDS = tv + wall_tv + both projection screens',
+      SCREEN_SURFACE_KINDS.size === 4 &&
+      ['tv', 'wall_tv', 'projector_screen', 'projector_screen_ceiling'].every(k => SCREEN_SURFACE_KINDS.has(k)));
+    ok('isScreenKind: true for all four', ['tv', 'wall_tv', ...SCREENS].every(k => isScreenKind(k)));
+    ok('isScreenKind: false for non-screens + undefined',
+      !isScreenKind('sofa') && !isScreenKind('speaker_tower') && !isScreenKind('microwave') && !isScreenKind(undefined));
+    ok('isProjectorScreenKind: only the two projection screens',
+      SCREENS.every(k => isProjectorScreenKind(k)) &&
+      !isProjectorScreenKind('tv') && !isProjectorScreenKind('wall_tv') && !isProjectorScreenKind(undefined));
+    ok('screenCenterHeight: projector_screen 1500', screenCenterHeight('projector_screen') === 1500);
+    ok('screenCenterHeight: projector_screen_ceiling 1400', screenCenterHeight('projector_screen_ceiling') === 1400);
+    ok('screenCenterHeight: tv/wall_tv unchanged (700 / 1350)',
+      screenCenterHeight('tv') === 700 && screenCenterHeight('wall_tv') === 1350);
+    ok('projectorScreenPanelH: wall 1200 / ceiling 1150',
+      projectorScreenPanelH('projector_screen') === 1200 &&
+      projectorScreenPanelH('projector_screen_ceiling') === 1150);
+  }
+
+  // ══ 3. 3D plush recliner builds ══════════════════════════════════════════
+  {
+    // Plain furniture groups carry NO fixtureId (only click-tagged kinds do), so
+    // build ONE piece at a time and search the whole floor group.
+    const EXP_CUP = { theater_recliner_plush: 2, theater_loveseat_plush: 4, recliner_row3_plush: 2 };
+    for (const k of PLUSH) {
+      build([{ id: 'pl_' + k, x: 3000, y: 3000, w: K[k].w, h: K[k].h, kind: k }], {});
+      const g = r._floorGroup;
+      ok(`3D ${k}: builds a group`, countFlag(g, 'plushFootrest') > 0);
+      ok(`3D ${k}: ${EXP_CUP[k]} cupholder recesses`, g && countFlag(g, 'plushCupholder') === EXP_CUP[k],
+        g && String(countFlag(g, 'plushCupholder')));
+      ok(`3D ${k}: one extended footrest per seat`,
+        g && countFlag(g, 'plushFootrest') === plushReclinerSeats(k), g && String(countFlag(g, 'plushFootrest')));
+      ok(`3D ${k}: console present only on the loveseat`,
+        g && countFlag(g, 'plushConsole') === (k === 'theater_loveseat_plush' ? 1 : 0),
+        g && String(countFlag(g, 'plushConsole')));
+      // Footrest is RAISED and TILTED (the reclined read) and lives out FRONT (−Z).
+      const foot = g && findFlag(g, 'plushFootrest');
+      ok(`3D ${k}: footrest raised ~250 mm`, foot && foot.position.y > 200 && foot.position.y < 400, foot && foot.position.y.toFixed(0));
+      ok(`3D ${k}: footrest tilted (toes up)`, foot && Math.abs(foot.rotation.x) > 0.05, foot && foot.rotation.x.toFixed(3));
+      ok(`3D ${k}: footrest sits toward the FRONT (local −Z)`, foot && foot.position.z < 0, foot && foot.position.z.toFixed(0));
+      // The footrest must stay INSIDE the footprint.
+      ok(`3D ${k}: footrest inside the plan footprint`,
+        foot && Math.abs(foot.position.z) + (K[k].h * (1 - PLUSH_BODY_DEPTH_FRAC)) / 2 <= K[k].h / 2 + 1e-6,
+        foot && foot.position.z.toFixed(0));
+      // Sits on the floor → blob shadow.
+      let blob = false; g && g.traverse(o => { if (o.userData && o.userData.blob) blob = true; });
+      ok(`3D ${k}: casts a blob shadow`, blob || (g && g.children.some(o => o.geometry && o.geometry.type === 'PlaneGeometry')));
+      // Cartoon outline shells (the Sims dressing) reach the body.
+      let shells = 0; g && g.traverse(o => { if (o.userData && o.userData.outline) shells++; });
+      ok(`3D ${k}: carries outline shells`, shells > 0, String(shells));
+    }
+    // Cupholders are SUNK — their top must sit under the arm crown, never tangent.
+    {
+      build([{ id: 'pl1', x: 3000, y: 3000, w: K.theater_recliner_plush.w, h: K.theater_recliner_plush.h, kind: 'theater_recliner_plush' }], {});
+      const g = r._floorGroup;
+      const cup = findFlag(g, 'plushCupholder');
+      // The recess STRADDLES the arm crown: most of it buried (so it reads as a
+      // hole), a thin rim proud (so it renders at all) — and therefore NEVER
+      // coplanar / tangent with the arm's top face.
+      const armCrown = K.theater_recliner_plush.ht * 0.56 * 1.04;
+      const cTop = cup ? cup.position.y + 22 : NaN, cBot = cup ? cup.position.y - 22 : NaN;
+      ok('3D single: cupholder straddles the arm crown (not coplanar/tangent)',
+        cBot < armCrown - 8 && cTop > armCrown + 4, `${cBot.toFixed(0)} < ${armCrown.toFixed(0)} < ${cTop.toFixed(0)}`);
+      ok('3D single: cupholder mostly buried (reads as a recess)',
+        (armCrown - cBot) > (cTop - armCrown), `${(armCrown - cBot).toFixed(0)} vs ${(cTop - armCrown).toFixed(0)}`);
+    }
+  }
+
+  // ══ 4. SitSpots (1 / 2 / 3, and never on the console) ════════════════════
+  {
+    for (const k of PLUSH) {
+      build([{ id: 'ss', x: 5000, y: 4000, w: K[k].w, h: K[k].h, kind: k }], {});
+      const spots = r._sitSpots.filter(s => s.id.startsWith('ss:'));
+      ok(`SitSpots ${k}: ${plushReclinerSeats(k)} registered`,
+        spots.length === plushReclinerSeats(k), String(spots.length));
+      ok(`SitSpots ${k}: seatY at the def seat height`,
+        spots.every(s => near(s.seatY, K[k].seat, 1e-6)), spots.map(s => s.seatY).join(','));
+    }
+    // Loveseat spots land ON CUSHIONS, not on the center console. At rotation 0
+    // the piece-local x maps to scene x with the _w mirror, so compare the
+    // scene-x OFFSET magnitude from the piece centre against the console half-width.
+    {
+      const k = 'theater_loveseat_plush';
+      build([{ id: 'lv', x: 5000, y: 4000, w: K[k].w, h: K[k].h, kind: k }], {});
+      const c = r._w(5000, 4000, 0);
+      const lay = plushReclinerLayout(k, K[k].w, K[k].h);
+      const spots = r._sitSpots.filter(s => s.id.startsWith('lv:'));
+      const offs = spots.map(s => Math.abs(s.x - c.x)).sort((a, b) => a - b);
+      ok('SitSpots loveseat: exactly 2', spots.length === 2, String(spots.length));
+      ok('SitSpots loveseat: both clear the console half-width',
+        offs.every(o => o >= lay.consoleW / 2 - 1e-6), `${offs.map(o => o.toFixed(0)).join(',')} vs ${(lay.consoleW / 2).toFixed(0)}`);
+      ok('SitSpots loveseat: both land on a cushion centre |x| == layout |seatX|',
+        offs.length === 2 && near(offs[0], Math.abs(lay.seatXs[0]), 1e-6) && near(offs[1], Math.abs(lay.seatXs[1]), 1e-6),
+        offs.map(o => o.toFixed(1)).join(','));
+      // Negative control: a spot ON the console would sit at |x| ≈ 0.
+      ok('SitSpots loveseat: NEITHER spot is at the console centre', offs.every(o => o > 200), offs.map(o => o.toFixed(0)).join(','));
+    }
+    // Row3 spots are distinct + spread across the width.
+    {
+      const k = 'recliner_row3_plush';
+      build([{ id: 'r3', x: 5000, y: 4000, w: K[k].w, h: K[k].h, kind: k }], {});
+      const xs = r._sitSpots.filter(s => s.id.startsWith('r3:')).map(s => s.x).sort((a, b) => a - b);
+      ok('SitSpots row3: 3 distinct x positions', xs.length === 3 && xs[1] - xs[0] > 400 && xs[2] - xs[1] > 400,
+        xs.map(v => v.toFixed(0)).join(','));
+    }
+    // The ORIGINAL recliner kinds are untouched (1 / 3 spots).
+    {
+      build([{ id: 'o1', x: 2000, y: 2000, w: K.theater_recliner.w, h: K.theater_recliner.h, kind: 'theater_recliner' },
+             { id: 'o3', x: 6000, y: 2000, w: K.recliner_row3.w, h: K.recliner_row3.h, kind: 'recliner_row3' }], {});
+      ok('SitSpots: original theater_recliner still 1',
+        r._sitSpots.filter(s => s.id.startsWith('o1:')).length === 1);
+      ok('SitSpots: original recliner_row3 still 3',
+        r._sitSpots.filter(s => s.id.startsWith('o3:')).length === 3);
+    }
+  }
+
+  // ══ 5. Projector body + orientation ══════════════════════════════════════
+  {
+    const screen = { id: 'scr1', x: 4000, y: 7000, w: K.projector_screen.w, h: K.projector_screen.h, kind: 'projector_screen' };
+    const mkFloor = (projectors, furniture) => baseFloor(furniture || [screen], projectors);
+    const setProj = (st, p, furniture) => {
+      r.updateFloor(mkFloor([p], furniture), scene3d, undefined, undefined, id => st[id] || null);
+      r.updateProjectors([p], furniture || [screen], id => st[id] || null);
+    };
+    const bodies = () => r._projGroup.children.filter(o => o.userData && o.userData.kind === 'projector');
+    const beams = () => r._projGroup.children.filter(o => o.userData && o.userData.projectorBeam);
+
+    const proj = { id: 'p1', x: 4000, y: 1500, height: 2600, rotation: 0, screenId: 'scr1', entity_id: 'media.proj', throwRatio: 1.5 };
+    setProj({ 'media.proj': { state: 'playing', attributes: {} } }, proj);
+    const body = bodies()[0];
+    ok('projector: one body assembly', bodies().length === 1, String(bodies().length));
+    for (const tag of ['projStem', 'projChassis', 'projBarrel', 'projLens', 'projLed']) {
+      ok(`projector body: has ${tag}`, body && countFlag(body, tag) === 1, body && String(countFlag(body, tag)));
+    }
+    // Every body part must resolve to the projector on a raycast parent-walk.
+    {
+      let untagged = 0;
+      body && body.traverse(o => { if (o.isMesh && !(o.userData && (o.userData.kind === 'projector' || o.userData.outline))) untagged++; });
+      ok('projector body: every mesh carries kind=projector (outline shells excepted)', untagged === 0, String(untagged));
+    }
+    // Chassis is a REAL body (not the old ~170 mm stub).
+    {
+      const ch = body && findFlag(body, 'projChassis');
+      const pr2 = ch && ch.geometry.parameters;
+      ok('projector body: chassis ~360×280×120', pr2 && pr2.width === 360 && pr2.depth === 280 && pr2.height === 120,
+        pr2 && `${pr2.width}×${pr2.depth}×${pr2.height}`);
+      const ba = body && findFlag(body, 'projBarrel');
+      ok('projector body: lens barrel ~70 r × 90 long',
+        ba && near(ba.geometry.parameters.radiusTop, 70, 1e-6) && near(ba.geometry.parameters.height, 90, 1e-6),
+        ba && `${ba.geometry.parameters.radiusTop}×${ba.geometry.parameters.height}`);
+      ok('projector body: barrel protrudes out the FRONT (local −Z)', ba && ba.position.z < -140, ba && ba.position.z.toFixed(0));
+    }
+    // ORIENTATION: the assembly's front (local −Z) points down the aim vector.
+    const aimDot = (p, sc) => {
+      const L = r._w(p.x, p.y, projectorHeight(p));
+      const aim = projectorAim(p, sc ? { x: sc.x, y: sc.y, cy: screenCenterHeight(sc.kind) } : null);
+      const T = r._w(aim.x, aim.y, aim.y3);
+      const dx = T.x - L.x, dz = T.z - L.z, dl = Math.hypot(dx, dz) || 1;
+      const b = bodies()[0];
+      const wd = new (Object.getPrototypeOf(b.position).constructor)();
+      b.getWorldDirection(wd);                     // local +Z in world
+      const fx = -wd.x, fz = -wd.z;                // front = local −Z
+      const fl = Math.hypot(fx, fz) || 1;
+      return (dx / dl) * (fx / fl) + (dz / dl) * (fz / fl);
+    };
+    ok('projector: lens faces the BOUND SCREEN (dot > 0.999)', aimDot(proj, screen) > 0.999, aimDot(proj, screen).toFixed(5));
+    // IDLE keeps the same orientation (the body always shows where it aims).
+    setProj({ 'media.proj': { state: 'off', attributes: {} } }, proj);
+    ok('projector: body still built when idle', bodies().length === 1, String(bodies().length));
+    ok('projector: idle body STILL faces the screen', aimDot(proj, screen) > 0.999, aimDot(proj, screen).toFixed(5));
+    ok('projector: idle → no beam', beams().length === 0, String(beams().length));
+    // Heading-only (no screen bound) at several headings.
+    for (const rot of [0, 45, 90, 180, 270]) {
+      const ph = { id: 'ph', x: 6000, y: 5000, rotation: rot, entity_id: null, localState: 'on' };
+      setProj({}, ph);
+      ok(`projector: heading ${rot}° body faces the throw point`, aimDot(ph, null) > 0.999, aimDot(ph, null).toFixed(5));
+    }
+    // Beam now ORIGINATES at the lens barrel tip (not the mount point).
+    {
+      setProj({ 'media.proj': { state: 'playing', attributes: {} } }, proj);
+      const cone = beams()[0];
+      const L = r._w(proj.x, proj.y, projectorHeight(proj));
+      const aim = projectorAim(proj, { x: screen.x, y: screen.y, cy: screenCenterHeight(screen.kind) });
+      const T = r._w(aim.x, aim.y, aim.y3);
+      const full = Math.hypot(T.x - L.x, T.y - L.y, T.z - L.z);
+      const TIP = 218;                                    // CH_D/2 + BARREL_L − 12
+      ok('projector beam: cone LENGTH = mount→screen minus the barrel standoff',
+        near(cone.geometry.parameters.height, full - TIP, 1), cone.geometry.parameters.height.toFixed(1));
+      ok('projector beam: apex sits at the barrel tip, not the mount',
+        near(cone.position.distanceTo(T), (full - TIP) / 2, 1), cone.position.distanceTo(T).toFixed(1));
+      ok('projector beam: aims at the screen (dot > 0.999)',
+        (() => { const d = cone.userData.dir;
+                 const dx = T.x - L.x, dy = T.y - L.y, dz = T.z - L.z, l = Math.hypot(dx, dy, dz);
+                 return (dx / l) * d[0] + (dy / l) * d[1] + (dz / l) * d[2] > 0.999; })());
+    }
+    // Ceiling-mounted → NO blob shadow under the projector.
+    {
+      let blobs = 0; r._projGroup.traverse(o => { if (o.userData && o.userData.blob) blobs++; });
+      ok('projector: no blob shadow (ceiling-mounted)', blobs === 0, String(blobs));
+    }
+    // A projector can aim at BOTH new screen kinds.
+    for (const k of SCREENS) {
+      const sc = { id: 'sk', x: 4000, y: 7000, w: K[k].w, h: K[k].h, kind: k };
+      const p2 = { id: 'p2', x: 4000, y: 1500, screenId: 'sk', entity_id: null, localState: 'on' };
+      setProj({}, p2, [sc]);
+      ok(`projector: aims at a ${k}`, aimDot(p2, sc) > 0.999, aimDot(p2, sc).toFixed(5));
+      const cone = r._projGroup.children.find(o => o.userData && o.userData.projectorBeam);
+      ok(`projector: beam exists toward the ${k}`, !!cone);
+    }
+    r.updateProjectors([], [], () => null);
+  }
+
+  // ══ 6. Screens: builds, retract blend, TV parity ═════════════════════════
+  {
+    // Wall screen: casing + frame + fabric face, NO cassette, NO drop rig.
+    build([{ id: 'ws', x: 4000, y: 2000, w: K.projector_screen.w, h: K.projector_screen.h, kind: 'projector_screen' }], {});
+    {
+      const g = findByFixtureId(r._floorGroup, 'ws');
+      ok('wall screen: builds a group', !!g);
+      ok('wall screen: has a dark border frame', g && countFlag(g, 'screenFrame') === 1, g && String(countFlag(g, 'screenFrame')));
+      ok('wall screen: has a fabric face', g && countFlag(g, 'screenFace') === 1, g && String(countFlag(g, 'screenFace')));
+      ok('wall screen: NO cassette / drop rig',
+        g && countFlag(g, 'screenCassette') === 0 && countFlag(g, 'screenDrop') === 0);
+      ok('wall screen: not registered as a retractable screen', r._screens.length === 0, String(r._screens.length));
+      // The fabric is proud of the frame front (−Z) — no coplanar faces.
+      const fr = g && findFlag(g, 'screenFrame'), fa = g && findFlag(g, 'screenFace');
+      ok('wall screen: fabric is PROUD of the frame front', fr && fa && fa.position.z < fr.position.z, fa && fa.position.z.toFixed(1));
+      ok('wall screen: fabric centred on screenCenterHeight',
+        fa && near(fa.position.y, screenCenterHeight('projector_screen'), 1e-6), fa && fa.position.y.toFixed(0));
+      // Wall-plane piece: no blob shadow.
+      let blobs = 0; g && g.traverse(o => { if (o.userData && o.userData.blob) blobs++; });
+      ok('wall screen: NO blob shadow (hangs on a wall)', blobs === 0, String(blobs));
+    }
+    // Ceiling screen: cassette + a retractable drop rig, gated on state.
+    const ceil = { id: 'cs', x: 4000, y: 2000, w: K.projector_screen_ceiling.w, h: K.projector_screen_ceiling.h,
+                   kind: 'projector_screen_ceiling', entity_id: 'switch.scr' };
+    const buildCeil = (state) => build([ceil], { 'switch.scr': { state, attributes: {} } });
+    buildCeil('off');
+    {
+      const g = findByFixtureId(r._floorGroup, 'cs');
+      ok('ceiling screen: has a cassette', g && countFlag(g, 'screenCassette') === 1, g && String(countFlag(g, 'screenCassette')));
+      ok('ceiling screen: has a drop pivot group', g && countFlag(g, 'screenDrop') === 1, g && String(countFlag(g, 'screenDrop')));
+      ok('ceiling screen: fabric face lives INSIDE the drop group',
+        (() => { const d = g && findFlag(g, 'screenDrop'); return !!d && countFlag(d, 'screenFace') === 1; })());
+      ok('ceiling screen: registered in _screens', r._screens.length === 1 && r._screens[0].fuId === 'cs', String(r._screens.length));
+      ok('ceiling screen: OFF → retract target 0', r._screens[0].target === 0, String(r._screens[0].target));
+    }
+    // Advance: the panel rolls UP (scale → 0, hidden).
+    advance(60, 0.1);
+    {
+      const d = findFlag(findByFixtureId(r._floorGroup, 'cs'), 'screenDrop');
+      ok('ceiling screen: OFF → panel retracted after 6 s', d && d.scale.y < 0.02 && d.visible === false, d && d.scale.y.toFixed(4));
+      ok('ceiling screen: blend map keyed by fixture id', r._screenDrop.cs < 0.02, String(r._screenDrop.cs));
+    }
+    // ON → extends.
+    buildCeil('on');
+    ok('ceiling screen: ON → retract target 1', r._screens[0].target === 1, String(r._screens[0].target));
+    advance(60, 0.1);
+    {
+      const d = findFlag(findByFixtureId(r._floorGroup, 'cs'), 'screenDrop');
+      ok('ceiling screen: ON → panel extended after 6 s', d && d.scale.y > 0.98 && d.visible === true, d && d.scale.y.toFixed(4));
+    }
+    // A rebuild MID-DROP re-applies the blend (no pop) — the _curtainBlend idiom.
+    buildCeil('off');
+    advance(3, 0.1);                                  // partially rolled up
+    {
+      const mid = r._screenDrop.cs;
+      ok('ceiling screen: mid-roll blend is strictly between 0 and 1', mid > 0.05 && mid < 0.95, mid.toFixed(3));
+      buildCeil('off');                               // rebuild
+      const d = findFlag(findByFixtureId(r._floorGroup, 'cs'), 'screenDrop');
+      ok('ceiling screen: a rebuild RE-APPLIES the blend (no pop)', d && near(d.scale.y, mid, 1e-6), d && d.scale.y.toFixed(4));
+      ok('ceiling screen: blend value survives the rebuild', near(r._screenDrop.cs, mid, 1e-9));
+    }
+    // A 'paused' media state still counts as in use (parseNowPlaying tier).
+    build([{ ...ceil, entity_id: 'media_player.scr' }],
+      { 'media_player.scr': { state: 'paused', attributes: { media_title: 'Film' } } });
+    ok('ceiling screen: PAUSED media still extends the panel', r._screens[0].target === 1, String(r._screens[0].target));
+    // Floor switch clears both the rig list and the blend map.
+    r.clearTransientGroups();
+    ok('ceiling screen: floor switch clears _screens + _screenDrop',
+      r._screens.length === 0 && Object.keys(r._screenDrop).length === 0);
+  }
+
+  // ══ 7. TV parity: click tag, room TV, now-playing, bias negative pin ══════
+  {
+    // Click-tagged 'media' (unbound too) so a click toggles localState.
+    build(SCREENS.map((k, i) => ({ id: 'tag_' + k, x: 2000 + i * 4000, y: 2000, w: K[k].w, h: K[k].h, kind: k })), {});
+    for (const k of SCREENS) {
+      const g = findByFixtureId(r._floorGroup, 'tag_' + k);
+      ok(`${k}: click-tagged 'media' (unbound too)`, g && g.userData.kind === 'media' && g.userData.entity_id === null,
+        g && String(g.userData.kind));
+      ok(`${k}: registered in the raycast clickable list`,
+        r._mediaClickables.some(o => o.userData && o.userData.fixtureId === 'tag_' + k));
+    }
+    // A projection screen IS the room's TV (seated watch_tv + the dance gate).
+    {
+      const walls = [{ id: 'w1', kind: 'full', points: [
+        { x: 1000, y: 1000 }, { x: 9000, y: 1000 }, { x: 9000, y: 7000 }, { x: 1000, y: 7000 }, { x: 1000, y: 1000 }] }];
+      const rooms = [{ id: 'rm1', name: 'Theater', anchor: { x: 5000, y: 4000 } }];
+      for (const k of SCREENS) {
+        build([{ id: 'rt', x: 5000, y: 1400, w: K[k].w, h: K[k].h, kind: k, entity_id: 'media_player.s' }],
+          { 'media_player.s': { state: 'playing', attributes: { media_title: 'X' } } }, rooms, walls);
+        const tvs = r._tvsByRoom['rm1'] || [];
+        ok(`${k}: registered as the room's TV (_tvsByRoom)`,
+          tvs.some(t => t.furnitureId === 'rt' && t.hasEntity === true), JSON.stringify(tvs));
+      }
+      // Negative control: a speaker in the same room is NOT the room's TV.
+      build([{ id: 'sp', x: 5000, y: 1400, w: K.speaker_tower.w, h: K.speaker_tower.h, kind: 'speaker_tower', entity_id: 'media_player.s' }],
+        { 'media_player.s': { state: 'playing', attributes: {} } }, rooms, walls);
+      ok('negative: a speaker is NOT registered as the room TV',
+        !(r._tvsByRoom['rm1'] || []).some(t => t.furnitureId === 'sp'));
+    }
+    // Now-playing card + news/weather surface land on the screens.
+    for (const k of SCREENS) {
+      const fu = { id: 'np', x: 4000, y: 2000, w: K[k].w, h: K[k].h, kind: k,
+                   entity_id: 'media_player.np', screenMode: 'news', newsEntity: 'sensor.n' };
+      const st = { 'media_player.np': { state: 'playing', attributes: { media_title: 'Movie', media_artist: 'A' } } };
+      build([fu], st);
+      r.updateNowPlaying([fu], undefined, id => st[id] || null, '', undefined, undefined);
+      ok(`${k}: now-playing card built`, Object.keys(r._nowPlaying).length === 1, JSON.stringify(Object.keys(r._nowPlaying)));
+      // News surface: the plane must land ON the fabric band, not at ht*0.30.
+      r.updateNowPlaying([fu], undefined, id => st[id] || null, '', undefined,
+        { screens: [{ id: 'np', content: 'news', headlines: ['Hello'] }], weather: null, forecast: null, imperial: false, nowMs: 0 });
+      const surf = r._tvScreens['np'];
+      ok(`${k}: news surface plane built`, !!surf);
+      const panelH = projectorScreenPanelH(k), scy = screenCenterHeight(k);
+      const yLocal = surf ? surf.mesh.position.y : NaN;
+      ok(`${k}: news surface sits ON the fabric band`,
+        yLocal >= scy - panelH / 2 && yLocal <= scy + panelH / 2, `${yLocal.toFixed(0)} in [${(scy - panelH / 2).toFixed(0)},${(scy + panelH / 2).toFixed(0)}]`);
+      ok(`${k}: news surface uses a flat MeshBasicMaterial (documented _mat exemption)`,
+        surf && surf.mesh.material.type === 'MeshBasicMaterial', surf && surf.mesh.material.type);
+    }
+    // Ceiling screen: the SURFACE plane rides the retracting panel.
+    {
+      const fu = { id: 'rp', x: 4000, y: 2000, w: K.projector_screen_ceiling.w, h: K.projector_screen_ceiling.h,
+                   kind: 'projector_screen_ceiling', entity_id: 'switch.s', screenMode: 'weather' };
+      const st = { 'switch.s': { state: 'on', attributes: {} } };
+      build([fu], st);
+      r.updateNowPlaying([fu], undefined, id => st[id] || null, '', undefined,
+        { screens: [{ id: 'rp', content: 'weather' }], weather: null, forecast: null, imperial: false, nowMs: 0 });
+      ok('ceiling screen: surface records drop geometry', !!(r._tvScreens['rp'] && r._tvScreens['rp'].drop));
+      advance(60, 0.1);
+      const yUp = r._tvScreens['rp'].mesh.position.y;
+      // Roll it up and re-advance: the surface follows the panel and hides.
+      build([fu], { 'switch.s': { state: 'off', attributes: {} } });
+      r.updateNowPlaying([fu], undefined, id => ({ 'switch.s': { state: 'off', attributes: {} } })[id] || null, '', undefined,
+        { screens: [{ id: 'rp', content: 'weather' }], weather: null, forecast: null, imperial: false, nowMs: 0 });
+      advance(60, 0.1);
+      const s2 = r._tvScreens['rp'];
+      ok('ceiling screen: surface plane rises with the panel', s2.mesh.position.y > yUp - 1e-9, `${yUp.toFixed(0)}→${s2.mesh.position.y.toFixed(0)}`);
+      ok('ceiling screen: surface plane hidden when rolled up', s2.mesh.visible === false);
+    }
+    // BIAS LIGHT stays tv/wall_tv-only (negative pin).
+    {
+      const haloOf = () => { let n = 0; r._floorGroup.traverse(o => { if (o.userData && o.userData.biasHalo) n++; }); return n; };
+      for (const k of SCREENS) {
+        build([{ id: 'bl', x: 4000, y: 2000, w: K[k].w, h: K[k].h, kind: k,
+                 entity_id: 'media_player.b', biasLight: {} }],
+          { 'media_player.b': { state: 'playing', attributes: {} } });
+        ok(`${k}: NO bias halo even with biasLight configured`, haloOf() === 0, String(haloOf()));
+      }
+      // Positive control: a wall_tv in the same situation DOES glow.
+      build([{ id: 'bl', x: 4000, y: 2000, w: K.wall_tv.w, h: K.wall_tv.h, kind: 'wall_tv',
+               entity_id: 'media_player.b', biasLight: {} }],
+        { 'media_player.b': { state: 'playing', attributes: {} } });
+      ok('control: a wall_tv with biasLight DOES build a halo', haloOf() === 1, String(haloOf()));
+    }
+    // Nav parity with wall_tv: the elevation ≥ 300 exemption is the whole rule.
+    {
+      const mk = (kind, elevation) => ({ id: 'nv', x: 5000, y: 4000, w: K[kind].w, h: K[kind].h, kind, elevation });
+      const blockedAt = (fu) => {
+        build([fu], {});
+        const n = r._nav; if (!n) return null;
+        const cx = Math.floor(fu.x / n.cell), cy = Math.floor(fu.y / n.cell);
+        return n.blocked[cy * n.nx + cx] === 1;
+      };
+      ok('nav: a floor-level wall screen blocks exactly like a floor-level wall_tv',
+        blockedAt(mk('projector_screen', 0)) === blockedAt(mk('wall_tv', 0)),
+        `${blockedAt(mk('projector_screen', 0))} vs ${blockedAt(mk('wall_tv', 0))}`);
+      ok('nav: an elevated (≥300) wall screen is exempt, like an elevated wall_tv',
+        blockedAt(mk('projector_screen', 1200)) === false && blockedAt(mk('wall_tv', 1200)) === false);
+    }
+  }
+
+  // ══ 8. 2D plan glyphs ════════════════════════════════════════════════════
+  {
+    const cv = document.createElement('canvas');
+    cv.width = 400; cv.height = 400;
+    const ctx = cv.getContext('2d');
+    const sig = (kind) => {
+      ctx.clearRect(0, 0, 400, 400);
+      ctx.save(); ctx.translate(200, 200);
+      CR.drawFurniturePrimitiveLocal(ctx, { id: 'g', x: 0, y: 0, w: K[kind].w, h: K[kind].h, kind }, 90, 70);
+      ctx.restore();
+      const d = ctx.getImageData(0, 0, 400, 400).data;
+      let n = 0, acc = 0;
+      for (let i = 0; i < d.length; i += 4) if (d[i + 3] > 8) { n++; acc = (acc * 31 + d[i] + d[i + 1] * 3 + d[i + 2] * 7 + (i >> 4)) >>> 0; }
+      return { n, acc };
+    };
+    const sigs = {};
+    for (const k of [...PLUSH, ...SCREENS]) {
+      sigs[k] = sig(k);
+      ok(`2D ${k}: paints something`, sigs[k].n > 100, String(sigs[k].n));
+    }
+    const keys = Object.keys(sigs);
+    let dupes = 0;
+    for (let i = 0; i < keys.length; i++) for (let j = i + 1; j < keys.length; j++)
+      if (sigs[keys[i]].acc === sigs[keys[j]].acc) dupes++;
+    ok('2D: all five new glyphs are pairwise DISTINCT', dupes === 0, String(dupes));
+    // The plush glyphs must also differ from the ORIGINAL recliners they sit beside.
+    const o1 = sig('theater_recliner'), o3 = sig('recliner_row3');
+    ok('2D: plush single differs from the original recliner', sigs.theater_recliner_plush.acc !== o1.acc);
+    ok('2D: plush row3 differs from the original row3', sigs.recliner_row3_plush.acc !== o3.acc);
+  }
+
+  const n = results.length, pass = results.filter(x => x.startsWith('PASS')).length;
+  document.title = `THEATERWAVE ${pass === n ? 'PASS' : 'FAIL'} ${pass}/${n}` +
+    (pass === n ? '' : ' :: ' + results.filter(x => x.startsWith('FAIL')).slice(0, 8).join(' | '));
+  document.body.insertAdjacentHTML('beforeend',
+    '<pre style="color:#9cf;font:11px monospace">' + results.join('\n') + '</pre>');
+  r.applyViewPreset('iso');
+ } catch (e) { document.title = 'ERR: ' + (e && e.stack ? e.stack.split('\n').slice(0, 4).join(' | ') : e); }
+</script>

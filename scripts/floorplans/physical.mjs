@@ -179,6 +179,9 @@ export function doorwayBlockers(f, geom, customObjects) {
 const WALL_HUGGING_KINDS = new Set([
   'wall_tv', 'wall_heater', 'wall_radiator', 'towel_warmer', 'mini_split',
   'window_ac', 'shower', 'ev_charger',
+  // Wall-mounted projection screen — the wall_tv twin (three-renderer's
+  // HOUSE_MOUNTED_FURNITURE_KINDS carries it too; keep the two in sync).
+  'projector_screen',
 ]);
 
 // An ELEVATED piece is only excused from the wall test when it is shallow

@@ -272,6 +272,94 @@
     check('P gate off → no flip', unbound.localState === before, `ls=${unbound.localState}`);
   }
 
+  // ══ Part 3 — USER-TOGGLE IMMUNITY ═════════════════════════════════════════
+  // A user flip makes an item off-limits to the avatar-interaction system for
+  // USER_TOGGLE_IMMUNITY_MS (user-reported 2026-08-09: an unbound firepit the
+  // user turned OFF after dark was relit by a roamer, because the goal picker
+  // deliberately targets unbound lights whose state doesn't fit the hour).
+  // The rule lives in ONE place — Planner.avatarMayActuate — which three-view
+  // consults while building ActivityContext.interactive. `buildInteractive`
+  // below MIRRORS that three-view loop (this page can't bundle the Lit
+  // component) and calls the REAL predicate at the same point, so the mirror
+  // only reproduces the filter's placement, never the rule itself.
+  {
+    const p = new Planner();
+    p.uiMode = 'kiosk';
+    p.save = () => {};
+    const f = p.store.floors[0];
+    const lightA = { id: 'la', x: 1000, y: 1000, kind: 'bulb' };            // unbound
+    const lightB = { id: 'lb', x: 2000, y: 1000, kind: 'bulb' };            // unbound, control
+    const boundL = { id: 'lc', x: 3000, y: 1000, kind: 'bulb', entity_id: 'light.real' };
+    const sw     = { id: 'sa', x: 4000, y: 1000 };                          // unbound switch
+    f.lights = [lightA, lightB, boundL];
+    f.switches = [sw];
+
+    // Mirror of three-view's ActivityContext.interactive loop (lights +
+    // switches; the furniture arm is the same one-line filter).
+    const buildInteractive = () => {
+      const out = [];
+      for (const l of f.lights) {
+        if (l.logic?.entityId) continue;
+        if (!p.avatarMayActuate(l.id)) continue;
+        out.push({ id: 'L' + l.id, bound: l.entity_id != null });
+      }
+      for (const s of f.switches) {
+        if (!p.avatarMayActuate(s.id)) continue;
+        out.push({ id: 'S' + s.id, bound: s.entity_id != null });
+      }
+      return out;
+    };
+    const ids = () => buildInteractive().map(x => x.id);
+
+    check('I baseline: everything interactive',
+      JSON.stringify(ids()) === JSON.stringify(['Lla', 'Llb', 'Llc', 'Ssa']), `ids=${ids()}`);
+    check('I baseline avatarMayActuate true', p.avatarMayActuate('la') === true);
+
+    // (1) A USER toggle immunizes that item — it drops out of the next build.
+    p.toggleItem(lightA);
+    check('I user toggle flipped the item', lightA.localState === 'on', `ls=${lightA.localState}`);
+    check('I user-toggled item leaves the list', !ids().includes('Lla'), `ids=${ids()}`);
+    check('I avatarMayActuate false inside window', p.avatarMayActuate('la') === false);
+
+    // (4) Per-item, not global: siblings are untouched.
+    check('I sibling light unaffected', ids().includes('Llb'), `ids=${ids()}`);
+    check('I switch unaffected', ids().includes('Ssa'), `ids=${ids()}`);
+
+    // (5) Accepted consequence: a BOUND item the user toggled also drops out for
+    // the window, so it skips status contemplation too (deliberate, harmless).
+    p.toggleItem(boundL);
+    check('I bound item drops out too (contemplation)', !ids().includes('Llc'), `ids=${ids()}`);
+
+    // A user toggle of a SWITCH immunizes the switch arm the same way.
+    p.toggleItem(sw);
+    check('I user-toggled switch leaves the list', !ids().includes('Ssa'), `ids=${ids()}`);
+
+    // (2) Self-healing: backdate the stamp past the window (no test-only API —
+    // the map is plain runtime state) and the item returns on the next build.
+    const WINDOW_MS = 600000;   // USER_TOGGLE_IMMUNITY_MS
+    p._userToggleAt['la'] = performance.now() - (WINDOW_MS + 1000);
+    check('I returns after the window', ids().includes('Lla'), `ids=${ids()}`);
+    check('I avatarMayActuate true after window', p.avatarMayActuate('la') === true);
+    check('I others still immune', !ids().includes('Llc') && !ids().includes('Ssa'), `ids=${ids()}`);
+    // Just INSIDE the window is still immune (boundary sanity).
+    p._userToggleAt['la'] = performance.now() - (WINDOW_MS - 5000);
+    check('I still immune just inside window', !ids().includes('Lla'), `ids=${ids()}`);
+
+    // (3) An AVATAR flip must NOT self-immunize — the per-item/per-rig cooldowns
+    // own avatar pacing; immunity is a user-intent signal only.
+    const p2 = new Planner();
+    p2.uiMode = 'kiosk';
+    p2.save = () => {};
+    const f2 = p2.store.floors[0];
+    const av = { id: 'lz', x: 1000, y: 1000, kind: 'bulb' };
+    f2.lights = [av];
+    p2.avatarToggleItem(av);
+    check('I avatar flip happened', av.localState === 'on', `ls=${av.localState}`);
+    check('I avatar flip creates NO immunity', p2.avatarMayActuate('lz') === true);
+    check('I avatar flip leaves no stamp', p2._userToggleAt['lz'] === undefined,
+      `at=${p2._userToggleAt['lz']}`);
+  }
+
   const passed = results.filter(x => x.pass).length;
   const total = results.length;
   const fails = results.filter(x => !x.pass).map(x => `${x.name} [${x.extra}]`);

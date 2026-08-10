@@ -127,6 +127,9 @@ const LIGHT_KINDS: { id: LightIconKind; label: string; glyph: string }[] = [
   { id: 'exhaust_wall', label: 'Exhaust (wall)', glyph: '⊛' }, { id: 'exhaust_light', label: 'Exhaust + light', glyph: '❈' },
   { id: 'firepit_round', label: 'Fire pit (round)', glyph: '◉' },
   { id: 'firepit_square', label: 'Fire pit (square)', glyph: '▣' },
+  { id: 'vanity_bar', label: 'Vanity bar (3 globes)', glyph: '💄' },
+  { id: 'vanity_hollywood', label: 'Vanity strip (5 globes)', glyph: '🎬' },
+  { id: 'mirror_light', label: 'Backlit mirror', glyph: '🪞' },
 ];
 
 const WALL_KINDS: { id: WallKind; label: string }[] = [
@@ -157,7 +160,11 @@ const CONTROL_TOOLS: { tool: Tool; label: string; glyph: string }[] = [
   { tool: 'alarm', label: 'Alarm', glyph: '🚨' }, { tool: 'calendar', label: 'Calendar', glyph: '📅' },
   { tool: 'thermostat', label: 'Thermostat', glyph: '🌡' }, { tool: 'safety', label: 'Safety/Siren', glyph: '⚠️' },
   { tool: 'alertbeacon', label: 'Alert beacon', glyph: '🔔' }, { tool: 'robot', label: 'Robot', glyph: '🤖' },
-  { tool: 'camera', label: 'Camera', glyph: '📷' }, { tool: 'projector', label: 'Projector', glyph: '📽' },
+  { tool: 'camera', label: 'Camera', glyph: '📷' },
+  // NB `projector` is deliberately NOT here — the user asked for it on the
+  // THEATER tab (appended after that tab's furniture cards, the flagpole-on-
+  // Outdoor idiom). The sidebar's TOOL_GROUPS keeps it under "Devices &
+  // sensors" — that grouping is by DEVICE TYPE, not by shopping category.
   { tool: 'valve', label: 'Valve', glyph: '🚰' }, { tool: 'sprinkler', label: 'Sprinkler', glyph: '🚿' },
   { tool: 'plug', label: 'Plug', glyph: '🔌' }, { tool: 'switch', label: 'Switch', glyph: '🎛' },
   { tool: 'solar', label: 'Solar panel', glyph: '☀️' },
@@ -360,7 +367,13 @@ export function buildToolbarModel(p: Planner): ToolCategory[] {
     { id: 'decor', label: 'Decor', glyph: CAT_GLYPH.decor, cards: furnitureCards('decor') },
     { id: 'appliance', label: 'Appliances', glyph: '🔌', cards: furnitureCards('appliance') },
     { id: 'bathroom', label: 'Bathroom', glyph: '🛁', cards: furnitureCards('bathroom') },
-    { id: 'theater', label: 'Theater', glyph: '🎬', cards: furnitureCards('theater') },
+    {
+      id: 'theater', label: 'Theater', glyph: '🎬',
+      // Theater furniture (speakers, recliners, projection screens) + the
+      // projector FIXTURE, which shops with them (user-requested move off the
+      // Controls tab). Same pattern as the flagpole on Outdoor.
+      cards: [...furnitureCards('theater'), controlCardLike('tool:projector', 'Projector', '📽', 'projector')],
+    },
     // Plants & trees split off Decor (the potted plant) + Outdoor (the whole
     // tree family) — they read as one shopping category. Sits immediately
     // before Outdoor, which keeps the remaining yard props (rocks, bird bath,

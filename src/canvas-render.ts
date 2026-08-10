@@ -13,6 +13,7 @@ import {
   robotGlyph, robotColor, robotProgress, dockParkedHeading, ROBOT_DEFAULTS,
   presenceZoneColor, cameraFov, cameraRange, cameraStateColor, cameraColor,
   projectorProjecting, projectorAim, projectorBeamColor, projectorThrow, screenCenterHeight, biasLightColor,
+  isScreenKind, plushReclinerLayout,
   VALVE_DEFAULTS, valveOpenness, valveFlowing, valveTransitional, valveRotation,
   SPRINKLER_DEFAULTS, sprinklerRunning, sprinklerHeadKind, sprinklerArcDeg, sprinklerRadius, sprinklerRotation,
   FLAGPOLE_DEFAULTS, flagpoleHoistFraction,
@@ -144,6 +145,7 @@ const LIGHT_GLYPH: Record<LightIconKind, string> = {
   wall_sconce: '◨', step: '▤', flood: '🔆', inground: '⤒', ground_spot: '⟰',
   heatlamp: '♨', exhaust: '❊', exhaust_wall: '⊛', exhaust_light: '❈',
   firepit_round: '◉', firepit_square: '▣',
+  vanity_bar: '💄', vanity_hollywood: '🎬', mirror_light: '🪞',
 };
 
 export interface View {
@@ -2877,6 +2879,37 @@ function drawProjectors(ctx: CanvasRenderingContext2D, p: Planner, view: View): 
       ctx.stroke();
       ctx.setLineDash([]);
     }
+    // ALWAYS-VISIBLE ORIENTATION: a short dim aim chevron from the glyph toward
+    // the aim direction (the bound screen, else the `rotation` heading) — the
+    // SAME projectorAim the 3D body yaws onto. Drawn idle too (the throw wedge
+    // above only exists while projecting) and UNDER the glyph.
+    {
+      const screen0 = pr.screenId ? (f.furniture.find(x => x.id === pr.screenId) ?? null) : null;
+      const aim0 = projectorAim(pr, screen0 ? { x: screen0.x, y: screen0.y, cy: 0 } : null);
+      const a0 = mmToPx(view, aim0.x, aim0.y);
+      const ax = a0.x - c.x, ay = a0.y - c.y;
+      const al = Math.hypot(ax, ay);
+      if (al > 1e-6) {
+        const ux = ax / al, uy = ay / al;
+        const R = 22 * dpr;                      // fixed screen length — a direction cue, not a range
+        const tipX = c.x + ux * R, tipY = c.y + uy * R;
+        ctx.strokeStyle = projecting ? hexToRgba(beamCol, 0.85) : 'rgba(144,164,174,0.72)';
+        ctx.lineWidth = 1.6 * dpr;
+        ctx.beginPath();
+        ctx.moveTo(c.x + ux * 8 * dpr, c.y + uy * 8 * dpr);
+        ctx.lineTo(tipX, tipY);
+        ctx.stroke();
+        // Arrowhead.
+        const hw = 4.5 * dpr, hl = 7 * dpr;
+        ctx.beginPath();
+        ctx.moveTo(tipX, tipY);
+        ctx.lineTo(tipX - ux * hl - uy * hw, tipY - uy * hl + ux * hw);
+        ctx.lineTo(tipX - ux * hl + uy * hw, tipY - uy * hl - ux * hw);
+        ctx.closePath();
+        ctx.fillStyle = projecting ? hexToRgba(beamCol, 0.85) : 'rgba(144,164,174,0.72)';
+        ctx.fill();
+      }
+    }
     // Body glyph.
     ctx.fillStyle = projecting ? lighten(beamCol, 0.1) : selected ? '#90caf9' : '#5c6bc0';
     ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5;
@@ -5305,6 +5338,9 @@ function drawFurniture(ctx: CanvasRenderingContext2D, p: Planner, view: View,
     // Screen bias lighting (home-theater arc): a subtle colored halo ring around
     // the TV footprint while the bias source is on — bound bias entity 'on', or
     // (no entityId) AUTO while the TV itself is playing/on.
+    // Deliberately NOT isScreenKind: a bias halo is a BACKLIT-PANEL effect, and
+    // a projection screen is a passive reflective surface with nothing behind it
+    // to glow (see the note at SCREEN_SURFACE_KINDS).
     if ((piece.kind === 'tv' || piece.kind === 'wall_tv') && piece.biasLight) {
       const bl = piece.biasLight;
       const biasOn = bl.entityId
@@ -5493,7 +5529,7 @@ function drawFurniture(ctx: CanvasRenderingContext2D, p: Planner, view: View,
     // TV screen surfaces (calendar-tv feature): a glanceable 📰/⛅ line under the
     // label when a tv/wall_tv shows a news/weather screen (no scrolling in 2D).
     // Now-playing precedence: only when no media is presenting. Reads live state.
-    if ((piece.kind === 'tv' || piece.kind === 'wall_tv') && p.hass?.states) {
+    if (isScreenKind(piece.kind) && p.hass?.states) {
       const mode = (piece.screenMode as ScreenMode | undefined) ?? 'auto';
       if (mode === 'news' || mode === 'weather') {
         const media = isMediaPlayerId(piece.entity_id) ? parseNowPlaying(p.hass.states[piece.entity_id!]) : null;
@@ -6793,6 +6829,65 @@ export function drawFurniturePrimitiveLocal(
         const sx = x + (w * i) / nSeats;
         ctx.beginPath(); ctx.moveTo(sx, y + h * 0.22); ctx.lineTo(sx, y + h - 3); ctx.stroke();
       }
+      break;
+    }
+    case 'theater_recliner_plush':
+    case 'theater_loveseat_plush':
+    case 'recliner_row3_plush': {
+      // Plush leather recliners (plan view): back band on the +Y (top) edge,
+      // thick arms on the outer ends, per-seat cushion splits, the EXTENDED
+      // FOOTREST as a lighter band across the front (−Y / bottom) third, and —
+      // on the loveseat — the center CONSOLE drawn as its own dark band.
+      // Layout comes from the shared plushReclinerLayout helper so the plan and
+      // the 3D build can never disagree about where the seats are.
+      fill(bodyFill('rgba(62,39,35,0.72)', 0.72));
+      stroke('#8d6a5c');
+      // Resolve the layout in MM (the helper has absolute mm clamps) then scale
+      // into the px frame — feeding px straight in would misapply those clamps.
+      const kpx = piece.w > 0 ? w / piece.w : 1;
+      const layMm = plushReclinerLayout(kind, piece.w, piece.h);
+      const lay = {
+        seats: layMm.seats, armW: layMm.armW * kpx, consoleW: layMm.consoleW * kpx,
+        seatXs: layMm.seatXs.map(v => v * kpx),
+      };
+      const nS = lay.seats;
+      // Back band along the top (the tufted back + headrest roll).
+      ctx.fillStyle = '#2a1a16';
+      ctx.fillRect(x, y, w, Math.max(4, h * 0.16));
+      ctx.fillStyle = '#4a2f28';
+      ctx.fillRect(x, y + Math.max(4, h * 0.16), w, Math.max(2, h * 0.05));
+      // Outer arms.
+      ctx.fillStyle = '#2a1a16';
+      ctx.fillRect(x, y, lay.armW, h * 0.62);
+      ctx.fillRect(x + w - lay.armW, y, lay.armW, h * 0.62);
+      // Center console (loveseat) — a dark band between the two seats.
+      if (lay.consoleW > 0) {
+        ctx.fillRect(x + w / 2 - lay.consoleW / 2, y, lay.consoleW, h * 0.62);
+        ctx.strokeStyle = '#8d6a5c'; ctx.lineWidth = 1;
+        ctx.strokeRect(x + w / 2 - lay.consoleW / 2 + 1, y + h * 0.1, lay.consoleW - 2, h * 0.4);
+      }
+      // Extended footrest band across the front (−Y / bottom).
+      ctx.fillStyle = 'rgba(96,64,55,0.75)';
+      ctx.fillRect(x + lay.armW * 0.4, y + h * 0.66, w - lay.armW * 0.8, h * 0.3);
+      // Seat-division ticks between neighbouring cushions.
+      ctx.strokeStyle = '#6b4a40'; ctx.lineWidth = 1.5;
+      for (let i = 1; i < nS; i++) {
+        const sx = x + w / 2 + (lay.seatXs[i - 1] + lay.seatXs[i]) / 2;
+        ctx.beginPath(); ctx.moveTo(sx, y + h * 0.2); ctx.lineTo(sx, y + h * 0.64); ctx.stroke();
+      }
+      break;
+    }
+    case 'projector_screen':
+    case 'projector_screen_ceiling': {
+      // Projection screen (plan view): the casing bar as a dark rect + a bright
+      // fabric line along the FRONT (−Z = −Y / bottom edge), like wall_tv's
+      // screen edge. The ceiling kind's line is DASHED — it retracts.
+      fill('rgba(42,45,49,0.85)');
+      stroke('#78909c');
+      ctx.strokeStyle = '#e8eaed'; ctx.lineWidth = 3;
+      if (kind === 'projector_screen_ceiling') ctx.setLineDash([7, 4]);
+      ctx.beginPath(); ctx.moveTo(x + 2, y + h); ctx.lineTo(x + w - 2, y + h); ctx.stroke();
+      ctx.setLineDash([]);
       break;
     }
     case 'riser_platform': {

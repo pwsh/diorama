@@ -1013,7 +1013,20 @@ export const SENSOR_PALETTE = [
   '#f06292', '#4dd0e1', '#aed581', '#ff8a65',
 ];
 
-export function lightHeight(l: { height?: number }): number   { return l.height ?? LIGHT_DEFAULTS.height; }
+// Per-kind default mount height, consulted BEFORE LIGHT_DEFAULTS.height. Only
+// kinds whose natural mounting height is nowhere near a ceiling need a row: a
+// vanity bar sits just above a mirror, a backlit mirror is centred on its
+// panel. Every kind absent from this table keeps LIGHT_DEFAULTS.height (2500)
+// byte-identically — do NOT bulk-populate it.
+export const LIGHT_KIND_HEIGHT_DEFAULTS: Partial<Record<LightIconKind, number>> = {
+  vanity_bar: 1950,
+  vanity_hollywood: 1950,
+  mirror_light: 1700,
+};
+export function lightHeight(l: { height?: number; iconKind?: LightIconKind }): number {
+  return l.height ?? (l.iconKind != null ? LIGHT_KIND_HEIGHT_DEFAULTS[l.iconKind] : undefined)
+    ?? LIGHT_DEFAULTS.height;
+}
 export function lightRadius(l: { radius?: number }): number   { return l.radius ?? LIGHT_DEFAULTS.radius; }
 export function lightIntensity(l: { intensity?: number }): number { return l.intensity ?? LIGHT_DEFAULTS.intensity; }
 export function lightRotation(l: { rotation?: number }): number { return l.rotation ?? 0; }
@@ -1044,6 +1057,18 @@ export const FIREPIT_SIZE_MM = 900;
 export const FIREPIT_KINDS = new Set<LightIconKind>(['firepit_round', 'firepit_square']);
 export function isFirepitKind(kind: string | undefined): boolean {
   return kind != null && FIREPIT_KINDS.has(kind as LightIconKind);
+}
+
+// Bathroom vanity lighting — three WALL-PLANE kinds (vanity bar, Hollywood
+// marquee strip, backlit mirror). All three mount flat against a wall like a
+// sconce (front = local −Z), flush-snap on drop + move-release via
+// snapVanityToWall, and skip the floor pool: they light the person at the
+// mirror, not the floor (the sconce / inground rule). Unlike a fireplace they
+// respect the bound entity's colour + brightness — nothing is forced warm.
+export const VANITY_LIGHT_KINDS = new Set<LightIconKind>(
+  ['vanity_bar', 'vanity_hollywood', 'mirror_light']);
+export function isVanityLightKind(kind: string | undefined): boolean {
+  return kind != null && VANITY_LIGHT_KINDS.has(kind as LightIconKind);
 }
 
 // Stairs-family kinds a step light can mount flush against.
@@ -1327,6 +1352,30 @@ export function snapFloodlightToWall(
   const hit = snapToWallEdge(walls, light.x, light.y, maxMm);
   if (!hit) return false;
   const off = WALL_HALF_MM + FLOOD_PLATE_DEPTH_MM / 2;   // 70
+  light.x = Math.round(hit.x + hit.nx * off);
+  light.y = Math.round(hit.y + hit.ny * off);
+  light.rotation = Math.atan2(-hit.nx, -hit.ny) * 180 / Math.PI;
+  return true;
+}
+
+// Vanity lights (bar / Hollywood strip / backlit mirror) lock flush to the
+// nearest wall exactly like a floodlight, but on a thinner plate: the
+// backplate's back sits on the wall face and the globes / mirror face (local
+// −Z) look into the room. Center = axis + normal·(wallT/2 +
+// VANITY_PLATE_DEPTH/2) = axis + normal·65. Rotation follows the light
+// front-axis convention (front = local −Z ⇒ rotation = atan2(−nx, −ny)). NO
+// ganging. No-op for non-vanity lights or when no wall is within maxMm.
+// Mutates x / y / rotation; returns whether it snapped.
+export const VANITY_PLATE_DEPTH_MM = 30;   // three-renderer vanity backplate / mirror panel Z
+export function snapVanityToWall(
+  light: { x: number; y: number; rotation?: number; iconKind?: LightIconKind },
+  walls: { points: Vec2[]; kind?: WallKind }[],
+  maxMm = 500,
+): boolean {
+  if (!isVanityLightKind(light.iconKind ?? LIGHT_DEFAULTS.iconKind)) return false;
+  const hit = snapToWallEdge(walls, light.x, light.y, maxMm);
+  if (!hit) return false;
+  const off = WALL_HALF_MM + VANITY_PLATE_DEPTH_MM / 2;   // 65
   light.x = Math.round(hit.x + hit.nx * off);
   light.y = Math.round(hit.y + hit.ny * off);
   light.rotation = Math.atan2(-hit.nx, -hit.ny) * 180 / Math.PI;
@@ -2120,9 +2169,13 @@ export function projectorAim(
 }
 // Screen center height (mm above floor) of the piece the projector aims at.
 // Matches the 3D build: wall_tv screen sits at ~1350; freestanding tv panel
-// centers around 700; anything else falls back to 1350.
+// centers around 700; the wall projection screen at 1500 and the ceiling
+// (dropped) one at 1400; anything else falls back to 1350.
 export function screenCenterHeight(kind: string | undefined): number {
-  return kind === 'wall_tv' ? 1350 : kind === 'tv' ? 700 : 1350;
+  return kind === 'wall_tv' ? 1350 : kind === 'tv' ? 700
+    : kind === 'projector_screen' ? 1500
+    : kind === 'projector_screen_ceiling' ? 1400
+    : 1350;
 }
 
 // ── Screen bias lighting (home-theater arc) ────────────────────────────────
@@ -2934,12 +2987,20 @@ export const FURNITURE_KINDS: Record<FurnitureKind, FurnitureKindDef> = {
   sofa_l_left:   { label: 'Sofa · L (left)',  w: 2600, h: 1800, ht: 850, seat: 450, back: 'tall', color: 0x37474f, cat: 'seating' },
   sofa_l_right:  { label: 'Sofa · L (right)', w: 2600, h: 1800, ht: 850, seat: 450, back: 'tall', color: 0x37474f, cat: 'seating' },
   sofa_u:        { label: 'Sofa · U',         w: 3200, h: 2000, ht: 850, seat: 450, back: 'tall', color: 0x37474f, cat: 'seating' },
-  // Beds. `bed` keeps its legacy id AND dims (existing plans must not move);
-  // the three sized kinds carry real mattress footprints (width × length) and
-  // differ visually by pillow count — see bedPillowLayout(). Everything
-  // downstream (lie lanes floor(w/700), shared covers, the nav-occupiable
-  // exemption) keys off dimensions or isBedKind(), never a literal.
-  bed:           { label: 'Bed · queen',   w: 2000, h: 1500, ht: 500,  back: 'low',  color: 0x546e7a, cat: 'bedroom', activity: 'sleep_shared' },
+  // Beds. `bed` keeps its legacy ID (existing plans must not lose their piece),
+  // and all four kinds carry real mattress footprints as w = WIDTH (across the
+  // headboard) × h = LENGTH (head to foot); they differ visually by pillow
+  // count — see bedPillowLayout(). Everything downstream (lie lanes
+  // floor(w/700), shared covers, the nav-occupiable exemption) keys off
+  // dimensions or isBedKind(), never a literal.
+  //   2026-08-09 CORRECTION (user-reported "sizes and orientations appear
+  //   incorrect"): `bed` was 2000 × 1500 — the legacy generic-double footprint,
+  //   carried through the 2026-08-07 "Bed · queen" RELABEL without correcting
+  //   the dims. Because the headboard is authored on the +y / +Z edge, that
+  //   made the queen render SIDEWAYS and SHORT (2 m across, 1.5 m head-to-foot)
+  //   while twin/full/king were all correctly longer than wide. Now a real
+  //   queen (60 × 80 in). Placed pieces keep their stored w/h — no migration.
+  bed:           { label: 'Bed · queen',   w: 1524, h: 2032, ht: 500,  back: 'low',  color: 0x546e7a, cat: 'bedroom', activity: 'sleep_shared' },
   bed_twin:      { label: 'Bed · twin',    w: 990,  h: 1910, ht: 500,  back: 'low',  color: 0x546e7a, cat: 'bedroom', activity: 'sleep_shared' },
   bed_full:      { label: 'Bed · full',    w: 1370, h: 1910, ht: 500,  back: 'low',  color: 0x546e7a, cat: 'bedroom', activity: 'sleep_shared' },
   bed_king:      { label: 'Bed · king',    w: 1930, h: 2030, ht: 500,  back: 'low',  color: 0x546e7a, cat: 'bedroom', activity: 'sleep_shared' },
@@ -3022,6 +3083,20 @@ export const FURNITURE_KINDS: Record<FurnitureKind, FurnitureKindDef> = {
   // TV via the seated-context SitSpot path (never a standing anchor).
   theater_recliner:  { label: 'Theater recliner',    w: 950,  h: 1000, ht: 1050, seat: 450, back: 'tall', color: 0x2b2320, cat: 'theater' },
   recliner_row3:     { label: 'Recliner row (3)',    w: 2900, h: 1000, ht: 1050, seat: 450, back: 'tall', color: 0x2b2320, cat: 'theater' },
+  // Plush LEATHER recliners (PLUSH_RECLINER_KINDS). Deeper (1700 mm) than the
+  // originals because the footrest is built EXTENDED — the reclined read — and
+  // taller (1100) for the rolled headrest. Deep leather brown. Like the two
+  // kinds above they carry NO `activity`: watch_tv resolves from the room's TV
+  // through the seated-context SitSpot path, never a standing anchor.
+  theater_recliner_plush: { label: 'Plush recliner',            w: 1100, h: 1700, ht: 1100, seat: 450, back: 'tall', color: 0x3e2723, cat: 'theater' },
+  theater_loveseat_plush: { label: 'Plush loveseat · console',  w: 2300, h: 1700, ht: 1100, seat: 450, back: 'tall', color: 0x3e2723, cat: 'theater' },
+  recliner_row3_plush:    { label: 'Plush recliner row (3)',    w: 3300, h: 1700, ht: 1100, seat: 450, back: 'tall', color: 0x3e2723, cat: 'theater' },
+  // Projection screens — the `wall_tv` twins for a projector setup. Both carry
+  // the full TV screen-surface contract (see SCREEN_SURFACE_KINDS). The wall
+  // screen is a HOUSE-MOUNTED wall-plane piece (like wall_tv); the ceiling one
+  // hangs from a cassette and retracts when unused.
+  projector_screen:         { label: 'Projector screen · wall',    w: 2400, h: 150, ht: 1600, back: 'none', color: 0x2a2d31, cat: 'theater' },
+  projector_screen_ceiling: { label: 'Projector screen · ceiling', w: 2400, h: 150, ht: 1600, back: 'none', color: 0x2a2d31, cat: 'theater' },
   // Walkable tiered-seating deck. Low (220 mm) flat platform — does NOT block
   // nav (see isRiserKind in three-renderer's _buildNav skip + _groundYAt); place
   // recliners on top with their `elevation` set to the riser height.
@@ -3669,6 +3744,78 @@ export function carChargeState(
 export function isSpeakerKind(kind: FurnitureKind | undefined): boolean {
   return kind === 'speaker_tower' || kind === 'speaker_bookshelf' ||
          kind === 'subwoofer' || kind === 'center_channel';
+}
+// Plush LEATHER theater recliners — one parametric 3D/2D builder for all three
+// (single / loveseat-with-console / three-seat row). Membership is the canonical
+// test (the isStairsKind precedent): it selects the builder branch AND the
+// per-kind SitSpot distribution (1 / 2 / 3 spots) in updateFloor.
+export const PLUSH_RECLINER_KINDS = new Set<FurnitureKind>([
+  'theater_recliner_plush', 'theater_loveseat_plush', 'recliner_row3_plush',
+]);
+export function isPlushReclinerKind(kind?: FurnitureKind): boolean {
+  return kind != null && PLUSH_RECLINER_KINDS.has(kind);
+}
+// Seat count of a plush recliner piece (drives both the 3D cushion/arm layout
+// and the SitSpot distribution — they must never disagree).
+export function plushReclinerSeats(kind?: FurnitureKind): number {
+  return kind === 'recliner_row3_plush' ? 3 : kind === 'theater_loveseat_plush' ? 2 : 1;
+}
+// The plush recliner's BODY occupies the rear fraction of the depth; the rest is
+// the EXTENDED footrest (built out front — the reclined read).
+export const PLUSH_BODY_DEPTH_FRAC = 0.62;
+// THE plush-recliner seat layout — ONE source of truth shared by the 3D builder
+// and the SitSpot distribution (they can never disagree). Piece-local frame:
+// x across the width (0 = center, symmetric), +Z = back / −Z = the footrest
+// front. Cushions exclude the outer arms, the inner dividers (row) and the
+// center console (loveseat), so a seated rig can never land on the console.
+export function plushReclinerLayout(kind: FurnitureKind | undefined, w: number, d: number): {
+  seats: number; armW: number; consoleW: number; divW: number;
+  seatW: number; seatXs: number[]; seatLz: number; seatDepth: number;
+} {
+  const seats = plushReclinerSeats(kind);
+  const armW = Math.min(240, w * (seats === 1 ? 0.19 : 0.11));
+  const consoleW = kind === 'theater_loveseat_plush' ? Math.min(340, w * 0.16) : 0;
+  const nDiv = kind === 'recliner_row3_plush' ? 2 : 0;
+  const divW = armW * 0.72;
+  const seatW = (w - 2 * armW - nDiv * divW - consoleW) / seats;
+  const seatXs: number[] = [];
+  let cur = -w / 2 + armW;
+  for (let i = 0; i < seats; i++) {
+    seatXs.push(cur + seatW / 2);
+    cur += seatW;
+    if (i < seats - 1) cur += (consoleW || divW);
+  }
+  const bodyD = d * PLUSH_BODY_DEPTH_FRAC;
+  return {
+    seats, armW, consoleW, divW, seatW, seatXs,
+    seatLz: d / 2 - bodyD / 2 - bodyD * 0.05,   // cushion center, inset from the back band
+    seatDepth: bodyD * 0.74,
+  };
+}
+// THE screen-surface membership (2026-08, projector-screen batch). A "screen"
+// is any piece that can display information the TV way: news/weather screen
+// surfaces (screenMode), now-playing cards, the room-TV resolution that gates
+// the seated `watch_tv` activity + the standing `dance` fidget, and the
+// projector's aim-target picker (+ screenCenterHeight). Replaces every former
+// hard-coded `kind === 'tv' || kind === 'wall_tv'` pair at those sites.
+// NB `biasLight` deliberately stays tv/wall_tv-only (see the literal tests at
+// its four sites): a bias halo is a BACKLIT-PANEL effect — a projection screen
+// is a passive reflective surface with nothing behind it to glow.
+export const SCREEN_SURFACE_KINDS = new Set<FurnitureKind>([
+  'tv', 'wall_tv', 'projector_screen', 'projector_screen_ceiling',
+]);
+export function isScreenKind(kind?: FurnitureKind): boolean {
+  return kind != null && SCREEN_SURFACE_KINDS.has(kind);
+}
+// Projection screens only (the two kinds a projector actually throws onto).
+export function isProjectorScreenKind(kind?: FurnitureKind): boolean {
+  return kind === 'projector_screen' || kind === 'projector_screen_ceiling';
+}
+// Visible fabric height (mm) of a projection screen — shared by the 3D build
+// and the news/weather screen-surface placement so the content always lands ON
+// the fabric. The ceiling panel is slightly shorter (the cassette eats height).
+export function projectorScreenPanelH(kind?: FurnitureKind): number {
+  return kind === 'projector_screen_ceiling' ? 1150 : 1200;
 }
 // Walkable tiered-seating deck — exempt from nav footprint-blocking (like
 // rugs/beds) and registered as flat terrain so avatars climb onto it.

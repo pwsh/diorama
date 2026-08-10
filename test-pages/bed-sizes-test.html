@@ -30,6 +30,14 @@
    (F) the 2D glyph paints the same pillow count as the 3D build.
    (G) category: all four sit in the `bedroom` cat with sleep_shared + real
        mattress footprints.
+   (H) ORIENTATION + REAL-WORLD SIZE (2026-08-09, user-reported "the sizes and
+       orientations appear incorrect"): every bed is LONGER than it is WIDE
+       (w = width across the headboard, h = head-to-foot length; the headboard
+       is authored on the +y / +Z edge in both renderers), and each authored
+       footprint tracks its real-world nominal. This is the invariant the
+       legacy `bed` broke: it carried the generic-double 2000 × 1500 through
+       the 2026-08-07 "Bed · queen" relabel, so the queen rendered sideways
+       and short.
 -->
 <script type="module">
   const G = await import('./geometry.mod.js');
@@ -69,7 +77,9 @@
   {
     // LEGACY GOLDEN: the pre-split queen build placed two 0.42·W pillows at
     // ±0.22·W. The generic rule must reproduce that bit-for-bit.
-    const W = G.FURNITURE_KINDS.bed.w;              // 2000
+    // (RATIO golden — deliberately reads the live def width, so it survived the
+    // 2026-08-09 queen dim correction 2000 → 1524 unchanged.)
+    const W = G.FURNITURE_KINDS.bed.w;              // 1524
     const lay = G.bedPillowLayout('bed', W);
     ok('B3 queen layout is the legacy build exactly (pitch 0.44·W, pw 0.42·W)',
        lay.count === 2 && near(lay.pitch, W * 0.44, 1e-9) && near(lay.pw, W * 0.42, 1e-9),
@@ -90,7 +100,8 @@
   }
   {
     // Width scaling: same pillow count, wider bed ⇒ wider pillows.
-    const a = G.bedPillowLayout('bed_full', 1370), b = G.bedPillowLayout('bed', 2000);
+    const a = G.bedPillowLayout('bed_full', G.FURNITURE_KINDS.bed_full.w),   // 1370
+          b = G.bedPillowLayout('bed',      G.FURNITURE_KINDS.bed.w);        // 1524
     ok('B6 pillow width scales with bed width at equal count',
        a.count === b.count && b.pw > a.pw, `full=${a.pw.toFixed(1)} queen=${b.pw.toFixed(1)}`);
   }
@@ -229,8 +240,8 @@
      BEDS.map(k => G.FURNITURE_KINDS[k].cat).join(','));
   ok('G2 all four anchor sleep_shared',
      BEDS.every(k => G.FURNITURE_KINDS[k].activity === 'sleep_shared'));
-  ok('G3 the legacy `bed` keeps its dims (back-compat) and is relabelled queen',
-     G.FURNITURE_KINDS.bed.w === 2000 && G.FURNITURE_KINDS.bed.h === 1500
+  ok('G3 the legacy `bed` keeps its ID, is relabelled queen, and carries the real queen footprint',
+     G.FURNITURE_KINDS.bed.w === 1524 && G.FURNITURE_KINDS.bed.h === 2032
      && /queen/i.test(G.FURNITURE_KINDS.bed.label),
      `${G.FURNITURE_KINDS.bed.w}x${G.FURNITURE_KINDS.bed.h} "${G.FURNITURE_KINDS.bed.label}"`);
   ok('G4 the sized kinds carry real mattress footprints',
@@ -239,6 +250,47 @@
      && G.FURNITURE_KINDS.bed_king.w === 1930 && G.FURNITURE_KINDS.bed_king.h === 2030);
   ok('G5 none of the beds is sittable (no seat spot on a mattress)',
      BEDS.every(k => G.FURNITURE_KINDS[k].seat == null));
+
+  // ══ (H) orientation + real-world size ════════════════════════════════════
+  // AUTHORED dims are the golden (that's what ships); the real-world nominal
+  // is carried alongside so a future edit can be checked against reality, not
+  // against itself. US mattress standards, inches → mm:
+  //   twin  38 × 75 = 965.2 × 1905.0   (authored 990 × 1910 — rounded up 24.8 / 5.0)
+  //   full  54 × 75 = 1371.6 × 1905.0  (authored 1370 × 1910 — 1.6 / 5.0)
+  //   queen 60 × 80 = 1524.0 × 2032.0  (authored 1524 × 2032 — exact)
+  //   king  76 × 80 = 1930.4 × 2032.0  (authored 1930 × 2030 — 0.4 / 2.0)
+  // The twin's 24.8 mm width rounding is the only material deviation and is
+  // deliberate (990 = a clean 99 cm frame); hence the 25 mm tolerance below,
+  // NOT a tighter one that would silently exclude it.
+  const BED_SIZES = {
+    bed:      { authored: [1524, 2032], real: [1524.0, 2032.0], name: 'queen' },
+    bed_twin: { authored: [990,  1910], real: [965.2,  1905.0], name: 'twin'  },
+    bed_full: { authored: [1370, 1910], real: [1371.6, 1905.0], name: 'full'  },
+    bed_king: { authored: [1930, 2030], real: [1930.4, 2032.0], name: 'king'  },
+  };
+  const REAL_TOL_MM = 25;
+  for (const k of BEDS) {
+    const d = G.FURNITURE_KINDS[k], s = BED_SIZES[k];
+    // THE invariant the user reported broken: a bed is longer than it is wide.
+    // w spans the headboard (+y / +Z edge); h runs head → foot.
+    ok(`H1:${k} is longer than it is wide (h > w — headboard on the short edge)`,
+       d.h > d.w, `${d.w} × ${d.h}`);
+    ok(`H2:${k} authored footprint golden (${s.authored[0]} × ${s.authored[1]})`,
+       d.w === s.authored[0] && d.h === s.authored[1], `${d.w} × ${d.h}`);
+    const dw = Math.abs(d.w - s.real[0]), dh = Math.abs(d.h - s.real[1]);
+    ok(`H3:${k} tracks the real ${s.name} mattress (${s.real[0]} × ${s.real[1]} mm) within ${REAL_TOL_MM} mm`,
+       dw <= REAL_TOL_MM && dh <= REAL_TOL_MM, `Δw=${dw.toFixed(1)} Δh=${dh.toFixed(1)}`);
+  }
+  {
+    // Ordering sanity: the four sizes get monotonically wider, and every one
+    // of them is at least a realistic single-sleeper width / adult length.
+    const ws = ['bed_twin', 'bed_full', 'bed', 'bed_king'].map(k => G.FURNITURE_KINDS[k].w);
+    ok('H4 twin < full < queen < king by width',
+       ws[0] < ws[1] && ws[1] < ws[2] && ws[2] < ws[3], ws.join(' < '));
+    ok('H5 every bed is at least 900 mm wide and 1900 mm long',
+       BEDS.every(k => G.FURNITURE_KINDS[k].w >= 900 && G.FURNITURE_KINDS[k].h >= 1900),
+       BEDS.map(k => `${k}=${G.FURNITURE_KINDS[k].w}x${G.FURNITURE_KINDS[k].h}`).join(' '));
+  }
 
   let pass = 0; const fails = [];
   for (const t of tests) { if (t.ok) pass++; else fails.push(t.name); }

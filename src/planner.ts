@@ -395,6 +395,11 @@ export interface RobotPosInfo {
 // one-shot so the animation always completes before localState clears.
 export const TOILET_FLUSH_MS = 4300;
 
+// USER-TOGGLE IMMUNITY window (ms). After a USER flips an interactive item, that
+// item is off-limits to the avatar-interaction system for this long. See
+// Planner.avatarMayActuate / toggleItem for the full rationale.
+export const USER_TOGGLE_IMMUNITY_MS = 600_000;   // 10 min
+
 // Sentinel for Planner.placingRoomId meaning "create a new room at the next
 // canvas click" (vs an existing room id = re-place that room's anchor).
 export const NEW_ROOM = '__new_room__';
@@ -7060,6 +7065,16 @@ export class Planner extends EventTarget {
     // toggle anything (its state is derived; see effectiveState). No-op here so
     // every click path (2D, 3D, kiosk) inherits the guard.
     if (item.logic?.entityId) return;
+    // USER-TOGGLE IMMUNITY. toggleItem is reached ONLY from user paths (2D
+    // click-vs-drag + kiosk click, 3D raycast, and the sidebar/fixture helpers
+    // triggerSiren / acknowledgeAlertBeacon — audited), so any flip landing here
+    // is a deliberate human action: an avatar must never undo a deliberate user
+    // action while the user is still around to notice — the hour rule resumes
+    // after the immunity window (user-reported 2026-08-09: firepit relit by a
+    // roamer). Deliberately NOT stamped in avatarToggleItem (an avatar flip must
+    // not self-immunize; the per-item/per-rig cooldowns own avatar pacing).
+    // Runtime-only, never persisted; pruned opportunistically below.
+    if (item.id) this._stampUserToggle(item.id);
     if (item.entity_id) { this.toggleEntity(item.entity_id); return; }
     // A TOILET is not a sustained state — it is a ~4 s FLUSH ONE-SHOT. An unbound
     // click sets localState 'on' (the rising edge the renderer's _advanceToilets
@@ -7089,6 +7104,32 @@ export class Planner extends EventTarget {
   }
   // Pending unbound-toilet flush resets (runtime-only, keyed by fixture id).
   private _toiletFlushTimers: Record<string, ReturnType<typeof setTimeout>> = {};
+
+  // Last USER toggle per item id (performance.now() ms). Runtime-only, NEVER
+  // persisted (it must not ride the store, undo, or export) and pruned
+  // opportunistically here — the map only ever holds items the user touched, so
+  // it stays tiny, and a stale entry is harmless once past the window.
+  private _userToggleAt: Record<string, number> = {};
+
+  private _stampUserToggle(id: string): void {
+    const now = performance.now();
+    for (const k in this._userToggleAt) {
+      if (now - this._userToggleAt[k] >= USER_TOGGLE_IMMUNITY_MS) delete this._userToggleAt[k];
+    }
+    this._userToggleAt[id] = now;
+  }
+
+  // THE one place the user-toggle-immunity rule lives: may the avatar-interaction
+  // system act on this item right now? False while the item is inside the
+  // USER_TOGGLE_IMMUNITY_MS window after a user flipped it. three-view calls this
+  // when building ActivityContext.interactive, so an immune item simply is not
+  // offered to the goal picker; the list is rebuilt every tick, so the item
+  // returns on its own once the window lapses (no event, no invalidation).
+  avatarMayActuate(itemId: string): boolean {
+    const at = this._userToggleAt[itemId];
+    if (at == null) return true;
+    return (performance.now() - at) >= USER_TOGGLE_IMMUNITY_MS;
+  }
 
   // Session-only actuation by a SYNTHETIC avatar (an `ai` presence/demo rig or a
   // `roam` roamer) that walked up to an UNBOUND interactive device and "used" it.
@@ -8365,9 +8406,19 @@ export class Planner extends EventTarget {
       }
       return;
     }
-    // Not the GPS branch this step (sim / docked / no fix): drop the stuck
-    // accounting so a stale timer can never fire into a later GPS session.
-    rs.stuckRefX = undefined; rs.stuckRefY = undefined; rs.stuckT = 0;
+    // A BOUND mower reporting `docked` is the one non-GPS branch that also has
+    // GROUND TRUTH, so it keeps its own stuck accounting (the relocation block
+    // at the end of the docked/returning branch below). `returning` is
+    // deliberately EXCLUDED even when bound: a returning mower is mid-journey
+    // with no fixed truth point — the only thing its state asserts is "heading
+    // home", which says nothing about where it is, so there is nowhere honest
+    // to snap it to. Unbound stays out for the synthetic-body rule.
+    const dockTruth = act === 'docked' && !!r.entity_id;
+    // Every OTHER non-GPS step (sim mowing, unbound docked/returning, bound
+    // returning, GPS configured but no fix) drops the accounting, so a stale
+    // timer from one mode can never fire in another: each mode has to earn its
+    // own full stuckRelocateS window from scratch.
+    if (!dockTruth) { rs.stuckRefX = undefined; rs.stuckRefY = undefined; rs.stuckT = 0; }
     if (act === 'docked' || act === 'returning') {
       // Drive to the dock itself. Under the garage exception the dock's own
       // room is not in `dockLoops`, so the clamp is a NO-OP for the common
@@ -8399,6 +8450,52 @@ export class Planner extends EventTarget {
         bs.heading = wrapAngle(bs.heading + Math.max(-wMax * h, Math.min(wMax * h, K.steerGain * e * h)));
       }
       commit();
+      // ── Prong B, docked branch: entity-state ground truth (2026-08-09) ─────
+      // User-reported "the mower docking still is not aligned": the body stopped
+      // askew at a wall corner ~1.5 m short of the dock while the entity read
+      // `docked`. The dock sat just OUTSIDE a long wall and the mower approached
+      // from the far side, so the straight line met that wall far from its end —
+      // the greedy deflection steerer's known deadlock class, and one the doorway
+      // router cannot heal (no room, no door: the dock is outdoors).
+      //
+      // The GPS relocation above was the backstop for exactly this, but it lives
+      // in the GPS branch, which `docked` never takes (a fix is only fetched for
+      // mowing/returning) — so a docked mower had none. It does now, and it needs
+      // no fix: a BOUND mower whose entity says `docked` is PHYSICALLY ON ITS
+      // DOCK. The state itself is the ground truth, so a drawn body that stops
+      // moving while short of the dock is a DISPLAY error and SNAPS — the same
+      // humanoid rule that respawns a ground-truth rig at an unreachable goal
+      // rather than gliding it through the geometry. Landing on `home` is also
+      // what finally ALIGNS the body: the parked heading is applied outright.
+      //
+      // Legality needs no extra guard here (unlike the GPS carrot, which is an
+      // external number that can land anywhere and is therefore checked): `home`
+      // is this branch's OWN steering target, derived from the user-placed dock
+      // by the same nearestPointOutsideLoops clamp the drive uses — the mower is
+      // put exactly where it has been trying to go. And in the one case where
+      // that clamp can still return an indoor point (a dock buried in a nested
+      // interior room), drawing the mower on its dock is precisely what `docked`
+      // asserts, so indoors is the truthful render, not a bug.
+      if (dockTruth) {
+        const C = MOWER_CONTAINMENT;
+        if (rs.stuckRefX == null || rs.stuckRefY == null) {
+          rs.stuckRefX = rs.x; rs.stuckRefY = rs.y; rs.stuckT = 0;
+        }
+        // MOVEMENT, not progress — same metric as the GPS block: a mower taking a
+        // long legitimate detour around the building keeps moving and can never
+        // trip this; arriving parks it and resets the reference anyway.
+        if (Math.hypot(home.x - rs.x, home.y - rs.y) <= K.arriveMm ||
+            Math.hypot(rs.x - rs.stuckRefX, rs.y - rs.stuckRefY) > C.stuckMoveMm) {
+          rs.stuckRefX = rs.x; rs.stuckRefY = rs.y; rs.stuckT = 0;
+        } else {
+          rs.stuckT = (rs.stuckT ?? 0) + dt;
+          if (rs.stuckT > C.stuckRelocateS) {
+            rs.x = home.x; rs.y = home.y; rs.speed = 0;
+            rs.heading = dockParkedHeading(r.rotation);
+            rs.stuckRefX = rs.x; rs.stuckRefY = rs.y; rs.stuckT = 0;
+          }
+        }
+      }
       if (act === 'returning' && !r.entity_id && Math.hypot(r.x - rs.x, r.y - rs.y) < K.arriveMm) {
         rs.demoPhase = 'dock'; rs.demoTimer = 60 + Math.random() * 60;
       }

@@ -421,6 +421,76 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Theater wave: 3 plush leather recliners + projector body/orientation/
+  Theater-tab move + 2 projection screens with TV parity** (2026-08-09,
+  four user asks; unreleased — on main past v0.63.0). Plush kinds
+  (single/console-loveseat/row-3, one parametric builder + ONE pure
+  `plushReclinerLayout` feeding build, SitSpots 1/2/3 and the 2D branch);
+  projector = real ceiling-mount assembly yawed onto its aim, beam from
+  the lens-barrel tip, always-visible 2D aim chevron, card moved to the
+  toolbar Theater tab; `projector_screen` (wall) + retractable
+  `projector_screen_ceiling` (eased drop blend, extends on media) with
+  `isScreenKind` replacing every routable tv/wall_tv literal (media
+  click, _tvsByRoom, screenData, 2D ♪/📰, dblclick binder, sidebar
+  Screen/bind, projector picker) + screens joining the appliance-state
+  hash; biasLight stays literal (passive fabric, negatively pinned).
+  Agent deviations accepted: derived theater-tab card count (my "5" was
+  the new-kind count, real total 11), straddling cupholders (buried
+  renders as nothing), ceiling screen NOT house-mounted (flagged
+  follow-up). NEW THEATERWAVE 199/199; TOOLBAR 93→97; THEATER 30→31;
+  FLOORPLANS 425/425 (physical.mjs WALL_HUGGING += projector_screen).
+
+- **User-toggle avatar immunity** (2026-08-09, the REAL fix for "can
+  turn a firepit on but cannot turn it off"; unreleased). The firepit
+  click was never broken (probe-disproved — the body-group backstop tag
+  resolved flame clicks all along; direct tags added as hardening +
+  fireplace/heatlamp audit, FIREPIT 52→65): a synthetic avatar was
+  RELIGHTING the pit after dark via the wants-ON-evening rule. Now
+  `toggleItem` stamps runtime `_userToggleAt` (call-site audit: every
+  caller is a user path; `avatarToggleItem` never stamps) and
+  `avatarMayActuate(id)` (10 min `USER_TOGGLE_IMMUNITY_MS`) filters the
+  `ActivityContext.interactive` build — an avatar must never undo a
+  deliberate user action; hour rule resumes after the window.
+  AVINTERACT 26→42.
+
+- **Queen bed corrected to real dimensions** (2026-08-09, user-reported
+  "sizes and orientations appear incorrect"; unreleased). The 2026-08-07
+  relabel had carried the legacy generic-double footprint — the queen
+  rendered 2000×1500, SIDEWAYS and short. Now 1524×2032 (60×80 in);
+  both renderers verified dim-generic (no draw changes); placed pieces
+  keep stored dims (standard def-change semantics). BEDSIZES 61→75
+  (§H: every bed kind longer than wide + real-world nominals ±25 mm —
+  the twin's deliberate 99 cm round-up documented). Follow-up noted:
+  three demo plans hand-author 2000×1500 beds (bungalow,
+  interior-design store staged queen, starship med bunk).
+
+- **Docked-mower ground-truth relocation** (2026-08-09, user-reported
+  "the mower docking still is not aligned"; unreleased). The deck-side
+  approach crossed the long wall far from its end and wedged at the
+  corner; `docked` never takes the GPS branch so it had no Prong-B
+  backstop. Now `dockTruth` (docked + bound) keeps its own stuck
+  accounting and snaps onto `home` + `dockParkedHeading` after 8 s of
+  no movement — the entity state IS ground truth; `returning` and
+  unbound demos excluded; the probe-cap hypothesis was tested and
+  rejected (didn't rescue the failing approach). Agent finding: true
+  stops only occur in slots narrower than the turning circle. ROBOT
+  257→278 (§f, four harness-only negative controls).
+
+- **Bathroom vanity lights** (2026-08-09, user-requested; unreleased).
+  Three LightIconKinds: `vanity_bar` 💄 (3 globes), `vanity_hollywood`
+  🎬 (5-globe marquee), `mirror_light` 🪞 (backlit mirror w/ emissive
+  rim). Wall-flush snap (`snapVanityToWall`), no floor pool (sconce
+  rule), honest HA color (never forced warm), and the FIRST per-kind
+  mount-height table (`LIGHT_KIND_HEIGHT_DEFAULTS`: 1950/1950/1700 —
+  pre-existing sidebar-placeholder divergence for five older kinds
+  documented, left alone). Gallery light hand-list 28→31,
+  guard-parity verified. NEW VANITYLIGHT 105/105; tests forced two
+  real corrections (globes buried in the wall → stand-off arms; mirror
+  emissive default). Six-batch wave shipped as one commit (files
+  interleave across batches; per-batch splits would be untested
+  intermediates) — this ledger is the per-batch record. All 11
+  headline suites re-verified independently on the merged tree.
+
 - **Plants & trees category + sidebar furniture-list split** (2026-08-09,
   user-requested "put these into their own categories in the side bar:
   plants and trees / appliance"; unreleased — on main past v0.63.0). New

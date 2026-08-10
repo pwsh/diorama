@@ -20,6 +20,7 @@ import { AVATAR_PACK_MANIFEST } from '../../src/avatar-packs/manifest.js';
 import { VEHICLE_PACK_MANIFEST } from '../../src/vehicle-packs/manifest.js';
 import {
   FURNITURE_KINDS, furnitureCat, isWetBathKind, ENV_KINDS, envValueText, robotLedColor, isFirepitKind,
+  isVanityLightKind, snapVanityToWall,
 } from '../../src/geometry.js';
 import type { LightIconKind } from '../../src/types.js';
 
@@ -532,7 +533,8 @@ function capAppliance(sub: Subject, o: CapOpts): string {
 
 // Lighting: a two-wall corner + floor; off → on → color sweep → dim → off
 // (fireplace: off → flicker → off; wall kinds mount on the wall).
-const WALL_LIGHT = new Set<LightIconKind>(['sconce', 'wall_sconce', 'step', 'flood', 'exhaust_wall']);
+const WALL_LIGHT = new Set<LightIconKind>(['sconce', 'wall_sconce', 'step', 'flood', 'exhaust_wall',
+  'vanity_bar', 'vanity_hollywood', 'mirror_light']);
 // Ground-level kinds (fixture body at grade, not the 2500 mm ceiling default):
 // the standard room-wide framing renders them as a speck in the lower third, so
 // they get their own tighter, lower orbit that fills the frame with the trim
@@ -556,6 +558,12 @@ const LIGHT_FRAMING: Partial<Record<LightIconKind, [number, number, number]>> = 
   // low orbit fills the frame with the stone rim + fire (the ground-kind rule).
   firepit_round: [500, 3200, 16],
   firepit_square: [500, 3200, 16],
+  // Bathroom vanity kinds skip the floor pool too (they light the person at the
+  // mirror), so like the exhaust family they need a tight orbit on the fixture
+  // itself — framed at their own mount height (LIGHT_KIND_HEIGHT_DEFAULTS).
+  vanity_bar: [1950, 2200, 6],
+  vanity_hollywood: [1950, 2700, 6],
+  mirror_light: [1700, 2600, 4],
 };
 function capLight(sub: Subject, o: CapOpts): string {
   const gifPx = o.size ?? 400, N = o.frames ?? 34, fps = o.fps ?? 12;
@@ -567,7 +575,10 @@ function capLight(sub: Subject, o: CapOpts): string {
   ];
   const onWall = WALL_LIGHT.has(kind);
   const lx = onWall ? 2400 : f.w / 2;
-  const ly = onWall ? 600 : f.d / 2;
+  // Vanity kinds start a little into the room so the real snapVanityToWall
+  // below resolves the room-side normal (a point exactly ON the wall axis is
+  // ambiguous) and parks them at the same flush offset the editor would.
+  const ly = onWall ? (isVanityLightKind(kind) ? 900 : 600) : f.d / 2;
   // Fireplace front = local −Z and the sconce dome faces −Z (wall-mount convention);
   // at rotation 0 both point AWAY from the room-side camera. Rotate those 180°
   // so their fronts face the camera (the other kinds already read correctly).
@@ -578,6 +589,10 @@ function capLight(sub: Subject, o: CapOpts): string {
     id: 'l', x: lx, y: ly, entity_id: 'light.demo', iconKind: kind, rotation,
     label: '', length: 1600,
   };
+  // Vanity bar / Hollywood strip / backlit mirror lock flush to the wall face
+  // with the front looking into the room — run the REAL snapper so the gallery
+  // shot can never disagree with what a drop in the editor produces.
+  snapVanityToWall(light, f.walls);
   f.lights = [light];
   // Fire pits share the hearth's capture script: night preset, and a plain
   // steady ON window (their look IS the flicker — a colour sweep would fight
@@ -985,6 +1000,9 @@ const LIGHT_KINDS: { id: LightIconKind; label: string; glyph: string }[] = [
   { id: 'exhaust_light', label: 'Exhaust + light', glyph: '❈' },
   { id: 'firepit_round', label: 'Fire pit (round)', glyph: '◉' },
   { id: 'firepit_square', label: 'Fire pit (square)', glyph: '▣' },
+  { id: 'vanity_bar', label: 'Vanity bar (3 globes)', glyph: '💄' },
+  { id: 'vanity_hollywood', label: 'Vanity strip (5 globes)', glyph: '🎬' },
+  { id: 'mirror_light', label: 'Backlit mirror', glyph: '🪞' },
 ];
 // ── Flying-craft roster (the banner-tow "Aircraft" dropdown) ──────────────────
 // Hand-typed to mirror src/ui/modals.ts's AIRCRAFT_GROUPS **verbatim**: those

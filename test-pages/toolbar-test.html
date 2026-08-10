@@ -137,6 +137,30 @@
       ok('A9: ruler card in Structure tab', cat(model,'structure').cards.some(c => c.tool === 'ruler'), '');
       // the sun-tracking solar panel is a bindable device → Controls & Sensors
       ok('A10: solar panel card in Controls tab', cat(model,'controls').cards.some(c => c.tool === 'solar'), '');
+      // A11–A13 (2026-08 theater wave, user: "move the projector to the theater
+      // category") — the projector FIXTURE card moved off Controls onto Theater,
+      // appended AFTER that tab's furniture cards (the flagpole-on-Outdoor
+      // idiom). The sidebar's TOOL_GROUPS deliberately keeps it under
+      // "Devices & sensors" — that grouping is by device type, not shopping
+      // category — so this is a toolbar-only move.
+      const theater = cat(model, 'theater').cards;
+      ok('A11: projector card in the Theater tab', theater.some(c => c.tool === 'projector'), '');
+      ok('A12: projector card NO LONGER in the Controls tab',
+        !cat(model, 'controls').cards.some(c => c.tool === 'projector'), '');
+      // Theater = every theater-cat furniture kind (speakers ×4, the two original
+      // recliners, the three PLUSH recliners, the two projection screens = 11)
+      // followed by exactly one control card.
+      const theaterFurnKinds = Object.keys(FURNITURE_KINDS).filter(k => FURNITURE_KINDS[k].cat === 'theater');
+      ok('A13: Theater = all theater-cat furniture cards then the projector card',
+        theater.length === theaterFurnKinds.length + 1
+        && theater.slice(0, theaterFurnKinds.length).every(c => c.thumb.type === 'furniture')
+        && theater[theater.length - 1].tool === 'projector',
+        `n=${theater.length} furnKinds=${theaterFurnKinds.length}`);
+      // A14 — the plush recliners + projection screens are reachable there.
+      const NEW_THEATER = ['theater_recliner_plush', 'theater_loveseat_plush', 'recliner_row3_plush',
+                           'projector_screen', 'projector_screen_ceiling'];
+      const missingNew = NEW_THEATER.filter(k => !theater.some(c => c.thumb.kind === k));
+      ok('A14: the 5 new theater kinds have Theater-tab cards', missingNew.length === 0, `missing=${missingNew.join(',')}`);
     }
 
     // ═══ B. arming parity (card.arm → planner state) ═══

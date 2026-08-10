@@ -19,7 +19,7 @@ import { listActivePacks } from '../avatars.js';
 import { resolveVehicleDef, vehiclePackOf, vehicleRecipe } from '../vehicles.js';
 import {
   fmtLen,
-  motionColor, motionIntensity, sensorColor, lightIconKind, MOTION_DEFAULTS,
+  motionColor, motionIntensity, sensorColor, lightIconKind, lightHeight, MOTION_DEFAULTS,
   BLE_PROXY_DEFAULTS, bleProxyHeight,
   alarmHeight, alarmStateColor, calendarHeight, safetyColor,
   thermostatHeight, hvacModeColor,
@@ -39,7 +39,7 @@ import {
   envKindOf, envColor, envValueText, envHeight, envScale,
   INFO_CARD_MOUNT_DEFAULTS, INFO_CARD_SCALE_MIN, INFO_CARD_SCALE_MAX,
   infoCardText, infoCardMount, infoCardHeight, infoCardW, infoCardH, infoCardScale,
-  furnitureCat, type FurnitureCat, isBinKind, isWetBathKind, isVehicleKind, isStairsKind, isBedKind, STAIRS_MIN_RISE_MM, stairsRiseMm, stairsTreadCount, isClimateApplianceKind, isBladedFanKind,
+  furnitureCat, type FurnitureCat, isBinKind, isScreenKind, isProjectorScreenKind, isWetBathKind, isVehicleKind, isStairsKind, isBedKind, STAIRS_MIN_RISE_MM, stairsRiseMm, stairsTreadCount, isClimateApplianceKind, isBladedFanKind,
   isTreeKind, TREE_MIN_HEIGHT_MM, TREE_MAX_HEIGHT_MM,
   isMechanicalApplianceKind, mechanicalBindDomains, mechanicalRun,
   isRackKind, rackHealth, rackHealthColor,
@@ -110,6 +110,9 @@ const LIGHT_KINDS: { id: LightIconKind; label: string; glyph: string }[] = [
   { id: 'exhaust_light', label: 'Exhaust + light',     glyph: '❈' },
   { id: 'firepit_round',  label: 'Fire pit (round)',   glyph: '◉' },
   { id: 'firepit_square', label: 'Fire pit (square)',  glyph: '▣' },
+  { id: 'vanity_bar',       label: 'Vanity bar (3 globes)',   glyph: '💄' },
+  { id: 'vanity_hollywood', label: 'Vanity strip (5 globes)', glyph: '🎬' },
+  { id: 'mirror_light',     label: 'Backlit mirror',          glyph: '🪞' },
 ];
 
 const WINDOW_KINDS: { id: WindowKind; label: string }[] = [
@@ -3281,8 +3284,9 @@ export class Sidebar extends LitElement {
   private _projectorEditor(pr: ProjectorFixture) {
     const p = this.planner;
     const upd = (mut: () => void) => { mut(); p.save(); p.emitConfig(); };
-    // Screens this projector can aim at: wall_tv / tv pieces on the floor.
-    const screens = p.floor().furniture.filter(fu => fu.kind === 'wall_tv' || fu.kind === 'tv');
+    // Screens this projector can aim at: every SCREEN piece on the floor —
+    // tv / wall_tv plus the two projection screens (isScreenKind).
+    const screens = p.floor().furniture.filter(fu => isScreenKind(fu.kind));
     return html`
       <div style="background:rgba(0,0,0,0.25);border-radius:4px;padding:6px;margin:4px 0">
         <div class="row"><label>Label</label>
@@ -5869,7 +5873,9 @@ export class Sidebar extends LitElement {
           </select>
         </div>`}
         ${this._furnitureBindRow(piece, upd)}
-        ${(curKind === 'tv' || curKind === 'wall_tv') ? this._screenContentRow(piece, upd) : nothing}
+        ${isScreenKind(curKind) ? this._screenContentRow(piece, upd) : nothing}
+        <!-- Bias light stays tv/wall_tv-only: a projection screen has no
+             backlight (see the note at SCREEN_SURFACE_KINDS). -->
         ${(curKind === 'tv' || curKind === 'wall_tv') ? this._biasLightRow(piece, upd) : nothing}
         ${curKind === 'fridge' ? this._fridgeDoorBindRow(piece, upd) : nothing}
         ${furnitureCat(resolveFurnitureDef(piece, p.store.customObjects)) === 'appliance'
@@ -6122,7 +6128,10 @@ export class Sidebar extends LitElement {
   private _furnitureBindRow(piece: Furniture, upd: (mut: () => void) => void) {
     const p = this.planner;
     const def = resolveFurnitureDef(piece, p.store.customObjects);
-    if (!def.activity && furnitureKind(piece) !== 'tv' && !isBinKind(piece.kind) && !isVehicleKind(piece.kind) && !isClimateApplianceKind(piece.kind) && !isMechanicalApplianceKind(piece.kind)) return nothing;
+    // isScreenKind covers tv / wall_tv (wall_tv reaches this via its watch_tv
+    // activity anyway) AND the two projection screens, which get the same
+    // media_player binding so their screen surfaces / retract state work.
+    if (!def.activity && furnitureKind(piece) !== 'tv' && !isScreenKind(piece.kind) && !isBinKind(piece.kind) && !isVehicleKind(piece.kind) && !isClimateApplianceKind(piece.kind) && !isMechanicalApplianceKind(piece.kind)) return nothing;
     return html`
       <div class="row"><label>HA entity</label>
         <span style="font-size:11px;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
@@ -6640,6 +6649,9 @@ export class Sidebar extends LitElement {
   private _pickFurnitureEntity(piece: Furniture): void {
     const climateHeater = piece.kind === 'space_heater' || piece.kind === 'wall_heater' || piece.kind === 'towel_warmer';
     const domain = furnitureKind(piece) === 'tv' ? 'media_player'
+      // Projection screens display like a TV — bind a media_player (or the
+      // switch/on-off source that drops the ceiling panel).
+      : isProjectorScreenKind(piece.kind) ? ['media_player', 'switch', 'binary_sensor']
       : isBinKind(piece.kind) ? 'binary_sensor'   // bins: 'on'/'full' = full
       : isVehicleKind(piece.kind) ? 'binary_sensor'   // car: presence 'on' = in bay
       // Wet bathroom pieces (sinks / bathtub / shower / toilet): the water run
@@ -7059,7 +7071,10 @@ export class Sidebar extends LitElement {
             </div>
           ` : nothing}
           ${/* Height may go negative (down to −3000) for lights sunk below the floor — e.g. a step light on a sunken stairway shaft. */ ''}
-          ${numRow('Height (mm)', l.height ?? (curKind === 'under_cabinet' ? 1350 : curKind === 'wall_sconce' ? 1700 : curKind === 'step' ? 300 : curKind === 'flood' ? 2400 : curKind === 'exhaust_wall' ? 2000 : 2500), -3000, 6000, 50, v => upd(() => { l.height = v; }))}
+          ${/* The trailing lightHeight() consults LIGHT_KIND_HEIGHT_DEFAULTS (the value the RENDERER
+                actually mounts at) and falls back to 2500. The leading ternaries are older hand-typed
+                suggestions that deliberately differ from the renderer's 2500 — left byte-identical. */ ''}
+          ${numRow('Height (mm)', l.height ?? (curKind === 'under_cabinet' ? 1350 : curKind === 'wall_sconce' ? 1700 : curKind === 'step' ? 300 : curKind === 'flood' ? 2400 : curKind === 'exhaust_wall' ? 2000 : lightHeight({ iconKind: curKind })), -3000, 6000, 50, v => upd(() => { l.height = v; }))}
           ${numRow('Radius (mm)', l.radius ?? 900, 100, 5000, 50, v => upd(() => { l.radius = v; }))}
           ${numRow('Intensity', l.intensity ?? 1, 0, 2, 0.05, v => upd(() => { l.intensity = v; }))}
           <div style="font-size:10px;color:var(--text-dim);margin-top:4px;line-height:1.3">

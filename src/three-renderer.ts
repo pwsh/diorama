@@ -9,10 +9,11 @@ import type {
 } from './types.js';
 import {
   lightHeight, lightRadius, lightIntensity, lightIconKind, lightRotation, lightLength, lightTilt,
-  isFirepitKind, FIREPIT_SIZE_MM,
+  isFirepitKind, FIREPIT_SIZE_MM, isVanityLightKind, VANITY_PLATE_DEPTH_MM,
   switchHeight, switchRotation, switchSize,
   motionColor, motionIntensity, hexToInt, bleProxyHeight, BLE_PROXY_DEFAULTS,
   furnitureDef, resolveFurnitureDef, furnitureColor, furnitureCat, isBinKind, binStateIsFull, isSpeakerKind, isSinkKind, isWetBathKind, isRiserKind, doorOpenDeltaDeg,
+  isPlushReclinerKind, plushReclinerLayout, PLUSH_BODY_DEPTH_FRAC, isScreenKind, isProjectorScreenKind, projectorScreenPanelH,
   hasFunctionalFront, frontVectorPlan,
   isClimateApplianceKind, isBladedFanKind, climateApplianceRun,
   isMechanicalApplianceKind, isPumpKind, mechanicalRun, mechanicalGlowColor, type MechanicalRun,
@@ -1203,6 +1204,11 @@ const OPENING_HOST_MAX_MM = 500;
 // a post on the driveway, shower stands on the slab).
 const HOUSE_MOUNTED_FURNITURE_KINDS = new Set<string>([
   'wall_tv', 'wall_heater', 'towel_warmer', 'mini_split', 'window_ac',
+  // Wall-mounted projection screen — the wall_tv twin (its elevation is
+  // measured off the wall plane). The CEILING screen is deliberately NOT here:
+  // it is placed like an ordinary free piece and its cassette height is
+  // measured off the surface under it, so an outdoor one follows the grade.
+  'projector_screen',
   'stairs', 'stairs_half', 'stair_landing', 'ramp',
 ]);
 
@@ -1241,7 +1247,8 @@ const STAIR_BALUSTER_MM = 35;       // slim square spindle
 // bolting to a wall) and so follow the surroundings grade when placed outdoors.
 // Everything else — bulb / spot / pendant / strip / recessed / fan / heatlamp /
 // exhaust (ceiling) and sconce / wall_sconce / flood / fireplace / exhaust_wall
-// / step (wall-snapped; `step` rides snapStepLightToSurface) — is mounted on the
+// / step / the vanity family (wall-snapped; `step` rides
+// snapStepLightToSurface, the vanity kinds snapVanityToWall) — is mounted on the
 // house and stays slab-relative. Fire pits stand in the yard, so they follow the
 // grade too (body, ember bed, flames, point light and floor pool all take the
 // same offset).
@@ -2393,6 +2400,13 @@ export class ThreeDRenderer {
     mesh: THREE.Mesh; cv: HTMLCanvasElement; tex: THREE.CanvasTexture;
     content: 'news' | 'weather'; headlines: string[]; w: number; h: number;
     scrollT: number; lastPaintT: number; lastHeadIdx: number;
+    // Retractable CEILING screen only: the surface plane must RIDE the panel
+    // as it rolls up/down. The plane lives in _nowPlayingGroup (its own dirty
+    // key), so it cannot simply be parented to the panel pivot in _floorGroup —
+    // instead _advanceScreenDrops drives it from the same _screenDrop blend.
+    // `originY` = the cassette-relative pivot's world Y; `faceOffY` = how far
+    // below it the fully-extended surface centre sits.
+    drop?: { originY: number; faceOffY: number; baseScaleY: number };
   }> = {};
   private _pulseActive = false;
   // Ghost (glass-house) floors: translucent shells of every OTHER story,
@@ -2836,6 +2850,17 @@ export class ThreeDRenderer {
     emptyY: number; fullY: number;
   }[] = [];
   private _sinkFill: Record<string, number> = {};
+  // Retractable CEILING projection screens (theater wave). The panel is a pivot
+  // group scaled from the cassette downward; `target` is 1 when the piece's
+  // resolved state reads "in use" (on/playing/paused) and 0 when rolled up.
+  // The eased blend is keyed by FIXTURE ID so it SURVIVES _keyFloor rebuilds
+  // (the _curtainBlend / _sinkFill / appliance-door idiom) — the build re-applies
+  // it, so a rebuild mid-drop never pops. Advanced per frame in
+  // _advanceScreenDrops (zero alloc); the list is reset in updateFloor +
+  // clearTransientGroups so the advance never touches freed geometry.
+  private _screens: { fuId: string; drop: THREE.Object3D; target: number }[] = [];
+  private _screenDrop: Record<string, number> = {};
+  private _SCREEN_DROP_TAU = 0.6;   // s — roll-down / roll-up time constant
   // Bathtub water rigs (furniture-polish batch). A tub RUNS off its
   // effectiveState (bound switch/binary_sensor / unbound localState → entityOn)
   // OR while a rig is engaged in a `bathe` activity anchored to it (anchor /
@@ -3969,6 +3994,11 @@ export class ThreeDRenderer {
     // just disposed with _floorGroup; a different floor = different fixtures).
     this._sinks = [];
     this._sinkFill = {};
+    // Retractable ceiling projection screens + their drop blend reset on floor
+    // switch (a different floor = different fixtures; the pivot groups were just
+    // disposed with _floorGroup).
+    this._screens = [];
+    this._screenDrop = {};
     // Bathtub / swing / mailbox-flag rigs + their blend maps reset on floor
     // switch (a different floor = different fixtures; the geometry was just
     // disposed with _floorGroup).
@@ -6872,6 +6902,10 @@ export class ThreeDRenderer {
     // Sink water rigs are rebuilt here; _sinkFill persists (keyed by fixture id)
     // so a _keyFloor rebuild re-applies the current fill level without a pop.
     this._sinks = [];
+    // Retractable ceiling screens are rebuilt here; _screenDrop persists (keyed
+    // by fixture id) so a _keyFloor rebuild re-applies the current drop without
+    // a pop.
+    this._screens = [];
     // Bathtub water / swing seats / mailbox flags are rebuilt here; their eased
     // blend maps persist (keyed by fixture id / spot id) so a _keyFloor rebuild
     // re-applies the current fill / swing / flag state without a pop.
@@ -6991,7 +7025,9 @@ export class ThreeDRenderer {
           tempLabel = `${Math.round(v)}°${/F/i.test(unit) ? 'F' : ''}`;
         }
       }
-      // Screen bias lighting (home-theater arc): a tv/wall_tv with a biasLight
+      // Screen bias lighting (home-theater arc): deliberately kept literal (NOT
+      // isScreenKind) — a projection screen has no backlight to bias; see the
+      // note at SCREEN_SURFACE_KINDS. A tv/wall_tv with a biasLight
       // config glows behind the screen — a bound bias entity 'on', or (no
       // entityId) AUTO while the TV itself is playing/on. Bias entity state folds
       // into three-view's appliance hash so this rebuilds on a change.
@@ -7044,11 +7080,23 @@ export class ThreeDRenderer {
       // finished-window provider (Planner.applianceJustFinished). Folded into the
       // appliance hash in three-view so this rebuilds when it flips.
       const jobDone = isAppliance && !!jobDoneProvider && jobDoneProvider(fu.id);
+      // Retractable ceiling screen: EXTENDED while the piece reads "in use" —
+      // presenting media (parseNowPlaying non-null covers playing AND paused) or
+      // simply on. Rolled up otherwise. Resolved at build time; three-view folds
+      // screen state into the _keyFloor appliance hash so this rebuilds on a
+      // flip, and _advanceScreenDrops eases the panel between the two.
+      let screenExtended = false;
+      if (isScreenKind(fu.kind)) {
+        const media = isMediaPlayerId(fu.entity_id) && stateProvider
+          ? parseNowPlaying(stateProvider(fu.entity_id!)) : null;
+        const ss = st0?.state;
+        screenExtended = !!media || ss === 'on' || ss === 'playing' || ss === 'paused';
+      }
       const grp = this._buildFurniture(fu, f.furniture, customObjects,
                                        { applianceOn, ledScale, doorSink, plantSink, sinkSink, tempLabel, binFull, speakerPlaying, biasOn, biasColor,
                                          vehicleGhost, evCharging, evColor, mailFlagUp, mailCountLabel, jobDone,
                                          climateRunning, climateAir, fanRps, oscillate: (fu as Furniture).oscillate === true,
-                                         mech, rackHealth: rackHl });
+                                         mech, screenExtended, rackHealth: rackHl });
       grp.position.y += furnGY;   // outdoor pieces stand on the surroundings grade
       this._shadowFlags(grp);
       // Custom-recipe front-arrow indicator: custom objects draw only as a
@@ -7143,7 +7191,9 @@ export class ThreeDRenderer {
       // dedicated clickable list (raycasting all of _floorGroup would be heavy).
       // TVs are clickable regardless of binding so an UNBOUND set can still be
       // toggled locally (entity_id null → the click handler flips localState).
-      if (fu.kind === 'tv' || fu.kind === 'wall_tv') {
+      // Projection screens ride the same path (isScreenKind): an unbound screen
+      // must be click-toggleable so the ceiling panel can be dropped locally.
+      if (isScreenKind(fu.kind)) {
         grp.userData = { ...grp.userData, kind: 'media', entity_id: fu.entity_id ?? null, fixtureId: fu.id };
         this._mediaClickables.push(grp);
       }
@@ -7322,6 +7372,13 @@ export class ThreeDRenderer {
           const n = 3;
           for (let i = 0; i < n; i++)
             seatLocals.push({ lx: usable * ((i + 0.5) / n - 0.5), lz: 0, depth: D });
+        } else if (isPlushReclinerKind(fu.kind)) {
+          // Plush recliners: 1 / 2 / 3 seats from the SHARED layout helper the
+          // 3D builder uses, so a seated rig always lands on a CUSHION — never
+          // on the loveseat's center console or a shared arm.
+          const lay = plushReclinerLayout(fu.kind, W, D);
+          for (const lx of lay.seatXs)
+            seatLocals.push({ lx, lz: lay.seatLz, depth: lay.seatDepth });
         } else if (fu.kind === 'sofa_l_left' || fu.kind === 'sofa_l_right' || fu.kind === 'sofa_u') {
           // Sectionals: spots along the main run (X, near the back) PLUS one per
           // return arm — matching the builder's main-seat + return geometry.
@@ -7400,7 +7457,9 @@ export class ThreeDRenderer {
       }
       // TVs per room: a seated person in a room whose bound-or-locally-ON TV is
       // on watches it. Skip roomless TVs (can't scope them to a seat's room).
-      if ((fu.kind === 'tv' || def.activity === 'watch_tv') && roomId) {
+      // isScreenKind covers tv / wall_tv / both projection screens — a theater
+      // screen IS the room's "TV" for seated watch_tv + the standing dance gate.
+      if ((isScreenKind(fu.kind) || def.activity === 'watch_tv') && roomId) {
         (this._tvsByRoom[roomId] ??= []).push({
           furnitureId: fu.id, hasEntity: fu.entity_id != null || fu.localState != null,
         });
@@ -9881,6 +9940,7 @@ export class ThreeDRenderer {
                                    climateAir?: import('./geometry.js').HvacAirflowKind;
                                    fanRps?: number; oscillate?: boolean;
                                    mech?: MechanicalRun;
+                                   screenExtended?: boolean;
                                    rackHealth?: RackHealth }): THREE.Group {
     // A vehicle-pack model resolves into the SAME ObjectRecipe shape a custom
     // object does (vehicles.ts is pure + shared by both graphs, like avatars.ts),
@@ -12713,6 +12773,176 @@ export class ThreeDRenderer {
         }
         break;
       }
+      case 'theater_recliner_plush':
+      case 'theater_loveseat_plush':
+      case 'recliner_row3_plush': {
+        // ── Plush LEATHER theater recliners (one parametric builder) ─────────
+        // Single / loveseat-with-console / three-across row. Everything is a
+        // proportion of (W, D, HT) so a resized piece stays in proportion.
+        // Front = local −Z (the footrest end); the tufted back sits on +Z.
+        // Coincident-face discipline: every stacked/abutting box is INSET or
+        // held proud of its neighbour — flat toon banding hatches coplanar
+        // faces (and abutting inverted-hull shells z-fight).
+        // Layout (arm widths, console, seat centers) comes from the SHARED pure
+        // helper the SitSpot distribution reads — the two can never disagree.
+        const lay = plushReclinerLayout(kind, W, D);
+        const nSeats = lay.seats;
+        const seatH2 = def.seat ?? 450;
+        const leather = cushion;                                  // tint = deep leather brown
+        const leatherLo = this._mat({ color: new THREE.Color(tint).multiplyScalar(0.78).getHex(), roughness: 0.95 });
+        const leatherHi = this._mat({ color: new THREE.Color(tint).multiplyScalar(1.22).getHex(), roughness: 0.9 });
+        const armW = lay.armW, consoleW = lay.consoleW;
+        // The BODY occupies the rear PLUSH_BODY_DEPTH_FRAC of the depth; the
+        // extended footrest takes the front rest (the reclined read).
+        const bodyD = D * PLUSH_BODY_DEPTH_FRAC, footD = D - bodyD;
+        const bodyZc = D / 2 - bodyD / 2;                          // body center (toward +Z / back)
+        const footZc = -D / 2 + footD / 2;                         // footrest center (toward −Z / front)
+        const backT = bodyD * 0.26, backH = HT - seatH2;
+        // Plinth under the whole body — narrower + shallower than the cushions
+        // so no side/front face lands coplanar with an arm or the seat.
+        const plinthH = seatH2 - 130;
+        addBox(W - armW * 1.4, plinthH, bodyD * 0.88, dark, 0, plinthH / 2, bodyZc);
+        // TUFTED BACK: a back panel plus TWO horizontal cushion segments proud
+        // of it and a rolled headrest bar capping the stack.
+        const panelZ = D / 2 - backT / 2;
+        addBox(W, backH, backT, leatherLo, 0, seatH2 + backH / 2, panelZ);
+        const tuftH = backH * 0.30, tuftT = backT * 0.42;
+        for (let s = 0; s < 2; s++) {
+          const ty = seatH2 + backH * (0.20 + s * 0.34) + tuftH / 2;
+          addBox(W - armW * 2 - 24, tuftH, tuftT, leather,
+                 0, ty, panelZ - backT / 2 - tuftT / 2 + 6);        // proud toward the room, ends buried
+        }
+        const rollR = Math.min(95, backH * 0.13);
+        const roll = addCyl(rollR, rollR, W - armW * 2 - 60, leatherHi,
+                            0, seatH2 + backH - rollR * 0.7, panelZ - backT * 0.18, 14);
+        roll.rotation.z = Math.PI / 2;                              // lay the bolster across X
+        // ARMS: 2–3 stacked, progressively inset boxes so the silhouette reads
+        // rounded without a real fillet. Outer pair full depth; inner dividers
+        // between neighbouring seats (row) share one arm each.
+        const armH = HT * 0.56;
+        const addArm = (ax: number, aw: number, full: boolean) => {
+          const tiers = full ? 3 : 2;
+          for (let t = 0; t < tiers; t++) {
+            const f = 1 - t * 0.16;                                 // each tier inset
+            const h0 = armH * (t === 0 ? 0.68 : t === 1 ? 0.24 : 0.12);
+            const y0 = armH * (t === 0 ? 0 : t === 1 ? 0.68 : 0.92);
+            addBox(aw * f, h0, (full ? bodyD : bodyD * 0.9) * (1 - t * 0.06),
+                   t === 2 ? leatherHi : leather, ax, y0 + h0 / 2, bodyZc);
+          }
+        };
+        for (const sx of [-1, 1]) addArm(sx * (W / 2 - armW / 2), armW, true);
+        // Seat centers from the shared layout; a ROW's inner dividers are arms
+        // built in the gaps between them (the loveseat's gap holds the console).
+        const seatCx = lay.seatXs, seatW = lay.seatW, divW = lay.divW;
+        if (!consoleW)
+          for (let i = 1; i < nSeats; i++)
+            addArm((seatCx[i - 1] + seatW / 2 + seatCx[i] - seatW / 2) / 2, divW, false);
+        // SEAT cushions, proud of the plinth (raised lip) and inset from the back.
+        const seatT = 150;
+        for (const cx of seatCx)
+          addBox(seatW * 0.9, seatT, bodyD * 0.74, leather, cx, seatH2 - seatT / 2, bodyZc - bodyD * 0.05);
+        // EXTENDED FOOTREST: a slab at the front, raised ~250 mm and slightly
+        // angled up toward the front (the reclined read). Stays INSIDE the
+        // footprint (its half-depth plus the tilt rise never exceed D/2).
+        const footY = 250, footT = 120;
+        for (const cx of seatCx) {
+          const foot = addBox(seatW * 0.88, footT, footD * 0.86, leather, cx, footY + footT / 2, footZc);
+          foot.rotation.x = -0.12;                                  // toes up
+          foot.userData.plushFootrest = true;
+          // Support skirt under the footrest so it doesn't float.
+          addBox(seatW * 0.5, footY, footD * 0.5, dark, cx, footY / 2, footZc + footD * 0.12);
+        }
+        // CUPHOLDER insets: dark short cylinders sunk INTO the arm tops. The
+        // cylinder straddles the crown plane (most of it buried, a thin rim
+        // proud) so the recess READS from above and no face is ever coplanar
+        // or tangent with the arm top — the coincident-face gotcha.
+        const armTopY = armH * 1.04;                              // top tier crown
+        const cupR = Math.min(58, armW * 0.3);
+        const cupXs: number[] = [-1, 1].map(sx => sx * (W / 2 - armW / 2));
+        if (consoleW) {
+          // CENTER CONSOLE between the two seats: a box with a proud lid seam
+          // and two cupholders in its top.
+          const conZ = bodyZc + bodyD * 0.04, conH = armH * 0.92;
+          const con = addBox(consoleW, conH, bodyD * 0.9, leatherLo, 0, conH / 2, conZ);
+          con.userData.plushConsole = true;
+          // Lid: proud of the body top AND inset in plan, so no face is coplanar.
+          addBox(consoleW * 0.9, 26, bodyD * 0.82, leatherHi, 0, conH + 13, conZ);
+          cupXs.push(0, 0);                                          // two console cupholders
+        }
+        let cupIdx = 0;
+        for (const cx of cupXs) {
+          const isCon = consoleW > 0 && cx === 0;
+          const topY = isCon ? armH * 0.92 + 26 : armTopY;
+          const zc = isCon ? bodyZc + (cupIdx++ % 2 === 0 ? -bodyD * 0.16 : bodyD * 0.2)
+                           : bodyZc - bodyD * 0.14;
+          const cup = new THREE.Mesh(new THREE.CylinderGeometry(cupR, cupR * 0.86, 44, 14), dark);
+          cup.position.set(cx, topY - 10, zc);   // straddles the crown: 32 buried / 12 proud
+          cup.userData.plushCupholder = true;
+          cup.userData.outlineSkip = true;                           // a recess needs no dark shell
+          grp.add(cup);
+        }
+        break;
+      }
+      case 'projector_screen':
+      case 'projector_screen_ceiling': {
+        // ── Projection screens (TV-parity display surfaces) ──────────────────
+        // Wall kind: a slim top casing bar + a white screen panel with a dark
+        // border frame. The frame OVERLAPS the panel edges (frame deeper AND
+        // wider than the panel, panel held proud of the frame front) so no two
+        // visible faces land coplanar.
+        // Ceiling kind: a cassette tube at the top; the panel DROPS out of it.
+        // The drop is an eased per-fixture blend (_screenDrop, keyed by fixture
+        // id so it survives _keyFloor rebuilds) advanced in _advanceScreenDrops.
+        const ceiling = kind === 'projector_screen_ceiling';
+        const panelH = projectorScreenPanelH(kind);
+        // Screen center height must agree with geometry.screenCenterHeight —
+        // that is what the projector beam + glow aim at.
+        const scY = screenCenterHeight(kind);
+        const casingH = 140, casingD = Math.min(D, 150);
+        const frameT = 46, panelT = 18;
+        const fabric = this._mat({ color: 0xe8eaed, roughness: 0.85, metalness: 0.0 });
+        const casingMat = this._mat({ color: tint, roughness: 0.6, metalness: 0.15 });
+        if (ceiling) {
+          // Cassette: a tube (with end caps) hanging just under the ceiling.
+          const cassY = scY + panelH / 2 + casingH * 0.5;
+          const tube = addCyl(casingH / 2, casingH / 2, W * 0.98, casingMat, 0, cassY, 0, 16);
+          tube.rotation.z = Math.PI / 2;
+          tube.userData.screenCassette = true;
+          for (const sx of [-1, 1])
+            addBox(46, casingH * 1.14, casingH * 1.14, dark, sx * (W / 2 - 18), cassY, 0);
+          // Retractable panel: a pivot GROUP scaled/positioned from the cassette
+          // downward, so a 0 blend leaves only the cassette visible.
+          const drop = new THREE.Group();
+          drop.position.set(0, cassY - casingH * 0.4, 0);
+          drop.userData.screenDrop = true;
+          const face = new THREE.Mesh(new THREE.BoxGeometry(W * 0.94, panelH, panelT), fabric);
+          face.position.set(0, -panelH / 2, 0);
+          face.userData.screenFace = true;
+          drop.add(face);
+          // Weight bar at the bottom edge, proud of both panel faces.
+          const bar = new THREE.Mesh(new THREE.BoxGeometry(W * 0.96, 44, panelT + 20), dark);
+          bar.position.set(0, -panelH - 14, 0);
+          drop.add(bar);
+          grp.add(drop);
+          // Register for the per-frame eased drop. Re-apply the persisted blend
+          // at build time so a _keyFloor rebuild never pops the panel.
+          const sid = fu.id ?? `pscr_${Math.round(fu.x)}_${Math.round(fu.y)}`;
+          const blend0 = this._screenDrop[sid] ?? (opts?.screenExtended ? 1 : 0);
+          this._screenDrop[sid] = blend0;
+          drop.scale.y = Math.max(1e-3, blend0);
+          drop.visible = blend0 > 0.02;
+          this._screens.push({ fuId: sid, drop, target: opts?.screenExtended ? 1 : 0 });
+        } else {
+          // Wall screen: casing bar above the frame, then the frame, then the
+          // white panel proud of the frame front (−Z).
+          addBox(W, casingH, casingD, casingMat, 0, scY + panelH / 2 + casingH / 2, 0);
+          const frame = addBox(W * 0.98, panelH + 2 * frameT, frameT, dark, 0, scY, 0);
+          frame.userData.screenFrame = true;
+          const face = addBox(W * 0.98 - 2 * frameT, panelH, panelT, fabric, 0, scY, -frameT / 2 - panelT / 2 + 6);
+          face.userData.screenFace = true;
+        }
+        break;
+      }
       case 'riser_platform': {
         // Walkable tiered-seating deck: a dark carpeted slab + a lighter step-edge
         // lip on the front (-Z) face so the height reads. NON-nav (see _buildNav
@@ -12962,6 +13192,7 @@ export class ThreeDRenderer {
     // warm glow rings the TV silhouette. Held off the coincident-face plane of
     // the bezel/panel back (the coincident-face gotcha); outline-skipped — a
     // translucent glow needs no dark inverted-hull shell.
+    // Literal on purpose (not isScreenKind): projection screens have no backlight.
     if (opts?.biasOn && (kind === 'tv' || kind === 'wall_tv')) {
       const col = opts.biasColor ?? 0xfff1d6;
       const scY = kind === 'wall_tv' ? 1350 : 300 + (HT - 300) / 2;   // screen center height
@@ -13044,6 +13275,7 @@ export class ThreeDRenderer {
     const onFloor = !def.rug &&
       !isStairsKind(kind) &&
       kind !== 'wall_tv' &&   // hangs on a wall, never touches the floor
+      !isProjectorScreenKind(kind) &&   // hangs on a wall / drops from a cassette
       kind !== 'riser_platform' &&   // a floor-like deck; a huge blob reads wrong
       !opts?.vehicleGhost &&   // an empty bay shouldn't cast a solid shadow
       Math.abs(fu.elevation ?? 0) < 100;
@@ -13347,34 +13579,12 @@ export class ThreeDRenderer {
       const projecting = projectorProjecting(itemState(pr, stateProvider)?.state);
       const beamColInt = hexToInt(projectorBeamColor(pr));
       const heightMm = projectorHeight(pr);
-      // Body pivot aimed by heading (matches camera/sensor convention). Local
-      // -Z (after the _w X-mirror) is the front / aim side, like the camera lens.
-      const grp = new THREE.Group();
       // Free placement (no wall snap): an outdoor projector's mount height is
       // measured from the yard.
       const projGY = this._itemGroundY(pr.x, pr.y);
-      const bp = this._w(pr.x, pr.y, heightMm + projGY);
-      grp.position.set(bp.x, bp.y, bp.z);
-      grp.rotation.y = -((pr.rotation || 0) * Math.PI / 180);
-      grp.userData = { kind: 'projector', entity_id: pr.entity_id ?? null, fixtureId: pr.id };
-      const body = new THREE.Mesh(
-        new THREE.BoxGeometry(PROJECTOR_DEFAULTS.bodyW * 0.55, PROJECTOR_DEFAULTS.bodyH, PROJECTOR_DEFAULTS.bodyD * 0.55),
-        this._mat({ color: 0x2b2f36, metalness: 0.2, roughness: 0.6 }));
-      grp.add(body);
-      const lens = new THREE.Mesh(
-        new THREE.CylinderGeometry(42, 42, 44, 16),
-        this._mat({ color: projecting ? beamColInt : 0x11151b,
-                    emissive: projecting ? beamColInt : 0x000000,
-                    emissiveIntensity: projecting ? 0.8 : 0 }));
-      lens.rotation.x = Math.PI / 2;                      // cylinder axis → local Z
-      lens.position.set(0, 0, -PROJECTOR_DEFAULTS.bodyD * 0.3);  // front (-Z)
-      lens.userData.outlineSkip = true;
-      grp.add(lens);
-      this._addOutlines(grp);
-      this._projGroup.add(grp);
-      if (!projecting) continue;
-
-      // Aim: the bound screen center (world plan + height), else a heading throw.
+      // Aim FIRST — the body yaws to point its lens at the SAME target the beam
+      // uses (bound screen center, else the heading throw), so the orientation
+      // is always readable, projecting or not.
       const screen = pr.screenId ? furniture.find(x => x.id === pr.screenId) : null;
       const aim = projectorAim(pr, screen ? { x: screen.x, y: screen.y, cy: screenCenterHeight(screen.kind) } : null);
       const L = this._w(pr.x, pr.y, heightMm + projGY);   // lens ≈ mount
@@ -13382,7 +13592,79 @@ export class ThreeDRenderer {
       // and an outdoor screen's furniture group is offset the same way), so
       // resolve the aim end independently — the beam spans real geometry.
       const T = this._w(aim.x, aim.y, aim.y3 + this._itemGroundY(aim.x, aim.y));
-      const dir = new THREE.Vector3().subVectors(T, L);
+      // Scene yaw putting local −Z (the lens axis) on the plan aim direction.
+      // The scene mirrors X, so derive it from the SCENE delta, not plan mm.
+      const aimYaw = (Math.abs(T.x - L.x) < 1e-6 && Math.abs(T.z - L.z) < 1e-6)
+        ? -((pr.rotation || 0) * Math.PI / 180)
+        : Math.atan2(L.x - T.x, L.z - T.z);
+      // ── Ceiling-mount body: stem + chassis + lens barrel + status LED ──────
+      // The whole assembly yaws so the barrel points down the aim vector.
+      const grp = new THREE.Group();
+      grp.position.set(L.x, L.y, L.z);
+      grp.rotation.y = aimYaw;
+      grp.userData = { kind: 'projector', entity_id: pr.entity_id ?? null, fixtureId: pr.id };
+      const shell = this._mat({ color: 0x2b2f36, metalness: 0.2, roughness: 0.6 });
+      const trim = this._mat({ color: 0x14181d, metalness: 0.25, roughness: 0.5 });
+      const CH_W = 360, CH_H = 120, CH_D = 280;   // chassis
+      // Mounting stem dropping from ~200 mm above the chassis top (the ceiling
+      // plate) down to the chassis. Plate is WIDER than the stem so no face is
+      // coplanar (the coincident-face gotcha).
+      const stemH = 200;
+      const stem = new THREE.Mesh(new THREE.CylinderGeometry(28, 28, stemH + CH_H * 0.4, 12), trim);
+      stem.position.set(0, CH_H / 2 + stemH / 2 - CH_H * 0.2, 0);
+      stem.userData = { kind: 'projector', projStem: true, entity_id: pr.entity_id ?? null, fixtureId: pr.id };
+      grp.add(stem);
+      const plate = new THREE.Mesh(new THREE.CylinderGeometry(96, 96, 26, 16), trim);
+      plate.position.set(0, CH_H / 2 + stemH, 0);
+      plate.userData = { kind: 'projector', entity_id: pr.entity_id ?? null, fixtureId: pr.id };
+      grp.add(plate);
+      const chassis = new THREE.Mesh(new THREE.BoxGeometry(CH_W, CH_H, CH_D), shell);
+      chassis.userData = { kind: 'projector', projChassis: true, entity_id: pr.entity_id ?? null, fixtureId: pr.id };
+      grp.add(chassis);
+      // Vent slot band on the −X flank, inset so its outer face is NOT coplanar.
+      const vent = new THREE.Mesh(new THREE.BoxGeometry(10, CH_H * 0.5, CH_D * 0.6), trim);
+      vent.position.set(-CH_W / 2 + 4, 0, CH_D * 0.08);
+      vent.userData = { kind: 'projector', entity_id: pr.entity_id ?? null, fixtureId: pr.id };
+      grp.add(vent);
+      // Protruding LENS BARREL out the FRONT (local −Z). Its far tip is where
+      // the beam originates.
+      const BARREL_R = 70, BARREL_L = 90;
+      const barrelZ = -CH_D / 2 - BARREL_L / 2 + 12;   // seated 12 mm into the chassis
+      const barrel = new THREE.Mesh(
+        new THREE.CylinderGeometry(BARREL_R, BARREL_R * 0.92, BARREL_L, 18), trim);
+      barrel.rotation.x = Math.PI / 2;                 // cylinder axis → local Z
+      barrel.position.set(0, 0, barrelZ);
+      barrel.userData = { kind: 'projector', projBarrel: true, entity_id: pr.entity_id ?? null, fixtureId: pr.id };
+      grp.add(barrel);
+      // Glass element, recessed inside the barrel mouth (never tangent).
+      const lens = new THREE.Mesh(
+        new THREE.CylinderGeometry(BARREL_R * 0.74, BARREL_R * 0.74, 18, 18),
+        this._mat({ color: projecting ? beamColInt : 0x11151b,
+                    emissive: projecting ? beamColInt : 0x000000,
+                    emissiveIntensity: projecting ? 0.9 : 0 }));
+      lens.rotation.x = Math.PI / 2;
+      lens.position.set(0, 0, barrelZ - BARREL_L / 2 + 16);
+      lens.userData = { kind: 'projector', projLens: true, entity_id: pr.entity_id ?? null, fixtureId: pr.id, outlineSkip: true };
+      grp.add(lens);
+      // Status LED on the chassis front-top: emissive green projecting, dim red idle.
+      const ledCol = projecting ? 0x00e676 : 0x8e2b24;
+      const led = new THREE.Mesh(new THREE.BoxGeometry(26, 14, 10),
+        this._mat({ color: ledCol, emissive: ledCol, emissiveIntensity: projecting ? 1.0 : 0.25 }));
+      led.position.set(CH_W * 0.32, CH_H * 0.22, -CH_D / 2 - 6);
+      led.userData = { kind: 'projector', projLed: true, entity_id: pr.entity_id ?? null, fixtureId: pr.id, outlineSkip: true };
+      grp.add(led);
+      this._addOutlines(grp);
+      // Ceiling-mounted: no blob shadow (it never touches the floor).
+      this._projGroup.add(grp);
+      if (!projecting) continue;
+      // The beam ORIGINATES AT THE LENS BARREL TIP (not the mount point), so
+      // the cone visibly leaves the glass rather than the chassis centre.
+      const dirRaw = new THREE.Vector3().subVectors(T, L);
+      const rawLen = dirRaw.length();
+      const LT = rawLen > 1
+        ? L.clone().addScaledVector(dirRaw.multiplyScalar(1 / rawLen), -barrelZ + BARREL_L / 2)
+        : L.clone();
+      const dir = new THREE.Vector3().subVectors(T, LT);
       const dist = dir.length() || 1;
       dir.normalize();
       // Frustum cone: base radius from the throw ratio — image width ≈
@@ -13396,8 +13678,8 @@ export class ThreeDRenderer {
       // ConeGeometry apex sits at +Y/2, base at -Y/2. Align local +Y to (L - T)
       // so the apex lands at the lens; center at the lens↔screen midpoint.
       cone.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0),
-        new THREE.Vector3().subVectors(L, T).normalize());
-      cone.position.copy(L).add(T).multiplyScalar(0.5);
+        new THREE.Vector3().subVectors(LT, T).normalize());
+      cone.position.copy(LT).add(T).multiplyScalar(0.5);
       cone.userData.outlineSkip = true;
       cone.userData.projectorBeam = true;
       cone.userData.dir = [dir.x, dir.y, dir.z];          // lens→screen unit vector (test hook)
@@ -13411,7 +13693,7 @@ export class ThreeDRenderer {
           side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending }));
       glow.position.copy(T).addScaledVector(dir, -30);    // 30 mm proud toward the lens
       glow.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1),
-        new THREE.Vector3().subVectors(L, T).normalize());
+        new THREE.Vector3().subVectors(LT, T).normalize());
       glow.userData.outlineSkip = true;
       glow.userData.projectorGlow = true;
       this._projGroup.add(glow);
@@ -14823,8 +15105,18 @@ export class ThreeDRenderer {
     const off = D / 2 + 2;                       // proud of the front face (coincident-face gotcha)
     // Screen face geometry + content-specific placement.
     const screenW = W * 0.86;
-    const screenH = content === 'news' ? Math.max(120, ht * 0.18) : ht * 0.52;
-    const localY = content === 'news' ? ht * 0.30 : ht * 0.56;   // ticker rides low, card centered
+    // Projection screens size + place their surface off the FABRIC (panel
+    // height + screenCenterHeight), not the piece height — the fabric is a
+    // narrow band high up, nothing like a TV's full-body panel.
+    const isProjScr = isProjectorScreenKind(fu.kind);
+    const panelH = projectorScreenPanelH(fu.kind);
+    const scCy = screenCenterHeight(fu.kind);
+    const screenH = isProjScr
+      ? (content === 'news' ? Math.max(120, panelH * 0.18) : panelH * 0.62)
+      : (content === 'news' ? Math.max(120, ht * 0.18) : ht * 0.52);
+    const localY = isProjScr
+      ? (content === 'news' ? scCy - panelH * 0.30 : scCy)
+      : (content === 'news' ? ht * 0.30 : ht * 0.56);   // ticker rides low, card centered
     const cv = document.createElement('canvas');
     if (content === 'news') {
       const idx = tickerHeadlineIndex(nowS, headlines.length, 10);
@@ -14846,9 +15138,19 @@ export class ThreeDRenderer {
     mesh.position.set(base.x + off * Math.sin(rotRad), base.y, base.z - off * Math.cos(rotRad));
     mesh.rotation.y = -rotRad;
     this._nowPlayingGroup.add(mesh);
+    // Ceiling screen: capture the roll geometry so the surface rides the panel.
+    // Mirrors the builder — pivot at cassY − casingH·0.4, panel hanging below.
+    let drop: { originY: number; faceOffY: number; baseScaleY: number } | undefined;
+    if (fu.kind === 'projector_screen_ceiling') {
+      const casingH = 140;
+      const cassY = scCy + panelH / 2 + casingH * 0.5;
+      const originW = this._w(fu.x, fu.y, (fu.elevation ?? 0) + cassY - casingH * 0.4);
+      drop = { originY: originW.y, faceOffY: originW.y - base.y, baseScaleY: mesh.scale.y };
+    }
     this._tvScreens[fu.id] = {
       mesh, cv, tex, content, headlines, w: 640, h: content === 'news' ? 128 : 360,
       scrollT: nowS, lastPaintT: 0, lastHeadIdx: content === 'news' ? tickerHeadlineIndex(nowS, headlines.length, 10) : 0,
+      drop,
     };
   }
 
@@ -20323,6 +20625,55 @@ export class ThreeDRenderer {
           shaft.position.y = -lh / 2;
           g.add(shaft);
         };
+        // Bathroom vanity bar (3 globes) / Hollywood marquee strip (5 globes) —
+        // one builder, two sizings. A horizontal backplate flat against the wall
+        // (its BACK face lands exactly on the wall face: snapVanityToWall offsets
+        // by WALL_HALF + VANITY_PLATE_DEPTH/2, so the face sits at local
+        // +VANITY_PLATE_DEPTH/2) with exposed globes on short sockets hanging
+        // just below and in front (front = local −Z). Globes are transparent
+        // glass, so they skip the inverted-hull shells automatically; nothing is
+        // forced warm — the bound entity's colour + brightness drive them.
+        const addVanityBar = (plateW: number, globeR: number, count: number) => {
+          const half = VANITY_PLATE_DEPTH_MM / 2;   // 15
+          const PLATE_H = 90;
+          const plateMat = this._mat({ color: 0x9aa0a6, metalness: 0.6, roughness: 0.35 });
+          const plate = new THREE.Mesh(
+            new THREE.BoxGeometry(plateW, PLATE_H, VANITY_PLATE_DEPTH_MM), plateMat);
+          plate.userData = ud;
+          g.add(plate);
+          const globeMat = this._mat({
+            color: isOn ? color.getHex() : 0xd8dade,
+            emissive: isOn ? color.getHex() : 0x000000,
+            emissiveIntensity: isOn ? (0.5 + 1.0 * (bri / 255)) * intensity * flickerMul : 0,
+            transparent: true, opacity: isOn ? 0.95 : 0.55,
+          });
+          // Each globe stands off the wall on a short FORWARD arm. That stand-off
+          // is structural, not decorative: the wall face lands at local
+          // +VANITY_PLATE_DEPTH/2, so a 2·globeR ball hung directly under a
+          // 30 mm plate would bury its back half in the wall. The arm's rear cap
+          // starts INSIDE the plate (z = −8, overlapping) — an abutting cap
+          // would share the plate's front plane (the coincident-face gotcha) and
+          // hatch under flat toon shading.
+          const armY = -PLATE_H / 2 + 18;             // inside the plate vertically
+          const armBackZ = -8;                        // buried in the plate
+          const globeZ = -(globeR + 12);              // back of the ball clears +15 by 27
+          const armLen = armBackZ - globeZ;
+          // Globes span [-usable/2, +usable/2]; one centred globe when count = 1.
+          const usable = plateW - 2 * (globeR + 30);
+          for (let i = 0; i < count; i++) {
+            const gx = count === 1 ? 0 : (i / (count - 1) - 0.5) * usable;
+            const arm = new THREE.Mesh(
+              new THREE.CylinderGeometry(globeR * 0.24, globeR * 0.24, armLen, 12), plateMat);
+            arm.rotation.x = Math.PI / 2;             // lie the arm along local ±Z
+            arm.position.set(gx, armY, (armBackZ + globeZ) / 2);
+            arm.userData = ud;
+            g.add(arm);
+            const globe = new THREE.Mesh(new THREE.SphereGeometry(globeR, 18, 14), globeMat);
+            globe.position.set(gx, armY - globeR * 0.55, globeZ);   // hangs below the arm end
+            globe.userData = { ...ud, vanityGlobe: true };
+            g.add(globe);
+          }
+        };
         switch (kind) {
           case 'spot': {
             // Cylindrical housing with an emissive lens at the mouth + a
@@ -20604,8 +20955,19 @@ export class ThreeDRenderer {
                 }));
               ember.rotation.x = -Math.PI / 2;
               ember.position.y = 66;
-              ember.userData.outlineSkip = true;
-              ember.userData.firepitEmber = true;
+              // ON-only meshes carry the click `ud` too (defence in depth,
+              // 2026-08-09). The fire is the TALLEST thing here — flames reach
+              // ~900 mm over the 260 mm rim and the pitHit box is only RIM_H
+              // tall — so a click on the fire meets no other tagged geometry
+              // along the ray. It resolves today only because the outer body
+              // Group carries `ud` as a backstop (see `body.userData = ud`);
+              // tagging the meshes directly keeps the fire self-describing and
+              // one hop from the walker. NB this was investigated as the cause
+              // of "can turn a firepit on but cannot turn it off" and is NOT it
+              // — a raycast probe resolved flame clicks to the light both
+              // before and after. See the note at the avatar-interaction
+              // `wantOn` gate for the real mechanism.
+              ember.userData = { ...ud, outlineSkip: true, firepitEmber: true };
               g.add(ember);
               // Flames: emissive cones breathing / swaying on slow sines (the
               // fireplace flame idiom), clustered over the log pile.
@@ -20627,7 +20989,7 @@ export class ThreeDRenderer {
                   }));
                 flame.position.set(fl.ox + sway * 0.4, 150 + h3 / 2, fl.oz + sway * 0.25);
                 flame.rotation.z = sway * 0.0012;
-                flame.userData.firepitFlame = true;
+                flame.userData = { ...ud, firepitFlame: true };
                 g.add(flame);
               }
               // Hot core.
@@ -20639,7 +21001,7 @@ export class ThreeDRenderer {
                   transparent: true, opacity: 0.95, depthWrite: false,
                 }));
               core.position.set(0, 130 + coreH / 2, 0);
-              core.userData.firepitFlame = true;
+              core.userData = { ...ud, firepitFlame: true };
               g.add(core);
             }
             // Generous invisible click target over the whole basin (the 400 mm
@@ -21119,6 +21481,70 @@ export class ThreeDRenderer {
             }
             break;
           }
+          case 'vanity_bar': {
+            // Classic 3-globe bathroom vanity bar over a mirror.
+            addVanityBar(600, 55, 3);
+            break;
+          }
+          case 'vanity_hollywood': {
+            // Marquee strip: longer bar, five smaller globes.
+            addVanityBar(900, 40, 5);
+            break;
+          }
+          case 'mirror_light': {
+            // Backlit LED mirror: a rounded-rect mirror panel with a glowing
+            // perimeter rim BEHIND it (toward the wall, local +Z). The rim is
+            // deliberately larger AND its z-span OVERLAPS the panel's rather
+            // than abutting it — two coplanar faces would hatch under flat toon
+            // shading (the coincident-face gotcha), and the halo has to spill
+            // past the panel edge to read as backlight anyway. The mirror face
+            // is a cool flat toon grey: there are no reflections in this
+            // renderer, so "lit mirror" reads as dim face + bright rim.
+            const MW = 600, MH = 800, PANEL_D = 24, RIM_D = 22, RIM_OUT = 45;
+            const roundedRect = (w: number, h: number, rad: number) => {
+              const s = new THREE.Shape();
+              const x0 = -w / 2, y0 = -h / 2;
+              s.moveTo(x0 + rad, y0);
+              s.lineTo(x0 + w - rad, y0);
+              s.quadraticCurveTo(x0 + w, y0, x0 + w, y0 + rad);
+              s.lineTo(x0 + w, y0 + h - rad);
+              s.quadraticCurveTo(x0 + w, y0 + h, x0 + w - rad, y0 + h);
+              s.lineTo(x0 + rad, y0 + h);
+              s.quadraticCurveTo(x0, y0 + h, x0, y0 + h - rad);
+              s.lineTo(x0, y0 + rad);
+              s.quadraticCurveTo(x0, y0, x0 + rad, y0);
+              return s;
+            };
+            const slab = (w: number, h: number, rad: number, depth: number, zc: number) => {
+              const geo = new THREE.ExtrudeGeometry(roundedRect(w, h, rad),
+                { depth, bevelEnabled: false, curveSegments: 8 });
+              geo.translate(0, 0, zc - depth / 2);   // extrudes 0..depth → centre on zc
+              return geo;
+            };
+            // Rim BACK face lands on the wall face (+VANITY_PLATE_DEPTH/2 = 15);
+            // its FRONT face (−7) sits INSIDE the panel's span (±12) — overlap,
+            // never a shared plane.
+            const rimZC = VANITY_PLATE_DEPTH_MM / 2 - RIM_D / 2;   // +4
+            const rim = new THREE.Mesh(
+              slab(MW + 2 * RIM_OUT, MH + 2 * RIM_OUT, 70, RIM_D, rimZC),
+              this._mat({
+                color: isOn ? color.getHex() : 0x2f3338,
+                emissive: isOn ? color.getHex() : 0x14171a,
+                emissiveIntensity: isOn ? (0.6 + 1.1 * (bri / 255)) * intensity * flickerMul : 0.06,
+                metalness: 0.1, roughness: 0.6,
+              }));
+            rim.userData = { ...ud, mirrorRim: true };
+            g.add(rim);
+            const panel = new THREE.Mesh(
+              slab(MW, MH, 46, PANEL_D, 0),
+              this._mat({
+                color: 0xb9c2cb, metalness: 0.5, roughness: 0.25,
+                emissive: 0x000000, emissiveIntensity: 0,   // the FACE never lights; the rim does
+              }));
+            panel.userData = { ...ud, mirrorPanel: true };
+            g.add(panel);
+            break;
+          }
           case 'inground': {
             // Recessed in-ground uplight: a flush trim ring + emissive lens disc
             // at grade (no body above ground), beaming UP. When ON: a translucent
@@ -21351,10 +21777,12 @@ export class ThreeDRenderer {
         // Skip floor pool for sconce (wall), plain fan (no light), exhaust fans
         // (ceiling/wall extractors — they move air, not light), and under-cabinet
         // strips (their wash lands on the counter below via the point light, not
-        // the floor). Heat lamps KEEP the pool (a red-tinted heat pool).
+        // the floor), and the bathroom vanity kinds (bar / Hollywood strip /
+        // backlit mirror — they light the person at the mirror, not the floor).
+        // Heat lamps KEEP the pool (a red-tinted heat pool).
         if (kind !== 'sconce' && kind !== 'fan' && kind !== 'under_cabinet' && kind !== 'wall_sconce' &&
             kind !== 'exhaust' && kind !== 'exhaust_wall' && kind !== 'exhaust_light' &&
-            kind !== 'inground' && kind !== 'ground_spot') {
+            kind !== 'inground' && kind !== 'ground_spot' && !isVanityLightKind(kind)) {
           // Step lights emit from one face only → a HALF-disc pool bulging
           // toward the front, its flat diameter lying along the wall line
           // (centered on the fixture). After rotation.x=-π/2 a CircleGeometry
@@ -21868,6 +22296,14 @@ export class ThreeDRenderer {
           if (Math.hypot(it.x - ai.anchorX, it.y - ai.anchorY) > 8000) return false;
           if (this._regionOfWorld(it.x, it.y) !== region) return false; // reachable region
           if (!inLoop(it.x, it.y)) return false;                        // home-room confinement
+          // NB (2026-08-09) this is the mechanism behind "I can turn a firepit
+          // ON but cannot turn it OFF": after dark `wantOn` is true, so an
+          // UNBOUND light the user just switched off is exactly what a rig
+          // qualifies to walk over and switch back on (~90 s per item). It
+          // applies to every unbound light; a big outdoor fire pit is just
+          // where it gets noticed. Working as designed — the escape hatch is
+          // Settings ▸ Display "Avatars use unbound devices"
+          // (Store.avatarInteractions) or binding the fixture to an entity.
           if (it.ctrl === 'light' && it.on === wantOn) return false;    // light already matches the hour
           return true;
         });
@@ -23686,6 +24122,10 @@ export class ThreeDRenderer {
     this._advanceShowers(targets, entityOn, frameDt);
     this._advanceToilets(entityOn, frameDt);
 
+    // ── Retractable ceiling projection screens: ease each panel toward its
+    // build-resolved drop target (1 = in use / extended, 0 = rolled up).
+    this._advanceScreenDrops(frameDt);
+
     // ── Swing seats (furniture-polish): pendulum each occupied swing (a rig
     // claims its SitSpot, sit > 0.5) ±~15° at ~0.4 Hz, eased in/out; publishes
     // the seat displacement into _swingOffset so the seated rig rides it.
@@ -23788,6 +24228,32 @@ export class ThreeDRenderer {
       const next = cur + ((openTarget ? 1 : 0) - cur) * alpha;
       this._applianceDoorBlend[d.fuId] = next;
       d.pivot.rotation[d.axis] = d.openAngle * next;
+    }
+  }
+
+  // Per-frame retractable-screen drop. Each registered ceiling screen eases a
+  // per-fixture-id blend (τ = _SCREEN_DROP_TAU) toward its build-resolved target
+  // (1 while the piece reads "in use" — on/playing/paused — else 0 = rolled up
+  // into the cassette) and scales the panel pivot group from the cassette
+  // downward. Blend lives in _screenDrop keyed by fixture id so it survives
+  // _keyFloor rebuilds (the build re-applies it — no pop). Zero allocation.
+  private _advanceScreenDrops(dt: number): void {
+    if (!this._screens.length) return;
+    const alpha = 1 - Math.exp(-dt / this._SCREEN_DROP_TAU);
+    for (const sc of this._screens) {
+      const cur = this._screenDrop[sc.fuId] ?? 0;
+      const next = cur + (sc.target - cur) * alpha;
+      this._screenDrop[sc.fuId] = next;
+      // A zero Y scale collapses the matrix (degenerate normals); clamp and hide.
+      sc.drop.scale.y = Math.max(1e-3, next);
+      sc.drop.visible = next > 0.02;
+      // Any news/weather surface plane on this screen rides the rolling panel.
+      const surf = this._tvScreens[sc.fuId];
+      if (surf?.drop) {
+        surf.mesh.scale.y = surf.drop.baseScaleY * Math.max(1e-3, next);
+        surf.mesh.position.y = surf.drop.originY - surf.drop.faceOffY * next;
+        surf.mesh.visible = next > 0.02;
+      }
     }
   }
 

@@ -1418,6 +1418,194 @@
       }
     }
 
+    // ══ (f) WEDGED ON THE WAY HOME: docked-state ground-truth relocation ══════
+    // User-reported (2026-08-09): "the mower docking still is not aligned" — the
+    // body stopped askew at a wall corner ~1.5 m short of its dock while the
+    // entity read `docked`. The dock sits OUTSIDE every building loop, just north
+    // of a long east-west wall, and the mower is south of it: the straight line
+    // to the dock meets that wall metres from either end, which is precisely the
+    // greedy deflection steerer's deadlock class. No room, no door ⇒ the doorway
+    // router (Prong A) cannot help, and the GPS relocation (Prong B) lives in the
+    // GPS branch, which `docked` never takes — a fix is only fetched for
+    // mowing/returning. So a docked mower had no backstop at all.
+    //
+    // It needs no GPS fix to have one: a BOUND mower whose entity says `docked`
+    // is PHYSICALLY ON ITS DOCK. That state IS the ground truth, so a drawn body
+    // that stops moving short of the dock is a display error and snaps home,
+    // parked heading included — which is what finally ALIGNS it.
+    {
+      const { buildingWallLoops, MOWER_CONTAINMENT } = await import('./geometry.mod.js');
+      const relocSteps = MOWER_CONTAINMENT.stuckRelocateS / 0.05;      // 160 @ 20 Hz
+      // A relocation is a SNAP and is trivially separable from driving: a docked
+      // drive caps at maxSpeedMm × dt = 21 mm/step.
+      const JUMP_MM = 200;
+      const DOCK_ROT = 90;                       // parked heading 0 rad (due east)
+
+      const wall = (x0, y0, x1, y1) => ({ points: [{ x: x0, y: y0 }, { x: x1, y: y1 }] });
+      // The reported geometry. A long east-west house wall (2000..14000 at
+      // y=6000) with the dock 400 mm NORTH of it, and the mower on the deck
+      // SOUTH of it, in the slot between a house wing (x=7400) and a fence
+      // (x=8600). The straight line home meets the long wall 6 m from its west
+      // end — nowhere near an end to round — and the slot is too narrow for the
+      // 500 mm turning circle to swing out of, so the steerer noses into the
+      // corner, brakes, and works the wheel at the min-speed yaw rate: STOPPED.
+      const WALLS = [wall(2000, 6000, 14000, 6000),
+                     wall(7400, 6000, 7400, 3000),
+                     wall(8600, 6000, 8600, 3000)];
+      const DOCK = { x: 8000, y: 6400 };
+      const WEDGE = { x: 8000, y: 5300, h: Math.PI / 2 };   // in the slot, facing the wall
+      const CLEAR = { x: 9600, y: 6600, h: Math.PI };       // north side, open run home
+      // Step index of the uninterrupted run's relocation, shared with (f5)
+      // below: it is what makes the timer-isolation pin a real discriminator.
+      let plainJumpAt = -1;
+
+      // `noReloc` reproduces the PRE-FIX controller exactly: the stuck fields are
+      // wiped after every step, so the timer can never reach the window.
+      const dockDrive = async (o) => {
+        const { Planner } = await import('./planner.mod.js?v=' + Date.now());
+        const p = new Planner();
+        const f = p.floor();
+        f.w = 16000; f.d = 12000;
+        f.walls = WALLS; f.doors = []; f.windows = [];
+        const r = { id: 'mw', kind: 'mower', x: DOCK.x, y: DOCK.y, rotation: DOCK_ROT,
+                    entity_id: o.bound === false ? undefined : 'lawn_mower.mw' };
+        f.robots = [r];
+        p.hass = { states: { 'lawn_mower.mw': { state: o.state ?? 'docked', attributes: {} } } };
+        p.stepRobots(0.05);
+        const rs = p.robotStates.mw;
+        const s = o.seed ?? WEDGE;
+        rs.x = s.x; rs.y = s.y; rs.heading = s.h; rs.speed = 0;
+        // Unbound mowers resolve `docked` from the demo phase; freeze the timer
+        // so the cycle cannot flip it to `run` mid-test.
+        rs.demoPhase = 'dock'; rs.demoTimer = 999999;
+        const t = { p, r, rs, jumps: 0, jumpAt: -1, arriveAt: -1, maxStuckT: 0, cross: 0 };
+        const step1 = () => {
+          const px = rs.x, py = rs.y;
+          p.stepRobots(0.05);
+          const d = Math.hypot(rs.x - px, rs.y - py);
+          if (d > JUMP_MM) { t.jumps++; if (t.jumpAt < 0) t.jumpAt = t.i; }
+          // Crossings are only meaningful for KINEMATIC steps — the relocation
+          // deliberately crosses whatever lies between (it is a redraw, not a
+          // drive), which is exactly why it is gated on being stuck.
+          else if (segCrossesSolidWall(WALLS, [], [], px, py, rs.x, rs.y)) t.cross++;
+          t.maxStuckT = Math.max(t.maxStuckT, rs.stuckT ?? 0);
+          if (t.arriveAt < 0 && Math.hypot(rs.x - DOCK.x, rs.y - DOCK.y) < MOWER_KINEMATICS.arriveMm)
+            t.arriveAt = t.i;
+          if (o.noReloc) { rs.stuckRefX = rs.x; rs.stuckRefY = rs.y; rs.stuckT = 0; }
+          t.i++;
+        };
+        t.i = 0; t.step1 = step1;
+        for (let k = 0; k < (o.steps ?? 600); k++) step1();
+        t.dHome = Math.hypot(rs.x - DOCK.x, rs.y - DOCK.y);
+        return t;
+      };
+
+      try {
+        // ── (f1) The fixture really is a deadlock ─────────────────────────────
+        ok('dock wedge: the dock is OUTSIDE every building loop (no router to help)',
+           buildingWallLoops(WALLS).length === 0 &&
+           segCrossesSolidWall(WALLS, [], [], WEDGE.x, WEDGE.y, DOCK.x, DOCK.y) === true,
+           'straight line home crosses the long wall 6 m from its west end');
+        const ctl = await dockDrive({ noReloc: true, steps: 600 });
+        ok('dock wedge NEGATIVE: pre-fix, it never reaches the dock in 30 s…',
+           ctl.arriveAt === -1 && ctl.jumps === 0,
+           `arriveAt=${ctl.arriveAt} dHome=${ctl.dHome.toFixed(0)}mm`);
+        ok('dock wedge NEGATIVE: …and crosses no wall while failing',
+           ctl.cross === 0, `crossings=${ctl.cross}`);
+
+        // ── (f2) Bound + `docked` ⇒ the body snaps home, aligned ──────────────
+        const t1 = await dockDrive({ steps: 600 });
+        plainJumpAt = t1.jumpAt;
+        ok('dock wedge: exactly ONE discontinuity — the relocation',
+           t1.jumps === 1, `jumps=${t1.jumps} at step ${t1.jumpAt}`);
+        ok('dock wedge: it does NOT fire before the window elapses',
+           t1.jumpAt >= relocSteps, `jumpAt=${t1.jumpAt} window=${relocSteps} steps`);
+        ok('dock wedge: …and fires once wedged (drive in, then one window)',
+           t1.jumpAt < 600, `jumpAt=${t1.jumpAt}`);
+        ok('dock wedge: it lands EXACTLY on the dock, stopped',
+           Math.abs(t1.rs.x - DOCK.x) < 1e-9 && Math.abs(t1.rs.y - DOCK.y) < 1e-9 &&
+           t1.rs.speed === 0,
+           `(${t1.rs.x},${t1.rs.y}) v=${t1.rs.speed}`);
+        ok('dock wedge: ALIGNED — the parked heading is applied outright',
+           near(t1.rs.heading, dockParkedHeading(DOCK_ROT), 1e-12),
+           `${t1.rs.heading} vs ${dockParkedHeading(DOCK_ROT)}`);
+        ok('dock wedge: no kinematic step ever crossed a wall',
+           t1.cross === 0, `crossings=${t1.cross}`);
+        ok('dock wedge: the accounting resets, so it fires once, not repeatedly',
+           (t1.rs.stuckT ?? 0) === 0 && t1.jumps === 1, `stuckT=${t1.rs.stuckT}`);
+
+        // ── (f3) UNBOUND docked never relocates ───────────────────────────────
+        // No entity ⇒ no ground truth ⇒ a synthetic body must never teleport
+        // (the humanoid synthetic-rig rule). It just stays wedged.
+        const t2 = await dockDrive({ bound: false, steps: 900 });
+        ok('unbound docked: a demo mower stays wedged — no snap, ever',
+           t2.jumps === 0 && t2.arriveAt === -1,
+           `jumps=${t2.jumps} dHome=${t2.dHome.toFixed(0)}mm`);
+        ok('unbound docked: the accounting stays cleared on that path',
+           t2.maxStuckT === 0 && t2.rs.stuckRefX === undefined,
+           `maxStuckT=${t2.maxStuckT}`);
+
+        // ── (f4) `returning` never relocates, even bound ──────────────────────
+        // A returning mower is mid-journey: its state asserts only "heading
+        // home", never where it IS, so there is nowhere honest to snap it to.
+        const t3 = await dockDrive({ state: 'returning', steps: 900 });
+        ok('returning: a bound mower mid-journey is never snapped',
+           t3.jumps === 0, `jumps=${t3.jumps} jumpAt=${t3.jumpAt}`);
+        ok('returning: its accounting stays cleared too',
+           t3.maxStuckT === 0 && t3.rs.stuckRefX === undefined,
+           `maxStuckT=${t3.maxStuckT}`);
+      } catch (e) {
+        ok('docked-wedge relocation tests threw', false, String(e && e.message || e));
+      }
+
+      try {
+        // ── (f5) TIMER ISOLATION: a stale timer never fires in another mode ────
+        // Wedge while `docked` until the timer is well into the window, flip to
+        // sim `mowing` for a single step, flip back. The accounting must be gone
+        // and a FULL fresh window must be required — otherwise a mode change
+        // could inherit another mode's countdown.
+        const iso = await dockDrive({ steps: 0 });
+        while ((iso.rs.stuckT ?? 0) < 6 && iso.i < 800) iso.step1();
+        const atFlip = iso.i, tAtFlip = iso.rs.stuckT ?? 0;
+        ok('timer isolation: the docked wedge really does arm the timer',
+           tAtFlip >= 6 && iso.jumps === 0, `stuckT=${tAtFlip.toFixed(2)}s after ${atFlip} steps`);
+        iso.p.hass.states['lawn_mower.mw'].state = 'mowing';
+        const mx = iso.rs.x, my = iso.rs.y;
+        iso.step1();
+        ok('timer isolation: ONE sim-mowing step wipes the accounting',
+           (iso.rs.stuckT ?? 0) === 0 && iso.rs.stuckRefX === undefined &&
+           Math.hypot(iso.rs.x - mx, iso.rs.y - my) < 25,
+           `stuckT=${iso.rs.stuckT} ref=${iso.rs.stuckRefX}`);
+        iso.p.hass.states['lawn_mower.mw'].state = 'docked';
+        const before = iso.jumps;
+        for (let k = 0; k < 200; k++) iso.step1();       // 10 s > the 8 s window
+        ok('timer isolation: back on `docked` it starts from zero, not from 6 s',
+           iso.jumps === before,
+           `an uninterrupted run fires at step ${plainJumpAt}; 200 steps past a flip at ${atFlip} → no snap`);
+        ok('timer isolation: the discriminator is real (the un-flipped run WOULD have fired)',
+           plainJumpAt >= 0 && plainJumpAt - atFlip < 200,
+           `jumpAt=${plainJumpAt} flip=${atFlip}`);
+      } catch (e) {
+        ok('docked-wedge timer-isolation tests threw', false, String(e && e.message || e));
+      }
+
+      try {
+        // ── (f6) CLEAN APPROACH NON-REGRESSION ────────────────────────────────
+        // Nothing between the mower and the dock: it drives home kinematically,
+        // and the relocation must stay entirely out of the way.
+        const t5 = await dockDrive({ seed: CLEAR, steps: 600 });
+        ok('clean approach: it still drives home on its own',
+           t5.arriveAt >= 0, `arriveAt=${t5.arriveAt}`);
+        ok('clean approach: continuously — no snap anywhere in the run',
+           t5.jumps === 0 && t5.cross === 0, `jumps=${t5.jumps} crossings=${t5.cross}`);
+        ok('clean approach: the timer never reaches the window',
+           t5.maxStuckT < MOWER_CONTAINMENT.stuckRelocateS,
+           `maxStuckT=${t5.maxStuckT.toFixed(2)}s`);
+      } catch (e) {
+        ok('docked clean-approach tests threw', false, String(e && e.message || e));
+      }
+    }
+
     // ── Robots view LAYER + position readout + manual alignment nudges ───────
     // Three related surfaces: `Layers2D.robots` (split off `sensors`, absent =
     // ON), the `RobotFixture.showPosInfo` calibration readout resolved by

@@ -6,7 +6,7 @@ import { customElement } from './define.js';
 // startup path never downloads it.
 import type { ThreeDRenderer, ZoneWorld, HaloWorld, TargetWorld, ActivityContext,
   InteractiveItem, GpsPinWorld, GpsLandmarkWorld, GeoEventWorld, WeatherFxState, VacMapEntry } from '../three-renderer.js';
-import { localToWorld, transformVerts, pointInPolygon, sensorColor, hexToInt, motionColor, lightIconKind, isFirepitKind, furnitureKind, resolveFurnitureDef, furnitureCat, isBinKind, isSpeakerKind, isWetBathKind, isVehicleKind, isClimateApplianceKind, isMechanicalApplianceKind, mechanicalBindDomains, isRackKind, rackHealth, isBladedFanKind, isStairsKind, alarmStateColor, valveOpenness, sprinklerRunning, sprinklerHeadKind, sprinklerArcDeg, sprinklerRadius, sprinklerRotation, flagpoleHoistFraction, doorSpanCenter, isDroopPlant, plantThirsty, PLANT_MOISTURE_DEFAULT_THRESHOLD, hasFunctionalFront, frontVectorPlan } from '../geometry.js';
+import { localToWorld, transformVerts, pointInPolygon, sensorColor, hexToInt, motionColor, lightIconKind, isFirepitKind, furnitureKind, resolveFurnitureDef, furnitureCat, isBinKind, isSpeakerKind, isScreenKind, isWetBathKind, isVehicleKind, isClimateApplianceKind, isMechanicalApplianceKind, mechanicalBindDomains, isRackKind, rackHealth, isBladedFanKind, isStairsKind, alarmStateColor, valveOpenness, sprinklerRunning, sprinklerHeadKind, sprinklerArcDeg, sprinklerRadius, sprinklerRotation, flagpoleHoistFraction, doorSpanCenter, isDroopPlant, plantThirsty, PLANT_MOISTURE_DEFAULT_THRESHOLD, hasFunctionalFront, frontVectorPlan } from '../geometry.js';
 import { compass8, fmtDistanceM } from '../geo.js';
 import { resolveNorth, markerScaleOf } from '../compass.js';
 import { parseNowPlaying, isMediaPlayerId } from '../geometry.js';
@@ -1249,7 +1249,10 @@ export class ThreeView extends LitElement {
         // itself is per-frame). Unbound plants with no demo toggle never qualify.
         const isPlant = isDroopPlant(fu, p.store.customObjects) &&
           (!!fu.moistureEntity || fu.plantDemoThirsty !== undefined);
-        if (furnitureCat(def) !== 'appliance' && !isBinKind(fu.kind) && !isSpeakerKind(fu.kind) && !isWetBathKind(fu.kind) && !hasEvMail && !isPlant && !isClimateApplianceKind(fu.kind)) return '';
+        // Projection screens are cat 'theater', not appliance, but their bound
+        // state DRIVES the 3D build (the ceiling panel's retract target), so
+        // they fold into the hash exactly like speakers (isSpeakerKind precedent).
+        if (furnitureCat(def) !== 'appliance' && !isBinKind(fu.kind) && !isSpeakerKind(fu.kind) && !isScreenKind(fu.kind) && !isWetBathKind(fu.kind) && !hasEvMail && !isPlant && !isClimateApplianceKind(fu.kind)) return '';
         const on = p.effectiveState(fu)?.state ?? '-';
         const door = fu.doorEntity ? stOf(fu.doorEntity) : '';
         // Per-device power glow (#8): bucket the live power reading to 50 W so the
@@ -1270,6 +1273,8 @@ export class ThreeView extends LitElement {
         // Screen bias light (home-theater arc): tv/wall_tv glow behind the screen,
         // built inside updateFloor. Fold the config + bound-entity (or AUTO) on
         // state so the halo rebuilds on a flip. AUTO mode already tracks `on`.
+        // Deliberately kept literal (NOT isScreenKind): projection screens have
+        // no backlight to bias — see the note at SCREEN_SURFACE_KINDS.
         let bias = '';
         if ((fu.kind === 'tv' || fu.kind === 'wall_tv') && fu.biasLight) {
           const be = fu.biasLight.entityId;
@@ -1658,7 +1663,7 @@ export class ThreeView extends LitElement {
       // Now-playing cards (#11): sprites above media_player-bound furniture that
       // is playing/paused. Own dirty key = configRev + per-media (state|title|
       // picture) hash + the furniture/appliance layer flags (per-piece skipping).
-      // TV screen surfaces (calendar-tv feature): for each tv/wall_tv with a
+      // TV screen surfaces (calendar-tv feature): for each SCREEN piece with a
       // news/weather screenMode, resolve the content (now-playing precedence:
       // playing/paused media hides the surface) + gather its headlines. Built in
       // the SAME now-playing group/key (research doc §4.2). The ticker SCROLL is
@@ -1666,7 +1671,7 @@ export class ThreeView extends LitElement {
       const tvWn = p.weatherNow;
       const tvScreens: Array<{ id: string; content: 'news' | 'weather'; headlines?: string[] }> = [];
       for (const fu of f.furniture) {
-        if (fu.kind !== 'tv' && fu.kind !== 'wall_tv') continue;
+        if (!isScreenKind(fu.kind)) continue;
         const mode = fu.screenMode ?? 'auto';
         if (mode !== 'news' && mode !== 'weather') continue;
         const media = isMediaPlayerId(fu.entity_id) ? parseNowPlaying(states[fu.entity_id!]) : null;
@@ -2553,15 +2558,25 @@ export class ThreeView extends LitElement {
       // avatarToggleItem); bound items feed the status-contemplation bubble tier.
       // Same set toggleItem covers — lights (incl. fireplaces, minus read-only
       // logic lights), switches, and appliance-category / TV furniture (media).
+      // USER-TOGGLE IMMUNITY: an item the user flipped in the last few minutes is
+      // omitted entirely (p.avatarMayActuate, keyed by the RAW id — the L/S/F
+      // prefix is a renderer-side namespace, not the fixture id), so a roamer can
+      // never immediately undo a deliberate toggle. Accepted consequence: an
+      // excluded BOUND item also skips the status-contemplation bubble tier for
+      // the window — harmless (avatars just don't remark on it). Self-healing:
+      // this list is rebuilt every tick, so the item returns when the window
+      // lapses, with no event or invalidation needed.
       const interactive: InteractiveItem[] = [];
       for (const l of f.lights) {
         if (l.logic?.entityId) continue;   // computed display — read-only, never actuated
+        if (!p.avatarMayActuate(l.id)) continue;
         const st = p.effectiveState(l);
         interactive.push({ id: 'L' + l.id, x: l.x, y: l.y, ctrl: 'light',
           fkind: lightIconKind(l) === 'fireplace' ? 'fireplace' : undefined,
           bound: l.entity_id != null, on: st?.state === 'on' });
       }
       for (const sw of f.switches) {
+        if (!p.avatarMayActuate(sw.id)) continue;
         const st = p.effectiveState(sw);
         interactive.push({ id: 'S' + sw.id, x: sw.x, y: sw.y, ctrl: 'switch',
           bound: sw.entity_id != null, on: st?.state === 'on' });
@@ -2569,6 +2584,7 @@ export class ThreeView extends LitElement {
       for (const fu of f.furniture) {
         const def = resolveFurnitureDef(fu, p.store.customObjects);
         if (furnitureCat(def) !== 'appliance') continue;   // fridge/stove/dishwasher/washer/dryer/microwave/tv
+        if (!p.avatarMayActuate(fu.id)) continue;
         // Oriented pieces carry their functional-front normal so the AI
         // controller walks up to the FRONT and only reaches from there (a fridge
         // must not be opened from behind). Symmetric kinds leave it undefined.

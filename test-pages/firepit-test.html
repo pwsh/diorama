@@ -212,6 +212,132 @@
        sideLen.join(','));
   }
 
+  // ═══ 2b. Click union: a LIT pit must be clickable ON THE FIRE ═════════════
+  // Investigated 2026-08-09 for "I can turn a firepit ON but cannot turn it
+  // OFF". The ON-only ember / flames / core used to carry only their test
+  // hooks, and the fire is the tallest geometry here (flames ~900 mm over the
+  // 260 mm rim; the pitHit box is only RIM_H tall), so a click on the fire
+  // meets no OTHER tagged mesh along the ray. It still resolved, because the
+  // outer body Group carries `ud` as a backstop — a raycast probe returned
+  // light:fp both before and after, so this was NOT the reported cause (that
+  // is the avatar-interaction `wantOn` gate re-lighting unbound lights after
+  // dark). The meshes are tagged directly now as defence in depth, and these
+  // assertions pin the whole-fixture invariant either way.
+  // Mirror of _raycastFixture's acceptance: first ancestor-or-self whose
+  // userData.kind is in the fixture-click union.
+  {
+    const CLICK_KINDS = new Set(mod.FIXTURE_CLICK_KIND_LIST);
+    const resolveClick = (o) => {
+      let n = o;
+      while (n) {
+        const ud = n.userData;
+        if (ud && CLICK_KINDS.has(ud.kind)) return { kind: ud.kind, fixtureId: String(ud.fixtureId) };
+        n = n.parent;
+      }
+      return null;
+    };
+    const subtreeMeshes = (root) => { const out = []; root.traverse(o => { if (o.isMesh) out.push(o); }); return out; };
+    // Exact top of a mesh in group-local coords: transform the geometry's 8
+    // bbox corners by the mesh matrix and take max y. (Parameter-based math
+    // lies here — the crossed logs are cylinders ROTATED flat along X, so
+    // `height/2` would read as vertical reach.) Matrix4.elements is
+    // column-major, so the y row is indices 1/5/9/13.
+    const topY = (m) => {
+      m.updateMatrix();
+      const g2 = m.geometry;
+      if (!g2.boundingBox) g2.computeBoundingBox();
+      const bb = g2.boundingBox, e = m.matrix.elements;
+      let top = -Infinity;
+      for (const x of [bb.min.x, bb.max.x])
+        for (const y of [bb.min.y, bb.max.y])
+          for (const z of [bb.min.z, bb.max.z])
+            top = Math.max(top, e[1] * x + e[5] * y + e[9] * z + e[13]);
+      return top;
+    };
+    const RIM_H = 260;
+
+    for (const kind of KINDS) {
+      const on = build(mkPit(kind), ON);
+      const all = subtreeMeshes(on.body);
+      const orphans = all.filter(m => resolveClick(m) === null);
+      ok(`C1 ${kind} ON: every mesh in the fixture subtree resolves to the click union`,
+         orphans.length === 0 && all.length >= 12,
+         `${all.length} meshes, ${orphans.length} orphan(s): ` +
+         orphans.map(m => m.geometry.type).join(','));
+
+      // The fire itself — the meshes the user actually clicks.
+      const fire = all.filter(m => m.userData.firepitFlame || m.userData.firepitEmber);
+      ok(`C2 ${kind} ON: flames + ember + core all resolve to THIS light`,
+         fire.length >= 6 && fire.every(m => {
+           const hit = resolveClick(m);
+           return hit && hit.kind === 'light' && hit.fixtureId === 'fp';
+         }), fire.length);
+
+      // The hardening itself: a hook-tagged mesh must ALSO carry the click tag,
+      // so the fire never depends on the group backstop alone. (Negative
+      // control: reverting the merge in the built chunk fails exactly this
+      // assertion, and only this one — C1/C2 still pass off the body Group.)
+      ok(`C3 ${kind} ON: every firepitFlame/firepitEmber mesh carries userData.kind='light'`,
+         fire.length >= 6 && fire.every(m => m.userData.kind === 'light' &&
+                                             String(m.userData.fixtureId) === 'fp'),
+         fire.map(m => String(m.userData.kind)).join(','));
+
+      // …and why it matters: the fire really does overshoot every OTHER tagged
+      // mesh, so a click up there has nothing else on the ray to fall back to.
+      const preTagged = all.filter(m => !m.userData.firepitFlame && !m.userData.firepitEmber);
+      const fireTop = Math.max(...fire.map(topY));
+      const oldTop = Math.max(...preTagged.map(topY));
+      ok(`C4 ${kind}: the fire towers over the previously-tagged geometry`,
+         fireTop > oldTop + 300 && oldTop <= RIM_H + 120,
+         `fire top ${fireTop.toFixed(0)} vs old top ${oldTop.toFixed(0)}`);
+
+      // OFF is unchanged: masonry / basin / logs / pitHit were always tagged.
+      const off = build(mkPit(kind), OFF);
+      const offAll = subtreeMeshes(off.body);
+      ok(`C5 ${kind} OFF: every mesh still resolves (unchanged)`,
+         offAll.length >= 6 && offAll.every(m => {
+           const hit = resolveClick(m);
+           return hit && hit.kind === 'light' && hit.fixtureId === 'fp';
+         }), offAll.length);
+    }
+
+    // Sibling audit (2026-08-09): the `fireplace` kind leaves its ON-only flames
+    // and hot core untagged too, but they are FULLY ENCLOSED by its tagged
+    // full-carcass invisible hit box — so every ray that reaches a flame also
+    // reaches the hit box and the click resolves. That containment is what makes
+    // it safe; pin it so a taller flame can't silently reintroduce the firepit
+    // bug here. (`heatlamp` adds no ON-only geometry at all — its housing and
+    // domes are tagged in both states.)
+    {
+      const fp = { id: 'fp', x: FW / 2, y: FD / 2, entity_id: 'light.pit',
+                   iconKind: 'fireplace', label: '' };
+      const on = build(fp, ON);
+      const hitBox = on.meshes.find(m => m.material.opacity === 0 && m.userData.kind === 'light');
+      const hp = hitBox?.geometry.parameters;
+      const cones = on.meshes.filter(m => m.geometry.type === 'ConeGeometry' && !m.userData.kind);
+      const inside = (m) => {
+        const pm = m.geometry.parameters;
+        return Math.abs(m.position.x) + pm.radius <= hp.width / 2 + 1e-6 &&
+               Math.abs(m.position.z) + pm.radius <= hp.depth / 2 + 1e-6 &&
+               m.position.y - pm.height / 2 >= hitBox.position.y - hp.height / 2 - 1e-6 &&
+               m.position.y + pm.height / 2 <= hitBox.position.y + hp.height / 2 + 1e-6;
+      };
+      ok('C6 fireplace ON builds untagged flame cones (the audited shape)',
+         !!hitBox && cones.length >= 4, `hit=${!!hitBox} cones=${cones.length}`);
+      ok('C7 …but every one is enclosed by the tagged hit box, so clicks resolve',
+         !!hp && cones.length > 0 && cones.every(inside),
+         cones.map(m => `${m.position.y.toFixed(0)}±${(m.geometry.parameters.height / 2).toFixed(0)}`).join(' '));
+
+      const hl = { id: 'fp', x: FW / 2, y: FD / 2, entity_id: 'light.pit',
+                   iconKind: 'heatlamp', label: '' };
+      const hlOn = build(hl, ON), hlOff = build(hl, OFF);
+      const tagged = (b) => b.meshes.length > 0 && b.meshes.every(m => m.userData.kind === 'light');
+      ok('C8 heatlamp adds no ON-only geometry and stays fully tagged',
+         hlOn.meshes.length === hlOff.meshes.length && tagged(hlOn) && tagged(hlOff),
+         `${hlOn.meshes.length}/${hlOff.meshes.length}`);
+    }
+  }
+
   // ═══ 3. 2D plan: real Planner + the real drawAll / hitFixture ═════════════
   class FakeHa {
     constructor(seed) { this.map = new Map(); for (const [k, v] of Object.entries(seed || {})) this.map.set(k, JSON.parse(JSON.stringify(v))); this.states = {}; this._s = []; this._c = []; }

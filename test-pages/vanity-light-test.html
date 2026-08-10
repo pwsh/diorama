@@ -1,0 +1,435 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>vanity light test</title>
+<style>html,body{margin:0;background:#111;color:#ccc;font:12px sans-serif}#c{width:1280px;height:880px}</style>
+<div id="c"></div>
+<!--
+  Three new bathroom-vanity LightIconKinds: vanity_bar (3 globes),
+  vanity_hollywood (5 globes) and mirror_light (backlit LED mirror). All three
+  are WALL-PLANE kinds on the FLOODLIGHT pattern — flush wall-snap via
+  snapVanityToWall, front = local −Z, NO floor pool (they light the person at
+  the mirror, not the floor) — but unlike the fireplace family nothing is forced
+  warm: the bound entity's colour + brightness drive them. They are also the
+  first kinds to use LIGHT_KIND_HEIGHT_DEFAULTS (1950 / 1950 / 1700).
+
+  Pure helpers via geometry.mod.js; the 3D builds via the BUILT three-renderer
+  chunk; the 2D plan via ONE COMBINED canvas bundle (canvas-render and
+  canvas-hit must share a module instance — the door-kinds / flights-ui / firepit
+  precedent) driven by the real Planner.
+
+  Harness build (from the repo root; NEVER reuse stale bundles):
+    npm run build
+    H=/tmp/diorama-harness-vanity
+    rm -rf "$H"; mkdir -p "$H"; cp -r dist/* "$H"/
+    cp test-pages/vanity-light-test.html "$H"/
+    npx esbuild src/geometry.ts --bundle --format=esm --outfile="$H"/geometry.mod.js
+    T=$(mktemp -d); cp -r src/* "$T"/; cp tsconfig.json "$T"/
+    cp test-pages/fake-avatar-store.ts "$T"/avatar-store.ts
+    printf "export * from './canvas-render.js';\nexport * from './canvas-hit.js';\n" > "$T"/canvas2d-entry.ts
+    npx esbuild "$T"/planner.ts        --bundle --format=esm --outfile="$H"/planner.mod.js
+    npx esbuild "$T"/canvas2d-entry.ts --bundle --format=esm --outfile="$H"/canvas-render.mod.js
+  Run headless (serve over http — Chrome blocks dynamic module imports on file://):
+    (cd "$H" && python3 -m http.server 8951 &)
+    google-chrome --headless=new --disable-gpu --use-angle=swiftshader \
+      --enable-unsafe-swiftshader --run-all-compositor-stages-before-draw \
+      --window-size=1200,900 --virtual-time-budget=30000 --dump-dom \
+      "http://localhost:8951/vanity-light-test.html" | grep -o "<title>[^<]*"
+-->
+<script type="module">
+ try {
+  const V = '?v=' + Date.now();
+  const geo = await import('./geometry.mod.js' + V);
+  const mod = await import('./assets/three-renderer.js' + V);
+  const { Planner } = await import('./planner.mod.js' + V);
+  const C2D = await import('./canvas-render.mod.js' + V);
+  const { drawAll, computeView, mmToPx } = C2D;
+  const { isVanityLightKind, VANITY_LIGHT_KINDS, VANITY_PLATE_DEPTH_MM, snapVanityToWall,
+          snapFloodlightToWall, snapFireplaceToWall, snapSwitchToWall,
+          lightHeight, LIGHT_KIND_HEIGHT_DEFAULTS, LIGHT_DEFAULTS, lightIconKind } = geo;
+
+  const tests = [];
+  const ok = (name, cond, detail = '') => tests.push({ name, ok: !!cond, detail: String(detail) });
+  const near = (a, b, t = 1e-6) => Math.abs(a - b) <= t;
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  async function waitFor(cond, tries = 600) {
+    for (let i = 0; i < tries; i++) { if (cond()) return true; await sleep(4); }
+    return !!cond();
+  }
+  const KINDS = ['vanity_bar', 'vanity_hollywood', 'mirror_light'];
+  const HEIGHTS = { vanity_bar: 1950, vanity_hollywood: 1950, mirror_light: 1700 };
+  const GLOBES  = { vanity_bar: 3, vanity_hollywood: 5, mirror_light: 0 };
+
+  // ═══ 1. Pure membership + shared constants ════════════════════════════════
+  ok('P1 isVanityLightKind accepts all three vanity kinds',
+     KINDS.every(k => isVanityLightKind(k)));
+  ok('P2 isVanityLightKind rejects every other kind',
+     !isVanityLightKind('sconce') && !isVanityLightKind('wall_sconce') &&
+     !isVanityLightKind('flood') && !isVanityLightKind('bulb') &&
+     !isVanityLightKind('fireplace') && !isVanityLightKind('strip') &&
+     !isVanityLightKind(undefined) && !isVanityLightKind(''));
+  ok('P3 VANITY_LIGHT_KINDS holds exactly the three kinds',
+     VANITY_LIGHT_KINDS.size === 3 && KINDS.every(k => VANITY_LIGHT_KINDS.has(k)),
+     VANITY_LIGHT_KINDS.size);
+  ok('P4 VANITY_PLATE_DEPTH_MM is the shared 30 mm plate', VANITY_PLATE_DEPTH_MM === 30,
+     VANITY_PLATE_DEPTH_MM);
+  ok('P5 lightIconKind round-trips a vanity kind',
+     lightIconKind({ iconKind: 'mirror_light' }) === 'mirror_light');
+
+  // ── lightHeight: per-kind defaults, and EVERY other kind byte-identical ────
+  for (const k of KINDS) {
+    ok(`P6 ${k} default mount height is ${HEIGHTS[k]}`,
+       lightHeight({ iconKind: k }) === HEIGHTS[k], lightHeight({ iconKind: k }));
+    ok(`P7 ${k} explicit height still wins`,
+       lightHeight({ iconKind: k, height: 1234 }) === 1234 &&
+       lightHeight({ iconKind: k, height: 0 }) === 0,
+       lightHeight({ iconKind: k, height: 1234 }));
+  }
+  ok('P8 LIGHT_KIND_HEIGHT_DEFAULTS carries ONLY the three vanity rows',
+     Object.keys(LIGHT_KIND_HEIGHT_DEFAULTS).length === 3 &&
+     KINDS.every(k => LIGHT_KIND_HEIGHT_DEFAULTS[k] === HEIGHTS[k]),
+     Object.keys(LIGHT_KIND_HEIGHT_DEFAULTS).join(','));
+  {
+    // Every pre-existing kind must still resolve LIGHT_DEFAULTS.height. Hand
+    // list = the LightIconKind union minus the three new kinds (the guard for
+    // "the table has only these three entries" from the other direction).
+    const OTHERS = ['bulb', 'spot', 'pendant', 'sconce', 'strip', 'fireplace', 'lamp', 'bowl',
+      'tiered', 'round', 'recessed', 'jar', 'oval', 'fan', 'fan_light', 'string',
+      'under_cabinet', 'wall_sconce', 'step', 'flood', 'inground', 'ground_spot',
+      'heatlamp', 'exhaust', 'exhaust_wall', 'exhaust_light', 'firepit_round', 'firepit_square'];
+    const bad = OTHERS.filter(k => lightHeight({ iconKind: k }) !== LIGHT_DEFAULTS.height);
+    ok('P9 all 28 pre-existing kinds still default to LIGHT_DEFAULTS.height',
+       bad.length === 0 && LIGHT_DEFAULTS.height === 2500, bad.join(',') || '2500');
+    ok('P10 a kind-less light object still defaults to 2500 (widened param compat)',
+       lightHeight({}) === 2500 && lightHeight({ height: 900 }) === 900);
+  }
+
+  // ── snapVanityToWall: the floodlight matrix, at the 65 mm flush offset ─────
+  {
+    const HWALL = [{ points: [{ x: 0, y: 2000 }, { x: 6000, y: 2000 }], kind: 'full' }];
+    const VWALL = [{ points: [{ x: 2000, y: 0 }, { x: 2000, y: 6000 }], kind: 'full' }];
+    const OFF = 50 + VANITY_PLATE_DEPTH_MM / 2;   // WALL_HALF + depth/2 = 65
+    ok('S0 the flush offset is WALL_HALF + plate/2 = 65 (thinner than flood 70)', OFF === 65, OFF);
+
+    for (const k of KINDS) {
+      // Room side ABOVE the wall → back on the wall face, front (−Z) into the room.
+      const a = { x: 3000, y: 2150, rotation: 0, iconKind: k };
+      ok(`S1 ${k} snaps flush from the +Y side`,
+         snapVanityToWall(a, HWALL) === true && a.x === 3000 && a.y === 2000 + OFF &&
+         near(a.rotation, 180, 1e-9),
+         `${a.x},${a.y} rot=${a.rotation}`);
+      // Room side BELOW → mirrored offset + rotation 0.
+      const b = { x: 3000, y: 1850, rotation: 90, iconKind: k };
+      ok(`S2 ${k} snaps flush from the −Y side (rotation flips to 0)`,
+         snapVanityToWall(b, HWALL) === true && b.y === 2000 - OFF && near(b.rotation, 0, 1e-9),
+         `${b.x},${b.y} rot=${b.rotation}`);
+      // Vertical wall → rotation −90.
+      const c = { x: 2150, y: 3000, rotation: 0, iconKind: k };
+      ok(`S3 ${k} snaps flush to a vertical wall (rotation −90)`,
+         snapVanityToWall(c, VWALL) === true && c.x === 2000 + OFF && c.y === 3000 &&
+         near(c.rotation, -90, 1e-9),
+         `${c.x},${c.y} rot=${c.rotation}`);
+      // Out of range → untouched.
+      const d = { x: 3000, y: 2000 + 501, rotation: 7, iconKind: k };
+      ok(`S4 ${k} beyond 500 mm is a no-op`,
+         snapVanityToWall(d, HWALL) === false && d.y === 2501 && d.rotation === 7,
+         `${d.y}/${d.rotation}`);
+      // Invisible walls are not mounting surfaces.
+      const inv = [{ points: [{ x: 0, y: 2000 }, { x: 6000, y: 2000 }], kind: 'invisible' }];
+      const e = { x: 3000, y: 2150, rotation: 7, iconKind: k };
+      ok(`S5 ${k} skips an invisible wall`,
+         snapVanityToWall(e, inv) === false && e.y === 2150 && e.rotation === 7, `${e.y}`);
+    }
+    // Kind isolation, both directions.
+    for (const other of ['flood', 'sconce', 'bulb', 'fireplace', undefined]) {
+      const z = { x: 3000, y: 2150, rotation: 0, iconKind: other };
+      ok(`S6 snapVanityToWall ignores ${other ?? 'the default bulb'}`,
+         snapVanityToWall(z, HWALL) === false && z.y === 2150, `${z.y}`);
+    }
+    for (const k of KINDS) {
+      const z1 = { x: 3000, y: 2150, rotation: 0, iconKind: k };
+      const z2 = { x: 3000, y: 2150, rotation: 0, iconKind: k };
+      ok(`S7 the flood + fireplace snappers ignore ${k}`,
+         snapFloodlightToWall(z1, HWALL) === false && z1.y === 2150 &&
+         snapFireplaceToWall(z2, HWALL) === false && z2.y === 2150);
+    }
+    // Sanity: the wall really is in snap range for a kind that DOES snap.
+    ok('S8 control: the wall is within snap range',
+       snapSwitchToWall({ id: 's1', x: 3000, y: 2150, rotation: 0 }, [], HWALL, 500) === true);
+  }
+
+  // ═══ 2. 3D builds ═════════════════════════════════════════════════════════
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+  r.resize(1280, 880);
+  const FW = 6000, FD = 6000;
+  const floor3d = (lights) => ({
+    id: 'f1', name: 'T', w: FW, d: FD,
+    walls: [], furniture: [], lights, switches: [], sensors: [], motionSensors: [], envSensors: [],
+    doors: [], windows: [], rooms: [], groundAreas: [], voidAreas: [], pools: [],
+    bg: null, model3d: null, look3d: null,
+  });
+  const scene3d = { preset: 'night', floorColor: '#3a3f4a', floorTex: 'none', wallColor: '#7a8494' };
+  const mkL = (kind, over = {}) =>
+    ({ id: 'vl', x: FW / 2, y: FD / 2, entity_id: 'light.van', iconKind: kind, label: '', ...over });
+  const build = (light, state) => {
+    r.updateFloor(floor3d([light]), scene3d);
+    r.updateLightsSwitches([light], [], id => (id === 'light.van' ? state : null));
+    const kids = r._lightGroup.children;
+    const body = kids.find(c => c.type === 'Group');
+    const meshes = body ? body.children.filter(c => c.isMesh) : [];
+    return {
+      body, meshes, kids,
+      globes: meshes.filter(c => c.userData.vanityGlobe),
+      rim:    meshes.find(c => c.userData.mirrorRim),
+      panel:  meshes.find(c => c.userData.mirrorPanel),
+      pointLights: kids.filter(c => c.isPointLight),
+      pools: kids.filter(c => c.isMesh && c.geometry.type === 'CircleGeometry'),
+    };
+  };
+  const ON  = { state: 'on', attributes: { brightness: 255 } };
+  const OFF = { state: 'off', attributes: {} };
+
+  for (const kind of KINDS) {
+    const on = build(mkL(kind), ON);
+    const off = build(mkL(kind), OFF);
+    ok(`B1 ${kind} builds a body group`, !!on.body && on.meshes.length >= 2, on.meshes.length);
+    ok(`B2 ${kind} builds ${GLOBES[kind]} exposed globe(s)`,
+       on.globes.length === GLOBES[kind] && off.globes.length === GLOBES[kind],
+       `${on.globes.length}/${off.globes.length}`);
+
+    // THE headline behaviour: a vanity fixture lights the mirror, not the floor.
+    ok(`B3 ${kind} ON draws NO floor pool disc`, on.pools.length === 0, on.pools.length);
+    ok(`B4 ${kind} ON still casts a point light (it does emit)`,
+       on.pointLights.length === 1, on.pointLights.length);
+    ok(`B5 ${kind} OFF has no pool and no point light`,
+       off.pools.length === 0 && off.pointLights.length === 0,
+       `${off.pools.length}/${off.pointLights.length}`);
+
+    // Mount height comes from LIGHT_KIND_HEIGHT_DEFAULTS, not the 2500 ceiling.
+    ok(`B6 ${kind} body sits at its kind default height ${HEIGHTS[kind]}`,
+       near(on.body.position.y, HEIGHTS[kind]), on.body.position.y);
+    const custom = build(mkL(kind, { height: 1200 }), OFF);
+    ok(`B7 ${kind} honours an explicit Height`, near(custom.body.position.y, 1200),
+       custom.body.position.y);
+
+    // Wall-plane fixture: aimed by the rotation option, front = local −Z.
+    const rot = build(mkL(kind, { rotation: 90 }), OFF);
+    ok(`B8 ${kind} body yaw negates the screen-CW rotation`,
+       near(rot.body.rotation.y, -Math.PI / 2, 1e-9), rot.body.rotation.y);
+
+    // Click target: the outer group + every part carries the light userData, so
+    // the recursive raycast parent-walk lands on the fixture from any hit.
+    ok(`B9 ${kind} every part resolves to the light for click-toggle`,
+       on.body.userData.kind === 'light' && on.body.userData.fixtureId === 'vl' &&
+       on.meshes.every(m => m.userData.kind === 'light' && m.userData.fixtureId === 'vl'),
+       on.meshes.length);
+
+    // Deterministic geometry (no Math.random in a builder that can rerun).
+    const sig = (b) => b.meshes.map(m =>
+      `${m.geometry.type}:${m.position.x.toFixed(4)},${m.position.y.toFixed(4)},${m.position.z.toFixed(4)}`)
+      .join('|');
+    ok(`B10 ${kind} rebuild is geometrically identical`,
+       sig(build(mkL(kind), OFF)) === sig(build(mkL(kind), OFF)) && sig(off).length > 20);
+
+    // The whole plate/panel sits on the room side of the wall face at local
+    // +VANITY_PLATE_DEPTH/2 — i.e. nothing pokes further into the wall than the
+    // snap offset accounts for.
+    const maxZ = Math.max(...off.meshes.map(m => {
+      m.geometry.computeBoundingBox();
+      return m.geometry.boundingBox.max.z + m.position.z;
+    }));
+    ok(`B11 ${kind} nothing protrudes past the wall face (+15)`,
+       maxZ <= VANITY_PLATE_DEPTH_MM / 2 + 1e-6, maxZ.toFixed(3));
+  }
+
+  // ── ON vs OFF emissive (globes / rim) ─────────────────────────────────────
+  for (const kind of ['vanity_bar', 'vanity_hollywood']) {
+    const on = build(mkL(kind), ON), off = build(mkL(kind), OFF);
+    const eOn = on.globes[0].material.emissiveIntensity, eOff = off.globes[0].material.emissiveIntensity;
+    ok(`B12 ${kind} globes go emissive when ON`, eOn > 1 && eOff === 0, `${eOn} vs ${eOff}`);
+    // OFF globes stay VISIBLE unlit glass, not blacked out.
+    ok(`B13 ${kind} OFF globes remain visible glass`,
+       off.globes.every(g => g.material.transparent && g.material.opacity > 0.3),
+       off.globes[0].material.opacity);
+    // Brightness scales the emissive (unlike the forced-warm fire kinds).
+    const dim = build(mkL(kind), { state: 'on', attributes: { brightness: 20 } });
+    ok(`B14 ${kind} globe emissive scales with brightness`,
+       dim.globes[0].material.emissiveIntensity < eOn, dim.globes[0].material.emissiveIntensity);
+    // Nothing is forced warm — a blue bound light really renders blue.
+    const blue = build(mkL(kind), { state: 'on', attributes: { brightness: 255, rgb_color: [20, 40, 255] } });
+    const c = blue.globes[0].material.emissive;
+    ok(`B15 ${kind} respects the entity colour (NOT forced warm like a hearth)`,
+       c.b > 0.6 && c.b > c.r, `${c.r.toFixed(2)},${c.g.toFixed(2)},${c.b.toFixed(2)}`);
+    // Globes spread along the bar, all at the same height, below the plate.
+    const xs = on.globes.map(g => g.position.x).sort((a, b) => a - b);
+    ok(`B16 ${kind} globes are spread along the bar`,
+       new Set(xs.map(v => v.toFixed(2))).size === GLOBES[kind] && xs[xs.length - 1] - xs[0] > 200,
+       xs.map(v => v.toFixed(0)).join(','));
+    ok(`B17 ${kind} globes hang below the backplate`,
+       on.globes.every(g => g.position.y < -45), on.globes[0].position.y.toFixed(1));
+  }
+  ok('B18 the Hollywood strip is longer + finer-grained than the 3-globe bar', (() => {
+    const bar = build(mkL('vanity_bar'), OFF), hw = build(mkL('vanity_hollywood'), OFF);
+    const plate = (b) => {
+      const m = b.meshes.find(x => x.geometry.type === 'BoxGeometry');
+      return m ? m.geometry.parameters.width : 0;
+    };
+    const gr = (b) => b.globes[0].geometry.parameters.radius;
+    return plate(hw) > plate(bar) && gr(hw) < gr(bar) && hw.globes.length > bar.globes.length;
+  })());
+
+  // ── mirror_light: rim + panel, and NO coplanar faces between them ─────────
+  {
+    const on = build(mkL('mirror_light'), ON), off = build(mkL('mirror_light'), OFF);
+    ok('M1 mirror builds exactly one rim + one panel',
+       !!on.rim && !!on.panel && on.meshes.length === 2, on.meshes.length);
+    ok('M2 rim goes emissive when ON, stays dim (not black) when OFF',
+       on.rim.material.emissiveIntensity > 1 &&
+       off.rim.material.emissiveIntensity > 0 && off.rim.material.emissiveIntensity < 0.2,
+       `${on.rim.material.emissiveIntensity} vs ${off.rim.material.emissiveIntensity}`);
+    // "Never lights up" = BLACK emissive (a non-zero emissiveIntensity over a
+    // black emissive colour still emits nothing — assert the colour, which is
+    // the property that actually decides).
+    ok('M3 the mirror panel itself never lights up (dim face + bright rim)',
+       on.panel.material.emissive.getHex() === 0 && off.panel.material.emissive.getHex() === 0 &&
+       on.panel.material.emissiveIntensity === 0 && on.rim.material.emissive.getHex() !== 0,
+       `${on.panel.material.emissive.getHex()}/${on.rim.material.emissive.getHex()}`);
+    ok('M4 the panel is opaque toon (not a MeshBasicMaterial exemption)',
+       on.panel.material.type === 'MeshToonMaterial' && on.rim.material.type === 'MeshToonMaterial',
+       `${on.panel.material.type}/${on.rim.material.type}`);
+    // The halo must SPILL past the panel edge to read as backlight.
+    const bb = (m) => { m.geometry.computeBoundingBox(); return m.geometry.boundingBox; };
+    const pb = bb(on.panel), rb = bb(on.rim);
+    ok('M5 the rim frame is larger than the panel on both axes (halo spills)',
+       rb.max.x > pb.max.x + 20 && rb.max.y > pb.max.y + 20,
+       `${(rb.max.x - pb.max.x).toFixed(0)},${(rb.max.y - pb.max.y).toFixed(0)}`);
+    ok('M6 the panel is the pinned 600 × 800 mirror',
+       near(pb.max.x - pb.min.x, 600, 1e-3) && near(pb.max.y - pb.min.y, 800, 1e-3),
+       `${(pb.max.x - pb.min.x).toFixed(1)}×${(pb.max.y - pb.min.y).toFixed(1)}`);
+    // THE coincident-face assertion: no z face plane of the rim may coincide
+    // with one of the panel's — two coplanar faces hatch under flat toon
+    // shading (and their inverted-hull shells would z-fight too).
+    const pz = [pb.min.z + on.panel.position.z, pb.max.z + on.panel.position.z];
+    const rz = [rb.min.z + on.rim.position.z,   rb.max.z + on.rim.position.z];
+    let minGap = Infinity;
+    for (const a of pz) for (const b of rz) minGap = Math.min(minGap, Math.abs(a - b));
+    ok('M7 no rim/panel face plane is coincident (coincident-face gotcha)',
+       minGap > 1, `minGap=${minGap.toFixed(3)} panel=[${pz}] rim=[${rz}]`);
+    // …and they genuinely OVERLAP in z rather than merely abutting (an abutting
+    // pair would satisfy M7 only by a hair and would still read as a seam).
+    ok('M8 rim + panel z-spans overlap (rim front sits inside the panel)',
+       rz[0] < pz[1] && rz[1] > pz[0] && rz[1] > pz[1],
+       `panel=[${pz}] rim=[${rz}]`);
+  }
+
+  // ── Negative control: an ordinary bulb DOES pool on the floor ─────────────
+  {
+    const bulb = build(mkL('bulb'), ON);
+    ok('B19 negative control: a bulb still draws its floor pool',
+       bulb.pools.length === 1 && bulb.pointLights.length === 1,
+       `${bulb.pools.length}/${bulb.pointLights.length}`);
+    ok('B20 negative control: a bulb still mounts at the 2500 ceiling default',
+       near(bulb.body.position.y, 2500), bulb.body.position.y);
+  }
+
+  // ═══ 3. 2D plan: real Planner + the real drawAll ══════════════════════════
+  class FakeHa {
+    constructor(seed) { this.map = new Map(); for (const [k, v] of Object.entries(seed || {})) this.map.set(k, JSON.parse(JSON.stringify(v))); this.states = {}; this._s = []; this._c = []; }
+    connect() { for (const cb of this._c) cb('connected'); for (const cb of this._s) cb(this.states, undefined); }
+    onState(fn) { this._s.push(fn); } onConn(fn) { this._c.push(fn); }
+    callService() { return Promise.resolve(); }
+    async getHistory() { return {}; } async getWeatherForecasts() { return null; }
+    async getDevices() { return []; } async getEntityRegistry() { return []; } async updateEntityRegistry() { return true; }
+    async getAreaRegistry() { return []; } async getFloorRegistry() { return []; }
+    async getUserData(k) { return this.map.has(k) ? JSON.parse(JSON.stringify(this.map.get(k))) : null; }
+    async setUserData(k, v) { this.map.set(k, JSON.parse(JSON.stringify(v))); return true; }
+    async refreshStates() {} async subscribeMqtt() { return () => {}; } async publishMqtt() {}
+    async getCalendarEvents() { return {}; }
+    async subscribePersistentNotifications() { return () => {}; }
+    async listRepairsIssues() { return []; }
+  }
+  const flat2d = (lights) => ({ id: 'f1', name: 'Home', w: 8000, d: 5000,
+    walls: [], furniture: [], lights, switches: [], sensors: [], motionSensors: [],
+    envSensors: [], bleProxies: [], doors: [], windows: [], rooms: [], bg: null });
+  async function mkPlanner(lights) {
+    localStorage.removeItem('diorama:store:v1'); localStorage.removeItem('diorama:configs');
+    const seed = { v: 2, floors: [flat2d(lights)], currentFloorId: 'f1', activeSensorId: null,
+      coverage: true, imperial: false, showDetails: false, useRawTargets: false };
+    const p = new Planner();
+    const ha = new FakeHa({ diorama: seed });
+    p.connectWith(ha);
+    await waitFor(() => p.configIndex !== null);
+    return p;
+  }
+  const cvs = document.createElement('canvas'); cvs.width = 600; cvs.height = 400;
+  const ctx = cvs.getContext('2d', { willReadFrequently: true });
+  const view = computeView(cvs, 8000, 5000, null, 1);
+  const snapPx = () => ctx.getImageData(0, 0, cvs.width, cvs.height).data.slice();
+  const diffCount = (base) => {
+    const d = ctx.getImageData(0, 0, cvs.width, cvs.height).data;
+    let n = 0;
+    for (let i = 0; i < d.length; i += 4)
+      if (d[i] !== base[i] || d[i + 1] !== base[i + 1] || d[i + 2] !== base[i + 2]) n++;
+    return n;
+  };
+  // The glyph occupies the fixture body disc; sample just that box so the ON
+  // glow (which is kind-independent) can't dominate the comparison.
+  const glyphBox = () => {
+    const c = mmToPx(view, 4000, 2500);
+    return ctx.getImageData(Math.round(c.x) - 14, Math.round(c.y) - 14, 28, 28).data.slice();
+  };
+  const boxDiff = (a, b) => {
+    let n = 0;
+    for (let i = 0; i < a.length; i += 4)
+      if (a[i] !== b[i] || a[i + 1] !== b[i + 1] || a[i + 2] !== b[i + 2]) n++;
+    return n;
+  };
+  const L2 = (kind, over = {}) =>
+    Object.assign({ id: 'lp', x: 4000, y: 2500, entity_id: null, iconKind: kind, label: '' }, over);
+
+  const P0 = await mkPlanner([]);
+  drawAll(ctx, P0, view, null);
+  const blank = snapPx();
+
+  const pBulb = await mkPlanner([L2('bulb')]);
+  drawAll(ctx, pBulb, view, null);
+  const bulbGlyph = glyphBox();
+
+  const glyphBoxes = {};
+  for (const kind of KINDS) {
+    const pOff = await mkPlanner([L2(kind)]);
+    drawAll(ctx, pOff, view, null);
+    ok(`D1 ${kind} paints a plan marker`, diffCount(blank) > 60, diffCount(blank));
+    glyphBoxes[kind] = glyphBox();
+    // A kind MISSING from LIGHT_GLYPH falls back to the bulb's 💡 — so a raster
+    // that differs from the bulb's proves the entry exists and is distinct.
+    ok(`D2 ${kind} draws its own glyph (not the 💡 fallback)`,
+       boxDiff(glyphBoxes[kind], bulbGlyph) > 15, boxDiff(glyphBoxes[kind], bulbGlyph));
+
+    const pOn = await mkPlanner([L2(kind, { localState: 'on' })]);
+    drawAll(ctx, pOn, view, null);
+    ok(`D3 ${kind} ON paints more than the cold fixture (glow)`,
+       diffCount(blank) > 400, diffCount(blank));
+  }
+  ok('D4 the three vanity glyphs are distinct from each other',
+     boxDiff(glyphBoxes.vanity_bar, glyphBoxes.vanity_hollywood) > 15 &&
+     boxDiff(glyphBoxes.vanity_bar, glyphBoxes.mirror_light) > 15 &&
+     boxDiff(glyphBoxes.vanity_hollywood, glyphBoxes.mirror_light) > 15,
+     [boxDiff(glyphBoxes.vanity_bar, glyphBoxes.vanity_hollywood),
+      boxDiff(glyphBoxes.vanity_bar, glyphBoxes.mirror_light),
+      boxDiff(glyphBoxes.vanity_hollywood, glyphBoxes.mirror_light)].join(','));
+
+  let pass = 0; const fails = [];
+  for (const t of tests) { if (t.ok) pass++; else fails.push(t.name); }
+  const total = tests.length;
+  const title = pass === total ? `VANITYLIGHT PASS ${pass}/${total}`
+    : `VANITYLIGHT FAIL ${pass}/${total} [${fails.join(',')}]`;
+  document.title = title;
+  document.body.insertAdjacentHTML('beforeend',
+    `<pre style="position:fixed;left:8px;top:8px;color:#8f8;max-height:96vh;overflow:auto">${title}\n` +
+    tests.map(t => `${t.ok ? 'PASS' : 'FAIL'} ${t.name} — ${t.detail}`).join('\n') + `</pre>`);
+ } catch (e) {
+  document.title = 'VANITYLIGHT ERROR ' + (e && e.message ? e.message : String(e));
+  console.error(e);
+ }
+</script>

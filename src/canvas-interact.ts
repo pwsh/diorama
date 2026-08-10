@@ -1,5 +1,5 @@
 import { vehicleRecipe } from './vehicles.js';
-import { snap, snapVertex15, distMM, worldToLocal, localToWorld, FURNITURE_KINDS, furnitureCorners, furnitureLocalToWorld, furnitureWorldToLocal, resolveFurnitureDef, resolveFurnitureWallCollision, resolveSeatTableCollision, seatBelongsToTable, snapStepLightToSurface, snapFireplaceToWall, snapFloodlightToWall, snapExhaustToWall, snapSwitchToWall, snapAlarmToWall, snapCalendarToWall, snapThermostatToWall, snapPlugToWall, snapInfoCardToWall, snapActionButtonToWall, isBinKind, isWetBathKind, isStairsKind, stairsRiseMm, rectPenetrationMm, defaultFurnitureElevation, nearestAlign, bestAlignShift, ALIGN_DRAG_KINDS, ALIGN_POLY_DRAG_KINDS, envScale, ENV_SCALE_MIN, ENV_SCALE_MAX, GRID_MM, floorContentBbox, resolveFloorEdgeDrag, DOOR_DEFAULT_W, doorDefaultWidth, windowDefaultWidth, isBoundaryWallKind } from './geometry.js';
+import { snap, snapVertex15, distMM, worldToLocal, localToWorld, FURNITURE_KINDS, furnitureCorners, furnitureLocalToWorld, furnitureWorldToLocal, resolveFurnitureDef, resolveFurnitureWallCollision, resolveSeatTableCollision, seatBelongsToTable, snapStepLightToSurface, snapFireplaceToWall, snapFloodlightToWall, snapVanityToWall, snapExhaustToWall, snapSwitchToWall, snapAlarmToWall, snapCalendarToWall, snapThermostatToWall, snapPlugToWall, snapInfoCardToWall, snapActionButtonToWall, isBinKind, isScreenKind, isWetBathKind, isStairsKind, stairsRiseMm, rectPenetrationMm, defaultFurnitureElevation, nearestAlign, bestAlignShift, ALIGN_DRAG_KINDS, ALIGN_POLY_DRAG_KINDS, envScale, ENV_SCALE_MIN, ENV_SCALE_MAX, GRID_MM, floorContentBbox, resolveFloorEdgeDrag, DOOR_DEFAULT_W, doorDefaultWidth, windowDefaultWidth, isBoundaryWallKind } from './geometry.js';
 import { newId } from './storage.js';
 import {
   pxToMm, type View,
@@ -2389,7 +2389,8 @@ export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement, e?: Mouse
         if (drag.fxKind === 'light') {
           if (!snapStepLightToSurface(it as Light, f.walls, f.furniture) &&
               !snapFireplaceToWall(it as Light, f.walls) &&
-              !snapFloodlightToWall(it as Light, f.walls))
+              !snapFloodlightToWall(it as Light, f.walls) &&
+              !snapVanityToWall(it as Light, f.walls))
             snapExhaustToWall(it as Light, f.walls);
         } else {
           snapSwitchToWall(it, f.switches, f.walls);
@@ -3155,7 +3156,7 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
     // lights default to 'bulb', so these bite once the kind is set + the piece
     // is dragged; kept here so a directly-typed kind snaps on drop too).
     if (!snapStepLightToSurface(lt, f.walls, f.furniture) && !snapFireplaceToWall(lt, f.walls) &&
-        !snapFloodlightToWall(lt, f.walls))
+        !snapFloodlightToWall(lt, f.walls) && !snapVanityToWall(lt, f.walls))
       snapExhaustToWall(lt, f.walls);
     f.lights.push(lt);
     p.save(); p.setTool('select'); p.emitConfig(); return;
@@ -3441,14 +3442,15 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
   }
 }
 
-// Dblclick on a TV / wall_tv furniture piece with a bound entity → open the
-// media control modal. Returns true if it consumed the event. Unbound TVs (and
-// non-TV furniture) return false so the caller keeps its normal handling.
+// Dblclick on a SCREEN furniture piece (tv / wall_tv / either projection
+// screen — isScreenKind) with a bound entity → open the media control modal.
+// Returns true if it consumed the event. Unbound screens (and non-screen
+// furniture) return false so the caller keeps its normal handling.
 function dblClickMediaFurniture(p: Planner, canvas: HTMLCanvasElement, mm: Vec2): boolean {
   const fh = hitFurniture(p, mm);
   if (!fh) return false;
   const fu = fh.item;
-  if ((fu.kind !== 'tv' && fu.kind !== 'wall_tv') || !fu.entity_id) return false;
+  if (!isScreenKind(fu.kind) || !fu.entity_id) return false;
   canvas.dispatchEvent(new CustomEvent('open-media-config', {
     bubbles: true, composed: true, detail: { entityId: fu.entity_id },
   }));
