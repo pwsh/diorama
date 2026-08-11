@@ -352,6 +352,19 @@ interface WeatherCloud {
   wobble: number;             // lateral sinusoid amplitude, mm/s (snow/dust)
   minX: number; minZ: number; sizeX: number; sizeZ: number;  // spawn box
 }
+// One animated flame / hot-core cone of a hearth or fire pit. Built at `baseH`
+// and driven per frame by _applyFireFlame (see ThreeDRenderer._fireFlames).
+interface FireFlame {
+  mesh: THREE.Mesh;
+  baseH: number;              // authored cone height (geometry height, mm)
+  hAmp: number;               // height sine amplitude (fraction of baseH)
+  hScale: number;             // constant brightness-derived height multiplier
+  om: number; ph: number;     // height sine rate (rad/s) + phase
+  swayAmp: number;            // lateral sway amplitude, mm (0 for the core)
+  swayRotK: number;           // roll per mm of sway
+  baseX: number; baseY: number; baseZ: number;   // FOOT of the cone, local mm
+  swayXK: number; swayZK: number;                // sway → local x / z factors
+}
 export interface TargetWorld {
   key: string; x: number; y: number; color: number;
   // Optional (additive): the raw target sits near the sensor's coverage edge
@@ -2969,6 +2982,30 @@ export class ThreeDRenderer {
   // carries an apply(k) closure (k = 0..1 breathe) built once at rebuild — zero
   // per-frame alloc. Reset each updateFloor, advanced by _advanceClimateGlows.
   private _climateGlows: { phase: number; om: number; apply: (k: number) => void }[] = [];
+  // ── Fire / heat-lamp / logic-flash flicker (registered, NOT baked) ────────
+  // A lit hearth or fire pit flickers randomly, a heat lamp breathes on a slow
+  // sine, and a logic light whose rule flagged `flash` pulses on a fast one. All
+  // three used to be evaluated INSIDE updateLightsSwitches, which forced
+  // three-view to rebuild the entire light group every single frame while any of
+  // them was live — measurably ~22 % of the frame on a modest plan (worse on a
+  // busy one) and the source of the stale-`matrixWorld` pick hazard (a rebuilt
+  // object's world matrix is identity until the next render; see
+  // _syncPickMatrices + firepit-test §F). They are now registered here at BUILD
+  // time and written per frame by _advanceLightFlickers — the _climateGlows
+  // idiom: closures allocated once at rebuild, zero per-frame allocation.
+  //
+  // ONE entry per FIXTURE (not per material): a hearth's pool, flames, embers
+  // and point light must flicker in unison, exactly as the single shared
+  // `flickerMul` made them. `cs` is the fire's warm-colour scale (the old `f1`).
+  private _lightFlickers: { fire: boolean; heat: boolean; flash: boolean;
+                            ch: ((mul: number, cs: number) => void)[] }[] = [];
+  // Flame / hot-core cones. Their height + sway are pure functions of the clock
+  // (they used to animate only because the builder re-extruded them each frame),
+  // so they ride the same advance: the cone is built at its BASE height and the
+  // advance writes scale.y + position + roll. Exactly equivalent — a cone is
+  // centred on its origin, so scaling y about the centre and re-seating the
+  // origin at base + h/2 leaves the foot where the builder put it.
+  private _fireFlames: FireFlame[] = [];
   // Eased climate blends keyed by fixture id (survive _keyFloor rebuilds): the
   // mini-split louver opening + the towel-warmer warm-up. Each entry eases the
   // shared _climateBlends[fuId] toward `running` at its own τ and applies it.
@@ -3456,23 +3493,39 @@ export class ThreeDRenderer {
     if (this._flightsGroup.visible) roots.push(this._flightsGroup);
     if (!roots.length) return null;
     const hits = this._raycaster.intersectObjects(roots, true);
+    // PICK-THROUGH GLASS. A hit whose walk to a tag passes through a mesh flagged
+    // `userData.pickThrough` (window + door glazing, and only that) does not win
+    // outright: it is remembered and the scan continues along the ray, so a
+    // fixture VISIBLE BEHIND the pane takes the click. The remembered hit is the
+    // answer when nothing else resolves, which keeps a plain click on a window
+    // toggling that window. Deliberately a FLAG, never an opacity threshold — a
+    // light's always-on 400 mm hit sphere is `opacity: 0` and must never be
+    // skipped.
+    let glassFallback: FixtureClickInfo | null = null;
     for (const h of hits) {
       // Walk up to find the first ancestor that carries our userData tag.
       let obj: THREE.Object3D | null = h.object;
+      let through = false;
       while (obj) {
         const ud = obj.userData;
+        if (ud && ud.pickThrough) through = true;
         if (ud && FIXTURE_CLICK_KINDS.has(ud.kind)) {
           const kind = ud.kind as FixtureClickKind;
           const info: FixtureClickInfo = {
             kind, entity_id: ud.entity_id ?? null, fixtureId: String(ud.fixtureId),
           };
           if (kind === 'flight') info.hex = String(ud.hex ?? ud.fixtureId);
-          return info;
+          if (!through) return info;
+          // `??=` keeps the NEAREST glass hit: `hits` is distance-sorted, so the
+          // remembered answer is the pane you actually aimed at, never a farther
+          // one that happens to share the ray.
+          glassFallback ??= info;
+          break;   // this hit is glass — keep scanning for something behind it
         }
         obj = obj.parent;
       }
     }
-    return null;
+    return glassFallback;
   }
 
   // Screen-space nearest-aircraft pick — the fat-finger fallback for flights.
@@ -4116,6 +4169,10 @@ export class ThreeDRenderer {
     this._floorFanSpin = {};
     this._applianceVents = [];
     this._climateGlows = [];
+    // _lightGroup was torn down above → its flicker/flame registrations hold
+    // disposed materials. Drop them (the next updateLightsSwitches re-registers).
+    this._lightFlickers = [];
+    this._fireFlames = [];
     this._climateEased = [];
     this._climateBlends = {};
     // Mechanical/utility plant: printer rigs + their accumulated head phase are
@@ -9097,7 +9154,19 @@ export class ThreeDRenderer {
       const wp = this._w(w.x, w.y, this._openingBaseY(w.x, w.y));
       grp.position.set(wp.x, wp.y, wp.z);
       grp.rotation.y = -((w.rotation || 0) * Math.PI / 180);
-      const glass = (pw: number, ph: number) => new THREE.Mesh(new THREE.BoxGeometry(pw, ph, PANE_T), mat);
+      // GLASS IS PICK-THROUGH. You can see through a pane, so you click through
+      // it: _raycastFixture treats any hit that reaches its tag through a
+      // `pickThrough` mesh as a FALLBACK, so a fixture visible BEHIND the glass
+      // wins the pick and a pane with nothing behind it still resolves its
+      // window. (Near-invisible glass — 0.16 opacity, 0.06 for the wall it sits
+      // in under wallCutaway — otherwise silently swallowed clicks aimed at an
+      // outdoor fire pit.) Flagged on the PANE only: sashes, mullions, muntins,
+      // shades, curtain fabric and the curtain rod stay ordinary pick targets.
+      const glass = (pw: number, ph: number) => {
+        const m = new THREE.Mesh(new THREE.BoxGeometry(pw, ph, PANE_T), mat);
+        m.userData.pickThrough = true;
+        return m;
+      };
       const bar = (bw: number, bh: number) => new THREE.Mesh(new THREE.BoxGeometry(bw, bh, PANE_T * 1.6), frameMatW);
       switch (kind) {
         case 'picture': {
@@ -9170,6 +9239,9 @@ export class ThreeDRenderer {
             const mesh = new THREE.Mesh(new THREE.BoxGeometry(len, y1 - y0, thick), m);
             mesh.position.set(cx, (y0 + y1) / 2, cz);
             mesh.rotation.y = ry;
+            // Bay GLAZING is pick-through (see `glass` above); the knee wall and
+            // head board of the same helper are casework and are not.
+            if (m === mat) mesh.userData.pickThrough = true;
             if (tag) mesh.userData = { ...mesh.userData, [tag]: true };
             grp.add(mesh);
             return mesh;
@@ -9483,6 +9555,12 @@ export class ThreeDRenderer {
                       m: THREE.Material, px: number, py: number, pz: number) => {
         const box = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), m);
         box.position.set(px, py, pz);
+        // Door GLAZING (french / sliding_glass leaves, the glass_panel garage
+        // style) is pick-through, exactly like a window pane — see the window
+        // `glass` helper. Stiles, rails, muntins, slats, tracks and the lock
+        // deadbolts all stay ordinary pick targets, so the lock still beats its
+        // door and a click on a glass door's frame still toggles the door.
+        if (m === doorGlassMat) box.userData.pickThrough = true;
         parent.add(box);
         return box;
       };
@@ -20598,6 +20676,11 @@ export class ThreeDRenderer {
   updateLightsSwitches(lights: Light[], switches: SwitchFixture[], stateProvider: StateProvider): void {
     if (!this._scene) return;
     this._fanRotors = [];  // rebuilt below; never spin disposed objects
+    // Drop every flicker/flame registration BEFORE the group is torn down — the
+    // closures hold the materials _clearGroup is about to dispose, so a stale
+    // entry would write into freed materials on the very next frame.
+    this._lightFlickers = [];
+    this._fireFlames = [];
     this._clearGroup(this._lightGroup);
     this._clearGroup(this._switchGroup);   // switches build into their own layer group
     const LIGHT_BODY_R = 200;
@@ -20621,29 +20704,41 @@ export class ThreeDRenderer {
         ? this._itemGroundY(l.x, l.y) : 0;
       let r = 1, g = 0.9, b = 0.7;
       if (rgb && isOn) { r = rgb[0] / 255; g = rgb[1] / 255; b = rgb[2] / 255; }
-      // Fireplace forces warm orange-red regardless of HA color, plus a
-      // per-frame flicker (this builder runs every render frame).
-      let flickerMul = 1;
-      // Fire pits share the hearth's fire: same forced warm tint + flicker (they
-      // are in three-view's per-frame rebuild set for exactly this reason).
-      if ((kind === 'fireplace' || isFirepitKind(kind)) && isOn) {
-        const f1 = 0.7 + Math.random() * 0.3;
-        r = 1.0 * f1; g = 0.45 * f1; b = 0.15 * f1;
-        flickerMul = 0.85 + Math.random() * 0.30;
-      }
-      // Heat lamp forces a strong warm-RED regardless of HA color + a SLOW cozy
-      // breathe (no flicker) — three-view forces the per-frame rebuild while an
-      // ON heatlamp exists (the fireplace idiom), so the sine reads as breathing.
-      if (kind === 'heatlamp' && isOn) {
-        r = 1.0; g = 0.28; b = 0.12;
-        flickerMul = 0.8 + 0.2 * Math.abs(Math.sin(performance.now() / 900));
-      }
-      // Logic-light flash (batch DC-B): a matched rule flagged flash → pulse the
-      // emissive + pool per-frame (three-view forces the rebuild while flashing,
-      // the fireplace idiom). _dim (offColor idle) rides brightness already.
-      if (isOn && (attrs as Record<string, unknown>)._flash) {
-        flickerMul *= 0.35 + 0.65 * Math.abs(Math.sin(performance.now() / 220));
-      }
+      // ── Per-frame flicker: REGISTERED, never baked ────────────────────────
+      // Fireplaces and fire pits force warm orange-red regardless of HA colour
+      // and flicker randomly; a heat lamp forces warm-RED and breathes on a slow
+      // sine; a logic light whose rule flagged `flash` pulses on a fast one
+      // (_dim, the offColor idle, rides brightness already). All three used to
+      // be evaluated HERE, which is why three-view had to rebuild the whole
+      // light group every frame. Now the materials are built at a NEUTRAL
+      // flicker of 1 and _advanceLightFlickers writes the live values into them
+      // (see _lightFlickers) — so the group rebuilds only on a real change.
+      const animFire = (kind === 'fireplace' || isFirepitKind(kind)) && isOn;
+      const animHeat = kind === 'heatlamp' && isOn;
+      const animFlash = isOn && !!(attrs as Record<string, unknown>)._flash;
+      const animated = animFire || animHeat || animFlash;
+      const flickerMul = 1;
+      const flickCh: ((mul: number, cs: number) => void)[] = [];
+      // emissiveIntensity = base × flicker.
+      const flickEm = (m: THREE.MeshToonMaterial, base: number): void => {
+        if (animated) flickCh.push(mul => { m.emissiveIntensity = base * mul; });
+      };
+      // opacity = min(cap, base × flicker) — the pool / ember / ring form.
+      const flickOp = (m: THREE.Material, base: number, cap: number): void => {
+        if (animated) flickCh.push(mul => { m.opacity = Math.min(cap, base * mul); });
+      };
+      if (animFire) { r = 1.0; g = 0.45; b = 0.15; }   // base tint; `cs` scales it
+      if (animHeat) { r = 1.0; g = 0.28; b = 0.12; }
+      // Warm-colour scale (the old per-frame `f1`). Only a FIRE has one, and the
+      // only surfaces that read `color` on a fire are its floor pool and its
+      // point light — the hearth / pit cases build their own masonry materials
+      // and never touch bodyMat/shadeMat. Deliberately NOT applied to anything
+      // built through `_mat`, whose colour goes through _simsColor's saturation
+      // push; reproducing that per frame would be a second, divergent formula.
+      const cr = r, cg = g, cb = b;
+      const flickColor = (o: { color: THREE.Color }): void => {
+        if (animFire) flickCh.push((_mul, cs) => { o.color.setRGB(cr * cs, cg * cs, cb * cs); });
+      };
       const color = new THREE.Color(r, g, b);
       const ud = { kind: 'light', entity_id: l.entity_id, fixtureId: l.id };
       const bodyMat = this._mat({
@@ -20652,6 +20747,7 @@ export class ThreeDRenderer {
         emissiveIntensity: isOn ? 0.9 * intensity * flickerMul : 0.05,
         metalness: 0.2, roughness: 0.4,
       });
+      if (isOn) flickEm(bodyMat, 0.9 * intensity);
       const shadeMat = this._mat({
         color: 0xeeeeee, emissive: isOn ? color.getHex() : 0x000000,
         emissiveIntensity: isOn ? 0.35 * intensity : 0.0,
@@ -20701,6 +20797,7 @@ export class ThreeDRenderer {
             emissiveIntensity: isOn ? (0.5 + 1.0 * (bri / 255)) * intensity * flickerMul : 0,
             transparent: true, opacity: isOn ? 0.95 : 0.55,
           });
+          if (isOn) flickEm(globeMat, (0.5 + 1.0 * (bri / 255)) * intensity);
           // Each globe stands off the wall on a short FORWARD arm. That stand-off
           // is structural, not decorative: the wall face lands at local
           // +VANITY_PLATE_DEPTH/2, so a 2·globeR ball hung directly under a
@@ -20827,6 +20924,7 @@ export class ThreeDRenderer {
               emissive: isOn ? 0xff5a1a : 0x1a0d06,
               emissiveIntensity: isOn ? 0.25 * flickerMul : 0.08,
             });
+            if (isOn) flickEm(inner, 0.25);
             // Carcass: back slab + two side columns + header above the
             // opening, leaving the front genuinely open.
             const back = new THREE.Mesh(new THREE.BoxGeometry(W2, H2, 120), brick);
@@ -20880,29 +20978,36 @@ export class ThreeDRenderer {
                 { ox:  170, r: 80, h: 260, om: 2.1, ph: 2.1, col: 0xef6c00 },
                 { ox:    0, r: 120, h: 430, om: 1.4, ph: 4.2, col: 0xffa726 },
               ];
+              // Cones are built at their BASE height; _applyFireFlame writes
+              // scale.y / position / roll from the clock (once here so the first
+              // frame after a rebuild is already in pose, then every frame).
               for (const fl of flames) {
-                const h3 = fl.h * (1 + 0.16 * Math.sin(tNow * fl.om + fl.ph)) * Math.min(1.4, intensity + 0.4);
-                const sway = 30 * Math.sin(tNow * fl.om * 0.8 + fl.ph * 1.7);
-                const flame = new THREE.Mesh(
-                  new THREE.ConeGeometry(fl.r, h3, 10),
-                  this._mat({
-                    color: fl.col, emissive: fl.col,
-                    emissiveIntensity: 1.6 * flickerMul,
-                    transparent: true, opacity: 0.85, depthWrite: false,
-                  }));
-                flame.position.set(fl.ox + sway * 0.4, -H2 / 2 + 180 + h3 / 2, 0);
-                flame.rotation.z = sway * 0.001;
+                const flameMat = this._mat({
+                  color: fl.col, emissive: fl.col,
+                  emissiveIntensity: 1.6 * flickerMul,
+                  transparent: true, opacity: 0.85, depthWrite: false,
+                });
+                flickEm(flameMat, 1.6);
+                const flame = new THREE.Mesh(new THREE.ConeGeometry(fl.r, fl.h, 10), flameMat);
+                this._regFireFlame({
+                  mesh: flame, baseH: fl.h, hAmp: 0.16, hScale: Math.min(1.4, intensity + 0.4),
+                  om: fl.om, ph: fl.ph, swayAmp: 30, swayRotK: 0.001,
+                  baseX: fl.ox, baseY: -H2 / 2 + 180, baseZ: 0, swayXK: 0.4, swayZK: 0,
+                }, tNow);
                 g.add(flame);
               }
               // Hot core.
-              const coreH = 240 * (1 + 0.14 * Math.sin(tNow * 1.9 + 1.1));
-              const core = new THREE.Mesh(
-                new THREE.ConeGeometry(60, coreH, 8),
-                this._mat({
-                  color: 0xffd54f, emissive: 0xffd54f, emissiveIntensity: 2.2 * flickerMul,
-                  transparent: true, opacity: 0.95, depthWrite: false,
-                }));
-              core.position.set(0, -H2 / 2 + 170 + coreH / 2, 0);
+              const coreMat = this._mat({
+                color: 0xffd54f, emissive: 0xffd54f, emissiveIntensity: 2.2 * flickerMul,
+                transparent: true, opacity: 0.95, depthWrite: false,
+              });
+              flickEm(coreMat, 2.2);
+              const core = new THREE.Mesh(new THREE.ConeGeometry(60, 240, 8), coreMat);
+              this._regFireFlame({
+                mesh: core, baseH: 240, hAmp: 0.14, hScale: 1,
+                om: 1.9, ph: 1.1, swayAmp: 0, swayRotK: 0,
+                baseX: 0, baseY: -H2 / 2 + 170, baseZ: 0, swayXK: 0, swayZK: 0,
+              }, tNow);
               g.add(core);
             }
             const hit = new THREE.Mesh(
@@ -20934,6 +21039,7 @@ export class ThreeDRenderer {
               emissive: isOn ? 0xff5a1a : 0x120a06,
               emissiveIntensity: isOn ? 0.30 * flickerMul : 0.05,
             });
+            if (isOn) flickEm(ashMat, 0.30);
             // Deterministic per-stone wobble. A rebuild happens on EVERY frame
             // while the pit is lit, so Math.random here would reshuffle the
             // masonry 60×/s — hash the stone index instead.
@@ -20999,14 +21105,15 @@ export class ThreeDRenderer {
               const tNow = performance.now() / 1000;
               // Ember bed: a flat glowing disc just under the logs.
               const emberR = S / 2 - WALL_T * 0.9;
+              const emberMat = new THREE.MeshBasicMaterial({
+                color: 0xff7a26, transparent: true,
+                opacity: Math.min(0.85, (0.42 + 0.3 * (bri / 255)) * intensity * flickerMul),
+                side: THREE.DoubleSide, depthWrite: false,
+              });
+              flickOp(emberMat, (0.42 + 0.3 * (bri / 255)) * intensity, 0.85);
               const ember = new THREE.Mesh(
                 square ? new THREE.PlaneGeometry(emberR * 2, emberR * 2)
-                  : new THREE.CircleGeometry(emberR, 32),
-                new THREE.MeshBasicMaterial({
-                  color: 0xff7a26, transparent: true,
-                  opacity: Math.min(0.85, (0.42 + 0.3 * (bri / 255)) * intensity * flickerMul),
-                  side: THREE.DoubleSide, depthWrite: false,
-                }));
+                  : new THREE.CircleGeometry(emberR, 32), emberMat);
               ember.rotation.x = -Math.PI / 2;
               ember.position.y = 66;
               // ON-only meshes carry the click `ud` too (defence in depth,
@@ -21031,30 +21138,35 @@ export class ThreeDRenderer {
                 { ox:   10, oz:  120, r: 70, h: 245, om: 2.4, ph: 3.6, col: 0xf57c00 },
                 { ox:    0, oz:    0, r: 118, h: 470, om: 1.4, ph: 4.2, col: 0xffa726 },
               ];
+              // Built at BASE height + posed by _applyFireFlame (see the hearth).
               for (const fl of flames) {
-                const h3 = fl.h * (1 + 0.18 * Math.sin(tNow * fl.om + fl.ph)) * Math.min(1.4, intensity + 0.4);
-                const sway = 34 * Math.sin(tNow * fl.om * 0.8 + fl.ph * 1.7);
-                const flame = new THREE.Mesh(
-                  new THREE.ConeGeometry(fl.r, h3, 10),
-                  this._mat({
-                    color: fl.col, emissive: fl.col,
-                    emissiveIntensity: 1.6 * flickerMul,
-                    transparent: true, opacity: 0.85, depthWrite: false,
-                  }));
-                flame.position.set(fl.ox + sway * 0.4, 150 + h3 / 2, fl.oz + sway * 0.25);
-                flame.rotation.z = sway * 0.0012;
+                const flameMat = this._mat({
+                  color: fl.col, emissive: fl.col,
+                  emissiveIntensity: 1.6 * flickerMul,
+                  transparent: true, opacity: 0.85, depthWrite: false,
+                });
+                flickEm(flameMat, 1.6);
+                const flame = new THREE.Mesh(new THREE.ConeGeometry(fl.r, fl.h, 10), flameMat);
+                this._regFireFlame({
+                  mesh: flame, baseH: fl.h, hAmp: 0.18, hScale: Math.min(1.4, intensity + 0.4),
+                  om: fl.om, ph: fl.ph, swayAmp: 34, swayRotK: 0.0012,
+                  baseX: fl.ox, baseY: 150, baseZ: fl.oz, swayXK: 0.4, swayZK: 0.25,
+                }, tNow);
                 flame.userData = { ...ud, firepitFlame: true };
                 g.add(flame);
               }
               // Hot core.
-              const coreH = 250 * (1 + 0.14 * Math.sin(tNow * 1.9 + 1.1));
-              const core = new THREE.Mesh(
-                new THREE.ConeGeometry(58, coreH, 8),
-                this._mat({
-                  color: 0xffd54f, emissive: 0xffd54f, emissiveIntensity: 2.2 * flickerMul,
-                  transparent: true, opacity: 0.95, depthWrite: false,
-                }));
-              core.position.set(0, 130 + coreH / 2, 0);
+              const coreMat = this._mat({
+                color: 0xffd54f, emissive: 0xffd54f, emissiveIntensity: 2.2 * flickerMul,
+                transparent: true, opacity: 0.95, depthWrite: false,
+              });
+              flickEm(coreMat, 2.2);
+              const core = new THREE.Mesh(new THREE.ConeGeometry(58, 250, 8), coreMat);
+              this._regFireFlame({
+                mesh: core, baseH: 250, hAmp: 0.14, hScale: 1,
+                om: 1.9, ph: 1.1, swayAmp: 0, swayRotK: 0,
+                baseX: 0, baseY: 130, baseZ: 0, swayXK: 0, swayZK: 0,
+              }, tNow);
               core.userData = { ...ud, firepitFlame: true };
               g.add(core);
             }
@@ -21141,6 +21253,7 @@ export class ThreeDRenderer {
               emissiveIntensity: isOn ? 1.1 * intensity * flickerMul : 0.05,
               metalness: 0.1, roughness: 0.3,
             });
+            if (isOn) flickEm(domeMat, 1.1 * intensity);
             for (const dx of [-140, 140, 0].slice(0, 3)) {
               const dome = new THREE.Mesh(new THREE.SphereGeometry(105, 16, 12, 0, Math.PI * 2, 0, Math.PI / 2), domeMat);
               dome.rotation.x = Math.PI;                 // dome opens downward
@@ -21579,14 +21692,15 @@ export class ThreeDRenderer {
             // its FRONT face (−7) sits INSIDE the panel's span (±12) — overlap,
             // never a shared plane.
             const rimZC = VANITY_PLATE_DEPTH_MM / 2 - RIM_D / 2;   // +4
+            const rimMat = this._mat({
+              color: isOn ? color.getHex() : 0x2f3338,
+              emissive: isOn ? color.getHex() : 0x14171a,
+              emissiveIntensity: isOn ? (0.6 + 1.1 * (bri / 255)) * intensity * flickerMul : 0.06,
+              metalness: 0.1, roughness: 0.6,
+            });
+            if (isOn) flickEm(rimMat, (0.6 + 1.1 * (bri / 255)) * intensity);
             const rim = new THREE.Mesh(
-              slab(MW + 2 * RIM_OUT, MH + 2 * RIM_OUT, 70, RIM_D, rimZC),
-              this._mat({
-                color: isOn ? color.getHex() : 0x2f3338,
-                emissive: isOn ? color.getHex() : 0x14171a,
-                emissiveIntensity: isOn ? (0.6 + 1.1 * (bri / 255)) * intensity * flickerMul : 0.06,
-                metalness: 0.1, roughness: 0.6,
-              }));
+              slab(MW + 2 * RIM_OUT, MH + 2 * RIM_OUT, 70, RIM_D, rimZC), rimMat);
             rim.userData = { ...ud, mirrorRim: true };
             g.add(rim);
             const panel = new THREE.Mesh(
@@ -21630,14 +21744,15 @@ export class ThreeDRenderer {
               cone.userData.outlineSkip = true;
               g.add(cone);
               // Tight glow ring around the lens (replaces the floor pool).
-              const ring = new THREE.Mesh(
-                new THREE.RingGeometry(R * 1.1, R * 1.9, 28),
-                new THREE.MeshBasicMaterial({
-                  color: color.getHex(), transparent: true,
-                  opacity: Math.min(0.55, 0.3 * intensity * flickerMul),
-                  side: THREE.DoubleSide, depthWrite: false,
-                  ...LIGHT_POOL_DEPTH_BIAS,
-                }));
+              const ringMat = new THREE.MeshBasicMaterial({
+                color: color.getHex(), transparent: true,
+                opacity: Math.min(0.55, 0.3 * intensity * flickerMul),
+                side: THREE.DoubleSide, depthWrite: false,
+                ...LIGHT_POOL_DEPTH_BIAS,
+              });
+              flickOp(ringMat, 0.3 * intensity, 0.55);
+              flickColor(ringMat);
+              const ring = new THREE.Mesh(new THREE.RingGeometry(R * 1.1, R * 1.9, 28), ringMat);
               ring.rotation.x = -Math.PI / 2;
               ring.position.y = -2;
               ring.userData.outlineSkip = true;
@@ -21712,14 +21827,16 @@ export class ThreeDRenderer {
               // travels far before it would climb; a steep beam pools close).
               // Clamped so a near-vertical beam doesn't place the pool at the base.
               const throwD = Math.max(lr * 0.35, Math.min(lr * 4, lr / Math.tan(tiltRad)));
+              const gsPoolMat = new THREE.MeshBasicMaterial({
+                color: color.getHex(), transparent: true,
+                opacity: Math.min(0.4, (0.14 + 0.16 * (bri / 255)) * intensity * flickerMul),
+                side: THREE.DoubleSide, depthWrite: false,
+                ...LIGHT_POOL_DEPTH_BIAS,
+              });
+              flickOp(gsPoolMat, (0.14 + 0.16 * (bri / 255)) * intensity, 0.4);
+              flickColor(gsPoolMat);
               const pool = new THREE.Mesh(
-                new THREE.CircleGeometry(Math.max(300, lr * 0.55), 40),
-                new THREE.MeshBasicMaterial({
-                  color: color.getHex(), transparent: true,
-                  opacity: Math.min(0.4, (0.14 + 0.16 * (bri / 255)) * intensity * flickerMul),
-                  side: THREE.DoubleSide, depthWrite: false,
-                  ...LIGHT_POOL_DEPTH_BIAS,
-                }));
+                new THREE.CircleGeometry(Math.max(300, lr * 0.55), 40), gsPoolMat);
               pool.rotation.x = -Math.PI / 2;
               // Local offset along -Z by throwD (composes with body yaw → world
               // azimuth); elongate along the throw for a raking-beam ellipse.
@@ -21785,6 +21902,7 @@ export class ThreeDRenderer {
       this._lightGroup.add(hitMesh);
       if (isOn) {
         const li = (0.6 + 1.4 * (bri / 255)) * intensity * flickerMul;
+        const liBase = (0.6 + 1.4 * (bri / 255)) * intensity;
         const dist = Math.max(2000, lr * 5);
         // Scene-space front direction (unit, horizontal). Body faces local -Z
         // with body.rotation.y = -lightRotation·π/180 and _w mirrors X, so the
@@ -21817,6 +21935,8 @@ export class ThreeDRenderer {
           );
           this._lightGroup.add(tgt);
           spot.target = tgt;
+          if (animated) flickCh.push(mul => { spot.intensity = liBase * mul; });
+          flickColor(spot);
           this._lightGroup.add(spot);
         } else if (kind !== 'exhaust' && kind !== 'exhaust_wall') {
           // Plain extractor fans move air, not light — no point light (exhaust_light
@@ -21826,6 +21946,8 @@ export class ThreeDRenderer {
           // generic −50 mm drop would sink the source under the grade — put it
           // up in the flame bowl where the fire actually is.
           pl.position.set(p.x, isFirepitKind(kind) ? p.y + 320 : p.y - 50, p.z);
+          if (animated) flickCh.push(mul => { pl.intensity = liBase * mul; });
+          flickColor(pl);
           this._lightGroup.add(pl);
         }
         // Skip floor pool for sconce (wall), plain fan (no light), exhaust fans
@@ -21848,14 +21970,15 @@ export class ThreeDRenderer {
           const poolGeo = kind === 'step'
             ? new THREE.CircleGeometry(lr, 24, Math.atan2(-fdx, -fdz), Math.PI)
             : new THREE.CircleGeometry(poolR, 48);
-          const disc = new THREE.Mesh(
-            poolGeo,
-            new THREE.MeshBasicMaterial({
-              color: color.getHex(), transparent: true,
-              opacity: Math.min(1, (0.18 + 0.22 * (bri / 255)) * intensity * flickerMul),
-              side: THREE.DoubleSide, depthWrite: false,
-              ...LIGHT_POOL_DEPTH_BIAS,
-            }));
+          const discMat = new THREE.MeshBasicMaterial({
+            color: color.getHex(), transparent: true,
+            opacity: Math.min(1, (0.18 + 0.22 * (bri / 255)) * intensity * flickerMul),
+            side: THREE.DoubleSide, depthWrite: false,
+            ...LIGHT_POOL_DEPTH_BIAS,
+          });
+          flickOp(discMat, (0.18 + 0.22 * (bri / 255)) * intensity, 1);
+          flickColor(discMat);
+          const disc = new THREE.Mesh(poolGeo, discMat);
           disc.rotation.x = -Math.PI / 2;
           // Elliptical feel for the flood pool (stretched along the local x/z).
           if (kind === 'flood') disc.scale.set(1.3, 0.82, 1);
@@ -21872,6 +21995,12 @@ export class ThreeDRenderer {
           disc.userData = ud;
           this._lightGroup.add(disc);
         }
+      }
+      // ONE flicker entry per fixture — every channel registered above shares
+      // this fixture's per-frame multiplier (and, for a fire, its colour scale),
+      // exactly as they shared the single builder-local `flickerMul`.
+      if (animated && flickCh.length) {
+        this._lightFlickers.push({ fire: animFire, heat: animHeat, flash: animFlash, ch: flickCh });
       }
     }
     for (const sw of switches) {
@@ -21893,6 +22022,53 @@ export class ThreeDRenderer {
       box.rotation.y = -switchRotation(sw) * Math.PI / 180;
       box.userData = { kind: 'switch', entity_id: sw.entity_id, fixtureId: sw.id };
       this._switchGroup.add(box);
+    }
+    // Apply the live flicker immediately: the materials above were built at a
+    // NEUTRAL multiplier of 1, so without this a rebuild would show one frame at
+    // full brightness before the next _animate tick — a visible pop.
+    this._advanceLightFlickers();
+  }
+
+  // Pose one flame / hot-core cone from the clock. Used at BUILD (so the first
+  // frame after a rebuild is already correct) and every frame from
+  // _advanceLightFlickers. Byte-equivalent to the old builder arithmetic: the
+  // cone geometry is `baseH` tall and centred on its origin, so scale.y = s
+  // gives a visible height of baseH·s and seating the origin at
+  // baseY + baseH·s/2 leaves the foot exactly at baseY.
+  private _applyFireFlame(f: FireFlame, t: number): void {
+    const s = (1 + f.hAmp * Math.sin(t * f.om + f.ph)) * f.hScale;
+    const sway = f.swayAmp * Math.sin(t * f.om * 0.8 + f.ph * 1.7);
+    f.mesh.scale.y = s;
+    f.mesh.position.set(f.baseX + sway * f.swayXK, f.baseY + f.baseH * s / 2,
+                        f.baseZ + sway * f.swayZK);
+    f.mesh.rotation.z = sway * f.swayRotK;
+  }
+
+  private _regFireFlame(f: FireFlame, tNow: number): void {
+    this._applyFireFlame(f, tNow);
+    this._fireFlames.push(f);
+  }
+
+  // Per-frame fire / heat-lamp / logic-flash drive. Replaces three-view's old
+  // "rebuild the whole light group every frame" force (see _lightFlickers).
+  // Zero allocation: every closure was built at rebuild time.
+  private _advanceLightFlickers(): void {
+    if (!this._lightFlickers.length && !this._fireFlames.length) return;
+    const now = performance.now();
+    for (const e of this._lightFlickers) {
+      let mul = 1, cs = 1;
+      // Random draws are per FIXTURE per frame, never per channel — one hearth's
+      // pool, embers, flames and point light must flicker together. (Random in an
+      // ADVANCE is fine; the house rule bans it in a builder that reruns under a
+      // dirty key, which is exactly what this refactor removes.)
+      if (e.fire) { cs = 0.7 + Math.random() * 0.3; mul = 0.85 + Math.random() * 0.30; }
+      if (e.heat) mul = 0.8 + 0.2 * Math.abs(Math.sin(now / 900));
+      if (e.flash) mul *= 0.35 + 0.65 * Math.abs(Math.sin(now / 220));
+      for (const ch of e.ch) ch(mul, cs);
+    }
+    if (this._fireFlames.length) {
+      const t = now / 1000;
+      for (const f of this._fireFlames) this._applyFireFlame(f, t);
     }
   }
 
@@ -27059,6 +27235,8 @@ export class ThreeDRenderer {
       cancelAnimationFrame(this._rafId);
       this._rafId = null;
     }
+    this._lightFlickers = [];
+    this._fireFlames = [];
     // Dispose every per-frame group BEFORE tearing down the WebGL context so
     // GC isn't dumped a giant orphaned graph all at once on view-switch.
     for (const g of [
@@ -27507,6 +27685,10 @@ export class ThreeDRenderer {
     this._advanceApplianceVents(frameDt);
     this._advanceFloorFans(frameDt);
     this._advanceClimateGlows();
+    // Fire flicker / heat-lamp breathe / logic-flash pulse + the flame cones.
+    // This is what lets the light group stay on its dirty key (it used to be
+    // rebuilt every frame purely to re-roll these values).
+    this._advanceLightFlickers();
     this._advanceClimateEased(frameDt);
     // Mechanical/utility plant: pump pipe-flow scroll + 3D printer gantry sweep
     // and growing print. Both early-return when the floor carries none.

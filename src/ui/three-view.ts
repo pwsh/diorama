@@ -6,7 +6,7 @@ import { customElement } from './define.js';
 // startup path never downloads it.
 import type { ThreeDRenderer, ZoneWorld, HaloWorld, TargetWorld, ActivityContext,
   InteractiveItem, GpsPinWorld, GpsLandmarkWorld, GeoEventWorld, WeatherFxState, VacMapEntry } from '../three-renderer.js';
-import { localToWorld, transformVerts, pointInPolygon, sensorColor, hexToInt, motionColor, lightIconKind, isFirepitKind, furnitureKind, resolveFurnitureDef, furnitureCat, isBinKind, isSpeakerKind, isScreenKind, isWetBathKind, isVehicleKind, isClimateApplianceKind, isMechanicalApplianceKind, mechanicalBindDomains, isRackKind, rackHealth, isBladedFanKind, isStairsKind, alarmStateColor, valveOpenness, sprinklerRunning, sprinklerHeadKind, sprinklerArcDeg, sprinklerRadius, sprinklerRotation, flagpoleHoistFraction, doorSpanCenter, isDroopPlant, plantThirsty, PLANT_MOISTURE_DEFAULT_THRESHOLD, hasFunctionalFront, frontVectorPlan } from '../geometry.js';
+import { localToWorld, transformVerts, pointInPolygon, sensorColor, hexToInt, motionColor, lightIconKind, furnitureKind, resolveFurnitureDef, furnitureCat, isBinKind, isSpeakerKind, isScreenKind, isWetBathKind, isVehicleKind, isClimateApplianceKind, isMechanicalApplianceKind, mechanicalBindDomains, isRackKind, rackHealth, isBladedFanKind, isStairsKind, alarmStateColor, valveOpenness, sprinklerRunning, sprinklerHeadKind, sprinklerArcDeg, sprinklerRadius, sprinklerRotation, flagpoleHoistFraction, doorSpanCenter, isDroopPlant, plantThirsty, PLANT_MOISTURE_DEFAULT_THRESHOLD, hasFunctionalFront, frontVectorPlan } from '../geometry.js';
 import { compass8, fmtDistanceM } from '../geo.js';
 import { resolveNorth, markerScaleOf } from '../compass.js';
 import { parseNowPlaying, isMediaPlayerId } from '../geometry.js';
@@ -2190,18 +2190,18 @@ export class ThreeView extends LitElement {
       }
 
       // Lights + switches: structural + state/brightness/color per entity.
-      // Fireplace lights flicker via Math.random() inside the builder, so an
-      // active fireplace forces a rebuild every frame (cheap: few lights). Fire
-      // pits (round + square) build their flames the same way, and a heat lamp
-      // breathes off the absolute clock — all three need the per-frame rebuild.
-      // A logical-state light flagged `flash` (via its rule) pulses the SAME
-      // way, so it also forces it.
-      const lightFlashing = (l: typeof f.lights[number]) =>
-        !!(p.effectiveState(l)?.attributes as Record<string, unknown> | undefined)?._flash;
-      const hasLiveFireplace = f.lights.some(l =>
-        ((l.iconKind === 'fireplace' || l.iconKind === 'heatlamp' || isFirepitKind(l.iconKind)) &&
-          p.effectiveState(l)?.state === 'on') || lightFlashing(l));
-      const keyLights = hasLiveFireplace ? `${Math.random()}` :
+      // NB there is NO per-frame force here any more. A lit fireplace / fire pit
+      // / heat lamp and a `flash`-flagged logic light used to compute their
+      // flicker inside the BUILDER, so this key was randomized to rebuild the
+      // whole light group every frame — ~22 % of the frame on a modest plan, and
+      // the source of the stale-matrixWorld pick hazard (a rebuilt object's
+      // world matrix is identity until the next render). The renderer now
+      // registers those channels at build and drives them from _animate
+      // (_advanceLightFlickers), so the group rebuilds only on a REAL change.
+      // `_flash` is therefore part of the key below: the flash starting or
+      // stopping changes which channels exist, and nothing else in the key is
+      // guaranteed to move with it.
+      const keyLights =
         `${p.configRev}|` + f.lights.map(l => {
           // effectiveState folds logic (derived on/color/flash from ANY entity),
           // localState, and the bound entity into one envelope — so a logic light
@@ -2214,6 +2214,7 @@ export class ThreeView extends LitElement {
           const fanSt = l.fanEntity ? states[l.fanEntity] : null;
           const fanA = (fanSt?.attributes ?? {}) as Record<string, unknown>;
           return `${st?.state ?? '-'}~${a.brightness ?? ''}~${a.rgb_color ?? ''}~${a.color_temp_kelvin ?? ''}` +
+                 `~${a._flash ? 1 : ''}` +
                  `~${a.percentage ?? ''}~${a.direction ?? ''}~${fanSt?.state ?? ''}:${fanA.percentage ?? ''}:${fanA.direction ?? ''}`;
         }).join(',') + '|' + f.switches.map(s => stOf(s.entity_id)).join(',');
       if (keyLights !== this._keyLights) {

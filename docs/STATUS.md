@@ -445,6 +445,39 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Fire flicker registered instead of rebuilt + glass is pick-through**
+  (2026-08-10, two user asks following the firepit hunt; unreleased —
+  on main past v0.64.0).
+  (1) A lit hearth / fire pit / heat lamp / flashing logic light
+  computed its flicker INSIDE the builder, so three-view randomized
+  `_keyLights` and rebuilt the whole light group EVERY frame — 3.1–3.8
+  ms against an 11–13 ms render, **~22 % of the frame rate just for
+  lighting a fire** (44 % on the reporting user's plan) — and it is
+  what made the stale-`matrixWorld` pick hazard permanent rather than a
+  rare race. Channels now register at build into `_lightFlickers` (ONE
+  entry per FIXTURE so a hearth's pool/embers/flames/point-light
+  flicker in unison, as the single shared `flickerMul` made them) and
+  `_fireFlames` (cones built at base height, posed per frame by
+  `scale.y` + position + roll — arithmetically identical to
+  re-extruding), advanced from `_animate` at **0.001 ms** and once at
+  the tail of the builder so a rebuild never pops. Lit-vs-dark penalty
+  within a run: **−22 % → −0.01 %**. Envelope pinned before/after —
+  every driven channel matches its closed form, means within 1.8 %.
+  three-view's force is gone; `_keyLights` gained a `_flash` term.
+  Alarming safety sensors + active alert beacons still force-rebuild,
+  so `_syncPickMatrices` stays load-bearing.
+  (2) Window/door GLAZING is now pick-through: a fixture visible behind
+  a pane wins the click, a pane with nothing behind still toggles its
+  window. Keyed on an explicit flag set by MATERIAL IDENTITY at three
+  builder sites — **never an opacity threshold**, for two measured
+  reasons: a light's hit sphere is opacity 0, and a CURTAINED pane
+  legitimately jumps to 0.42 (a threshold breaks the curtain pick — the
+  negative control proves it). Curtain fabric stays opaque to picks.
+  FIREPIT 92 → **110/110**, new **GLASSPICK 21/21**, six negative
+  controls each failing exactly the assertions they should; OPENCLICK
+  41, CURTAIN 71, WINDOW 73, DOORKINDS 131, LOGICLIGHT 22, WFX sky 70,
+  VANITYLIGHT 105, CLIMATEAPP 64, TERRAIN 122, FLIGHTSRENDER 591.
+
 - **STALE PICK MATRICES — the real "can turn the firepit on but not
   off" root cause** (2026-08-09, user-reported THREE times; the first
   two diagnoses were wrong; unreleased — on main past v0.64.0).

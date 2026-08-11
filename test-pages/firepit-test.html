@@ -834,6 +834,205 @@
     r3.destroy(); host3.remove();
   }
 
+  // ═══ 6. FLICKER WITHOUT A REBUILD (2026-08-10) ════════════════════════════
+  // The flicker used to be evaluated INSIDE updateLightsSwitches, so three-view
+  // randomized _keyLights and rebuilt the whole light group EVERY FRAME while
+  // any fire / heat lamp / flashing logic light was live. Measured cost of that
+  // rebuild on a 200-piece, 24-light plan: 3.1–3.8 ms per frame against an
+  // 11–13 ms render — a 22 % frame-rate penalty for lighting a fire — and it is
+  // what made the stale-matrixWorld hazard of §F permanent rather than a race.
+  //
+  // The channels are now REGISTERED at build (_lightFlickers / _fireFlames) and
+  // written by _advanceLightFlickers from _animate. This section pins that the
+  // motion survived the move: same envelopes, same flame breathing, no rebuild.
+  // Every G assertion below fails (or the section throws outright — there is no
+  // _advanceLightFlickers) against the pre-change renderer chunk.
+  {
+    const host4 = document.createElement('div');
+    host4.style.cssText = 'position:absolute;left:0;top:0;width:640px;height:480px';
+    document.body.appendChild(host4);
+    const r4 = new mod.ThreeDRenderer(host4);
+    await r4.load();
+    r4.resize(640, 480);
+    const noState = () => null;
+    const pit = { id: 'fp', x: FW / 2 + 1500, y: FD / 2 + 1200, entity_id: null,
+                  iconKind: 'firepit_round', label: '', localState: 'on' };
+    r4.updateFloor(floor3d([pit]), scene3d);
+    r4.updateLightsSwitches([pit], [], noState);
+
+    ok('G1 the renderer drives the flicker from a per-frame advance',
+       typeof r4._advanceLightFlickers === 'function');
+
+    const bodyOf = () => r4._lightGroup.children.find(c => c.type === 'Group');
+    const poolOf = () => r4._lightGroup.children.find(c => c.isMesh && c.geometry.type === 'CircleGeometry');
+    const plOf = () => r4._lightGroup.children.find(c => c.isPointLight);
+    // The big central flame: r = 118 (the others are 80/74/70, the core is 58).
+    const BIG_R = 118, BIG_H = 470, BIG_FOOT = 150;
+    const flameOf = () => bodyOf().children.find(
+      c => c.isMesh && c.userData.firepitFlame && c.geometry.type === 'ConeGeometry'
+        && c.geometry.parameters.radius > 100);
+    const emberOf = () => bodyOf().children.find(c => c.isMesh && c.userData.firepitEmber);
+
+    const body0 = bodyOf(), poolMat0 = poolOf().material, pl0 = plOf(), flame0 = flameOf();
+    const S = { pool: [], pl: [], flame: [], ember: [], scale: [], foot: [] };
+    const cols = new Set();
+    for (let i = 0; i < 90; i++) {
+      r4._advanceLightFlickers();
+      S.pool.push(poolOf().material.opacity);
+      S.pl.push(plOf().intensity);
+      cols.add(plOf().color.getHex());
+      const fl = flameOf();
+      S.flame.push(fl.material.emissiveIntensity);
+      S.scale.push(fl.scale.y);
+      S.foot.push(fl.position.y - BIG_H * fl.scale.y / 2);
+      S.ember.push(emberOf().material.opacity);
+      // 90 × 30 ms = 2.7 s of virtual time — more than π rad of the big flame's
+      // 1.4 rad/s height sine, so G7 sees its FULL range from any start phase.
+      await sleep(30);
+    }
+    const uniq = a => new Set(a.map(v => v.toFixed(6))).size;
+    const lo = a => Math.min(...a), hi = a => Math.max(...a);
+    const band = (a, min, max) => lo(a) >= min && hi(a) <= max;
+    const det = a => `${lo(a).toFixed(4)}..${hi(a).toFixed(4)} u=${uniq(a)}`;
+
+    // The whole point: none of the motion above required a new mesh/material.
+    ok('G2 (the headline) 90 flicker frames rebuilt NOTHING',
+       bodyOf() === body0 && poolOf().material === poolMat0 && plOf() === pl0
+       && flameOf() === flame0,
+       `${bodyOf() === body0}/${poolOf().material === poolMat0}/${plOf() === pl0}/${flameOf() === flame0}`);
+    // Envelopes are the pre-change arithmetic exactly: base × (0.85 + rand·0.30).
+    ok('G3 the floor pool opacity still flickers over its old envelope',
+       uniq(S.pool) >= 80 && band(S.pool, 0.3399, 0.4601), det(S.pool));          // 0.40 × mul
+    ok('G4 the point light intensity still flickers over its old envelope',
+       uniq(S.pl) >= 80 && band(S.pl, 1.6999, 2.3001), det(S.pl));                // 2.00 × mul
+    ok('G5 the flame emissive still flickers over its old envelope',
+       uniq(S.flame) >= 80 && band(S.flame, 1.3599, 1.8401), det(S.flame));       // 1.60 × mul
+    ok('G6 the ember bed still flickers over its old envelope',
+       uniq(S.ember) >= 80 && band(S.ember, 0.6119, 0.8281), det(S.ember));       // 0.72 × mul
+    // Height: h3 = 470 · (1 + 0.18·sin) · min(1.4, intensity + 0.4) — the cone is
+    // built at 470 and SCALED, so scale.y carries the whole sine.
+    ok('G7 the flame cone still breathes on its sine',
+       hi(S.scale) - lo(S.scale) > 0.15 && band(S.scale, 1.1479, 1.6521), det(S.scale));
+    ok('G8 …and its FOOT never moves while it breathes',
+       hi(S.foot) - lo(S.foot) < 0.01 && Math.abs(lo(S.foot) - BIG_FOOT) < 0.01, det(S.foot));
+    ok('G9 the fire still re-rolls its warm colour scale', cols.size >= 40, cols.size);
+
+    // No pop on rebuild: the materials are BUILT at a neutral multiplier of 1,
+    // so updateLightsSwitches applies the live flicker before returning. Without
+    // that call every rebuild would show one frame at exactly 0.40 (base × 1).
+    const postBuild = [];
+    for (let i = 0; i < 24; i++) {
+      r4.updateLightsSwitches([pit], [], noState);
+      postBuild.push(poolOf().material.opacity);
+    }
+    ok('G10 a rebuild lands already flickered (no full-brightness pop frame)',
+       uniq(postBuild) >= 20 && band(postBuild, 0.3399, 0.4601)
+       && !postBuild.every(v => Math.abs(v - 0.4) < 1e-9), det(postBuild));
+
+    // Registrations are dropped with the geometry they point at.
+    ok('G11 a lit fire registers exactly one flicker entry',
+       r4._lightFlickers.length === 1 && r4._lightFlickers[0].fire === true
+       && r4._fireFlames.length === 5,                      // 4 flames + the core
+       `${r4._lightFlickers.length}/${r4._fireFlames.length}`);
+    r4.updateLightsSwitches([{ ...pit, localState: 'off' }], [], noState);
+    ok('G12 …and putting it out drops every registration (no writes to freed materials)',
+       r4._lightFlickers.length === 0 && r4._fireFlames.length === 0,
+       `${r4._lightFlickers.length}/${r4._fireFlames.length}`);
+
+    // Heat lamp: a SLOW deterministic breathe, not a random flicker.
+    const lamp = { id: 'hl', x: FW / 2 - 1200, y: FD / 2, entity_id: null,
+                   iconKind: 'heatlamp', label: '', localState: 'on' };
+    r4.updateLightsSwitches([lamp], [], noState);
+    const domeOf = () => r4._lightGroup.children.find(c => c.type === 'Group')
+      .children.find(c => c.isMesh && c.geometry.type === 'SphereGeometry'
+        && c.material.emissiveIntensity > 0.06);
+    const dome0 = domeOf();
+    const lampS = [];
+    for (let i = 0; i < 60; i++) { r4._advanceLightFlickers(); lampS.push(domeOf().material.emissiveIntensity); await sleep(14); }
+    ok('G13 an ON heat lamp breathes without a rebuild',
+       domeOf() === dome0 && uniq(lampS) >= 30 && band(lampS, 0.8799, 1.1001),   // 1.1 × [0.8,1.0]
+       det(lampS));
+    ok('G14 …deterministically (a sine, not a random draw): it is monotone in stretches',
+       (() => { let flips = 0; for (let i = 2; i < lampS.length; i++) {
+         const a = lampS[i - 1] - lampS[i - 2], b = lampS[i] - lampS[i - 1];
+         if (a !== 0 && b !== 0 && Math.sign(a) !== Math.sign(b)) flips++; }
+         return flips <= 4; })(), 'direction changes');
+
+    // Logic-light flash: ANY kind, driven by the _flash attribute.
+    const bulb = { id: 'lg', x: FW / 2, y: FD / 2 - 1400, entity_id: 'light.x',
+                   iconKind: 'bulb', label: '' };
+    const flashSt = { state: 'on', attributes: { brightness: 255, rgb_color: [255, 0, 0], _flash: true } };
+    r4.updateLightsSwitches([bulb], [], id => (id === 'light.x' ? flashSt : null));
+    const bulbPool = () => r4._lightGroup.children.find(c => c.isMesh && c.geometry.type === 'CircleGeometry');
+    const bp0 = bulbPool().material;
+    const flashS = [];
+    for (let i = 0; i < 60; i++) { r4._advanceLightFlickers(); flashS.push(bulbPool().material.opacity); await sleep(14); }
+    ok('G15 a flashing logic light pulses without a rebuild',
+       bulbPool().material === bp0 && uniq(flashS) >= 30
+       && band(flashS, 0.1399, 0.4001),                     // 0.40 × [0.35,1.0]
+       det(flashS));
+    const steadySt = { state: 'on', attributes: { brightness: 255, rgb_color: [255, 0, 0] } };
+    r4.updateLightsSwitches([bulb], [], id => (id === 'light.x' ? steadySt : null));
+    const steady = [];
+    for (let i = 0; i < 12; i++) { r4._advanceLightFlickers(); steady.push(bulbPool().material.opacity); }
+    ok('G16 (negative control) a NON-flashing light registers nothing and never moves',
+       r4._lightFlickers.length === 0 && uniq(steady) === 1
+       && Math.abs(steady[0] - 0.4) < 1e-9, det(steady));
+
+    r4.destroy(); host4.remove();
+  }
+
+  // ═══ 7. three-view no longer force-rebuilds the light group ═══════════════
+  // The other half of the fix: with the flicker registered, _keyLights is an
+  // ordinary dirty key again. Pre-change this counted one rebuild PER TICK.
+  {
+    const { Planner: VPlanner2 } = await import('./fpview.mod.js' + V);
+    const host5 = document.createElement('div');
+    host5.style.cssText = 'position:absolute;left:0;top:0;width:640px;height:480px';
+    document.body.appendChild(host5);
+    const view5 = document.createElement('diorama-three-view');
+    view5.style.cssText = 'position:absolute;inset:0;display:block';
+    host5.appendChild(view5);
+    const FW5 = 8000, FD5 = 6000;
+    const mkStore = (lights) => ({
+      v: 2, currentFloorId: 'f1', activeSensorId: null, coverage: false, imperial: false,
+      showDetails: false, useRawTargets: false,
+      scene3d: { preset: 'night', floorColor: '#3a3f4a', floorTex: 'none',
+                 wallColor: '#7a8494', groundLevelMm: 0 },
+      floors: [{ id: 'f1', name: 'Home', w: FW5, d: FD5, walls: [], furniture: [], lights,
+        switches: [], sensors: [], motionSensors: [], envSensors: [], bleProxies: [],
+        doors: [], windows: [], rooms: [], groundAreas: [], voidAreas: [], pools: [],
+        bg: null, model3d: null, look3d: null }],
+    });
+    localStorage.removeItem('diorama:store:v1'); localStorage.removeItem('diorama:configs');
+    const pl5 = new VPlanner2();
+    const fake5 = new FakeHa({ diorama: mkStore([
+      { id: 'fp', x: FW5 / 2, y: FD5 / 2, entity_id: null, iconKind: 'firepit_round',
+        label: 'Pit', localState: 'on' }]) });
+    fake5.states = {};
+    pl5.connectWith(fake5);
+    await waitFor(() => pl5.configIndex !== null);
+    view5.planner = pl5;
+    await view5.updateComplete;
+    await waitFor(() => !!view5._renderer, 900);
+    const vr5 = view5._renderer;
+    vr5.resize(640, 480);
+    view5._tickOnce();                       // settle every key
+    let builds = 0;
+    const realUpdate = vr5.updateLightsSwitches.bind(vr5);
+    vr5.updateLightsSwitches = (...a) => { builds++; return realUpdate(...a); };
+    for (let i = 0; i < 40; i++) { view5._tickOnce(); await sleep(6); }
+    ok('G17 (the fix) 40 ticks with a LIT fire pit rebuild the light group 0 times',
+       builds === 0, `builds=${builds}`);
+    // …but a REAL change still rebuilds it — the key is not simply dead.
+    pl5.floor().lights[0].localState = 'off';
+    pl5.emitConfig();
+    view5._tickOnce();
+    ok('G18 …while putting the fire out still rebuilds it exactly once',
+       builds === 1, `builds=${builds}`);
+    view5.remove(); host5.remove();
+  }
+
   let pass = 0; const fails = [];
   for (const t of tests) { if (t.ok) pass++; else fails.push(t.name); }
   const total = tests.length;

@@ -1,0 +1,304 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>glass pick test</title>
+<style>html,body{margin:0;background:#111;color:#ccc;font:12px sans-serif}#c{width:1000px;height:700px}</style>
+<div id="c"></div>
+<!--
+  GLASS IS PICK-THROUGH (2026-08-10, user-reported).
+
+  From ~9 of 384 camera poses around an outdoor fire pit, a window pane at 0.16
+  opacity won the 3D raycast and silently toggled that WINDOW instead of the
+  fire. Glass gives the user no cue that anything is in the way, and under
+  wallCutaway the wall AROUND the pane fades to 0.06 while the pane stays fully
+  clickable — so the only thing between the click and the fixture is something
+  you can see straight through.
+
+  The ruling: you can see through it, so you click through it. Window + door
+  GLAZING is tagged `userData.pickThrough`; _raycastFixture treats a hit that
+  reaches its tag through such a mesh as a FALLBACK — it keeps scanning the ray
+  and only uses the remembered glass hit when nothing else resolves. So a
+  fixture behind a pane wins, and a pane with nothing behind it still toggles
+  its window.
+
+  The flag is deliberately NOT an opacity threshold. Two reasons, both pinned:
+  every light carries an always-on 400 mm `opacity: 0` hit sphere that must
+  never be skipped (T8 / P10 / P11), and glass opacity is STATE-DEPENDENT — a
+  curtained window's pane jumps to 0.42 (the blocked-daylight cue), so a
+  threshold would silently stop treating it as glass (P4).
+
+  Harness build (from the repo root; NEVER reuse stale bundles):
+    npm run build
+    H=/tmp/diorama-harness-glass
+    rm -rf "$H"; mkdir -p "$H"
+    cp test-pages/glass-pick-test.html "$H"/      # page FIRST…
+    cp -r dist/* "$H"/                            # …then dist (assets/ is gitignored but populated)
+  Run headless (serve over http — Chrome blocks dynamic module imports on file://):
+    (cd "$H" && python3 -m http.server 8951 &)
+    google-chrome --headless=new --disable-gpu --use-angle=swiftshader \
+      --enable-unsafe-swiftshader --run-all-compositor-stages-before-draw \
+      --window-size=1200,900 --virtual-time-budget=60000 --dump-dom \
+      "http://localhost:8951/glass-pick-test.html" | grep -o "<title>[^<]*"
+-->
+<script type="module">
+ try {
+  const V = '?v=' + Date.now();
+  const mod = await import('./assets/three-renderer.js' + V);
+
+  const tests = [];
+  const ok = (name, cond, detail = '') => tests.push({ name, ok: !!cond, detail: String(detail) });
+
+  const host = document.getElementById('c');
+  const r = new mod.ThreeDRenderer(host);
+  await r.load();
+  r.resize(1000, 700);
+  // The renderer's own rAF would re-render (and re-ease the camera) between the
+  // synchronous camera pose and the pick. Every aim below is deterministic.
+  if (r._rafId !== null) { cancelAnimationFrame(r._rafId); r._rafId = null; }
+
+  const FW = 8000, FD = 8000;
+  //  _w(wx, wy, h) = (FW/2 − wx, h, wy − FD/2). Plan ↔ scene, used in both
+  //  directions: everything sits on the wy = 4000 line (scene z = 0) with its
+  //  fixture 1000 mm behind it (wy = 5000, scene z = +1000).
+  const planX = sceneX => FW / 2 - sceneX;
+  const floorOf = (over = {}) => Object.assign({
+    id: 'f1', name: 'T', w: FW, d: FD, walls: [], furniture: [], lights: [], switches: [],
+    sensors: [], motionSensors: [], envSensors: [], doors: [], windows: [], rooms: [],
+    groundAreas: [], voidAreas: [], pools: [], bg: null, model3d: null, look3d: null,
+  }, over);
+  const scene3d = { preset: 'night', floorColor: '#3a3f4a', floorTex: 'none', wallColor: '#7a8494' };
+
+  const WIN = (id, sceneXAt, kind, over = {}) => Object.assign({
+    id, x: planX(sceneXAt), y: 4000, rotation: 0, w: 1600, kind,
+    sill: 100, height: 2200, entity_id: null, label: '',
+  }, over);
+  const LIGHT = (id, sceneXAt, over = {}) => Object.assign({
+    id, x: planX(sceneXAt), y: 5000, entity_id: null, iconKind: 'bulb',
+    label: '', localState: 'on', height: 1200,
+  }, over);
+
+  // ── The scene ─────────────────────────────────────────────────────────────
+  //  A  plain picture window, a light behind it            → the light must win
+  //  B  picture window with a CLOSED roller shade          → the shade must win
+  //  C  picture window with CLOSED curtains                → the curtain must win
+  //  D  casement pair (vertical mullion), light behind     → mullion vs pane
+  //  E  french door, light behind                          → the light must win
+  //  F  a lone light in the open                           → its opacity-0 sphere
+  const windows = [
+    WIN('wA',     0, 'picture'),
+    WIN('wB',  2600, 'picture', { coverEntity: 'cover.b' }),
+    WIN('wC', -2600, 'picture', { curtain: { style: 'split' }, curtainPos: 0 }),
+    WIN('wD',  5200, 'casement_pair'),
+  ];
+  // A door's (x, y) is its HINGE; the pane positions are read back from the
+  // built geometry below, so the exact span centre never has to be predicted.
+  const doors = [
+    { id: 'dE', x: planX(-5200) + 750, y: 4000, rotation: 0, w: 1500,
+      kind: 'french', entity_id: null, label: '', lockEntity: 'lock.e' },
+  ];
+  const lights = [
+    LIGHT('LA',     0), LIGHT('LB',  2600), LIGHT('LC', -2600),
+    LIGHT('LD1', 5200), LIGHT('LD2', 5700),   // behind D's mullion / behind its pane
+    LIGHT('LE', -5200),
+    // F/G: two lights in a line, out in the open and well away from every pane.
+    LIGHT('LF',  1300, { y: 1500, iconKind: 'strip' }),
+    LIGHT('LG',  1300, { y: 6500, iconKind: 'strip' }),
+  ];
+  const states = {
+    'cover.b': { state: 'closed', attributes: { current_position: 0 } },   // shade fully DOWN
+    'lock.e': { state: 'locked', attributes: {} },
+  };
+  const stateOf = id => states[id] ?? null;
+  r.updateFloor(floorOf({ windows, doors, lights }), scene3d);
+  r.updateDoorsWindows(doors, windows, stateOf);
+  r.updateLightsSwitches(lights, [], stateOf);
+  r._scene.updateMatrixWorld(true);
+
+  // ═══ 1. TAG CENSUS — exactly the glazing, nothing else ════════════════════
+  const walk = (root, fn) => { root.traverse(o => { if (o.isMesh) fn(o); }); };
+  const winGroups = {};
+  r._doorGroup.traverse(o => {
+    if (o.userData && (o.userData.kind === 'window' || o.userData.kind === 'door')) {
+      winGroups[String(o.userData.fixtureId)] = o;
+    }
+  });
+  ok('T0 every window + the door built', ['wA', 'wB', 'wC', 'wD', 'dE'].every(k => winGroups[k]),
+     Object.keys(winGroups).join(','));
+
+  const census = (id) => {
+    let through = 0, opaque = 0; const throughTypes = new Set(), opaqueTags = new Set();
+    walk(winGroups[id], m => {
+      if (m.userData.outline) return;                     // inverted-hull shells
+      if (m.userData.pickThrough) { through++; throughTypes.add(m.material.transparent ? 'transparent' : 'OPAQUE'); }
+      else opaque++;
+    });
+    // Tags live on GROUPS as often as on meshes (a curtain panel is a Group
+    // carrying kind='curtain'; the rod is a mesh carrying kind='curtainRod'), so
+    // the tag census walks every object, not just the meshes.
+    winGroups[id].traverse(o => {
+      if (o === winGroups[id] || o.userData.outline || o.userData.pickThrough) return;
+      if (o.userData.kind) opaqueTags.add(o.userData.kind);
+    });
+    return { through, opaque, throughTypes: [...throughTypes], opaqueTags: [...opaqueTags] };
+  };
+  const cA = census('wA'), cB = census('wB'), cC = census('wC'), cD = census('wD'), cE = census('dE');
+  ok('T1 a picture window flags exactly its ONE pane', cA.through === 1, JSON.stringify(cA));
+  ok('T2 …and every flagged mesh is genuinely translucent glass',
+     cA.throughTypes.length === 1 && cA.throughTypes[0] === 'transparent', cA.throughTypes.join(','));
+  ok('T3 the shade fabric + weight bar are NOT flagged',
+     cB.through === 1 && cB.opaque >= cA.opaque + 2, JSON.stringify(cB));
+  ok('T4 curtain fabric + rod are NOT flagged',
+     cC.through === 1 && cC.opaqueTags.includes('curtain') && cC.opaqueTags.includes('curtainRod'),
+     JSON.stringify(cC));
+  // A casement pair is two glazed leaves + one opaque centre mullion (the leaves
+  // carry no frame bars of their own) — so exactly 2 flagged, 1 not.
+  ok('T5 a casement pair flags both leaves and not the centre mullion',
+     cD.through === 2 && cD.opaque === 1, JSON.stringify(cD));
+  ok('T6 a french door flags its two glazed leaves only',
+     cE.through === 2 && cE.opaque >= 4, JSON.stringify(cE));
+  ok('T7 …and its lock deadbolts stay ordinary pick targets',
+     cE.opaqueTags.includes('lock'), cE.opaqueTags.join(','));
+  // Structural guard for the deliberate NON-choice: the lights' invisible hit
+  // spheres are opacity 0 and must never be confused for "see-through".
+  let zeroOpacityHits = 0, flaggedInLights = 0;
+  r._lightGroup.traverse(o => {
+    if (!o.isMesh) return;
+    if (o.material && o.material.transparent && o.material.opacity === 0) zeroOpacityHits++;
+    if (o.userData.pickThrough) flaggedInLights++;
+  });
+  ok('T8 (the trap) invisible opacity-0 hit meshes exist and are NOT flagged',
+     zeroOpacityHits >= lights.length && flaggedInLights === 0,
+     `${zeroOpacityHits} invisible / ${flaggedInLights} flagged`);
+
+  // ═══ 2. FUNCTIONAL PICKS ══════════════════════════════════════════════════
+  // Aim straight down +z at a world point, from 4 m in front of it. Everything
+  // in the scene sits on one z line, so the ray is axis-aligned and the pane /
+  // frame / fixture ordering along it is exact.
+  const vec = () => r._camera.position.clone();
+  const pickAt = (wx, wy, wz) => {
+    r.setCameraView([wx, wy, wz - 4000], [wx, wy, wz]);
+    r._scene.updateMatrixWorld(true);
+    r._camera.updateMatrixWorld(true);
+    r._camera.matrixWorldInverse.copy(r._camera.matrixWorld).invert();
+    const v = vec().set(wx, wy, wz).project(r._camera);
+    const rect = r._renderer.domElement.getBoundingClientRect();
+    return r._raycastFixture(rect.left + (v.x * 0.5 + 0.5) * rect.width,
+                             rect.top + (-v.y * 0.5 + 0.5) * rect.height);
+  };
+  // World position of a light's BODY group (the thing we aim at behind glass).
+  const lightPos = (id) => {
+    const g = r._lightGroup.children.find(c => c.type === 'Group' && c.userData.fixtureId === id);
+    return g ? g.position.clone() : null;
+  };
+  const paneOf = (id, nth = 0) => {
+    const out = [];
+    walk(winGroups[id], m => { if (m.userData.pickThrough && !m.userData.outline) out.push(m); });
+    return out[nth] ?? null;
+  };
+  const worldOf = (m) => m.getWorldPosition(vec().set(0, 0, 0));
+
+  // ── A: the report. A light behind a pane, aimed dead-on. ──────────────────
+  {
+    const L = lightPos('LA');
+    const pane = paneOf('wA');
+    const pw = worldOf(pane);
+    const alignedX = Math.abs(pw.x - L.x) < 1, between = pw.z < L.z;
+    ok('P0 (fixture sanity) window A\'s pane really is on the ray in front of the light',
+       alignedX && between && Math.abs(pw.y - L.y) < 700, `pane=${pw.x.toFixed(0)},${pw.y.toFixed(0)},${pw.z.toFixed(0)} light=${L.x.toFixed(0)},${L.y.toFixed(0)},${L.z.toFixed(0)}`);
+    const hit = pickAt(L.x, L.y, L.z);
+    ok('P1 (the headline) a light BEHIND a window pane wins the pick',
+       hit && hit.kind === 'light' && hit.fixtureId === 'LA', JSON.stringify(hit));
+  }
+  // ── A′: the same pane, nothing behind it → the window still resolves. ─────
+  {
+    const pw = worldOf(paneOf('wA'));
+    const hit = pickAt(pw.x + 600, pw.y, pw.z);       // off to the side of the light
+    ok('P2 a pane with nothing behind it still resolves its WINDOW',
+       hit && hit.kind === 'window' && hit.fixtureId === 'wA', JSON.stringify(hit));
+  }
+  // ── B: a closed roller shade is opaque cloth — it must block. ─────────────
+  {
+    const L = lightPos('LB');
+    const hit = pickAt(L.x, L.y, L.z);
+    ok('P3 a CLOSED shade behind the pane blocks the light (the window wins)',
+       hit && hit.kind === 'window' && hit.fixtureId === 'wB', JSON.stringify(hit));
+  }
+  // ── C: closed curtains are opaque cloth, and they carry their OWN tag. ────
+  {
+    const L = lightPos('LC');
+    const hit = pickAt(L.x, L.y, L.z);
+    ok('P4 CLOSED curtains block the light and still resolve as a curtain',
+       hit && hit.kind === 'curtain' && hit.fixtureId === 'wC', JSON.stringify(hit));
+  }
+  // ── D: the discriminating PAIR. Same window, same kind of light behind:
+  //      through the vertical MULLION → the window; through a PANE → the light.
+  {
+    const mull = lightPos('LD1'), pane = lightPos('LD2');
+    const hitMullion = pickAt(mull.x, mull.y, mull.z);
+    const hitPane = pickAt(pane.x, pane.y, pane.z);
+    ok('P5 through the casement MULLION the window still wins',
+       hitMullion && hitMullion.kind === 'window' && hitMullion.fixtureId === 'wD',
+       JSON.stringify(hitMullion));
+    ok('P6 …through the PANE beside it the light behind wins',
+       hitPane && hitPane.kind === 'light' && hitPane.fixtureId === 'LD2',
+       JSON.stringify(hitPane));
+  }
+  // ── E: door glazing behaves exactly like window glazing. ──────────────────
+  {
+    const L = lightPos('LE');
+    const hit = pickAt(L.x, L.y, L.z);
+    ok('P7 a light behind a FRENCH DOOR pane wins the pick',
+       hit && hit.kind === 'light' && hit.fixtureId === 'LE', JSON.stringify(hit));
+    // A stile / rail of the same leaf is opaque joinery → the door.
+    const stile = [];
+    walk(winGroups.dE, m => { if (!m.userData.pickThrough && !m.userData.outline
+        && m.userData.kind !== 'lock' && m.geometry.parameters
+        && m.geometry.parameters.width < 200 && m.geometry.parameters.height > 800) stile.push(m); });
+    const sp = stile.length ? worldOf(stile[0]) : null;
+    ok('P8 …while its stile still resolves the DOOR',
+       (() => { if (!sp) return false; const h = pickAt(sp.x, sp.y, sp.z + 900);
+                return h && h.kind === 'door' && h.fixtureId === 'dE'; })(),
+       sp ? JSON.stringify(pickAt(sp.x, sp.y, sp.z + 900)) : 'no stile found');
+    // The deadbolt keeps its priority over the door it is mounted on.
+    const bolts = [];
+    walk(winGroups.dE, m => { if (m.userData.kind === 'lock') bolts.push(m); });
+    const bp = bolts.length ? worldOf(bolts[0]) : null;
+    ok('P9 …and the deadbolt still beats the door',
+       (() => { if (!bp) return false; const h = pickAt(bp.x, bp.y, bp.z - 400);
+                return h && h.kind === 'lock'; })(),
+       bp ? JSON.stringify(pickAt(bp.x, bp.y, bp.z - 400)) : 'no bolt found');
+  }
+  // ── F/G: two lights in a line, and this ray meets ONLY their invisible 400 mm
+  //      hit spheres (`opacity: 0`). The near one must win.
+  //
+  //      This is where an opacity threshold would have been WRONG in principle
+  //      — those spheres are the most see-through things in the scene — even
+  //      though the measured break shows up at P4 instead: with a threshold, a
+  //      CURTAINED window's glass legitimately sits at 0.42 and stops being
+  //      pick-through, so the pane swallows the curtain click. (P10/P11 survive
+  //      a threshold only because the fallback is remembered NEAREST-FIRST,
+  //      which is itself worth pinning — see the `??=` in _raycastFixture.)
+  {
+    const L = lightPos('LF');
+    const hit = pickAt(L.x, L.y + 330, L.z);
+    ok('P10 an invisible opacity-0 hit sphere still picks its light',
+       hit && hit.kind === 'light' && hit.fixtureId === 'LF', JSON.stringify(hit));
+    ok('P11 …and is never overtaken by the light 1.5 m behind it',
+       hit && hit.fixtureId === 'LF' && lightPos('LG') != null
+       && lightPos('LG').z > L.z, `${JSON.stringify(hit)} LG.z=${lightPos('LG')?.z}`);
+  }
+
+  r.destroy();
+  let pass = 0; const fails = [];
+  for (const t of tests) { if (t.ok) pass++; else fails.push(t.name); }
+  const total = tests.length;
+  const title = pass === total ? `GLASSPICK PASS ${pass}/${total}`
+    : `GLASSPICK FAIL ${pass}/${total} [${fails.join(',')}]`;
+  document.title = title;
+  document.body.insertAdjacentHTML('beforeend',
+    `<pre style="position:fixed;left:8px;top:8px;color:#8f8;max-height:96vh;overflow:auto">${title}\n` +
+    tests.map(t => `${t.ok ? 'PASS' : 'FAIL'} ${t.name} — ${t.detail}`).join('\n') + `</pre>`);
+ } catch (e) {
+  document.title = 'GLASSPICK ERROR ' + (e && e.message ? e.message : String(e));
+  console.error(e);
+ }
+</script>
