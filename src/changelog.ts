@@ -23,6 +23,16 @@ export const CHANGELOG_DISPLAY_COUNT = 10;
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: 'v0.65.0', name: 'straighten up', date: '2026-08-10',
+    notes: [
+      'Turning a lit fire OFF in 3D works — it never did. A lit fire was rebuilding the whole light group every frame, which both ate ~22% of your frame rate and left the click landing on nothing',
+      'Click through glass: a fire or a lamp seen through a window is what you hit, not the pane',
+      'The mower parks nose-out in its dock instead of burying itself in the wall behind it',
+      'Every demo floor plan straightened up — real bed sizes with headboards against the wall, 232 pieces turned to face the room instead of the wall, and overlapping furniture separated',
+      'Dragging a table no longer reaches through a wall and drags a chair in the next room with it',
+    ],
+  },
+  {
     version: 'v0.64.0', name: 'upstairs, downstairs', date: '2026-08-09',
     notes: [
       'Stairs, properly built: start-a-step-down by default, a step-count entry, side walls up to the level above, risers/newel posts/handrails, stringers under open flights — and half-flights that line up and set their own elevation',

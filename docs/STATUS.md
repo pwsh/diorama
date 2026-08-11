@@ -1,6 +1,6 @@
 # Project status & pick-up guide
 
-Last updated: 2026-08-09, at **v0.64.0**. This is the single document to
+Last updated: 2026-08-10, at **v0.65.0**. This is the single document to
 read (alongside `CLAUDE.md`) to resume work with full context.
 
 ## Where things stand
@@ -441,13 +441,32 @@ instance.
   Hollywood / backlit mirror) with the first per-kind mount-height
   table; the queen bed corrected to a real 1524×2032; and user-toggle
   avatar immunity — an avatar can no longer undo a device you just
-  switched, the real cause of the "can't turn the firepit off" report).
+  switched, the real cause of the "can't turn the firepit off" report)
+  → v0.65.0 straighten up (the fix-and-audit wave: **the firepit report
+  finally root-caused** — a raycast reads `matrixWorld`, only `render()`
+  refreshes it, and a freshly constructed Object3D has an identity one
+  with `matrixWorldNeedsUpdate === false`, so a lit fire's per-frame
+  rebuild left every pick landing at the scene origin; an unlit pit is
+  not force-rebuilt, which is the whole on/off asymmetry, and an
+  ALARMING safety sensor was unclickable in 3D for the same reason.
+  Fixed twice over: `_syncPickMatrices` at the pick, and the flicker
+  moved out of the builder into a registered advance loop, which also
+  returned the ~22 % of frame rate a lit fire was costing. Glass became
+  pick-through — you see through it, so you click through it. The mower
+  parks nose-OUT of its dock, 60 mm forward, after measuring that its
+  546 mm body never fit centred in 494 mm of dock. And the demo
+  floorplan library got a full audit: ~400 furniture corrections across
+  all 18 plans, every bed onto a real size with the headboard on the
+  wall, 232 wall-backers turned to face the room, 19 interpenetrations
+  separated — plus validator checks 14–16 so none of it can come back,
+  and a wall guard on seat capture after finding the live table-carry
+  drag would reach through a partition and re-aim a toilet in the next
+  room).
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
 - **Fire flicker registered instead of rebuilt + glass is pick-through**
-  (2026-08-10, two user asks following the firepit hunt; unreleased —
-  on main past v0.64.0).
+  (2026-08-10, two user asks following the firepit hunt; v0.65.0).
   (1) A lit hearth / fire pit / heat lamp / flashing logic light
   computed its flicker INSIDE the builder, so three-view randomized
   `_keyLights` and rebuilt the whole light group EVERY frame — 3.1–3.8
@@ -480,7 +499,7 @@ instance.
 
 - **STALE PICK MATRICES — the real "can turn the firepit on but not
   off" root cause** (2026-08-09, user-reported THREE times; the first
-  two diagnoses were wrong; unreleased — on main past v0.64.0).
+  two diagnoses were wrong; v0.65.0).
   A raycast reads `object.matrixWorld`, which only `renderer.render()`
   recomputes, and a freshly CONSTRUCTED `Object3D` has an identity
   matrixWorld with `matrixWorldNeedsUpdate === false` (that flag is
@@ -515,7 +534,7 @@ instance.
   checks 14–16 + wall-aware seat capture** (2026-08-09, user-requested
   "review all the demo floorplans for wall and object overlapping
   interactions and orientation and replace the existing beds with the
-  updated dimensions"; unreleased — on main past v0.64.0). One read-only
+  updated dimensions"; v0.65.0). One read-only
   Opus survey, three parallel Opus fix agents on disjoint plan modules,
   one engine agent, one validator agent.
   **What was wrong**: the settle pass only ever auto-corrected pieces
@@ -554,7 +573,7 @@ instance.
 - **Mower parked pose: nose OUT of the dock + a 60 mm forward seat**
   (2026-08-09, user-reported "the mower is also docked 180 degrees
   incorrectly in the dock so it ends up intersecting the wall";
-  unreleased — on main past v0.64.0). `dockParkedHeading` REVERSED to
+  v0.65.0). `dockParkedHeading` REVERSED to
   `+frontVectorPlan` (0 → −π/2 … 270 → 0) — the shipped convention had
   aimed the nose INTO the dock, at its back wall. Measured, not
   argued: the 3D rig's front reach is 276 mm vs a dock back-wall inner
