@@ -23,6 +23,16 @@ export const CHANGELOG_DISPLAY_COUNT = 10;
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: 'v0.66.0', name: 'ground control', date: '2026-08-15',
+    notes: [
+      'Flight tracking works again: airplanes.live now blocks everyone, so OpenSky is the new default and Home Assistant fetches it for you — Settings writes the YAML to paste, with your own location already filled in',
+      'Your own ADS-B receiver can go the same route, which skips the CORS setup entirely — though fetching it directly is lighter if you can, and the guide explains when to pick which',
+      'New Demo source: invented aircraft on fixed circuits, no network and no Home Assistant needed — the live demo now has a sky full of planes',
+      'Offline panels say "needs a Home Assistant connection" instead of quietly failing, and the ISS keeps flying regardless',
+      'A local receiver hears everything for hundreds of miles; only what is inside your radius is drawn, and that is now guaranteed by test',
+    ],
+  },
+  {
     version: 'v0.65.0', name: 'straighten up', date: '2026-08-10',
     notes: [
       'Turning a lit fire OFF in 3D works — it never did. A lit fire was rebuilding the whole light group every frame, which both ate ~22% of your frame rate and left the click landing on nothing',

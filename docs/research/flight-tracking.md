@@ -847,3 +847,46 @@ lie). The two sources that genuinely work with no Home Assistant are the
 synthetic `demo` source and `local` with a browser-reachable URL — and a local
 config that names a proxy command demotes to the direct fetch when offline
 rather than refusing. The ISS is unaffected throughout: separate CORS-open feed.
+
+#### §2.11a — which local transport to prefer (efficiency, measured)
+
+The proxy of §2.11 exists to defeat CORS and mixed content, **not** for
+performance. Where both transports are available, **direct is strictly lighter**
+and should be preferred; the proxy is the fallback for an HTTPS panel (where
+direct is impossible at any efficiency) or an unwillingness to touch the
+receiver's web server.
+
+Basis: the repo's real 94-aircraft capture
+(`test-pages/fixtures/adsb/airplanes-live-lax.json`, 48 963 bytes) gives
+**≈520 bytes per readsb aircraft row** — the same row shape a local
+`aircraft.json` emits, minus airplanes.live's two bonus fields, so it is a
+slightly conservative basis.
+
+The payload is driven by **antenna reach, not the configured radius** — a
+receiver reports everything it hears and Diorama filters client-side in
+`_applyFlights` *after* the fetch. So the radius setting does not reduce
+transfer for this source at all.
+
+| aircraft heard | payload | at an 8 s poll |
+|---|---|---|
+| ~100 | ~52 KB | ~6.5 KB/s |
+| ~300 | ~156 KB | ~20 KB/s |
+
+Direct is one LAN hop. Through the proxy the same bytes cross the wire twice
+(receiver→HA, HA→panel) and HA performs an aiohttp request, JSON handling and a
+WebSocket frame per poll.
+
+**The dominant cost is not bandwidth.** The return trip rides the same HA
+WebSocket that carries `state_changed` at ~10 Hz — the stream driving live
+device state and the avatar rigs. Adding 50–150 KB to that connection every 8 s
+competes with the live path the panel's responsiveness depends on. A direct
+fetch keeps aircraft traffic off HA entirely.
+
+Latency is NOT a differentiator (one hop vs three is tens of ms, and
+`_advanceFlights` dead-reckons between polls, so it is invisible). Do not
+justify the choice on latency.
+
+Wire-format aside: OpenSky's positional state arrays measure ≈128 bytes per
+aircraft (`opensky-states.json`, 5 768 bytes / 45 states) — roughly **4× denser
+than the readsb shape**, precisely because they carry no registry enrichment.
+That density and the §2.9 capability gap are the same fact seen twice.

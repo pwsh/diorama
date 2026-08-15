@@ -444,6 +444,14 @@ aircraft list through HA's state machine + recorder as attributes, whereas `retu
 bypasses the state machine entirely. `unwrapRestCommandPayload` already parsed a raw-STRING
 `content`, which is load-bearing here — some receiver installs serve `aircraft.json` as
 `text/plain`, not `application/json` (pinned with an HTML-body negative control).
+**PREFER DIRECT WHERE BOTH WORK (research §2.11a, measured)** — the proxy is for
+CORS/mixed-content, NOT performance. A receiver reports everything its antenna hears and
+`_applyFlights` filters CLIENT-side, so the radius setting does not shrink the payload; at
+≈520 bytes/row (real 94-aircraft capture) that is ~52 KB per poll at 100 aircraft, ~156 KB at
+300. Direct is one LAN hop; the proxy sends the same bytes twice AND — the dominant cost — the
+return trip rides the SAME HA WebSocket carrying `state_changed` at ~10 Hz, i.e. the live path
+the avatar rigs depend on. Latency is NOT a differentiator (dead reckoning hides it); never
+argue the choice on latency. Docs say the same in the guide's "Why direct is lighter".
 **`demo` — deterministic synthetic traffic (2026-08-15, user-requested; the `weather` demo-source
 precedent)**: zero network, zero HA, works offline, so the gh-pages showcase actually shows the
 feature. `demoFlightPoints(nowMs, origin, radiusNm, cfg?)` is pure + ZERO-import in flights.ts

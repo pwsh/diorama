@@ -117,11 +117,24 @@ header on `aircraft.json` by default, so the panel can't read it directly. And
 if Diorama is served over **HTTPS** while the receiver is plain **HTTP**, the
 browser blocks the request outright as mixed content — no header fixes that.
 
-You have two options.
+You have two options. **Fetch directly if you can** — it's meaningfully
+lighter, for reasons worth understanding before you choose.
 
-**Let Home Assistant fetch it** (recommended — nothing on the receiver
-changes). Enter the service name in the settings block and paste its generated
-YAML:
+**Option 1 — fetch directly from the browser** *(preferred)*. Add the header to
+the receiver. For tar1090's lighttpd, drop a file into
+`/etc/lighttpd/conf-enabled/` and restart lighttpd:
+
+```lighttpd
+$HTTP["url"] =~ "^/tar1090/data/aircraft\.json$" {
+    setenv.add-response-header = ( "Access-Control-Allow-Origin" => "*" )
+}
+```
+
+nginx wants `add_header Access-Control-Allow-Origin *;` and Apache
+`Header set Access-Control-Allow-Origin "*"` on the same location.
+
+**Option 2 — let Home Assistant fetch it.** Nothing on the receiver changes.
+Enter a service name in the settings block and paste its generated YAML:
 
 ```yaml
 rest_command:
@@ -132,25 +145,42 @@ rest_command:
 ```
 
 Home Assistant is on your network and fetches server-side, so neither CORS nor
-mixed content applies.
-
-**Or fetch it directly from the browser**, by adding the header to the
-receiver. For tar1090's lighttpd, drop a file into
-`/etc/lighttpd/conf-enabled/` and restart lighttpd:
-
-```lighttpd
-$HTTP["url"] =~ "^/tar1090/data/aircraft\.json$" {
-    setenv.add-response-header = ( "Access-Control-Allow-Origin" => "*" )
-}
-```
-
-nginx wants `add_header Access-Control-Allow-Origin *;` and Apache
-`Header set Access-Control-Allow-Origin "*"` on the same location. This route
-still can't cross the HTTPS-to-HTTP boundary, so if your panel is HTTPS, use
-the Home Assistant route.
+mixed content applies. Use this when option 1 isn't available — an **HTTPS
+panel**, where a direct fetch is impossible at any efficiency, or when you'd
+rather not touch the receiver's web server.
 
 Leave the service name empty to keep fetching directly; fill it in to switch to
 Home Assistant.
+
+##### Why direct is lighter
+
+A local receiver reports **everything its antenna hears**. The radius setting
+filters *after* the fetch, on your device — so a 15 nm radius doesn't shrink
+the payload at all. Measured against a real capture, a readsb aircraft row is
+about **520 bytes**:
+
+| Aircraft heard | Payload | At an 8 s poll |
+|---|---|---|
+| ~100 | ~52 KB | ~6.5 KB/s |
+| ~300 | ~156 KB | ~20 KB/s |
+
+Fetched directly, that's one hop from your browser to the receiver. Through
+Home Assistant the same bytes cross the wire **twice** — receiver to HA, then
+HA to the panel — and HA does an HTTP request, JSON handling and a WebSocket
+frame on every poll.
+
+The part that matters most isn't the kilobytes: the return trip rides the
+**same WebSocket that carries live device state at around 10 Hz**, the stream
+driving your avatars and everything that makes the panel feel live. Adding
+50–150 KB to it every 8 seconds competes with that. A direct fetch keeps
+aircraft traffic off Home Assistant entirely.
+
+Latency isn't a factor either way — one hop versus three is a few tens of
+milliseconds, and aircraft are dead-reckoned between polls, so you'd never see
+it.
+
+None of this applies to OpenSky or adsb.lol: there the proxy is mandatory and
+there's no choice to weigh.
 
 #### Without Home Assistant
 
