@@ -82,21 +82,88 @@ International Space Station.
 ### Turning it on
 
 Open **Settings ▸ Integrations ▸ Flight tracking** and check **Show aircraft & satellites**. The status line at the top of the block tells you what's
-happening: `disabled`, `needs a location — calibrate a GPS landmark or set a weather location`, `fetch failing — check source settings`, or a live
+happening: `disabled`, `needs a location — calibrate a GPS landmark or set a weather location`, `needs a Home Assistant rest_command`, `needs a Home Assistant connection`, `fetch failing — check source settings`, or a live
 `N aircraft · updated Ns ago`.
+
+#### Why most sources go through Home Assistant
+
+A browser may only read a response from another site if that site explicitly
+says so, with an `Access-Control-Allow-Origin` header. Command-line tools like
+`curl` never ask for that permission, which is why an ADS-B URL can return
+perfect JSON in a terminal and still be unreadable to the panel. There is no
+longer any keyless, browser-readable ADS-B feed.
+
+So Diorama has **Home Assistant** make the request instead, using a small
+`rest_command` you paste into `configuration.yaml`. The settings block writes
+that YAML out for you, filled in with your own location and radius, with a copy
+button. Change the radius later and you never touch the YAML again — the URL is
+templated, not baked in.
 
 Then pick a **source**:
 
 | Source | What it is | Watch out for |
 |---|---|---|
-| **Cloud (airplanes.live)** | The default. A keyless public feed fetched straight from your browser. | Sends your home coordinates to a third party. It's a non-commercial community feed with no service guarantee. |
-| **Local receiver (LAN)** | Your own dump1090 / readsb / tar1090 `aircraft.json`. Freshest data, nothing leaves your network. | Your receiver must send an `Access-Control-Allow-Origin` header — it does **not** by default. And a Diorama panel served over **HTTPS cannot fetch an `http://` receiver** at all; the settings block warns you when it spots that combination. |
-| **Home Assistant entity** | A rest/template sensor that fetched the data server-side; its attributes carry the aircraft list. | The way to use feeds that browsers can't reach directly. |
+| **OpenSky Network** | The default. Fetched by Home Assistant through a `rest_command`. | Needs the one-time YAML block. Anonymous access is limited (roughly 400 credits/day, ~4000 with a free account), so it polls every 60 s by default. It carries no aircraft registry data, so airline liveries still work but military skins, privacy dimming and type-specific models don't. |
+| **adsb.lol** | Also fetched by Home Assistant through a `rest_command`. | Needs the same YAML block. Richer than OpenSky — full aircraft type, operator and military/privacy flags. |
+| **Local receiver (LAN)** | Your own dump1090 / readsb / tar1090 `aircraft.json`. Freshest data, nothing leaves your network. | Two ways to set it up — see below. |
+| **Home Assistant entity** | A rest/template sensor that fetched the data server-side; its attributes carry the aircraft list. | Works, but pushes the whole aircraft list through HA's state machine and recorder every poll. The `rest_command` options above avoid that. |
+| **Demo (synthetic traffic)** | Invented aircraft on fixed circuits. No network, no Home Assistant. | Not real traffic. It's for previewing the feature, or for a display that has no data source. |
+| **airplanes.live** | Formerly the default. | **Now returns 403 to everyone** unless you've emailed them for access. Selectable so an approved user keeps working. |
+
+#### Setting up a local receiver
+
+Your receiver's web server does not send the `Access-Control-Allow-Origin`
+header on `aircraft.json` by default, so the panel can't read it directly. And
+if Diorama is served over **HTTPS** while the receiver is plain **HTTP**, the
+browser blocks the request outright as mixed content — no header fixes that.
+
+You have two options.
+
+**Let Home Assistant fetch it** (recommended — nothing on the receiver
+changes). Enter the service name in the settings block and paste its generated
+YAML:
+
+```yaml
+rest_command:
+  diorama_local_adsb:
+    url: http://192.168.1.50/tar1090/data/aircraft.json
+    method: GET
+    timeout: 10
+```
+
+Home Assistant is on your network and fetches server-side, so neither CORS nor
+mixed content applies.
+
+**Or fetch it directly from the browser**, by adding the header to the
+receiver. For tar1090's lighttpd, drop a file into
+`/etc/lighttpd/conf-enabled/` and restart lighttpd:
+
+```lighttpd
+$HTTP["url"] =~ "^/tar1090/data/aircraft\.json$" {
+    setenv.add-response-header = ( "Access-Control-Allow-Origin" => "*" )
+}
+```
+
+nginx wants `add_header Access-Control-Allow-Origin *;` and Apache
+`Header set Access-Control-Allow-Origin "*"` on the same location. This route
+still can't cross the HTTPS-to-HTTP boundary, so if your panel is HTTPS, use
+the Home Assistant route.
+
+Leave the service name empty to keep fetching directly; fill it in to switch to
+Home Assistant.
+
+#### Without Home Assistant
+
+In the live demo — or any panel running offline — the sources that need Home
+Assistant report **needs a Home Assistant connection** rather than pretending
+to fetch. Two things still work: **Demo (synthetic traffic)**, and a **local
+receiver** your browser can reach directly. The ISS keeps flying either way; it
+comes from a separate feed that browsers are allowed to read.
 
 ### Filters & options
 
 - **Radius (nm)** — how far out to search and draw. Default 15, range 5–100.
-- **Poll (s)** — how often to refresh. Default 8, range 5–60. (The cloud feed documents a one-request-per-second limit; don't go below the minimum.)
+- **Poll (s)** — how often to refresh. Range 5–60. The default depends on the source: 60 s for OpenSky, to stay inside its daily credit budget, and 8 s for everything else.
 - **Min / max altitude (ft)** — leave blank for no filter. Useful for hiding cruising traffic and keeping only the approach path over your house.
 - **Track the ISS** — on by default; a live dot in the sky, no binding needed.
 
@@ -225,5 +292,6 @@ The **Alerts** sub-block feeds Diorama's [alert bell](info-displays.html):
 
 A notable flyover also gives nearby figures a ✈️ thought bubble.
 
-Like the neighborhood overlay, an active flight feed adds a small **airplanes.live**
-credit chip in the corner.
+Like the neighborhood overlay, an active flight feed adds a small credit chip in
+the corner naming whichever source is supplying the data. A local receiver and
+the demo source credit nobody — the data is yours, or invented.

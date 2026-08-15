@@ -66,9 +66,11 @@ import type {
 } from './types.js';
 import { normalizeFlightPayload, flightBearingDistance, MAX_AIRCRAFT,
          isEmergency, emergencySquawk, sanitizeLabelFields,
-         resolveFlightSource, flightSourceNeedsProxy, flightDefaultPollSeconds,
+         resolveFlightSource, flightSourceNeedsProxy, flightSourceNeedsHa,
+         flightDefaultPollSeconds,
          sanitizeFlightProxyCommand, FLIGHTS_DEFAULT_SOURCE,
          sanitizeFlightGlowRules, FLIGHTS_DEFAULT_RADIUS_NM,
+         demoFlightPoints, demoFlightsOrigin, sanitizeDemoFlights,
          FLIGHT_SHELL_DEFAULT_RADIUS_M, FLIGHT_SHELL_MIN_RADIUS_M,
          FLIGHT_SHELL_MAX_RADIUS_M,
          flightVerticalScale, FLIGHT_VSCALE_DEFAULT,
@@ -942,7 +944,13 @@ export class Planner extends EventTarget {
   // 'needs-proxy' = a server-side source (opensky / adsblol) is selected but no
   // `rest_command` name has been configured yet — nothing is called at all, and
   // the settings drawer shows the YAML to paste. Never a silent no-op.
-  flightsStatus: 'off' | 'no-origin' | 'ok' | 'error' | 'needs-proxy' = 'off';
+  // 'needs-ha'    = we are running on the offline LocalApi (the gh-pages demo /
+  //   standalone offline mode) with a source that CANNOT work without Home
+  //   Assistant (flightSourceNeedsHa). It outranks 'needs-proxy': pasting YAML
+  //   into a configuration.yaml that does not exist is not a fix, so the drawer
+  //   must not offer it. The ISS is unaffected — it is a separate CORS-open
+  //   feed and remains the one flight visual that still works offline.
+  flightsStatus: 'off' | 'no-origin' | 'ok' | 'error' | 'needs-proxy' | 'needs-ha' = 'off';
   private _flightsTimer: ReturnType<typeof setInterval> | null = null;
   private _issTimer: ReturnType<typeof setInterval> | null = null;
   private _flightsFetching = false;
@@ -6195,6 +6203,14 @@ export class Planner extends EventTarget {
     if (this.store.flights.glowRules !== undefined) {
       this.store.flights.glowRules = sanitizeFlightGlowRules(this.store.flights.glowRules);
     }
+    // Synthetic-source block: clamp the fleet size to the roster, drop a half
+    // coordinate pair, normalize the seed, and collapse an all-defaults block
+    // back to undefined — the same "exactly the default clears" discipline
+    // every other knob above uses, applied HERE (not in the settings UI) so an
+    // import or a hand-edited config lands in the same shape.
+    if (this.store.flights.demo !== undefined) {
+      this.store.flights.demo = sanitizeDemoFlights(this.store.flights.demo);
+    }
     this.save();
     void this._reconfigureFlights();
     this.emitConfig();
@@ -6215,6 +6231,19 @@ export class Planner extends EventTarget {
     if (w && typeof w.lat === 'number' && isFinite(w.lat)
       && typeof w.lon === 'number' && isFinite(w.lon)) {
       return { lat: w.lat, lon: w.lon };
+    }
+    // LAST resort, and ONLY for the synthetic source: the demo supplies its own
+    // observer so it is never blocked at 'no-origin'. This is load-bearing —
+    // every committed demo floorplan ships with zero calibrated landmarks and no
+    // weather location, so without this the one source built for the hosted demo
+    // would be dead in exactly the environment it exists to serve. It is safe
+    // because every rendered position is RELATIVE to the origin (a bearing plus
+    // a compressed radius), so any origin yields an identical-looking sky.
+    //
+    // Deliberately BELOW both real sources: someone with a calibrated home who
+    // selects synthetic traffic sees it centred on their actual house.
+    if (resolveFlightSource(this.store.flights?.source) === 'demo') {
+      return demoFlightsOrigin(this.store.flights?.demo);
     }
     return null;
   }
@@ -6275,7 +6304,19 @@ export class Planner extends EventTarget {
     // the YAML to paste plus a one-click name fill next to this status.
     const needsProxy = flightSourceNeedsProxy(source)
       && !sanitizeFlightProxyCommand(cfg.proxyCommand);
-    if (needsProxy) {
+    // Offline (the gh-pages demo / standalone offline mode) there is no Home
+    // Assistant to fetch for us and no entity states to read, so a source that
+    // depends on either is dead — and must SAY so rather than start a timer
+    // that can only ever fail. Checked BEFORE needsProxy: offline, a missing
+    // rest_command name is not the problem and pasting YAML is not the fix.
+    if (this.isOffline && flightSourceNeedsHa(source)) {
+      // Deliberately NOT an early return, for the same reason as the branch
+      // below: the ISS keeps flying. Offline it is the ONLY flight visual that
+      // still works, so taking it down here would empty the demo sky.
+      this.flightsNow = null;
+      this.flightsStatus = 'needs-ha'; this.flightsRev++;
+      this.emitConfig();
+    } else if (needsProxy) {
       // Deliberately NOT an early return: the ISS is a separate, CORS-open feed
       // on its own cadence, so an unconfigured aircraft proxy must not take the
       // satellite down with it.
@@ -6287,6 +6328,11 @@ export class Planner extends EventTarget {
       // _isSlowEntity). Recompute now from whatever state is already loaded.
       this._recomputeFlightsFromEntity();
     } else {
+      // Every remaining source — cloud, local, and the SYNTHETIC demo — runs on
+      // the poll timer. The demo deliberately shares it rather than getting a
+      // path of its own: its "poll" is just a clock read, and reusing the timer
+      // means the cadence knob, the in-flight status and `_applyFlights` behave
+      // identically to a fetched feed.
       void this._pollFlights();
       this._flightsTimer = setInterval(() => void this._pollFlights(), this._flightsPollMs());
     }
@@ -6311,15 +6357,47 @@ export class Planner extends EventTarget {
     // An unconfigured server-side proxy makes no call at all — and must not
     // downgrade its honest 'needs-proxy' status into a generic 'error'.
     if (flightSourceNeedsProxy(source) && !sanitizeFlightProxyCommand(cfg.proxyCommand)) return;
+    // Same contract for the offline case: no HA to call, so calling nothing is
+    // correct, and an explicit poll must not turn 'needs-ha' into 'error'.
+    if (this.isOffline && flightSourceNeedsHa(source)) return;
     const origin = this.flightsOrigin();
     if (!origin) return;
+    // SYNTHETIC: no fetch at all, so this runs entirely before the in-flight
+    // guard and never touches `_flightsFetching`. It still goes through
+    // `_applyFlights`, so the radius / altitude / cap filtering, the nearest-
+    // first sort and the alert triggers are IDENTICAL to every fetched source —
+    // which is the whole point of routing it here rather than assigning
+    // `flightsNow` directly. Two roster members sit deliberately outside the
+    // configured radius so that filter is visibly, provably live.
+    if (source === 'demo') {
+      this._applyFlights(
+        demoFlightPoints(Date.now(), origin, this._flightsRadiusNm(), cfg.demo),
+        origin);
+      return;
+    }
     if (this._flightsFetching) return;
     this._flightsFetching = true;
     try {
       const radiusNm = this._flightsRadiusNm();
-      const json = flightSourceNeedsProxy(source)
-        // Server-side: HA fetches the CORS-locked provider for us through the
-        // user's rest_command and hands back the body.
+      // `local` may go EITHER way, and the presence of a rest_command name is
+      // the switch: with one, HA fetches the receiver (no CORS header needed on
+      // it, and an https panel can reach an http receiver); without one, the
+      // browser fetches `localUrl` directly, which is still valid for anyone on
+      // an http panel who added the header. Both hand the SAME receiver payload
+      // to the same normalizer + `_applyFlights`.
+      // Offline, `local` DEMOTES to the direct fetch rather than reporting a
+      // failure: HA definitionally cannot fetch for us, and the receiver URL is
+      // sitting right there and is reachable from the browser. Refusing to try
+      // it would be over-suppressing the one source that can genuinely serve a
+      // Home-Assistant-less panel. The settings copy states the demotion; if
+      // there is no localUrl either, the existing `cfg.localUrl ? … : null`
+      // below already makes this a no-op poll.
+      const localProxy = source === 'local' && !this.isOffline
+        && !!sanitizeFlightProxyCommand(cfg.proxyCommand);
+      const json = flightSourceNeedsProxy(source) || localProxy
+        // Server-side: HA fetches the CORS-locked provider (or the LAN
+        // receiver) for us through the user's rest_command and hands back the
+        // body.
         ? await fetchProxiedAircraft(this.hass, source, cfg.proxyCommand,
                                      origin.lat, origin.lon, radiusNm)
         : source === 'local'

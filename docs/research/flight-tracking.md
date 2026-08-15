@@ -803,3 +803,47 @@ client-credentials account needs a token minted outside HA and passed as an
 units and needs `normalizeOpenSkyStates` (m→ft, m/s→kt, m/s→ft/min, trimmed
 callsign), and carries no registry enrichment or dbFlags — so registration, type,
 operator and the military/PIA/LADD flags are unavailable on that source.
+
+### §2.11 — the same proxy retires the §2.2 CORS problem (2026-08-15)
+
+§2.2 above solves the LAN-receiver CORS gap by adding a header to the receiver,
+and correctly notes that **no header fixes mixed content** — an HTTPS panel can
+never fetch an HTTP receiver. Once the `rest_command` transport of §2.10 exists,
+both restrictions have a second, better answer: point the proxy at the
+receiver's own URL and let Home Assistant fetch it.
+
+```yaml
+rest_command:
+  diorama_local_adsb:
+    url: http://192.168.1.50/tar1090/data/aircraft.json
+    method: GET
+    timeout: 10
+```
+
+No coordinates are involved, so unlike the OpenSky/adsb.lol blocks this one
+needs no Jinja — it is static. A server-side fetch sends no `Origin` and
+triggers no preflight, so the §2.2 lighttpd block becomes unnecessary and the
+receiver is not touched at all; and HA↔receiver is server-to-server while
+panel↔HA is same-origin, so mixed content does not arise. **§2.2's fix is still
+correct and still useful** for an HTTP panel whose owner would rather not depend
+on HA — which is why the local proxy is OPTIONAL in the implementation (an empty
+service name means "keep fetching directly"), unlike the cloud sources where it
+is mandatory.
+
+Two caveats worth stating to the user, both surfaced in the settings UI: HA must
+be able to reach the receiver itself (fine for ordinary Docker bridge
+networking), and the poll now costs an HA service round-trip per cycle.
+
+Also better than the `entity`-sensor workaround §3.4 sketches: a REST sensor
+pushes the whole aircraft list through HA's state machine and recorder as
+attributes every poll, whereas `return_response` bypasses the state machine
+entirely.
+
+**Offline consequence.** Every source that routes through HA — `opensky`,
+`adsblol`, `entity`, and a proxied `local` — is unreachable in an offline or
+gh-pages panel. The implementation reports that as a distinct `needs-ha` status
+rather than a fetch error (nothing was ever fetched, so an error would be a
+lie). The two sources that genuinely work with no Home Assistant are the
+synthetic `demo` source and `local` with a browser-reachable URL — and a local
+config that names a proxy command demotes to the direct fetch when offline
+rather than refusing. The ISS is unaffected throughout: separate CORS-open feed.

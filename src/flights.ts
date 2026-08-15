@@ -1376,7 +1376,8 @@ export interface IssNow {
 // `rest_command` (which returns its response body when called with
 // `return_response: true`), exactly the mechanism `weather.get_forecasts` and
 // `calendar.get_events` already ride. No CORS applies to HA's own outbound HTTP.
-export const FLIGHT_SOURCES = ['opensky', 'adsblol', 'cloud', 'local', 'entity'] as const;
+export const FLIGHT_SOURCES =
+  ['opensky', 'adsblol', 'cloud', 'local', 'entity', 'demo'] as const;
 export type FlightSource = typeof FLIGHT_SOURCES[number];
 
 // DEFAULT = OpenSky. It is the one source that (a) still answers, (b) is
@@ -1391,18 +1392,45 @@ export function resolveFlightSource(v: unknown): FlightSource {
 }
 
 // The two sources that cannot be fetched by the browser and must go through the
-// HA rest_command proxy.
+// HA rest_command proxy. `local` may ALSO be routed through HA (which is how a
+// receiver without a CORS header, or an http receiver behind an https panel, is
+// reached) but that is the user's CHOICE, not a requirement — so `local` is
+// deliberately absent here and can never report `needs-proxy`.
 export function flightSourceNeedsProxy(src: unknown): boolean {
   const s = resolveFlightSource(src);
   return s === 'opensky' || s === 'adsblol';
 }
 
-// Suggested `rest_command:` service name per proxied source. The user may pick
-// any name; this is what the generated YAML uses and what the settings UI
-// offers as a one-click fill.
+// Sources that cannot work AT ALL without a Home Assistant connection — the
+// gate for the offline `needs-ha` status. A SUPERSET of needsProxy: `entity`
+// uses no rest_command, but its whole premise is an HA sensor whose attributes
+// carry the aircraft array, and offline there are no states to read. Reporting
+// a generic fetch `error` for either would be a lie — nothing is being fetched
+// and nothing can be.
+//
+// Deliberately EXCLUDED, because each is genuinely reachable from a browser
+// with no Home Assistant behind it:
+//   • `cloud`   — a direct browser fetch. airplanes.live now 403s everyone, so
+//                 it will fail — but it fails as an honest HTTP error from a
+//                 request that really was made, which is what `error` means.
+//   • `local`   — a direct fetch of the user's own LAN receiver. This is the
+//                 one FETCHED source that can genuinely serve a
+//                 Home-Assistant-less panel, so it must never be suppressed.
+//   • `demo`    — synthesized in-process from the clock (`demoFlightPoints`).
+//                 It makes NO request of any kind, so it is the one source that
+//                 is always available: gh-pages, kiosk, air-gapped, no HA.
+export function flightSourceNeedsHa(src: unknown): boolean {
+  const s = resolveFlightSource(src);
+  return flightSourceNeedsProxy(s) || s === 'entity';
+}
+
+// Suggested `rest_command:` service name per source that CAN be proxied. The
+// user may pick any name; this is what the generated YAML uses and what the
+// settings UI offers as a one-click fill.
 export const FLIGHT_PROXY_DEFAULT_COMMAND: Readonly<Record<string, string>> = {
   opensky: 'diorama_opensky',
   adsblol: 'diorama_adsblol',
+  local: 'diorama_local_adsb',
 };
 
 // Sanitize a user-typed rest_command service name to what HA will actually
@@ -1501,7 +1529,13 @@ export function openSkyBoundingBox(lat: number, lon: number, radiusNm: number): 
 export function flightProxyVars(
   src: unknown, lat: number, lon: number, radiusNm: number,
 ): Record<string, number> {
-  if (resolveFlightSource(src) === 'opensky') {
+  const s = resolveFlightSource(src);
+  // A proxied LOCAL receiver takes NO parameters: the URL is the user's own
+  // `localUrl`, a fixed LAN address, so the YAML is static and there is nothing
+  // to template. Sending coordinates HA would ignore would only invite a
+  // mismatch between the generated block and the call.
+  if (s === 'local') return {};
+  if (s === 'opensky') {
     return openSkyBoundingBox(lat, lon, radiusNm) as unknown as Record<string, number>;
   }
   const r4 = (v: number): number =>
@@ -1529,13 +1563,37 @@ export function flightProxyUrlPreview(
 // radius (or moving the home landmark) never means editing YAML again — and HA
 // only ever fetches the one provider endpoint, never an arbitrary URL the panel
 // hands it.
+//
+// `localUrl` is a TRAILING OPTIONAL argument used only by the `local` branch
+// (the receiver address is the URL, and no caller for the other sources has one
+// to give) — absent, every other source's output is unchanged.
 export function flightProxyYaml(
   src: unknown, command: string | undefined,
   origin: { lat: number; lon: number } | null, radiusNm: number,
+  localUrl?: string,
 ): string {
   const s = resolveFlightSource(src);
   const name = sanitizeFlightProxyCommand(command)
     ?? FLIGHT_PROXY_DEFAULT_COMMAND[s] ?? 'diorama_flights';
+
+  if (s === 'local') {
+    // Static URL, no Jinja: HA fetches exactly the address the user typed into
+    // the panel. With no address yet there is nothing honest to emit, so the
+    // line becomes a clearly-marked placeholder rather than a block that would
+    // silently fail if pasted.
+    const url = typeof localUrl === 'string' && localUrl.trim() ? localUrl.trim() : null;
+    return '# Diorama flight tracking — local receiver via Home Assistant.\n'
+      + '# Home Assistant fetches your receiver and hands the panel the response.\n'
+      + '# This avoids BOTH browser limits: no CORS header is needed on the\n'
+      + '# receiver, and an https panel can reach an http receiver.\n'
+      + '# Home Assistant itself must be able to reach this address.\n'
+      + 'rest_command:\n'
+      + `  ${name}:\n`
+      + `    url: ${url ?? '# SET THE RECEIVER URL IN THE PANEL FIRST — it goes here'}\n`
+      + '    method: GET\n'
+      + '    timeout: 10\n';
+  }
+
   const preview = origin
     ? `#   ${flightProxyUrlPreview(s, origin.lat, origin.lon, radiusNm)}\n`
     : '#   (calibrate a GPS landmark or set a weather location to preview the URL)\n';
@@ -1686,4 +1744,440 @@ export function normalizeFlightPayload(src: unknown, json: unknown): FlightPoint
   return resolveFlightSource(src) === 'opensky'
     ? normalizeOpenSkyStates(json)
     : normalizeAircraftList(json);
+}
+
+// ── Source: demo (synthetic traffic) ────────────────────────────────────────
+// The sixth source: no network, no Home Assistant, no receiver — the aircraft
+// are SYNTHESIZED from the clock. It exists because live flight tracking is
+// structurally unavailable in exactly the place the feature most needs to be
+// seen: the hosted gh-pages demo and any offline / air-gapped panel. OpenSky
+// and adsb.lol require an HA `rest_command` proxy, airplanes.live now 403s
+// every browser, and `entity` needs HA states. `flightSourceNeedsHa` and
+// `flightSourceNeedsProxy` therefore BOTH exclude 'demo' (see their notes).
+//
+// PURE + DETERMINISTIC, following the `demoWeatherNow` precedent (weather.ts):
+// the caller passes the epoch (`nowMs`) — this module never reads the clock —
+// and there is no `Math.random` anywhere, so the same `nowMs` always yields
+// byte-identical output. That is what makes the whole fleet test-pinnable and
+// what keeps it safe under the house rule banning randomness in anything that
+// reruns under a dirty key.
+//
+// MOTION IS FREE. `_advanceFlights` in three-renderer already dead-reckons from
+// `latPerS`/`lonPerS` (derived from `gs` + `track`) and eases the display
+// position at 60 fps between polls. This source only has to answer "where is
+// everyone at time T" on the ordinary poll cadence, with a `gs`/`track` pair
+// that genuinely matches its own motion — which is why both are DERIVED by
+// central-differencing the analytic position rather than declared independently.
+// Aircraft fly closed CIRCUITS about the observer, so the sky never empties and
+// the demo is watchable indefinitely.
+
+// The synthetic observer, used ONLY when nothing real resolves (see
+// `demoFlightsOrigin` and `Planner.flightsOrigin`). Every rendered position is
+// relative to the origin — a bearing + a compressed radius — so the absolute
+// coordinates are invisible in the output and any origin yields the same sky.
+// It matters for exactly one thing: the ISS's alt/az, which is a real
+// astronomical calculation about a real point on Earth.
+export const DEMO_FLIGHT_ORIGIN: Readonly<{ lat: number; lon: number }> =
+  { lat: 47.6062, lon: -122.3321 };
+
+// Central-difference half-step (seconds) used to derive `gs` / `track` /
+// `vertRate` from the analytic position. Small enough that the chord/arc
+// shortfall is under 0.02 % at the fastest orbit this roster produces, large
+// enough to stay far from double-precision cancellation.
+const DEMO_DIFF_S = 1;
+
+// Hand-authored aircraft. Each entry is chosen to light up a DIFFERENT render
+// path, so the demo doubles as a live fixture for the whole flight subsystem —
+// see the `note` on each row. Everything is real-world plausible: real ICAO
+// type designators (so `aircraftArchetype` resolves a real silhouette), real
+// airline ICAO callsign prefixes present in src/airlines.ts (so liveries and
+// the flight card's Airline block light up), real speeds and altitudes.
+interface DemoFleetMember {
+  hex: string;                 // ICAO 24-bit, lowercase. AE0000–AFFFFF for US military.
+  callsign: string | null;
+  typeCode: string | null;
+  category: string | null;     // ADS-B emitter category (archetype FALLBACK only)
+  reg: string | null;
+  operator: string | null;
+  typeDesc: string | null;
+  gsKt: number;                // nominal ground speed; the derived value matches to <0.5 %
+  distFrac: number;            // orbit radius as a FRACTION of the configured radiusNm
+  bearing0Deg: number;         // orbit phase at epoch 0
+  dir: 1 | -1;                 // orbit direction (mixed, so it never reads as a carousel)
+  altFt: number;
+  altAmpFt?: number;           // gentle climb/descent → a real vertRate + trend + pitch
+  altPeriodS?: number;
+  radialFracAmp?: number;      // radial breathing, fraction of radiusNm → shell compression over TIME
+  radialPeriodS?: number;
+  squawk?: string;
+  military?: boolean;
+  interesting?: boolean;
+  pia?: boolean;
+  ladd?: boolean;
+  // Rows the user can switch off without leaving the demo source. Only the
+  // emergency aircraft has one: it is the single fleet member with a side
+  // effect outside the sky (a persistent `error` row in the Alert Center).
+  optional?: 'emergency';
+}
+
+// ORDER IS LOAD-BEARING. `fleet` slices from the FRONT, so the highest-value
+// coverage is front-loaded and the two DELIBERATELY OUT-OF-RANGE aircraft sit
+// at indices 6 and 11 — early enough that even a small fleet still exercises
+// the radius filter in `_applyFlights`. Their distance is a MULTIPLE of the
+// configured radius (not an absolute nm figure) so they stay outside it at any
+// radius setting, exactly as the in-range rows stay inside at any setting.
+const DEMO_FLEET: readonly DemoFleetMember[] = [
+  // 0 — widebody · United livery · band 5 contrail · operator-on-spine text
+  { hex: 'a1b2c3', callsign: 'UAL512', typeCode: 'B77W', category: 'A5',
+    reg: 'N2749U', operator: 'United Airlines', typeDesc: 'BOEING 777-300ER',
+    gsKt: 470, distFrac: 0.92, bearing0Deg: 35, dir: 1, altFt: 37000 },
+  // 1 — narrowbody · Delta livery · band 4
+  { hex: 'a2c4e6', callsign: 'DAL1522', typeCode: 'B738', category: 'A3',
+    reg: 'N3751B', operator: 'Delta Air Lines', typeDesc: 'BOEING 737-800',
+    gsKt: 290, distFrac: 0.66, bearing0Deg: 200, dir: -1, altFt: 14000 },
+  // 2 — GA high-wing piston WITH a callsign → the towed BANNER path · band 2
+  { hex: 'a5e7c9', callsign: 'N172SP', typeCode: 'C172', category: 'A1',
+    reg: 'N172SP', operator: null, typeDesc: 'CESSNA 172 SKYHAWK',
+    gsKt: 105, distFrac: 0.22, bearing0Deg: 120, dir: 1, altFt: 3500,
+    altAmpFt: 400, altPeriodS: 420 },
+  // 3 — helicopter · band 1 (rotor blur + station-keeping bob), low and slow
+  { hex: 'a6f8da', callsign: 'N911LF', typeCode: 'EC35', category: 'A7',
+    reg: 'N911LF', operator: null, typeDesc: 'AIRBUS H135',
+    gsKt: 22, distFrac: 0.10, bearing0Deg: 250, dir: -1, altFt: 1400 },
+  // 4 — MILITARY SKIN: typeCode F16 hits MILITARY_SKIN_TYPE_CODES exactly, and
+  //     the AE-range hex also trips `usMilitaryHexHeuristic` in the card.
+  { hex: 'ae1f2c', callsign: 'VIPER11', typeCode: 'F16', category: 'A6',
+    reg: null, operator: null, typeDesc: 'GENERAL DYNAMICS F-16',
+    gsKt: 430, distFrac: 0.75, bearing0Deg: 80, dir: 1, altFt: 22000,
+    military: true },
+  // 5 — EMERGENCY squawk 7700: red beacon at the top of the priority ladder +
+  //     the `flight:emerg:` alert lifecycle. Descending, which is what a 7700
+  //     usually is. The ONE optional row (see `optional` above).
+  { hex: 'a8b1c2', callsign: 'AAL1580', typeCode: 'A320', category: 'A3',
+    reg: 'N106US', operator: 'American Airlines', typeDesc: 'AIRBUS A320',
+    gsKt: 250, distFrac: 0.35, bearing0Deg: 285, dir: 1, altFt: 7000,
+    altAmpFt: 2500, altPeriodS: 900, squawk: '7700', optional: 'emergency' },
+  // 6 — OUT OF RANGE (1.6× the radius): proves the `_applyFlights` filter is live.
+  { hex: 'ac9203', callsign: 'FDX1290', typeCode: 'B763', category: 'A5',
+    reg: 'N178FE', operator: 'FedEx Express', typeDesc: 'BOEING 767-300F',
+    gsKt: 450, distFrac: 1.60, bearing0Deg: 220, dir: 1, altFt: 35000 },
+  // 7 — PIA privacy address: dimming, identity SUPPRESSION, and the kind:'pia'
+  //     livery veto (DCM = FLTPLAN, a privacy pseudo-airline in src/airlines.ts).
+  { hex: 'a9c3d4', callsign: 'DCM523', typeCode: 'C68A', category: 'A2',
+    reg: null, operator: null, typeDesc: 'CESSNA CITATION LATITUDE',
+    gsKt: 220, distFrac: 0.60, bearing0Deg: 340, dir: -1, altFt: 28000,
+    pia: true },
+  // 8 — RADIAL BREATHING + climb: the only row whose DISTANCE changes over
+  //     time, so the shell-compression curve is exercised across u, not just
+  //     sampled at one u per aircraft. Southwest livery. Because the angular
+  //     rate is constant, the tangential speed scales with the breathing radius
+  //     — so this is ALSO the one aircraft that changes SPEED BAND in flight
+  //     (220–380 kt ⇒ bands 3→4→5 and back), which is the only live exercise of
+  //     the band hysteresis. Both are deliberate.
+  { hex: 'a3d5f7', callsign: 'SWA2210', typeCode: 'B38M', category: 'A3',
+    reg: 'N8712L', operator: 'Southwest Airlines', typeDesc: 'BOEING 737 MAX 8',
+    gsKt: 300, distFrac: 0.45, bearing0Deg: 300, dir: 1, altFt: 9500,
+    altAmpFt: 1500, altPeriodS: 600, radialFracAmp: 0.12, radialPeriodS: 900 },
+  // 9 — turboprop archetype · band 3 motion lines. Horizon is a REGIONAL, so
+  //     like member 13 it deliberately carries no livery colours.
+  { hex: 'ab2c81', callsign: 'QXE2405', typeCode: 'DH8D', category: 'A2',
+    reg: 'N440QX', operator: 'Horizon Air', typeDesc: 'DE HAVILLAND DASH 8-400',
+    gsKt: 230, distFrac: 0.28, bearing0Deg: 155, dir: -1, altFt: 12000 },
+  // 10 — MILITARY CALLSIGN WORD (RCH → REACH, the AMC airlift alias) with a
+  //      typeCode that is NOT in the skin table: olive tint, generic widebody.
+  //      The negative control for member 4's skin, flying in the same fleet.
+  { hex: 'ae4b70', callsign: 'RCH431', typeCode: 'C17', category: 'A5',
+    reg: null, operator: 'UNITED STATES AIR FORCE', typeDesc: 'BOEING C-17A GLOBEMASTER III',
+    gsKt: 320, distFrac: 0.85, bearing0Deg: 160, dir: -1, altFt: 26000,
+    military: true },
+  // 11 — OUT OF RANGE (2.5× the radius), a second and much farther one.
+  { hex: 'ad4415', callsign: 'KLM602', typeCode: 'B789', category: 'A5',
+    reg: 'PH-BHA', operator: 'KLM Royal Dutch Airlines', typeDesc: 'BOEING 787-9',
+    gsKt: 480, distFrac: 2.50, bearing0Deg: 10, dir: -1, altFt: 38000 },
+  // 12 — LADD: privacy dimming + the WHITE beacon, but identity KEPT (the
+  //      deliberate PIA/LADD asymmetry — research §4.2).
+  { hex: 'aa5e6f', callsign: 'N88XR', typeCode: 'GLF5', category: 'A2',
+    reg: 'N88XR', operator: null, typeDesc: 'GULFSTREAM V',
+    gsKt: 410, distFrac: 0.50, bearing0Deg: 55, dir: 1, altFt: 39000,
+    ladd: true },
+  // 13 — `interesting` YELLOW beacon + a REGIONAL carrier, whose livery is its
+  //      mainline partner's — so `resolveAirlineLivery` deliberately paints NO
+  //      colours and the card shows "operates as" instead. CRJ9 is also the
+  //      §3.3 rule: a regional jet with the BIZJET silhouette.
+  { hex: 'ab7180', callsign: 'SKW3411', typeCode: 'CRJ9', category: 'A3',
+    reg: 'N221SW', operator: 'SkyWest Airlines', typeDesc: 'BOMBARDIER CRJ-900',
+    gsKt: 265, distFrac: 0.30, bearing0Deg: 100, dir: -1, altFt: 17000,
+    interesting: true },
+  // 14 — twin-prop archetype (low wing, two wing-mounted props)
+  { hex: 'a4a930', callsign: 'N400KA', typeCode: 'BE20', category: 'A2',
+    reg: 'N400KA', operator: null, typeDesc: 'BEECHCRAFT KING AIR 200',
+    gsKt: 210, distFrac: 0.18, bearing0Deg: 15, dir: 1, altFt: 11000 },
+  // 15 — ga-low archetype (low wing single, T-tail), completing all EIGHT
+  //      archetypes across the roster.
+  { hex: 'a7091b', callsign: 'N912TS', typeCode: 'PC12', category: 'A1',
+    reg: 'N912TS', operator: null, typeDesc: 'PILATUS PC-12',
+    gsKt: 250, distFrac: 0.55, bearing0Deg: 240, dir: -1, altFt: 19000 },
+];
+
+// Fleet-size bounds. The maximum IS the roster length — there is nothing beyond
+// it to generate, and silently repeating aircraft under fresh hexes would make
+// the sky read as a bug. The default is the whole roster, because every row
+// exists to cover a render path.
+export const DEMO_FLEET_MAX = DEMO_FLEET.length;
+export const DEMO_FLEET_MIN = 1;
+export const DEMO_FLEET_DEFAULT = DEMO_FLEET_MAX;
+
+// Deterministic [0,1) from a (seed, index) pair — the mulberry32 mixing step
+// the renderer's `_rndFrom` uses, re-derived here because this module is
+// zero-import. Used ONLY to offset orbit phases when the user sets a seed; a
+// seed of 0 / absent leaves the roster's authored bearings exactly as written.
+function demoRand01(seed: number, index: number): number {
+  let a = (Math.imul(seed | 0, 0x9e3779b1) + Math.imul(index + 1, 0x85ebca6b)) | 0;
+  a = (a + 0x6d2b79f5) | 0;
+  let t = a;
+  t = Math.imul(t ^ (t >>> 15), 1 | t);
+  t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+}
+
+// EXACT inverse of `flightBearingDistance`'s equirectangular tangent plane —
+// same earth radius, same cosine taken at the ORIGIN latitude — so a point
+// placed here at (bearing, distance) reads back as exactly that bearing and
+// distance. The whole demo depends on that round trip: `_applyFlights`
+// recomputes `distNm` from lat/lon and filters on it.
+function demoDestination(
+  originLat: number, originLon: number, bearingRad: number, distNm: number,
+): { lat: number; lon: number } {
+  const d = distNm * NM_M;
+  const north = d * Math.cos(bearingRad);
+  const east = d * Math.sin(bearingRad);
+  const cosLat = Math.cos(originLat * DEG);
+  return {
+    lat: originLat + north / (EARTH_R_M * DEG),
+    // Guard the pole, where a degree of longitude collapses. A demo observer
+    // that close to a pole degenerates to a north/south line rather than
+    // dividing by ~0 and flinging aircraft off the planet.
+    lon: originLon + (Math.abs(cosLat) > 1e-6 ? east / (EARTH_R_M * DEG * cosLat) : 0),
+  };
+}
+
+// Analytic position of one member at absolute time `tSec`. Everything else —
+// ground speed, track, vertical rate — is DERIVED from this by central
+// difference, so the reported motion can never disagree with the actual path.
+function demoStateAt(
+  m: DemoFleetMember, tSec: number, radiusNm: number,
+  origin: { lat: number; lon: number }, phaseRad: number,
+): { lat: number; lon: number; altFt: number } {
+  const baseR = Math.max(0.05, m.distFrac * radiusNm);
+  // Angular rate from the NOMINAL ground speed and the BASE radius: a circuit
+  // of circumference 2πR flown at `gsKt` knots. Taken from the base radius (not
+  // the breathing one) so ω is constant and the orbit stays a clean circuit.
+  const omegaPerS = (m.gsKt / baseR) / 3600;
+  const theta = m.bearing0Deg * DEG + phaseRad + m.dir * omegaPerS * tSec;
+  const r = m.radialFracAmp && m.radialPeriodS
+    ? baseR + m.radialFracAmp * radiusNm
+        * Math.sin(TWO_PI * tSec / m.radialPeriodS + phaseRad)
+    : baseR;
+  const alt = m.altAmpFt && m.altPeriodS
+    ? m.altFt + m.altAmpFt * Math.sin(TWO_PI * tSec / m.altPeriodS + phaseRad)
+    : m.altFt;
+  const p = demoDestination(origin.lat, origin.lon, theta, Math.max(0.01, r));
+  return { lat: p.lat, lon: p.lon, altFt: alt };
+}
+
+// Hand-authored config for the `demo` source. EVERY field is optional;
+// `demoFleetSize` / `demoFlightsOrigin` / `sanitizeDemoFlights` own all of the
+// defaults + clamps, so nothing else has to know the shape (the
+// `DemoWeatherConfig` / `demoWeatherNow` discipline). Lives HERE rather than in
+// types.ts because this module is zero-import; types.ts re-exports it, exactly
+// as it does for FlightGlowRule.
+export interface DemoFlightsConfig {
+  // How many roster members to generate. Clamp 1..DEMO_FLEET_MAX (= the roster
+  // length); absent = the whole roster. The count is aircraft GENERATED — the
+  // two deliberately-distant rows are then dropped by the ordinary radius
+  // filter, so the number actually in the sky is smaller.
+  fleet?: number;
+  // Synthetic observer, used ONLY when no real origin resolves (a calibrated
+  // geo fit and a weather location both win — see `Planner.flightsOrigin`).
+  // Both must be present and in range or neither is used. Purely relative
+  // rendering means this changes nothing about the aircraft; it changes where
+  // the ISS is computed to be.
+  lat?: number;
+  lon?: number;
+  // Deterministic rearrangement: rotates each aircraft's circuit by its own
+  // fixed amount. 0 / absent = the authored arrangement.
+  seed?: number;
+  // The emergency (squawk 7700) aircraft. ABSENT = ON. It is the only fleet
+  // member with an effect outside the sky — a persistent `error` row in the
+  // Alert Center — so it gets an opt-out that does not mean leaving the demo.
+  emergency?: boolean;
+}
+
+// The synthetic observer. Falls back to DEMO_FLIGHT_ORIGIN unless the config
+// supplies a COMPLETE, in-range pair — half a coordinate is not a location.
+// NB this is the BOTTOM of `Planner.flightsOrigin`'s ladder: a calibrated geo
+// fit or a weather location always wins, so someone with a real home sees the
+// synthetic traffic centred on their actual house.
+export function demoFlightsOrigin(
+  demo?: DemoFlightsConfig | null,
+): { lat: number; lon: number } {
+  const la = Number(demo?.lat), lo = Number(demo?.lon);
+  if (demo && demo.lat != null && demo.lon != null
+    && isFinite(la) && isFinite(lo)
+    && la >= -90 && la <= 90 && lo >= -180 && lo <= 180) {
+    return { lat: la, lon: lo };
+  }
+  return { lat: DEMO_FLIGHT_ORIGIN.lat, lon: DEMO_FLIGHT_ORIGIN.lon };
+}
+
+// How many aircraft to generate, clamped to the roster.
+export function demoFleetSize(demo?: DemoFlightsConfig | null): number {
+  const n = Number(demo?.fleet);
+  if (demo?.fleet == null || !isFinite(n)) return DEMO_FLEET_DEFAULT;
+  return Math.max(DEMO_FLEET_MIN, Math.min(DEMO_FLEET_MAX, Math.round(n)));
+}
+
+// Normalize a stored / imported demo block, the `setFlights` discipline: clamp
+// every number, drop an incomplete coordinate pair, and collapse an
+// all-defaults block back to `undefined` so the stored config stays minimal and
+// the default path is byte-identical to having no block at all.
+export function sanitizeDemoFlights(v: unknown): DemoFlightsConfig | undefined {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return undefined;
+  const o = v as Record<string, unknown>;
+  const out: DemoFlightsConfig = {};
+
+  const fleetN = Number(o.fleet);
+  if (o.fleet != null && isFinite(fleetN)) {
+    const n = Math.max(DEMO_FLEET_MIN, Math.min(DEMO_FLEET_MAX, Math.round(fleetN)));
+    if (n !== DEMO_FLEET_DEFAULT) out.fleet = n;
+  }
+
+  const la = Number(o.lat), lo = Number(o.lon);
+  if (o.lat != null && o.lon != null && isFinite(la) && isFinite(lo)
+    && la >= -90 && la <= 90 && lo >= -180 && lo <= 180) {
+    out.lat = la; out.lon = lo;
+  }
+
+  const seedN = Number(o.seed);
+  if (o.seed != null && isFinite(seedN)) {
+    const s = Math.trunc(seedN) | 0;
+    if (s !== 0) out.seed = s;
+  }
+
+  // Absent = ON (the militarySkins / airlineColors idiom): an explicit `true` is
+  // redundant and normalizes away; `false` is meaningful and stays.
+  if (o.emergency === false) out.emergency = false;
+
+  return Object.keys(out).length ? out : undefined;
+}
+
+// THE synthetic feed. Returns FlightPoints in exactly the shape every other
+// source's normalizer produces, so the planner hands them to the SAME
+// `_applyFlights` (distance / altitude / cap filtering) and every downstream
+// consumer — archetypes, liveries, beacons, privacy, speed bands, the label
+// plate, the flight card, the alert triggers — is reached by the ordinary path.
+//
+// `distNm` is deliberately LEFT UNSET: `_applyFlights` recomputes it from
+// lat/lon for every source, and setting it here would create a second number
+// that could drift from the one the filter and the shell actually use.
+export function demoFlightPoints(
+  nowMs: number,
+  origin: { lat: number; lon: number } | null | undefined,
+  radiusNm: number,
+  cfg?: DemoFlightsConfig | null,
+): FlightPoint[] {
+  const o = origin && isFinite(Number(origin.lat)) && isFinite(Number(origin.lon))
+    ? { lat: Number(origin.lat), lon: Number(origin.lon) }
+    : { lat: DEMO_FLIGHT_ORIGIN.lat, lon: DEMO_FLIGHT_ORIGIN.lon };
+  const r = typeof radiusNm === 'number' && isFinite(radiusNm) && radiusNm > 0
+    ? radiusNm : FLIGHTS_DEFAULT_RADIUS_NM;
+  const t = typeof nowMs === 'number' && isFinite(nowMs) ? nowMs / 1000 : 0;
+  const n = demoFleetSize(cfg);
+  const seed = typeof cfg?.seed === 'number' && isFinite(cfg.seed) ? cfg.seed | 0 : 0;
+  const skipEmergency = cfg?.emergency === false;
+
+  const out: FlightPoint[] = [];
+  for (let i = 0; i < n; i++) {
+    const m = DEMO_FLEET[i];
+    if (m.optional === 'emergency' && skipEmergency) continue;
+
+    // A seed rotates each member's circuit by its own deterministic amount, so
+    // two seeded demos differ in arrangement without differing in composition.
+    const phaseRad = seed ? demoRand01(seed, i) * TWO_PI : 0;
+
+    const here = demoStateAt(m, t, r, o, phaseRad);
+    const before = demoStateAt(m, t - DEMO_DIFF_S, r, o, phaseRad);
+    const after = demoStateAt(m, t + DEMO_DIFF_S, r, o, phaseRad);
+
+    // Central difference through the SAME projection the display uses, so the
+    // reported track/speed is the true tangent of the drawn path — which is
+    // what makes the renderer's dead reckoning land on the next fix instead of
+    // fighting it.
+    const d = flightBearingDistance(before.lat, before.lon, after.lat, after.lon);
+    const dtH = (2 * DEMO_DIFF_S) / 3600;
+
+    out.push({
+      hex: m.hex,
+      callsign: m.callsign,
+      lat: here.lat,
+      lon: here.lon,
+      altFt: here.altFt,
+      gsKt: d.distNm / dtH,
+      trackDeg: (d.bearingRad / DEG) % 360,
+      vertRateFpm: ((after.altFt - before.altFt) / (2 * DEMO_DIFF_S)) * 60,
+      category: m.category,
+      seenPosS: 0,
+      military: m.military === true,
+      reg: m.reg,
+      typeCode: m.typeCode,
+      typeDesc: m.typeDesc,
+      operator: m.operator,
+      emergency: null,
+      squawk: m.squawk ?? null,
+      interesting: m.interesting === true,
+      pia: m.pia === true,
+      ladd: m.ladd === true,
+    });
+  }
+  return out;
+}
+
+// The flight config the HOSTED DEMO seeds into each floorplan it imports
+// (src/demo-seed.ts). Every committed demo floorplan is GENERATED by
+// scripts/floorplans, which knows nothing about flight tracking, so they all
+// ship with the feature off — and in the hosted demo every fetched source is
+// structurally unavailable anyway. The synthetic source is the only one that
+// can put aircraft in that sky.
+//
+// A REDUCED fleet on purpose: the published demo runs on whatever device a
+// visitor happens to open it with, and eight rows already cover the widebody,
+// narrowbody, GA-banner, helicopter, military-skin, emergency, out-of-range and
+// privacy paths. Raising it is one number in the settings drawer.
+export const DEMO_SEED_FLIGHTS = Object.freeze({
+  enabled: true, source: 'demo' as FlightSource, demo: Object.freeze({ fleet: 8 }),
+});
+
+// Turn on demo flights in an export envelope on its way into the hosted demo.
+// Pure and text-in/text-out so the seeder stays a thin caller and this stays
+// testable. Deliberately conservative:
+//   • unparseable text is returned VERBATIM (importConfig will report the real
+//     error; corrupting it here would only obscure that);
+//   • an envelope that ALREADY authored `flights` is left alone, so a future
+//     floorplan can opt out or configure its own source and this never fights it;
+//   • both envelope shapes are handled — `{diorama:2, store:{…}}` and the
+//     legacy bare store.
+export function withDemoFlightsEnvelope(envText: string): string {
+  if (typeof envText !== 'string' || !envText) return envText;
+  try {
+    const env = JSON.parse(envText) as Record<string, unknown> | null;
+    if (!env || typeof env !== 'object' || Array.isArray(env)) return envText;
+    const store = (env.store && typeof env.store === 'object' && !Array.isArray(env.store))
+      ? env.store as Record<string, unknown> : env;
+    if (!Array.isArray(store.floors)) return envText;          // not a store at all
+    if (store.flights !== undefined) return envText;           // authored — leave it
+    store.flights = JSON.parse(JSON.stringify(DEMO_SEED_FLIGHTS));
+    return JSON.stringify(env);
+  } catch {
+    return envText;
+  }
 }

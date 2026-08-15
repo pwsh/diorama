@@ -33,6 +33,12 @@
          `curl -s 'https://api.adsb.lol/v2/lat/51.89508/lon/2.79437/dist/250'`
          — chosen to cover a "ground" sentinel, a C2 surface vehicle, military
          and LADD dbFlags, an ultralight, a gs-less row and ordinary airliners.
+       fixtures/adsb/local-wide-catch.json — GENERATED (deterministic; great-circle
+         destination points about 47.6/-122.3, the harness HOME) to model what a
+         LAN receiver actually hears, which no cloud capture can: 60 airborne
+         inside 40 nm (over the 50 cap), 14 airborne from 45 out to 221 nm,
+         5 "ground" sentinels, 3 null-altitude rows, 2 rows with no altitude key
+         at all, and 1 alt_baro-null/alt_geom-present fallback row. 85 total.
 
      Build (flights.ts AND aircraft-types.ts are genuinely zero-import → plain
      transpile; sky-astro.ts pulls in sky-catalog.ts → bundle; planner per the
@@ -89,6 +95,7 @@
   const GARBAGE = await (await fetch('./fixtures/adsb/garbage.json' + V)).json();
   const OPENSKY = await (await fetch('./fixtures/adsb/opensky-states.json' + V)).json();
   const ADSBLOL = await (await fetch('./fixtures/adsb/adsblol-point.json' + V)).json();
+  const WIDE = await (await fetch('./fixtures/adsb/local-wide-catch.json' + V)).json();
 
   try {
     // ── 1. Normalizer ────────────────────────────────────────────────────────
@@ -992,10 +999,16 @@
         'diorama-cfg-default': store,
       });
 
-      async function boot(store, states) {
+      // `opts.offline` marks the api as the LocalApi does (`readonly offline =
+      // true`), which is exactly what Planner.isOffline reads — no other
+      // behaviour changes, so the fake stays honest: callServiceWithResponse
+      // still resolves through svcReply, and the test asserts it is never CALLED
+      // rather than relying on it returning null.
+      async function boot(store, states, opts) {
         localStorage.removeItem('diorama:store:v1');
         localStorage.removeItem('diorama:configs');
         const stub = new FakeHa(seedFor(store), states);
+        if (opts?.offline) stub.offline = true;
         const p = new Planner();
         p.connectWith(stub);
         await waitFor(() => p.configIndex !== null);
@@ -1867,6 +1880,756 @@
           eq('31h: an explicit interval still wins', p._flightsPollMs(), 20000);
           p.store.flights = { enabled: false, source: 'opensky', pollSeconds: 999 };
           eq('31h: NEG the 5..60 clamp is unchanged', p._flightsPollMs(), 60000);
+          quiesce(p);
+        }
+      }
+
+      // ── 8y. `local` may OPTIONALLY route through the HA rest_command ────
+      // A LAN receiver serves no CORS header and cannot be reached at all from
+      // an https panel. Letting HA fetch it removes both walls — but the direct
+      // browser fetch stays valid, so the presence of a rest_command name is
+      // the ONLY switch, and `local` must never demand one.
+      {
+        const eq = (name, got, want, extra = '') =>
+          ok(name, got === want, extra || `got ${JSON.stringify(got)} want ${JSON.stringify(want)}`);
+        const LURL = 'http://192.168.1.50/tar1090/data/aircraft.json';
+
+        // (a) local + a proxy name → HA is asked, the browser is NOT.
+        {
+          calls.length = 0; svc.length = 0;
+          handler = () => WIDE;                    // a direct fetch would succeed…
+          svcReply = () => ({ context: {}, response: { status: 200, content: WIDE } });
+          const { p } = await boot(makeStore({
+            weather: WEATHER,
+            flights: { enabled: true, source: 'local', localUrl: LURL,
+                       proxyCommand: 'diorama_local_adsb', radiusNm: 40, iss: false },
+          }));
+          await p._pollFlights();
+          eq('32a: the rest_command domain is used', svc[0]?.domain, 'rest_command');
+          eq('32a: the configured service name is called', svc[0]?.service, 'diorama_local_adsb');
+          eq('32a: NO service data is sent (the URL is in the YAML)',
+            Object.keys(svc[0]?.data ?? { x: 1 }).length, 0, JSON.stringify(svc[0]?.data));
+          eq('32a: status ok after the proxied poll', p.flightsStatus, 'ok');
+          ok('32a: aircraft landed from the rest_command response',
+            (p.flightsNow?.length ?? 0) > 0, `n=${p.flightsNow?.length}`);
+          // NEGATIVE CONTROL: the direct browser fetch is NOT used when proxied
+          // — this is the whole point (the receiver URL never leaves the YAML).
+          eq('32a: NEG the receiver was NOT fetched by the browser',
+            calls.filter(u => u.includes('192.168.1.50')).length, 0, calls.join(' '));
+          quiesce(p);
+        }
+
+        // (b) local with NO proxy name → today's direct browser fetch, no service.
+        {
+          calls.length = 0; svc.length = 0;
+          handler = () => WIDE;
+          svcReply = () => ({ context: {}, response: { status: 200, content: WIDE } });
+          const { p } = await boot(makeStore({
+            weather: WEATHER,
+            flights: { enabled: true, source: 'local', localUrl: LURL, radiusNm: 40, iss: false },
+          }));
+          await waitFor(() => p.flightsStatus === 'ok');
+          ok('32b: the receiver URL is fetched directly', calls.includes(LURL), calls[0] || '');
+          eq('32b: NEG no rest_command is called', svc.length, 0);
+          quiesce(p);
+        }
+
+        // (b2) a BLANK/garbage proxy name sanitizes away → still the direct path.
+        {
+          calls.length = 0; svc.length = 0;
+          handler = () => WIDE;
+          const { p } = await boot(makeStore({
+            weather: WEATHER,
+            flights: { enabled: true, source: 'local', localUrl: LURL,
+                       proxyCommand: '   ', radiusNm: 40, iss: false },
+          }));
+          await waitFor(() => p.flightsStatus === 'ok');
+          ok('32b2: an unusable proxy name falls back to the direct fetch',
+            calls.includes(LURL) && svc.length === 0, `calls=${calls.length} svc=${svc.length}`);
+          quiesce(p);
+        }
+
+        // (c) local NEVER reports needs-proxy — that status means "this feed is
+        //     unreachable without one", which is false for a LAN receiver.
+        {
+          calls.length = 0; svc.length = 0;
+          handler = () => WIDE;
+          const { p } = await boot(makeStore({
+            weather: WEATHER,
+            flights: { enabled: true, source: 'local', localUrl: LURL, radiusNm: 40, iss: false },
+          }));
+          await waitFor(() => p.flightsStatus === 'ok');
+          ok('32c: local with no proxy is NOT needs-proxy', p.flightsStatus !== 'needs-proxy',
+            p.flightsStatus);
+          // NEGATIVE CONTROL: the same store on a proxy-REQUIRED source does
+          // report it — the status itself is alive, local is simply exempt.
+          const { p: p2 } = await boot(makeStore({
+            weather: WEATHER, flights: { enabled: true, source: 'opensky', iss: false },
+          }));
+          await waitFor(() => p2.flightsStatus === 'needs-proxy');
+          eq('32c: NEG the same shape on opensky DOES report needs-proxy',
+            p2.flightsStatus, 'needs-proxy');
+          quiesce(p); quiesce(p2);
+        }
+
+        // (d) a proxied local receiver serving text/plain: rest_command hands
+        //     back `content` as a raw JSON STRING. It must still parse.
+        {
+          svc.length = 0;
+          svcReply = () => ({ context: {}, response: { status: 200, content: JSON.stringify(WIDE) } });
+          const { p } = await boot(makeStore({
+            weather: WEATHER,
+            flights: { enabled: true, source: 'local', localUrl: LURL,
+                       proxyCommand: 'diorama_local_adsb', radiusNm: 40, iss: false },
+          }));
+          await p._pollFlights();
+          eq('32d: a text/plain receiver body still parses', p.flightsStatus, 'ok');
+          ok('32d: … and yields the same aircraft', (p.flightsNow?.length ?? 0) > 0,
+            `n=${p.flightsNow?.length}`);
+          // NEGATIVE CONTROL: genuinely unparseable text is not silently accepted.
+          svcReply = () => ({ response: { status: 200, content: '<html>502 Bad Gateway</html>' } });
+          const { p: p2 } = await boot(makeStore({
+            weather: WEATHER,
+            flights: { enabled: true, source: 'local', localUrl: LURL,
+                       proxyCommand: 'diorama_local_adsb', radiusNm: 40, iss: false },
+          }));
+          await p2._pollFlights();
+          eq('32d: NEG an HTML error body → status error, not a fake ok',
+            p2.flightsStatus, 'error');
+          quiesce(p); quiesce(p2);
+        }
+
+        // (e) a failing local rest_command with nothing cached reports 'error'.
+        {
+          svc.length = 0;
+          svcReply = () => null;
+          calls.length = 0;
+          handler = () => WIDE;
+          const { p } = await boot(makeStore({
+            weather: WEATHER,
+            flights: { enabled: true, source: 'local', localUrl: LURL,
+                       proxyCommand: 'diorama_local_adsb', radiusNm: 40, iss: false },
+          }));
+          await p._pollFlights();
+          ok('32e: the call WAS attempted', svc.length > 0, `svc=${svc.length}`);
+          eq('32e: a failing local proxy with no data → status error', p.flightsStatus, 'error');
+          eq('32e: NEG it does not silently fall back to the browser fetch',
+            calls.filter(u => u.includes('192.168.1.50')).length, 0);
+          quiesce(p);
+        }
+
+        // ── 8y2. A receiver's WHOLE CATCH is filtered the same either way ──
+        // A LAN antenna hears everything, out past 200 nm, unlike adsb.lol or
+        // OpenSky which pre-filter server-side. `_applyFlights` is the single
+        // shared gate; the risk of the proxy path is that it bypasses it.
+        // TWO radii are needed, and the reason is load-bearing: at 40 nm the
+        // fixture has 61 aircraft inside, so the 50-cap alone would trim the
+        // list to a 31 nm maximum and the radius filter could be deleted
+        // without any containment assertion noticing (measured). At 12 nm only
+        // 18 are inside, so the cap is inert and containment is genuinely the
+        // radius filter's doing. The 40 nm run therefore owns the CAP, the
+        // 12 nm run owns the RADIUS.
+        const RADIUS = 40, TIGHT = 12;
+        const wideVia = async (proxied, radiusNm = RADIUS) => {
+          calls.length = 0; svc.length = 0;
+          handler = () => WIDE;
+          svcReply = () => ({ context: {}, response: { status: 200, content: WIDE } });
+          const { p } = await boot(makeStore({
+            weather: WEATHER,
+            flights: {
+              enabled: true, source: 'local', localUrl: LURL, radiusNm, iss: false,
+              ...(proxied ? { proxyCommand: 'diorama_local_adsb' } : {}),
+            },
+          }));
+          await p._pollFlights();
+          const list = p.flightsNow ?? [];
+          quiesce(p);
+          return list;
+        };
+        const direct = await wideVia(false);
+        const viaHa = await wideVia(true);
+        const tightDirect = await wideVia(false, TIGHT);
+        const tightProxy = await wideVia(true, TIGHT);
+
+        // The fixture really is a wide catch — assert the PREMISE, so a future
+        // fixture edit that removes the far traffic cannot silently pass this.
+        const rawNorm = F.normalizeAircraftList(WIDE);
+        ok('33: the fixture normalizes to more than MAX_AIRCRAFT',
+          rawNorm.length > F.MAX_AIRCRAFT, `n=${rawNorm.length}`);
+        ok('33: the fixture really does contain traffic beyond the radius',
+          rawNorm.length > direct.length, `${rawNorm.length} → ${direct.length}`);
+
+        // The fixture is deliberately emitted in SHUFFLED order — ascending
+        // distance would let "sorted nearest-first" pass with no sort at all.
+        const monotonic = (list) => {
+          for (let i = 1; i < list.length; i++) {
+            if (list[i].distNm < list[i - 1].distNm - 1e-9) return false;
+          }
+          return true;
+        };
+        ok('33: the fixture is NOT emitted in distance order (so the sort is testable)',
+          !monotonic(F.normalizeAircraftList(WIDE).map(a => ({
+            distNm: F.flightBearingDistance(47.6, -122.3, a.lat, a.lon).distNm }))));
+
+        for (const [via, list] of [['direct', direct], ['proxy', viaHa]]) {
+          ok(`33 (${via}): capped at MAX_AIRCRAFT`, list.length === F.MAX_AIRCRAFT,
+            `n=${list.length}`);
+          ok(`33 (${via}): sorted nearest-first`, monotonic(list));
+          ok(`33 (${via}): the nearest aircraft survived the cap`,
+            Math.abs(list[0].distNm - 2) < 0.01, `${list[0].distNm.toFixed(3)} nm`);
+          // The fixture's ground rows also carry alt_geom (as tar1090 emits),
+          // so this tests the `alt_baro === 'ground'` sentinel itself and not
+          // the no-altitude drop standing in for it.
+          ok(`33 (${via}): ground aircraft are dropped`,
+            !list.some(a => a.callsign && a.callsign.startsWith('GND')),
+            list.filter(a => (a.callsign || '').startsWith('GND')).map(a => a.hex).join(','));
+          ok(`33 (${via}): NEG the far traffic is gone`,
+            !list.some(a => (a.callsign || '').startsWith('FAR')),
+            list.filter(a => (a.callsign || '').startsWith('FAR')).map(a => a.hex).join(','));
+        }
+
+        // The RADIUS, at a radius the cap cannot mask.
+        for (const [via, list] of [['direct', tightDirect], ['proxy', tightProxy]]) {
+          ok(`33 (${via}, ${TIGHT} nm): the cap is INERT here`,
+            list.length > 0 && list.length < F.MAX_AIRCRAFT, `n=${list.length}`);
+          ok(`33 (${via}, ${TIGHT} nm): every aircraft is inside the radius`,
+            list.every(a => a.distNm <= TIGHT + 1e-6),
+            `n=${list.length} max=${Math.max(...list.map(a => a.distNm)).toFixed(2)} nm`);
+          ok(`33 (${via}, ${TIGHT} nm): sorted nearest-first`, monotonic(list));
+          ok(`33 (${via}, ${TIGHT} nm): NEG no ground or far traffic`,
+            !list.some(a => /^(GND|FAR)/.test(a.callsign || '')));
+        }
+        ok('33: the tight radius really did drop traffic the wide one kept',
+          tightDirect.length < direct.length, `${direct.length} → ${tightDirect.length}`);
+        eq('33: the tight radius agrees across both transports',
+          JSON.stringify(tightProxy.map(a => a.hex)),
+          JSON.stringify(tightDirect.map(a => a.hex)));
+        // The actual regression risk of the optional proxy: a second code path
+        // that skips `_applyFlights` entirely. Same bytes in ⇒ same list out.
+        eq('33: the proxied list is IDENTICAL to the direct one',
+          JSON.stringify(viaHa.map(a => [a.hex, a.altFt, Math.round(a.distNm * 1e6)])),
+          JSON.stringify(direct.map(a => [a.hex, a.altFt, Math.round(a.distNm * 1e6)])),
+          `direct=${direct.length} proxy=${viaHa.length}`);
+        // NEGATIVE CONTROL for that equality: the SAME comparison against a
+        // deliberately different radius must fail, proving it discriminates.
+        {
+          calls.length = 0; handler = () => WIDE;
+          const { p } = await boot(makeStore({
+            weather: WEATHER,
+            flights: { enabled: true, source: 'local', localUrl: LURL, radiusNm: 10, iss: false },
+          }));
+          await p._pollFlights();
+          const narrow = p.flightsNow ?? [];
+          ok('33: NEG a different radius yields a different list (the compare discriminates)',
+            JSON.stringify(narrow.map(a => a.hex)) !== JSON.stringify(direct.map(a => a.hex))
+            && narrow.every(a => a.distNm <= 10 + 1e-6) && narrow.length > 0,
+            `n=${narrow.length}`);
+          quiesce(p);
+        }
+
+        // Altitude band, over the proxy path too.
+        {
+          svc.length = 0;
+          svcReply = () => ({ context: {}, response: { status: 200, content: WIDE } });
+          const { p } = await boot(makeStore({
+            weather: WEATHER,
+            flights: { enabled: true, source: 'local', localUrl: LURL,
+                       proxyCommand: 'diorama_local_adsb', radiusNm: RADIUS,
+                       minAltFt: 5000, maxAltFt: 20000, iss: false },
+          }));
+          await p._pollFlights();
+          const alts = (p.flightsNow ?? []).map(a => a.altFt);
+          ok('33: the altitude band applies on the proxy path',
+            alts.length > 0 && alts.every(a => a >= 5000 && a <= 20000),
+            `n=${alts.length} [${Math.min(...alts)}..${Math.max(...alts)}]`);
+          // NEGATIVE CONTROL: the unfiltered run genuinely contains out-of-band
+          // traffic, so the band is doing real work.
+          ok('33: NEG the unbanded run DOES contain out-of-band altitudes',
+            direct.some(a => a.altFt < 5000 || a.altFt > 20000),
+            `min=${Math.min(...direct.map(a => a.altFt))} max=${Math.max(...direct.map(a => a.altFt))}`);
+          quiesce(p);
+        }
+
+        // ── 8y3. Missing-altitude rows and the minAltFt comparison ─────────
+        // INVESTIGATED: a row with no usable altitude never reaches the band
+        // filter at all — `normalizeAircraftList` drops it (alt_baro →
+        // alt_geom → altitude, then `if (altFt === null) continue`). So
+        // `fp.altFt` is always a real number by the time `_applyFlights` runs,
+        // and there is no silent null-vs-number comparison to get wrong.
+        {
+          const norm = F.normalizeAircraftList(WIDE);
+          ok('34: every normalized point has a FINITE altitude',
+            norm.length > 0 && norm.every(a => Number.isFinite(a.altFt)),
+            `n=${norm.length}`);
+          ok('34: the explicitly-null-altitude rows are dropped at normalization',
+            !norm.some(a => (a.callsign || '').startsWith('NUL')));
+          ok('34: the rows with NO altitude key are dropped too',
+            !norm.some(a => (a.callsign || '').startsWith('NOA')));
+          // The fixture really contains them (premise, so the two assertions
+          // above cannot pass vacuously).
+          const missing = WIDE.aircraft.filter(a =>
+            a.alt_baro == null && a.alt_geom == null && a.altitude == null);
+          ok('34: the fixture DOES carry such rows', missing.length === 5,
+            `n=${missing.length}`);
+          // …and the ground rows are NOT among them: they carry alt_geom, so
+          // only the `ground` sentinel can be what drops them.
+          ok('34: the ground rows have a usable alt_geom (so the sentinel is load-bearing)',
+            WIDE.aircraft.filter(a => a.alt_baro === 'ground').length === 5
+            && WIDE.aircraft.filter(a => a.alt_baro === 'ground')
+                 .every(a => typeof a.alt_geom === 'number'));
+          // alt_baro null + alt_geom present is a FALLBACK, not a drop.
+          const geom = norm.find(a => a.callsign === 'GEOM1');
+          ok('34: alt_baro null falls back to alt_geom rather than dropping',
+            !!geom && geom.altFt === 7500, JSON.stringify(geom && geom.altFt));
+          // …and that fallback row is subject to the band like any other.
+          {
+            svc.length = 0;
+            svcReply = () => ({ response: { status: 200, content: WIDE } });
+            const { p } = await boot(makeStore({
+              weather: WEATHER,
+              flights: { enabled: true, source: 'local', localUrl: LURL,
+                         proxyCommand: 'diorama_local_adsb', radiusNm: RADIUS,
+                         minAltFt: 8000, iss: false },
+            }));
+            await p._pollFlights();
+            ok('34: minAltFt 8000 excludes the 7500 ft geom-fallback row',
+              !(p.flightsNow ?? []).some(a => a.callsign === 'GEOM1'));
+            quiesce(p);
+            // NEGATIVE CONTROL: with no floor it IS present, so the exclusion
+            // above is the filter's doing and not a normalization accident.
+            ok('34: NEG with no altitude floor the same row survives',
+              direct.some(a => a.callsign === 'GEOM1'),
+              direct.map(a => a.callsign).filter(Boolean).slice(0, 3).join(','));
+          }
+        }
+      }
+
+      // ── 8x. OFFLINE (the gh-pages demo / standalone offline mode) ──────
+      // There is no Home Assistant, so `callServiceWithResponse` can never
+      // return anything and there are no entity states to read. Anything that
+      // depends on either must SAY it needs Home Assistant and start no timer;
+      // the ISS is a separate CORS-open feed and must keep flying, because
+      // offline it is the only flight visual left.
+      {
+        const eq = (name, got, want, extra = '') =>
+          ok(name, got === want, extra || `got ${JSON.stringify(got)} want ${JSON.stringify(want)}`);
+        const LURL = 'http://192.168.1.50/tar1090/data/aircraft.json';
+        const ISS = { latitude: 10, longitude: 20, altitude: 420, velocity: 27000, timestamp: 1784953269 };
+
+        // (a) the demo default: offline + opensky + no proxy name configured.
+        {
+          calls.length = 0; svc.length = 0;
+          handler = u => u.includes('wheretheiss') ? ISS : ring(3);
+          svcReply = () => ({ context: {}, response: { status: 200, content: OPENSKY } });
+          const { p } = await boot(makeStore({
+            weather: WEATHER, flights: { enabled: true, source: 'opensky', iss: true },
+          }), undefined, { offline: true });
+          await waitFor(() => p.flightsStatus === 'needs-ha');
+          eq('35a: offline + a HA-dependent source → needs-ha', p.flightsStatus, 'needs-ha');
+          ok('35a: the planner really is in offline mode', p.isOffline === true);
+          // NEGATIVE CONTROL: it must NOT be the online diagnosis. Pasting YAML
+          // into a configuration.yaml that does not exist is not the fix.
+          ok('35a: NEG not needs-proxy', p.flightsStatus !== 'needs-proxy');
+          ok('35a: NEG not a generic error', p.flightsStatus !== 'error');
+          ok('35a: no stale aircraft shown', p.flightsNow === null);
+          // NO POLL TIMER — the thing that would otherwise hammer a dead service.
+          eq('35a: NO aircraft poll timer was started', p._flightsTimer, null);
+          eq('35a: ZERO service calls attempted', svc.length, 0);
+          eq('35a: ZERO aircraft network calls', aircraftCalls().length, 0);
+          // …and the ISS keeps flying. This is the whole point of the branch
+          // deliberately not being an early return.
+          await waitFor(() => p.issNow !== null);
+          ok('35a: the ISS still polls offline', p.issNow !== null);
+          ok('35a: … on its own timer', p._issTimer !== null);
+          ok('35a: … having really hit its own feed', issCalls().length > 0,
+            `iss=${issCalls().length}`);
+          // An explicit poll must not downgrade the honest status.
+          await p._pollFlights();
+          eq('35a: an explicit poll still reports needs-ha', p.flightsStatus, 'needs-ha');
+          eq('35a: … and still calls nothing', svc.length + aircraftCalls().length, 0);
+          quiesce(p);
+        }
+
+        // (b) offline + opensky WITH a proxy name typed in anyway. This is the
+        //     case that used to poll a service that cannot exist, forever.
+        {
+          calls.length = 0; svc.length = 0;
+          handler = u => u.includes('wheretheiss') ? ISS : ring(3);
+          const { p } = await boot(makeStore({
+            weather: WEATHER,
+            flights: { enabled: true, source: 'opensky', proxyCommand: 'diorama_opensky', iss: false },
+          }), undefined, { offline: true });
+          await waitFor(() => p.flightsStatus === 'needs-ha');
+          eq('35b: a configured proxy name does not make it reachable offline',
+            p.flightsStatus, 'needs-ha');
+          eq('35b: NO poll timer despite a valid service name', p._flightsTimer, null);
+          eq('35b: NEG the service was never called', svc.length, 0);
+          // The _pollFlights guard in its own right. Scenario (a) cannot reach
+          // it — the older needs-proxy guard returns first there — so a proxy
+          // name that IS configured is the only way to exercise it. Without it
+          // an explicit poll would call the dead service and, since this fake
+          // would happily answer, silently flip the status to 'ok'.
+          svcReply = () => ({ context: {}, response: { status: 200, content: OPENSKY } });
+          await p._pollFlights();
+          eq('35b: an explicit poll makes no call offline', svc.length, 0);
+          eq('35b: … and does not downgrade the status', p.flightsStatus, 'needs-ha');
+          ok('35b: … and lands no aircraft', p.flightsNow === null);
+          // NEGATIVE CONTROL: the SAME store ONLINE does call it and succeeds —
+          // so offline is the only reason nothing happened.
+          calls.length = 0; svc.length = 0;
+          svcReply = () => ({ context: {}, response: { status: 200, content: OPENSKY } });
+          const NY = { source: 'openmeteo', lat: 40.7, lon: -74.0, chip: true };
+          const { p: p2 } = await boot(makeStore({
+            weather: NY,
+            flights: { enabled: true, source: 'opensky', proxyCommand: 'diorama_opensky',
+                       radiusNm: 100, iss: false },
+          }));
+          await p2._pollFlights();
+          ok('35b: NEG the same config ONLINE calls the service and lands data',
+            svc.length > 0 && p2.flightsStatus === 'ok' && (p2.flightsNow?.length ?? 0) > 0,
+            `svc=${svc.length} status=${p2.flightsStatus} n=${p2.flightsNow?.length}`);
+          quiesce(p); quiesce(p2);
+        }
+
+        // (c) offline + entity. No rest_command is involved, but an HA sensor
+        //     cannot exist without HA — reporting a fetch 'error' would be a
+        //     lie, since nothing was ever fetched.
+        {
+          calls.length = 0; svc.length = 0;
+          handler = () => ring(3);
+          const { p } = await boot(makeStore({
+            weather: WEATHER,
+            flights: { enabled: true, source: 'entity', entityId: 'sensor.adsb', iss: false },
+          }), undefined, { offline: true });
+          await waitFor(() => p.flightsStatus === 'needs-ha');
+          eq('35c: offline + entity → needs-ha', p.flightsStatus, 'needs-ha');
+          ok('35c: NEG not the misleading generic error', p.flightsStatus !== 'error');
+          eq('35c: NO poll timer', p._flightsTimer, null);
+          quiesce(p);
+        }
+
+        // ── The sources that ARE genuinely reachable with no HA behind us ──
+        // (d) local + a receiver URL: a plain browser fetch of the user's own
+        //     LAN receiver. THE one aircraft source that works offline, so it
+        //     must never be suppressed as "needs HA".
+        {
+          calls.length = 0; svc.length = 0;
+          handler = () => WIDE;
+          const { p } = await boot(makeStore({
+            weather: WEATHER,
+            flights: { enabled: true, source: 'local', localUrl: LURL, radiusNm: 40, iss: false },
+          }), undefined, { offline: true });
+          await waitFor(() => p.flightsStatus === 'ok');
+          eq('35d: offline + local is NOT suppressed', p.flightsStatus, 'ok');
+          ok('35d: the receiver really was fetched by the browser', calls.includes(LURL),
+            calls[0] || '');
+          ok('35d: aircraft landed offline', (p.flightsNow?.length ?? 0) > 0,
+            `n=${p.flightsNow?.length}`);
+          ok('35d: a poll timer IS running for a source that can work',
+            p._flightsTimer !== null);
+          eq('35d: NEG no service call was attempted', svc.length, 0);
+          quiesce(p);
+        }
+
+        // (e) local + a proxy name, OFFLINE: the proxy is definitionally
+        //     unavailable, so it DEMOTES to the direct fetch rather than
+        //     reporting failure — the receiver URL is right there and reachable.
+        {
+          calls.length = 0; svc.length = 0;
+          handler = () => WIDE;
+          svcReply = () => ({ context: {}, response: { status: 200, content: WIDE } });
+          const { p } = await boot(makeStore({
+            weather: WEATHER,
+            flights: { enabled: true, source: 'local', localUrl: LURL,
+                       proxyCommand: 'diorama_local_adsb', radiusNm: 40, iss: false },
+          }), undefined, { offline: true });
+          await waitFor(() => p.flightsStatus === 'ok');
+          eq('35e: offline demotes a proxied local source to the direct fetch',
+            p.flightsStatus, 'ok');
+          ok('35e: the browser fetched the receiver', calls.includes(LURL), calls[0] || '');
+          eq('35e: NEG the dead rest_command was NOT called', svc.length, 0);
+          // NEGATIVE CONTROL: the identical store ONLINE takes the proxy path,
+          // so the demotion is genuinely the offline flag's doing.
+          calls.length = 0; svc.length = 0;
+          const { p: p2 } = await boot(makeStore({
+            weather: WEATHER,
+            flights: { enabled: true, source: 'local', localUrl: LURL,
+                       proxyCommand: 'diorama_local_adsb', radiusNm: 40, iss: false },
+          }));
+          await p2._pollFlights();
+          ok('35e: NEG the same config ONLINE uses the rest_command instead',
+            svc.length > 0 && !calls.includes(LURL),
+            `svc=${svc.length} calls=${calls.length}`);
+          quiesce(p); quiesce(p2);
+        }
+
+        // (f) local offline with NO receiver URL: nothing to fetch, but that is
+        //     an incomplete configuration, not a "needs HA" state.
+        {
+          calls.length = 0; svc.length = 0;
+          handler = () => WIDE;
+          const { p } = await boot(makeStore({
+            weather: WEATHER, flights: { enabled: true, source: 'local', iss: false },
+          }), undefined, { offline: true });
+          await waitFor(() => p.flightsStatus === 'error');
+          ok('35f: offline + local with no URL is not mislabelled needs-ha',
+            p.flightsStatus !== 'needs-ha', p.flightsStatus);
+          eq('35f: NEG and nothing was fetched', calls.length, 0);
+          quiesce(p);
+        }
+
+        // (g) cloud offline: a direct browser fetch, so the TRANSPORT is
+        //     reachable without HA. It will fail (airplanes.live 403s everyone
+        //     now) — but as an honest error from a request that was really made.
+        {
+          calls.length = 0; svc.length = 0;
+          handler = () => null;                    // stand in for the 403
+          const { p } = await boot(makeStore({
+            weather: WEATHER, flights: { enabled: true, source: 'cloud', iss: false },
+          }), undefined, { offline: true });
+          await waitFor(() => p.flightsStatus === 'error');
+          ok('35g: offline + cloud is NOT suppressed as needs-ha',
+            p.flightsStatus !== 'needs-ha', p.flightsStatus);
+          ok('35g: … the request really was attempted',
+            aircraftCalls().some(u => u.includes('airplanes.live')), aircraftCalls().join(' '));
+          quiesce(p);
+        }
+
+        // (h) NEGATIVE CONTROL for the whole section: ONLINE, the very first
+        //     scenario reports the ordinary needs-proxy, so `needs-ha` is
+        //     reachable only via the offline flag.
+        {
+          calls.length = 0; svc.length = 0;
+          handler = () => ring(3);
+          const { p } = await boot(makeStore({
+            weather: WEATHER, flights: { enabled: true, source: 'opensky', iss: false },
+          }));
+          await waitFor(() => p.flightsStatus === 'needs-proxy');
+          eq('35h: NEG online, the same store reports needs-proxy', p.flightsStatus, 'needs-proxy');
+          ok('35h: NEG needs-ha is unreachable while online', p.flightsStatus !== 'needs-ha');
+          quiesce(p);
+        }
+      }
+
+      // ── 8v. The `demo` source, end to end through the real Planner ──────
+      // The whole point of the source: it works where every fetched source
+      // cannot. So the assertions that matter are the NEGATIVE ones — nothing
+      // is fetched, no service is called, and none of the "cannot work here"
+      // statuses are reachable — plus the positive one that the fleet still
+      // flows through the ORDINARY `_applyFlights` filtering.
+      {
+        const eq = (name, got, want, extra = '') =>
+          ok(name, got === want, extra || `got ${JSON.stringify(got)} want ${JSON.stringify(want)}`);
+        const ISS = { latitude: 10, longitude: 20, altitude: 420, velocity: 27000, timestamp: 1784953269 };
+        const EMERG_HEX = 'a8b1c2';
+
+        // (a) OFFLINE + demo. This is the gh-pages demo's exact situation, and
+        //     the reason the source exists.
+        {
+          calls.length = 0; svc.length = 0;
+          handler = u => u.includes('wheretheiss') ? ISS : null;
+          svcReply = () => ({ context: {}, response: { status: 200, content: OPENSKY } });
+          // NB deliberately NO weather block and NO geo landmarks — exactly what
+          // every committed demo floorplan ships as. Any other source would be
+          // stuck at 'no-origin' before it ever looked at the network.
+          const { p } = await boot(makeStore({
+            flights: { enabled: true, source: 'demo', radiusNm: 15, iss: true },
+          }), undefined, { offline: true });
+          await waitFor(() => p.flightsStatus === 'ok');
+          eq('36a: offline + demo reports ok', p.flightsStatus, 'ok');
+          ok('36a: the planner really is in offline mode', p.isOffline === true);
+          ok('36a: aircraft landed', (p.flightsNow?.length ?? 0) > 0, `n=${p.flightsNow?.length}`);
+          // NEGATIVE CONTROLS: none of the "cannot work here" states apply.
+          ok('36a: NEG not needs-ha', p.flightsStatus !== 'needs-ha');
+          ok('36a: NEG not needs-proxy', p.flightsStatus !== 'needs-proxy');
+          ok('36a: NEG not no-origin', p.flightsStatus !== 'no-origin');
+          ok('36a: NEG not error', p.flightsStatus !== 'error');
+          // ZERO network, ZERO Home Assistant. The two claims the UI makes.
+          eq('36a: ZERO aircraft network calls', aircraftCalls().length, 0, aircraftCalls().join(' '));
+          eq('36a: ZERO Home Assistant service calls', svc.length, 0, JSON.stringify(svc));
+          // …while the ISS keeps its own separate, genuinely-fetched feed.
+          await waitFor(() => p.issNow !== null);
+          ok('36a: the ISS is untouched and still real', p.issNow !== null);
+          ok('36a: … having really hit its own feed', issCalls().length > 0);
+          // The poll timer IS running (unlike every offline-blocked source), so
+          // the sky actually moves.
+          ok('36a: a poll timer is running', p._flightsTimer !== null);
+          // NEGATIVE CONTROL on the origin fallback: with no geo fit and no
+          // weather location, `flightsOrigin` still answers — and it answers
+          // with the SYNTHETIC point, which is what unblocks the whole source.
+          const o = p.flightsOrigin();
+          ok('36a: an origin resolves with nothing configured', o !== null);
+          ok('36a: … and it is the synthetic one',
+            o && Math.abs(o.lat - F.DEMO_FLIGHT_ORIGIN.lat) < 1e-9
+              && Math.abs(o.lon - F.DEMO_FLIGHT_ORIGIN.lon) < 1e-9, JSON.stringify(o));
+          quiesce(p);
+        }
+
+        // (b) NEGATIVE CONTROL for (a): the SAME store with a fetched source
+        //     and no location is blocked at 'no-origin'. So the demo's own
+        //     origin is genuinely the thing doing the unblocking, not some
+        //     other fallback that would have applied anyway.
+        {
+          calls.length = 0; svc.length = 0;
+          handler = () => ring(3);
+          const { p } = await boot(makeStore({
+            flights: { enabled: true, source: 'cloud', radiusNm: 15, iss: false },
+          }), undefined, { offline: true });
+          await waitFor(() => p.flightsStatus === 'no-origin');
+          eq('36b: NEG a fetched source with no location is blocked', p.flightsStatus, 'no-origin');
+          ok('36b: NEG flightsOrigin is null for it', p.flightsOrigin() === null);
+          quiesce(p);
+        }
+
+        // (c) ORIGIN PRECEDENCE: a real configured location must WIN, so a user
+        //     with a calibrated home sees the synthetic traffic centred on their
+        //     actual house rather than on a placeholder in Seattle.
+        {
+          const { p } = await boot(makeStore({
+            weather: { source: 'openmeteo', lat: 51.5, lon: -0.12, chip: true },
+            flights: { enabled: true, source: 'demo', radiusNm: 15, iss: false },
+          }));
+          await waitFor(() => p.flightsStatus === 'ok');
+          const o = p.flightsOrigin();
+          ok('36c: a configured weather location beats the synthetic one',
+            o && Math.abs(o.lat - 51.5) < 1e-9 && Math.abs(o.lon + 0.12) < 1e-9, JSON.stringify(o));
+          ok('36c: NEG it is NOT the synthetic default',
+            o && Math.abs(o.lat - F.DEMO_FLIGHT_ORIGIN.lat) > 1);
+          // …and the fleet really is drawn about THAT point.
+          const near = p.flightsNow.every(fp =>
+            F.flightBearingDistance(51.5, -0.12, fp.lat, fp.lon).distNm <= 15.001);
+          ok('36c: every aircraft is within the radius of the configured home', near);
+          quiesce(p);
+        }
+
+        // (d) THE RADIUS FILTER IS LIVE. Two roster members are generated
+        //     outside the configured radius on purpose; `_applyFlights` must
+        //     drop exactly those. Checked at two very different radii so the
+        //     result cannot be an artefact of one setting.
+        for (const rad of [15, 40]) {
+          const { p } = await boot(makeStore({
+            flights: { enabled: true, source: 'demo', radiusNm: rad, iss: false },
+          }), undefined, { offline: true });
+          await waitFor(() => p.flightsStatus === 'ok');
+          const origin = p.flightsOrigin();
+          const generated = F.demoFlightPoints(Date.now(), origin, rad);
+          const outside = generated.filter(fp =>
+            F.flightBearingDistance(origin.lat, origin.lon, fp.lat, fp.lon).distNm > rad);
+          ok(`36d/${rad}: the generator really emits out-of-range traffic`,
+            outside.length === 2, `outside=${outside.length}`);
+          const shownHex = new Set(p.flightsNow.map(fp => fp.hex));
+          ok(`36d/${rad}: … and every one of them is FILTERED OUT`,
+            outside.every(fp => !shownHex.has(fp.hex)),
+            outside.filter(fp => shownHex.has(fp.hex)).map(fp => fp.hex).join(','));
+          ok(`36d/${rad}: the rest survive`,
+            p.flightsNow.length === generated.length - outside.length,
+            `shown=${p.flightsNow.length} gen=${generated.length}`);
+          // Non-vacuity guard for the two assertions above: the filter must have
+          // genuinely removed something, not passed everything through.
+          ok(`36d/${rad}: the filter really removed aircraft`,
+            p.flightsNow.length < generated.length,
+            `shown=${p.flightsNow.length} gen=${generated.length}`);
+          ok(`36d/${rad}: nothing shown exceeds the radius`,
+            p.flightsNow.every(fp => (fp.distNm ?? 1e9) <= rad + 1e-6));
+          quiesce(p);
+        }
+
+        // (e) The ALTITUDE band filter applies too — same code path, but worth
+        //     pinning because a synthetic fleet is exactly where someone might
+        //     assume the filters were skipped.
+        {
+          const { p } = await boot(makeStore({
+            flights: { enabled: true, source: 'demo', radiusNm: 15, minAltFt: 20000, iss: false },
+          }), undefined, { offline: true });
+          await waitFor(() => p.flightsStatus === 'ok');
+          ok('36e: minAltFt drops the low traffic',
+            p.flightsNow.every(fp => fp.altFt >= 20000),
+            p.flightsNow.map(fp => Math.round(fp.altFt)).join(','));
+          ok('36e: … but does not empty the sky', p.flightsNow.length > 0);
+          quiesce(p);
+        }
+
+        // (f) MOTION. Two polls at different wall-clock instants must move every
+        //     aircraft — that is the only thing the renderer's dead reckoning
+        //     has to work with.
+        {
+          const realNow = Date.now;
+          try {
+            let t0 = 1755300000000;
+            Date.now = () => t0;
+            const { p } = await boot(makeStore({
+              flights: { enabled: true, source: 'demo', radiusNm: 15, iss: false },
+            }), undefined, { offline: true });
+            await waitFor(() => p.flightsStatus === 'ok');
+            const first = new Map(p.flightsNow.map(fp => [fp.hex, { lat: fp.lat, lon: fp.lon }]));
+            t0 += 120000;                             // two minutes later
+            await p._pollFlights();
+            let moved = 0;
+            for (const fp of p.flightsNow) {
+              const a = first.get(fp.hex);
+              if (!a) continue;
+              if (F.flightBearingDistance(a.lat, a.lon, fp.lat, fp.lon).distNm > 0.05) moved++;
+            }
+            eq('36f: every aircraft moved over two minutes', moved, p.flightsNow.length);
+            // NEGATIVE CONTROL: at the SAME instant nothing moves, so the motion
+            // above is the clock and not per-call randomness.
+            const snap = p.flightsNow.map(fp => [fp.hex, fp.lat, fp.lon].join(':')).join('|');
+            await p._pollFlights();
+            eq('36f: NEG re-polling at the same instant is identical',
+              p.flightsNow.map(fp => [fp.hex, fp.lat, fp.lon].join(':')).join('|'), snap);
+            quiesce(p);
+          } finally { Date.now = realNow; }
+        }
+
+        // (g) The EMERGENCY aircraft drives the real alert lifecycle — and can
+        //     be switched off without leaving the source, because it is the one
+        //     fleet member with an effect outside the sky.
+        {
+          const { p } = await boot(makeStore({
+            flights: { enabled: true, source: 'demo', radiusNm: 15, iss: false },
+          }), undefined, { offline: true });
+          await waitFor(() => p.flightsStatus === 'ok');
+          ok('36g: the emergency aircraft is in the sky',
+            p.flightsNow.some(fp => fp.hex === EMERG_HEX && F.isEmergency(fp)));
+          await waitFor(() => p.flightAlerts.some(a => a.id === `flight:emerg:${EMERG_HEX}`));
+          const al = p.flightAlerts.find(a => a.id === `flight:emerg:${EMERG_HEX}`);
+          ok('36g: … and raised a real Alert Center row', !!al);
+          eq('36g: … at error severity', al?.severity, 'error');
+          // Opt out; the aircraft and its alert both go, the rest of the fleet stays.
+          const n0 = p.flightsNow.length;
+          p.setFlights(f => { f.demo = { ...(f.demo ?? {}), emergency: false }; });
+          await waitFor(() => p.flightsStatus === 'ok'
+            && !p.flightsNow.some(fp => fp.hex === EMERG_HEX));
+          ok('36g: opting out removes the emergency aircraft',
+            !p.flightsNow.some(fp => fp.hex === EMERG_HEX));
+          eq('36g: … and exactly one aircraft', p.flightsNow.length, n0 - 1);
+          ok('36g: … and nothing else is emergency-flagged',
+            !p.flightsNow.some(fp => F.isEmergency(fp)));
+          quiesce(p);
+        }
+
+        // (h) `setFlights` sanitizes the demo block like every other knob —
+        //     HERE, not in the settings UI, so an import lands the same shape.
+        {
+          const { p } = await boot(makeStore({
+            flights: { enabled: true, source: 'demo', iss: false },
+          }), undefined, { offline: true });
+          await waitFor(() => p.flightsStatus === 'ok');
+          p.setFlights(f => { f.demo = { fleet: 0, seed: 0, lat: 12.5 }; });
+          eq('36h: a too-small fleet clamps up to 1', p.store.flights.demo.fleet, 1);
+          ok('36h: a zero seed is dropped', p.store.flights.demo.seed === undefined);
+          ok('36h: half a coordinate is dropped', p.store.flights.demo.lat === undefined);
+          ok('36h: … and the fleet really did shrink the sky',
+            p.flightsNow.length <= 1, `n=${p.flightsNow.length}`);
+          // An over-large fleet clamps to the roster length — which IS the
+          // default, so the "exactly the default clears" rule then collapses the
+          // whole block. Both halves of that in one step.
+          p.setFlights(f => { f.demo = { fleet: 9999 }; });
+          ok('36h: an over-large fleet clamps to the roster and collapses away',
+            p.store.flights.demo === undefined, JSON.stringify(p.store.flights.demo));
+          await waitFor(() => (p.flightsNow?.length ?? 0) > 1);
+          ok('36h: … leaving the full fleet flying again',
+            p.flightsNow.length > 1, `n=${p.flightsNow.length}`);
           quiesce(p);
         }
       }
@@ -3354,6 +4117,50 @@
         && !F.flightSourceNeedsProxy('entity'));
       ok('30a: absent source needs the proxy (it resolves to opensky)',
         F.flightSourceNeedsProxy(undefined));
+      // `local` MAY be routed through HA, but must never be REQUIRED to be:
+      // a receiver reachable from the browser is a legitimate configuration,
+      // and `needs-proxy` would falsely claim nothing is being fetched.
+      ok('30a: NEG local has a suggested command yet still does NOT need the proxy',
+        !!F.FLIGHT_PROXY_DEFAULT_COMMAND.local && !F.flightSourceNeedsProxy('local'),
+        F.FLIGHT_PROXY_DEFAULT_COMMAND.local);
+      eq('30a: local suggests diorama_local_adsb',
+        F.FLIGHT_PROXY_DEFAULT_COMMAND.local, 'diorama_local_adsb');
+      ok('30a: NEG the three suggested command names are distinct', new Set([
+        F.FLIGHT_PROXY_DEFAULT_COMMAND.opensky, F.FLIGHT_PROXY_DEFAULT_COMMAND.adsblol,
+        F.FLIGHT_PROXY_DEFAULT_COMMAND.local]).size === 3);
+      eq('30a: NEG cloud/entity are still un-proxiable (no suggested name)',
+        [F.FLIGHT_PROXY_DEFAULT_COMMAND.cloud, F.FLIGHT_PROXY_DEFAULT_COMMAND.entity]
+          .filter(v => v !== undefined).length, 0);
+
+      // ── (a2) which sources cannot work without Home Assistant at all ────
+      // The gate for the offline `needs-ha` status. A SUPERSET of needsProxy:
+      // `entity` calls no rest_command but reads HA states, which offline are
+      // empty. `cloud` and `local` are plain browser fetches and must NOT be
+      // suppressed — `local` is the one source that can genuinely serve a
+      // Home-Assistant-less panel.
+      ok('30a2: the proxied sources need Home Assistant',
+        F.flightSourceNeedsHa('opensky') && F.flightSourceNeedsHa('adsblol'));
+      ok('30a2: entity needs Home Assistant too (its states come from HA)',
+        F.flightSourceNeedsHa('entity'));
+      ok('30a2: NEG local does NOT need Home Assistant (direct receiver fetch)',
+        !F.flightSourceNeedsHa('local'));
+      ok('30a2: NEG cloud does NOT need Home Assistant (direct browser fetch)',
+        !F.flightSourceNeedsHa('cloud'));
+      ok('30a2: absent source needs Home Assistant (it resolves to opensky)',
+        F.flightSourceNeedsHa(undefined));
+      // It is a strict superset — never equal to, never narrower than, needsProxy.
+      ok('30a2: needsHa is a strict SUPERSET of needsProxy',
+        F.FLIGHT_SOURCES.every(s => !F.flightSourceNeedsProxy(s) || F.flightSourceNeedsHa(s))
+        && F.FLIGHT_SOURCES.some(s => F.flightSourceNeedsHa(s) && !F.flightSourceNeedsProxy(s)),
+        F.FLIGHT_SOURCES.map(s =>
+          `${s}:${F.flightSourceNeedsProxy(s) ? 'P' : '-'}${F.flightSourceNeedsHa(s) ? 'H' : '-'}`).join(' '));
+      // `demo` joined this set: it makes no request at all, so it is reachable
+      // wherever a browser runs — see §31a for the rest of its gate contract.
+      eq('30a2: exactly three sources are browser-reachable with no HA',
+        F.FLIGHT_SOURCES.filter(s => !F.flightSourceNeedsHa(s)).sort().join(','),
+        'cloud,demo,local');
+      ok('30a2: NEG demo does NOT need Home Assistant (nothing is fetched)',
+        !F.flightSourceNeedsHa('demo') && !F.flightSourceNeedsProxy('demo'));
 
       eq('30a: OpenSky default poll is 60 s (credit budget)',
         F.flightDefaultPollSeconds('opensky'), 60);
@@ -3614,6 +4421,57 @@
       ok('30h: with no origin the preview says so instead of faking coordinates',
         yNoOrigin.includes('calibrate a GPS landmark') && !yNoOrigin.includes('lamin=0'));
 
+      // ── (h2) local receiver YAML (optional HA proxy) ────────────────────
+      // No coordinates are involved: the URL is the user's own LAN address, so
+      // the block is STATIC and must contain no Jinja at all.
+      const LURL = 'http://192.168.1.50/tar1090/data/aircraft.json';
+      const yLoc = F.flightProxyYaml('local', undefined, ORIGIN, 15, LURL);
+      ok('30h2: local YAML declares rest_command:', yLoc.includes('rest_command:'));
+      ok('30h2: local YAML uses the suggested service name by default',
+        yLoc.includes('  diorama_local_adsb:'), yLoc.split('\n').find(l => l.trim().endsWith(':')));
+      ok('30h2: local YAML carries the receiver URL verbatim',
+        yLoc.includes(`url: ${LURL}`), yLoc.split('\n').find(l => l.includes('url:')));
+      ok('30h2: local YAML is a GET with a timeout',
+        yLoc.includes('method: GET') && yLoc.includes('timeout: 10'));
+      // NEGATIVE CONTROLS: this block is static and self-contained.
+      ok('30h2: NEG local YAML contains NO Jinja template at all',
+        !yLoc.includes('{{'), yLoc);
+      ok('30h2: NEG local YAML never mentions a third-party provider',
+        !yLoc.includes('opensky') && !yLoc.includes('adsb.lol')
+        && !yLoc.includes('airplanes.live'));
+      ok('30h2: local YAML states HA must reach the receiver',
+        /home assistant/i.test(yLoc) && /reach/i.test(yLoc));
+      // A sanitized name reaches the local block too.
+      ok('30h2: a pasted/odd service name is sanitized INTO the local YAML',
+        F.flightProxyYaml('local', 'rest_command.My Pi ', null, 15, LURL).includes('  mypi:'));
+      // With no receiver URL yet, emit a MARKED placeholder — never a line that
+      // looks pasteable but would silently fetch nothing.
+      const yLocNone = F.flightProxyYaml('local', undefined, ORIGIN, 15);
+      ok('30h2: no receiver URL → a clearly-marked placeholder',
+        yLocNone.includes('#') && /SET THE RECEIVER URL/i.test(yLocNone),
+        yLocNone.split('\n').find(l => l.includes('url:')));
+      ok('30h2: NEG the placeholder never invents a URL',
+        !yLocNone.includes('http://') && !yLocNone.includes('https://'));
+      ok('30h2: a whitespace-only URL is treated as absent',
+        F.flightProxyYaml('local', undefined, ORIGIN, 15, '   ') === yLocNone);
+      ok('30h2: a URL with surrounding whitespace is trimmed into the block',
+        F.flightProxyYaml('local', undefined, ORIGIN, 15, `  ${LURL}  `) === yLoc);
+      // STALE-CALLER IDIOM: the trailing localUrl argument must leave every
+      // other source byte-identical, present or absent.
+      ok('30h2: the trailing localUrl leaves opensky YAML byte-identical',
+        F.flightProxyYaml('opensky', undefined, ORIGIN, 15, LURL) === yOpen);
+      ok('30h2: … and adsblol YAML byte-identical',
+        F.flightProxyYaml('adsblol', 'rest_command.My Feed', ORIGIN, 25, LURL) === yLol);
+      // NEGATIVE CONTROL: the local block is genuinely different from the
+      // others — this is not an accidental fall-through to the adsb.lol branch.
+      ok('30h2: NEG local YAML differs from the adsblol block',
+        yLoc !== F.flightProxyYaml('adsblol', 'diorama_local_adsb', ORIGIN, 15));
+
+      // Attribution is a property of WHO OWNS THE DATA, not of the transport:
+      // proxying your own receiver through HA still credits nobody.
+      eq('30h2: proxying local changes nothing about attribution',
+        F.flightAttribution('local'), null);
+
       // ── (i) the service data the poll actually sends ────────────────────
       const vOpen = F.flightProxyVars('opensky', 40.7, -74.0, 15);
       eq('30i: opensky vars are exactly the four box edges',
@@ -3628,6 +4486,378 @@
       ok('30i: the previewed URL is built from those same vars',
         F.flightProxyUrlPreview('adsblol', 40.712345678, -74.098765, 15.6)
           === `https://api.adsb.lol/v2/lat/${vLol.lat}/lon/${vLol.lon}/dist/${vLol.dist}`);
+      // A proxied local receiver takes NO variables — the address is baked into
+      // the user's own YAML, so sending coordinates HA ignores would only let
+      // the generated block and the actual call drift apart.
+      const vLoc = F.flightProxyVars('local', 40.7, -74.0, 15);
+      eq('30i: local vars are empty', Object.keys(vLoc).length, 0, JSON.stringify(vLoc));
+      // NEGATIVE CONTROL: local must NOT fall through to the point+radius shape.
+      ok('30i: NEG local does not emit lat/lon/dist',
+        vLoc.lat === undefined && vLoc.lon === undefined && vLoc.dist === undefined);
+      ok('30i: NEG local does not emit a bounding box', vLoc.lamin === undefined);
+      ok('30i: local vars stay empty for any coordinates',
+        Object.keys(F.flightProxyVars('local', NaN, NaN, NaN)).length === 0);
+      // The other sources are untouched by that early return.
+      ok('30i: NEG cloud/entity still take the point+radius shape',
+        Object.keys(F.flightProxyVars('cloud', 40.7, -74, 15)).sort().join(',') === 'dist,lat,lon'
+        && Object.keys(F.flightProxyVars('entity', 40.7, -74, 15)).sort().join(',') === 'dist,lat,lon');
+    }
+
+    // ── 31. The `demo` source — synthetic, deterministic, network-free ──────
+    // Mirrors weather.ts's `demo` source: the caller supplies the epoch, the
+    // module never reads the clock and never calls Math.random, so the same
+    // `nowMs` always yields byte-identical output. The fleet doubles as a live
+    // fixture for the whole flight subsystem, so most of this section is
+    // COVERAGE: each aircraft is asserted to reach the render path it exists for.
+    {
+      // Local helper — this page's shared vocabulary is ok()/near() only.
+      const eq = (name, got, want, extra = '') =>
+        ok(name, got === want, extra || `got ${JSON.stringify(got)} want ${JSON.stringify(want)}`);
+      const AL = await import('./airlines.mod.js' + V);
+      const O = F.DEMO_FLIGHT_ORIGIN;
+      const R = F.FLIGHTS_DEFAULT_RADIUS_NM;
+      const T0 = 1755300000000;
+      const gen = (t = T0, r = R, cfg) => F.demoFlightPoints(t, O, r, cfg);
+      const fleet = gen();
+      const distOf = (fp, o = O) => F.flightBearingDistance(o.lat, o.lon, fp.lat, fp.lon).distNm;
+      const bearingOf = (fp, o = O) =>
+        F.flightBearingDistance(o.lat, o.lon, fp.lat, fp.lon).bearingRad * 180 / Math.PI;
+
+      // ── 31a. Source registration + the two "cannot work here" gates ───────
+      ok('31a: demo is a real source', F.FLIGHT_SOURCES.includes('demo'));
+      ok('31a: it resolves to itself', F.resolveFlightSource('demo') === 'demo');
+      // THE load-bearing pair. `demo` needs no HA and no proxy — that is the
+      // entire reason it can serve the hosted demo and an offline panel.
+      ok('31a: demo needs NO rest_command proxy', F.flightSourceNeedsProxy('demo') === false);
+      ok('31a: demo needs NO Home Assistant', F.flightSourceNeedsHa('demo') === false);
+      // NEGATIVE CONTROLS: the gates are not simply broken for everything.
+      ok('31a: NEG opensky still needs the proxy', F.flightSourceNeedsProxy('opensky') === true);
+      ok('31a: NEG adsblol still needs the proxy', F.flightSourceNeedsProxy('adsblol') === true);
+      ok('31a: NEG entity still needs Home Assistant', F.flightSourceNeedsHa('entity') === true);
+      ok('31a: NEG local still needs neither', F.flightSourceNeedsHa('local') === false);
+      // Nobody to credit for invented data — crediting anyone would be a lie.
+      ok('31a: demo credits nobody', F.flightAttribution('demo') === null);
+      ok('31a: NEG opensky still credits OpenSky',
+        (F.flightAttribution('opensky')?.name ?? '').includes('OpenSky'));
+
+      // ── 31b. Determinism (the house rule) ────────────────────────────────
+      const j1 = JSON.stringify(gen(T0));
+      const j2 = JSON.stringify(gen(T0));
+      ok('31b: the same epoch yields byte-identical output', j1 === j2);
+      ok('31b: NEG a different epoch really does differ', JSON.stringify(gen(T0 + 90000)) !== j1);
+      // A second, INDEPENDENT determinism probe: a Math.random slipped anywhere
+      // in the builder would survive the string compare above only if it were
+      // cached, so re-derive across a spread of epochs.
+      let detOk = true;
+      for (const dt of [0, 1, 999, 60000, 3600000, 86400000]) {
+        if (JSON.stringify(gen(T0 + dt)) !== JSON.stringify(gen(T0 + dt))) detOk = false;
+      }
+      ok('31b: … at every epoch sampled', detOk);
+      ok('31b: no Math.random or Date in the generated values',
+        gen().every(fp => Object.values(fp).every(
+          v => v === null || typeof v === 'string' || typeof v === 'boolean' || isFinite(v))));
+
+      // ── 31c. Fleet size + the clamp ──────────────────────────────────────
+      eq('31c: the default fleet is the whole roster', fleet.length, F.DEMO_FLEET_MAX);
+      eq('31c: default === max (every row exists to cover a path)',
+        F.DEMO_FLEET_DEFAULT, F.DEMO_FLEET_MAX);
+      eq('31c: an explicit fleet slices from the front', gen(T0, R, { fleet: 5 }).length, 5);
+      eq('31c: … from the FRONT (same first hex)', gen(T0, R, { fleet: 5 })[0].hex, fleet[0].hex);
+      eq('31c: zero clamps up to one', gen(T0, R, { fleet: 0 }).length, 1);
+      eq('31c: negative clamps up to one', gen(T0, R, { fleet: -9 }).length, 1);
+      eq('31c: over-large clamps to the roster', gen(T0, R, { fleet: 9999 }).length, F.DEMO_FLEET_MAX);
+      eq('31c: a non-numeric fleet falls back to the default',
+        gen(T0, R, { fleet: 'lots' }).length, F.DEMO_FLEET_DEFAULT);
+      eq('31c: a fractional fleet rounds', gen(T0, R, { fleet: 4.6 }).length, 5);
+
+      // ── 31d. Positions round-trip, and are RADIUS-RELATIVE ───────────────
+      // Every position is placed as (bearing, distance) through the exact
+      // inverse of `flightBearingDistance`, so `_applyFlights` recomputing the
+      // distance must give back what was intended — the radius filter depends
+      // on it. Distances are FRACTIONS of the configured radius, which is what
+      // keeps both the shell-compression spread and the out-of-range pair
+      // meaningful at ANY radius setting.
+      const fracsAt = r => gen(T0, r).map(fp => +(distOf(fp) / r).toFixed(6));
+      const f15 = fracsAt(15);
+      ok('31d: distance fractions are identical at radius 5',
+        JSON.stringify(fracsAt(5)) === JSON.stringify(f15));
+      ok('31d: … and at radius 100',
+        JSON.stringify(fracsAt(100)) === JSON.stringify(f15));
+      ok('31d: … and at the 5..100 extremes they are a real spread, not one value',
+        new Set(f15).size >= 10, `distinct=${new Set(f15).size}`);
+      // NEGATIVE CONTROL: the ABSOLUTE distances are of course NOT equal — the
+      // fractions being equal is a real invariant, not a vacuous one.
+      ok('31d: NEG absolute distances do scale with the radius',
+        Math.abs(distOf(gen(T0, 100)[0]) - distOf(gen(T0, 5)[0])) > 1);
+      ok('31d: an origin far from the default round-trips too',
+        gen(T0, R).every((fp, i) => {
+          const alt = { lat: -33.87, lon: 151.21 };
+          const p = F.demoFlightPoints(T0, alt, R)[i];
+          return Math.abs(distOf(p, alt) - distOf(fp)) < 1e-6;
+        }));
+
+      // ── 31e. Out-of-range traffic is GENERATED (so the filter has work) ───
+      const outside = fleet.filter(fp => distOf(fp) > R);
+      eq('31e: exactly two aircraft are generated outside the radius', outside.length, 2);
+      ok('31e: … and they are outside at every radius setting',
+        [5, 15, 40, 100].every(r => gen(T0, r).filter(fp => distOf(fp) / r > 1).length === 2));
+      ok('31e: … and are still generated for a modest fleet',
+        gen(T0, R, { fleet: 8 }).some(fp => distOf(fp) > R));
+      ok('31e: NEG most of the fleet IS inside the radius',
+        fleet.length - outside.length >= 10);
+
+      // ── 31f. gs / track / vertRate are DERIVED from the drawn path ────────
+      // The renderer dead-reckons from `gs` + `track` between polls. If those
+      // were declared independently of the position they would fight the next
+      // fix; deriving them by central difference makes them the true tangent.
+      let worstTangent = 0, worstReckon = 0;
+      const NMM = 1852, DEGR = Math.PI / 180, ERM = 6371000;
+      const later = gen(T0 + 8000);
+      for (let i = 0; i < fleet.length; i++) {
+        const fp = fleet[i];
+        // Tangent: the track must be 90° from the position bearing (either
+        // sense — the roster deliberately mixes orbit directions).
+        const d = ((fp.trackDeg - bearingOf(fp)) % 360 + 360) % 360;
+        worstTangent = Math.max(worstTangent, Math.min(Math.abs(d - 90), Math.abs(d - 270)));
+        // Reckoning: advance along `track` at `gs` for 8 s and land on the
+        // position the generator itself reports 8 s later.
+        const dist = fp.gsKt * (8 / 3600) * NMM;
+        const br = fp.trackDeg * DEGR;
+        const plat = fp.lat + dist * Math.cos(br) / (ERM * DEGR);
+        const plon = fp.lon + dist * Math.sin(br) / (ERM * DEGR * Math.cos(fp.lat * DEGR));
+        worstReckon = Math.max(worstReckon,
+          F.flightBearingDistance(plat, plon, later[i].lat, later[i].lon).distNm);
+      }
+      // 5° covers the ONE aircraft with a radial component (member 8); the rest
+      // are exactly tangential.
+      ok('31f: track is the true tangent of the flown path', worstTangent < 5,
+        `worst=${worstTangent.toFixed(2)}°`);
+      ok('31f: dead reckoning over a poll interval lands on the next fix',
+        worstReckon < 0.1, `worst=${worstReckon.toFixed(4)} nm`);
+      ok('31f: every ground speed is positive and finite',
+        fleet.every(fp => isFinite(fp.gsKt) && fp.gsKt > 0));
+      ok('31f: every track is in [0,360)',
+        fleet.every(fp => fp.trackDeg >= 0 && fp.trackDeg < 360));
+      ok('31f: a climbing/descending aircraft reports a real vertical rate',
+        fleet.some(fp => Math.abs(fp.vertRateFpm) > 100));
+      ok('31f: a level aircraft reports zero', fleet.some(fp => fp.vertRateFpm === 0));
+
+      // ── 31g. The circuits never empty the sky ────────────────────────────
+      // "Watchable indefinitely": over a long sweep every aircraft must keep
+      // moving AND stay on its circuit rather than flying away.
+      {
+        const dmin = new Array(fleet.length).fill(Infinity);
+        const dmax = new Array(fleet.length).fill(0);
+        const quads = fleet.map(() => new Set());
+        for (let s = 0; s <= 7200; s += 30) {
+          const snap = gen(T0 + s * 1000);
+          for (let i = 0; i < snap.length; i++) {
+            const dd = distOf(snap[i]);
+            dmin[i] = Math.min(dmin[i], dd); dmax[i] = Math.max(dmax[i], dd);
+            quads[i].add(Math.floor(bearingOf(snap[i]) / 90));
+          }
+        }
+        ok('31g: no aircraft ever leaves its circuit', dmax.every((d, i) => d / dmin[i] < 3),
+          dmax.map((d, i) => (d / dmin[i]).toFixed(2)).join(','));
+        ok('31g: every aircraft circulates through all four quadrants',
+          quads.every(q => q.size === 4), quads.map(q => q.size).join(','));
+        ok('31g: … and the fleet is intact two hours later',
+          gen(T0 + 7200000).length === fleet.length);
+      }
+
+      // ── 31h. Coverage: archetypes, bands, liveries, beacons, privacy ──────
+      const archOf = fp => AT.aircraftArchetype(fp.typeCode, fp.category);
+      const arch = new Set(fleet.map(archOf));
+      eq('31h: all EIGHT aircraft archetypes are represented', arch.size, 8,
+        [...arch].sort().join(','));
+      const bands = new Set(fleet.map(fp => F.flightPointSpeedBand(fp)));
+      eq('31h: all FIVE speed bands are represented', bands.size, 5,
+        [...bands].sort().join(','));
+      // Real airline ICAO prefixes → real liveries.
+      const carriers = fleet.map(fp => AL.airlineForCallsign(fp.callsign)).filter(Boolean);
+      ok('31h: at least six aircraft resolve to a known airline', carriers.length >= 6,
+        `n=${carriers.length}`);
+      const livCount = fleet.filter(fp => {
+        const a = archOf(fp);
+        return !!AL.resolveAirlineLivery(AL.airlineForCallsign(fp.callsign), {
+          enabled: true, military: fp.military, skin: !!F.militarySkinFor(fp, a),
+          suppress: F.flightIdentitySuppressed(fp, true),
+        });
+      }).length;
+      ok('31h: at least five carry painted livery colours', livCount >= 5, `n=${livCount}`);
+      // …and the vetoes really bite: a regional's livery is its partner's, so
+      // it deliberately carries none.
+      ok('31h: a REGIONAL carrier is deliberately colourless',
+        fleet.some(fp => {
+          const info = AL.airlineForCallsign(fp.callsign);
+          return info?.kind === 'regional' && !AL.resolveAirlineLivery(info, { enabled: true });
+        }));
+      // Military: one with a SKIN, one deliberately without — the negative
+      // control for skin resolution, flying in the same fleet.
+      const skinned = fleet.filter(fp => F.militarySkinFor(fp, archOf(fp)));
+      const mil = fleet.filter(fp => fp.military);
+      eq('31h: exactly one aircraft resolves a military skin', skinned.length, 1,
+        skinned.map(fp => fp.callsign).join(','));
+      eq('31h: … which is the f16', F.militarySkinFor(skinned[0], archOf(skinned[0])), 'f16');
+      ok('31h: two aircraft carry the military flag', mil.length === 2, `n=${mil.length}`);
+      ok('31h: NEG the other military aircraft resolves NO skin',
+        mil.filter(fp => !F.militarySkinFor(fp, archOf(fp))).length === 1);
+      ok('31h: … and carries a recognised military callsign word',
+        mil.some(fp => AL.militaryCallsignInfo(fp.callsign)?.word === 'REACH'));
+      ok('31h: both military hexes trip the US-military heuristic',
+        mil.every(fp => AL.usMilitaryHexHeuristic(fp.hex)));
+      ok('31h: NEG no civil aircraft trips it',
+        fleet.filter(fp => !fp.military).every(fp => !AL.usMilitaryHexHeuristic(fp.hex)));
+      // Privacy: PIA suppresses identity, LADD keeps it — the documented asymmetry.
+      const pia = fleet.filter(fp => fp.pia), ladd = fleet.filter(fp => fp.ladd);
+      eq('31h: exactly one PIA aircraft', pia.length, 1);
+      eq('31h: exactly one LADD aircraft', ladd.length, 1);
+      ok('31h: PIA identity is suppressed', F.flightIdentitySuppressed(pia[0], true) === true);
+      ok('31h: LADD identity is KEPT', F.flightIdentitySuppressed(ladd[0], true) === false);
+      ok('31h: both are privacy-dimmed',
+        F.flightPrivacyDimmed(pia[0], true) && F.flightPrivacyDimmed(ladd[0], true));
+      // Beacon ladder: all four default tiers are present in one fleet.
+      const glow = fleet.map(fp => F.resolveFlightGlow(fp, undefined, true)).filter(Boolean);
+      const glowColors = new Set(glow.map(g => g.colorA));
+      eq('31h: all four default beacon tiers light up at once', glowColors.size, 4,
+        [...glowColors].join(','));
+      ok('31h: … including the emergency red',
+        glowColors.has(F.FLIGHT_DEFAULT_BEACON.emergency));
+      // The towed-banner path needs a PISTON archetype WITH a callsign.
+      ok('31h: at least one piston tows a banner',
+        fleet.some(fp => (archOf(fp) === 'ga-high' || archOf(fp) === 'ga-low') && !!fp.callsign));
+      // One emergency, and it is the squawk path (not the `emergency` enum).
+      const emerg = fleet.filter(fp => F.isEmergency(fp));
+      eq('31h: exactly one emergency aircraft', emerg.length, 1);
+      eq('31h: … squawking 7700', F.emergencySquawk(emerg[0]), '7700');
+
+      // ── 31i. Field hygiene ───────────────────────────────────────────────
+      ok('31i: hexes are unique', new Set(fleet.map(fp => fp.hex)).size === fleet.length);
+      ok('31i: hexes are lowercase 6-digit ICAO addresses',
+        fleet.every(fp => /^[0-9a-f]{6}$/.test(fp.hex)));
+      ok('31i: every type designator is one the archetype table knows',
+        fleet.every(fp => AT.TYPE_ARCHETYPE[fp.typeCode] !== undefined),
+        fleet.filter(fp => AT.TYPE_ARCHETYPE[fp.typeCode] === undefined)
+             .map(fp => fp.typeCode).join(','));
+      ok('31i: no surface-vehicle categories (which the normalizer would drop)',
+        fleet.every(fp => !/^C/.test(fp.category ?? '') && fp.category !== 'B3'));
+      ok('31i: altitudes are airborne and finite',
+        fleet.every(fp => isFinite(fp.altFt) && fp.altFt > 0));
+      ok('31i: distNm is deliberately UNSET (the planner owns it)',
+        fleet.every(fp => fp.distNm === undefined));
+      ok('31i: the shape matches a normalized aircraft exactly',
+        (() => {
+          const want = Object.keys(F.normalizeAircraftList(
+            [{ hex: 'abc123', lat: 1, lon: 2, alt_baro: 100 }])[0]).sort().join(',');
+          return Object.keys(fleet[0]).sort().join(',') === want;
+        })());
+
+      // ── 31j. The emergency opt-out ───────────────────────────────────────
+      const quiet = gen(T0, R, { emergency: false });
+      eq('31j: opting out removes exactly one aircraft', quiet.length, fleet.length - 1);
+      ok('31j: … the emergency one', !quiet.some(fp => F.isEmergency(fp)));
+      ok('31j: … and changes nothing else',
+        JSON.stringify(quiet)
+          === JSON.stringify(fleet.filter(fp => !F.isEmergency(fp))));
+      ok('31j: NEG an explicit true keeps it',
+        gen(T0, R, { emergency: true }).some(fp => F.isEmergency(fp)));
+
+      // ── 31k. The arrangement seed ────────────────────────────────────────
+      const s0 = gen(T0), sA = gen(T0, R, { seed: 7 }), sB = gen(T0, R, { seed: 7 });
+      ok('31k: a seed is reproducible', JSON.stringify(sA) === JSON.stringify(sB));
+      ok('31k: … and really rearranges the sky', JSON.stringify(sA) !== JSON.stringify(s0));
+      ok('31k: NEG a zero seed is the base arrangement',
+        JSON.stringify(gen(T0, R, { seed: 0 })) === JSON.stringify(s0));
+      ok('31k: the CAST is unchanged by a seed',
+        sA.map(fp => fp.hex).join(',') === s0.map(fp => fp.hex).join(','));
+      ok('31k: a different seed gives a different arrangement',
+        JSON.stringify(gen(T0, R, { seed: 8 })) !== JSON.stringify(sA));
+
+      // ── 31l. Origin resolution ───────────────────────────────────────────
+      const dOrigin = F.demoFlightsOrigin;
+      ok('31l: absent config → the synthetic default',
+        dOrigin().lat === O.lat && dOrigin().lon === O.lon);
+      ok('31l: a complete valid pair is used',
+        dOrigin({ lat: -33.87, lon: 151.21 }).lat === -33.87);
+      ok('31l: half a pair falls back', dOrigin({ lat: 10 }).lat === O.lat);
+      ok('31l: an out-of-range latitude falls back',
+        dOrigin({ lat: 120, lon: 5 }).lat === O.lat);
+      ok('31l: a non-numeric pair falls back',
+        dOrigin({ lat: 'x', lon: 'y' }).lat === O.lat);
+
+      // ── 31m. `sanitizeDemoFlights` ───────────────────────────────────────
+      const sd = F.sanitizeDemoFlights;
+      ok('31m: a non-object is undefined', sd(null) === undefined && sd(7) === undefined
+        && sd([1]) === undefined);
+      ok('31m: an empty object is undefined', sd({}) === undefined);
+      eq('31m: fleet clamps low', sd({ fleet: -3 }).fleet, 1);
+      ok('31m: fleet at the default collapses the block',
+        sd({ fleet: F.DEMO_FLEET_DEFAULT }) === undefined);
+      ok('31m: a NaN fleet is dropped', sd({ fleet: NaN }) === undefined);
+      eq('31m: a seed is truncated', sd({ seed: 4.9 }).seed, 4);
+      ok('31m: a zero seed is dropped', sd({ seed: 0 }) === undefined);
+      ok('31m: an incomplete coordinate is dropped', sd({ lon: 5 }) === undefined);
+      eq('31m: a complete coordinate survives', sd({ lat: 1, lon: 2 }).lon, 2);
+      ok('31m: an explicit emergency:true normalizes away', sd({ emergency: true }) === undefined);
+      ok('31m: emergency:false is meaningful and stays', sd({ emergency: false }).emergency === false);
+
+      // ── 31n. Never throws on garbage ─────────────────────────────────────
+      for (const [name, call] of [
+        ['NaN epoch', () => F.demoFlightPoints(NaN, O, R)],
+        ['null origin', () => F.demoFlightPoints(T0, null, R)],
+        ['garbage origin', () => F.demoFlightPoints(T0, { lat: 'x', lon: null }, R)],
+        ['zero radius', () => F.demoFlightPoints(T0, O, 0)],
+        ['negative radius', () => F.demoFlightPoints(T0, O, -40)],
+        ['NaN radius', () => F.demoFlightPoints(T0, O, NaN)],
+        ['garbage config', () => F.demoFlightPoints(T0, O, R, 'nope')],
+        ['polar origin', () => F.demoFlightPoints(T0, { lat: 90, lon: 0 }, R)],
+      ]) {
+        let got = null, threw = false;
+        try { got = call(); } catch { threw = true; }
+        ok(`31n: ${name} does not throw`, !threw);
+        ok(`31n: ${name} still yields finite aircraft`,
+          Array.isArray(got) && got.length > 0
+            && got.every(fp => isFinite(fp.lat) && isFinite(fp.lon) && isFinite(fp.altFt)));
+      }
+
+      // ── 31o. The hosted-demo envelope seeder ─────────────────────────────
+      // src/demo-seed.ts pipes every committed floorplan envelope through this
+      // on its way into the published demo. The committed plans are GENERATED
+      // and carry no `flights` block, so without it the showcase sky is empty.
+      {
+        const we = F.withDemoFlightsEnvelope;
+        const store = () => ({ v: 2, floors: [{ id: 'f1', name: 'A', w: 1, d: 1 }],
+                               currentFloorId: 'f1' });
+        // The real shape: a v2 export envelope.
+        const env = JSON.parse(we(JSON.stringify({ diorama: 2, name: 'Home', store: store() })));
+        eq('31o: flights are enabled in the seeded envelope', env.store.flights?.enabled, true);
+        eq('31o: … on the synthetic source', env.store.flights?.source, 'demo');
+        ok('31o: … with a reduced fleet for a visitor device',
+          env.store.flights?.demo?.fleet > 0
+            && env.store.flights?.demo?.fleet < F.DEMO_FLEET_MAX,
+          JSON.stringify(env.store.flights?.demo));
+        ok('31o: the seeded config survives the planner sanitizer',
+          env.store.flights?.demo !== undefined
+            && F.sanitizeDemoFlights(env.store.flights.demo)?.fleet
+                 === env.store.flights.demo.fleet);
+        ok('31o: nothing else in the envelope is disturbed',
+          env.diorama === 2 && env.name === 'Home' && env.store.floors.length === 1);
+        // The legacy bare-store envelope.
+        eq('31o: a legacy bare store is handled too',
+          JSON.parse(we(JSON.stringify(store()))).flights?.source, 'demo');
+        // NEGATIVE CONTROLS — the three cases it must leave completely alone.
+        const authored = JSON.stringify({ diorama: 2, store:
+          { ...store(), flights: { enabled: false, source: 'opensky' } } });
+        eq('31o: NEG an envelope that already authored flights is untouched',
+          we(authored), authored);
+        eq('31o: NEG unparseable text is returned verbatim', we('not json {'), 'not json {');
+        eq('31o: NEG a non-store object is returned verbatim',
+          we('{"hello":1}'), '{"hello":1}');
+        eq('31o: NEG an empty string is returned verbatim', we(''), '');
+        // …and the mutation really is what makes the difference.
+        ok('31o: NEG the raw envelope has no flights block',
+          JSON.parse(JSON.stringify({ diorama: 2, store: store() })).store.flights === undefined);
+      }
     }
 
   } catch (err) {

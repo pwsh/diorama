@@ -9,8 +9,9 @@ import type { ValueRule, InfoCardFormat } from './value-rules.js';
 // Type-only — flights.ts is pure + zero-import (shared by the app graph AND the
 // lazy renderer chunk), so mirroring its glow-rule shape here costs nothing at
 // runtime and keeps the schema's single home in that module.
-import type { FlightGlowRule } from './flights.js';
-export type { FlightGlowRule, FlightGlowCriteria, FlightGlowPattern } from './flights.js';
+import type { FlightGlowRule, DemoFlightsConfig } from './flights.js';
+export type { FlightGlowRule, FlightGlowCriteria, FlightGlowPattern,
+              DemoFlightsConfig } from './flights.js';
 // Type-only (erased) — weather.ts owns the HA condition vocabulary + the 8-state
 // moon phase enum, and imports this module type-only in return. The demo weather
 // source (below) authors both, so mirroring the unions here would be a second
@@ -1662,7 +1663,12 @@ export interface FlightsConfig {
   enabled?: boolean;                      // absent/false = feature fully inert
   // Absent or unknown resolves to 'opensky' (FLIGHTS_DEFAULT_SOURCE /
   // resolveFlightSource in src/flights.ts, which own the resolution).
-  source?: 'opensky' | 'adsblol' | 'cloud' | 'local' | 'entity';
+  // 'demo' is the SYNTHETIC source: no network, no Home Assistant, no receiver
+  // — the fleet is generated in-process from the clock (`demoFlightPoints` in
+  // src/flights.ts). It is the only source that works in the hosted gh-pages
+  // demo and in offline / air-gapped panels, where every fetched source is
+  // structurally unavailable.
+  source?: 'opensky' | 'adsblol' | 'cloud' | 'local' | 'entity' | 'demo';
   // 'opensky' / 'adsblol' — the NAME of the `rest_command:` service the user
   // pasted into configuration.yaml (no `rest_command.` prefix; sanitized by
   // sanitizeFlightProxyCommand). ABSENT is the "not configured yet" sentinel:
@@ -1765,6 +1771,11 @@ export interface FlightsConfig {
   // the FAA privacy programs, so honoring them is the consumer's call).
   // Absent = ON; set false to see every flagged aircraft in full.
   privacyDim?: boolean;
+  // 'demo' — fleet size / synthetic observer / arrangement seed / the
+  // emergency opt-out. Owned end to end by src/flights.ts (see
+  // DemoFlightsConfig there); `setFlights` runs `sanitizeDemoFlights`, which
+  // collapses an all-defaults block back to undefined.
+  demo?: DemoFlightsConfig;
   iss?: boolean;                          // live ISS dot; default true (active only while `enabled`)
   alerts?: {                              // low-overflight / watch-list / ISS-pass notices
     lowAltFt?: number;

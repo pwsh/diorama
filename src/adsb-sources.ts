@@ -83,6 +83,13 @@ export interface FlightProxyApi {
 // Returns the unwrapped aircraft envelope (whatever the provider sent), or null
 // on ANY failure — missing api, unconfigured command name, HA error, unknown
 // service, non-JSON body. Never throws; the caller decides how to report it.
+//
+// Source-agnostic by construction: the service data is whatever
+// `flightProxyVars` yields for that source, and the response comes back through
+// the same unwrap. That is what lets `local` opt IN to this transport (its vars
+// are `{}` — the receiver URL is baked into the user's YAML) without a second
+// code path. The lat/lon guard still applies there: the planner only ever polls
+// with a resolved origin, so it costs nothing and keeps one contract.
 export async function fetchProxiedAircraft(
   api: FlightProxyApi | null | undefined,
   source: string, command: string | undefined,

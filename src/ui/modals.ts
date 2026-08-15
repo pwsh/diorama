@@ -27,6 +27,7 @@ import {
   FLIGHT_SIDE_TEXT_MODES, FLIGHT_BANNER_TEXT_MODES,
   resolveFlightSource, flightSourceNeedsProxy, flightDefaultPollSeconds,
   flightProxyYaml, sanitizeFlightProxyCommand, FLIGHT_PROXY_DEFAULT_COMMAND,
+  demoFlightsOrigin, demoFleetSize, DEMO_FLEET_MAX, DEMO_FLEET_DEFAULT,
 } from '../flights.js';
 import type {
   FlightPoint, FlightGlowRule, FlightGlowPattern, FlightGlowCriteria, FlightSource,
@@ -1412,6 +1413,119 @@ export class SettingsDrawer extends LitElement {
     `;
   }
 
+  // ── Demo (synthetic traffic) sub-block ───────────────────────────────────
+  // Rendered only while the `demo` source is selected. Four knobs and an
+  // honesty statement — the copy must never let invented aircraft read as real
+  // traffic, which is why the warning-coloured "not real" line comes FIRST and
+  // is not conditional on anything.
+  private _flightsDemoBlock(
+    p: Planner,
+    cfg: import('../types.js').FlightsConfig,
+    set: (mut: (f: import('../types.js').FlightsConfig) => void) => void,
+  ) {
+    const demo = cfg.demo;
+    const fleet = demoFleetSize(demo);
+    // Which rung of `Planner.flightsOrigin`'s ladder actually answered. Stated
+    // out loud because a synthetic observer is exactly the sort of thing a user
+    // should never discover by accident.
+    const fit = p.geoFit();
+    const w = p.store.weather;
+    const originKind =
+      fit && fit.transform.quality !== 'none' ? 'calibrated landmarks'
+        : (w && typeof w.lat === 'number' && isFinite(w.lat)
+           && typeof w.lon === 'number' && isFinite(w.lon)) ? 'your weather location'
+          : 'synthetic';
+    const origin = p.flightsOrigin() ?? demoFlightsOrigin(demo);
+
+    const numOrUndef = (v: string, lo: number, hi: number): number | undefined => {
+      const n = parseFloat(v);
+      return v.trim() === '' || !isFinite(n) ? undefined : Math.max(lo, Math.min(hi, n));
+    };
+    // Both halves of a coordinate move together — half a location is not one.
+    const setCoord = (which: 'lat' | 'lon', raw: string) => set(f => {
+      const d = { ...(f.demo ?? {}) };
+      const n = parseFloat(raw);
+      if (raw.trim() === '' || !isFinite(n)) { delete d.lat; delete d.lon; }
+      else d[which] = which === 'lat' ? Math.max(-90, Math.min(90, n))
+                                      : Math.max(-180, Math.min(180, n));
+      f.demo = d;
+    });
+
+    return html`
+      <div style="margin:0 0 8px 24px" data-flight-demo>
+        <div style="font-size:10px;color:#fb8c00;line-height:1.4;margin-bottom:4px"
+             data-flight-demo-warn>
+          These aircraft are <strong>invented</strong>. Nothing is fetched and no
+          Home Assistant connection is used — the fleet is generated here, in this
+          browser, from the clock. Do not read it as real traffic.
+        </div>
+        <div style="font-size:10px;color:var(--text-dim);line-height:1.4;margin-bottom:4px">
+          A fixed cast flies circuits around your home so every part of the
+          feature has something to show: airline liveries, military markings, a
+          towed banner, an emergency squawk, privacy-flagged aircraft and each
+          speed band. Two of them sit outside your search radius on purpose, so
+          the radius filter is visibly doing something.
+        </div>
+        <div class="row" style="align-items:center">
+          <label style="font-size:12px;color:var(--text);flex:1"
+                 title="How many of the cast to generate, in roster order. Some may still fall outside your search radius.">Aircraft</label>
+          <input type="number" min="1" max=${String(DEMO_FLEET_MAX)} step="1"
+                 data-flight-demo-fleet
+                 .value=${String(fleet)}
+                 @change=${(e: Event) => set(f => {
+                   const n = numOrUndef((e.target as HTMLInputElement).value, 1, DEMO_FLEET_MAX);
+                   f.demo = { ...(f.demo ?? {}), fleet: n ?? DEMO_FLEET_DEFAULT };
+                 })}
+                 style="width:80px">
+        </div>
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text);margin:2px 0">
+          <input type="checkbox" data-flight-demo-emerg
+                 .checked=${demo?.emergency !== false}
+                 @change=${(e: Event) => set(f => {
+                   f.demo = { ...(f.demo ?? {}), emergency: (e.target as HTMLInputElement).checked };
+                 })}>
+          <span style="flex:1">Include an emergency aircraft
+            <span style="display:block;color:var(--text-dim);font-size:10px;line-height:1.35">
+              Squawking 7700 — red beacon, and a standing entry in the Alert Center
+              for as long as it is in range. Turn it off for a quiet showcase.</span></span>
+        </label>
+        <div class="row" style="align-items:center">
+          <label style="font-size:12px;color:var(--text);flex:1"
+                 title="Rearranges the same cast deterministically. The same seed always gives the same arrangement.">Arrangement seed</label>
+          <input type="number" step="1" placeholder="0" data-flight-demo-seed
+                 .value=${demo?.seed != null ? String(demo.seed) : ''}
+                 @change=${(e: Event) => set(f => {
+                   const raw = (e.target as HTMLInputElement).value.trim();
+                   const n = parseInt(raw, 10);
+                   f.demo = { ...(f.demo ?? {}), seed: raw === '' || !isFinite(n) ? 0 : n };
+                 })}
+                 style="width:80px">
+        </div>
+        <div style="font-size:10px;color:var(--text-dim);line-height:1.4;margin-top:4px"
+             data-flight-demo-origin>
+          Centred on <code>${origin.lat.toFixed(4)}, ${origin.lon.toFixed(4)}</code>
+          — ${originKind === 'synthetic'
+              ? html`a <strong>synthetic location</strong>, because no real one is
+                     configured. The aircraft look identical wherever this is
+                     (they are drawn by bearing and distance from home); it only
+                     decides where the ISS is computed to be.`
+              : html`taken from ${originKind}.`}
+        </div>
+        ${originKind === 'synthetic' ? html`
+          <div class="row" style="align-items:center">
+            <label style="font-size:12px;color:var(--text);flex:1">Synthetic location</label>
+            <input type="number" step="0.0001" placeholder="lat" data-flight-demo-lat
+                   .value=${demo?.lat != null ? String(demo.lat) : ''}
+                   @change=${(e: Event) => setCoord('lat', (e.target as HTMLInputElement).value)}
+                   style="width:80px">
+            <input type="number" step="0.0001" placeholder="lon" data-flight-demo-lon
+                   .value=${demo?.lon != null ? String(demo.lon) : ''}
+                   @change=${(e: Event) => setCoord('lon', (e.target as HTMLInputElement).value)}
+                   style="width:80px">
+          </div>` : nothing}
+      </div>`;
+  }
+
   // ── Flight & satellite tracking block (roadmap P4) ───────────────────────
   private _flightsBlock() {
     const p = this.planner;
@@ -1420,6 +1534,12 @@ export class SettingsDrawer extends LitElement {
     const source = resolveFlightSource(cfg.source);
     const set = (mut: (f: import('../types.js').FlightsConfig) => void) => p.setFlights(mut);
 
+    // Offline (the hosted demo / standalone offline mode) there is no Home
+    // Assistant, so anything that would have HA fetch on our behalf is dead and
+    // the YAML below is unusable. `local` is the exception and is handled at its
+    // own row: its receiver URL is fetched straight from the browser.
+    const offline = p.isOffline;
+
     // Live status line off the planner's own poll state.
     const status = p.flightsStatus;
     const ageS = p.flightsAt ? Math.max(0, Math.round((Date.now() - p.flightsAt) / 1000)) : null;
@@ -1427,12 +1547,15 @@ export class SettingsDrawer extends LitElement {
       ? html`<span style="color:var(--text-dim)">disabled</span>`
       : status === 'no-origin'
         ? html`<span style="color:#fb8c00">needs a location — calibrate a GPS landmark or set a weather location</span>`
+        : status === 'needs-ha'
+          ? html`<span style="color:#fb8c00" data-flight-needs-ha>needs a Home Assistant connection</span>`
         : status === 'needs-proxy'
           ? html`<span style="color:#fb8c00" data-flight-needs-proxy>needs the Home Assistant proxy below</span>`
         : status === 'error'
           ? html`<span style="color:#ff5252">${source === 'cloud'
               ? 'airplanes.live refused the request'
-              : flightSourceNeedsProxy(source)
+              : (flightSourceNeedsProxy(source)
+                 || (source === 'local' && !!sanitizeFlightProxyCommand(cfg.proxyCommand)))
                 ? 'the rest_command call failed — check the name and that HA was restarted'
                 : 'fetch failing — check source settings'}</span>`
           : html`<span style="color:#69f0ae">${p.flightsNow?.length ?? 0} aircraft${ageS !== null ? ` · updated ${ageS}s ago` : ''}</span>`;
@@ -1444,15 +1567,34 @@ export class SettingsDrawer extends LitElement {
     // data the poll actually sends, so the two can never disagree.
     const proxyName = sanitizeFlightProxyCommand(cfg.proxyCommand);
     const suggested = FLIGHT_PROXY_DEFAULT_COMMAND[source] ?? 'diorama_flights';
-    const proxyBlock = () => {
+    // `optional` = the `local` source, where routing through HA is a CHOICE
+    // (see the local block below) rather than the only way to reach the feed.
+    // Everything else — the YAML, the name field, the sanitizing — is shared.
+    // Offline stand-in for the whole proxy sub-block. The YAML is deliberately
+    // NOT rendered: it asks the user to edit a configuration.yaml that does not
+    // exist here, and a service name typed into that field would only start a
+    // poll that can never return. Points at the one source that does work.
+    const offlineHaNotice = () => html`
+      <div style="margin:0 0 8px 24px;font-size:10px;color:#fb8c00;line-height:1.4"
+           data-flight-offline-ha>
+        Offline — there is no Home Assistant to fetch this feed for you, so live
+        aircraft are unavailable. The ISS still works offline (it comes from a
+        separate feed the browser can call directly). For a sky with aircraft in
+        it right now, choose <strong>Demo (synthetic traffic)</strong> below — or
+        <strong>Local receiver</strong> if you run your own ADS-B receiver on this
+        network.
+      </div>`;
+
+    const proxyBlock = (opts?: { intro?: unknown; optional?: boolean }) => {
+      if (offline) return offlineHaNotice();
       const yaml = flightProxyYaml(source, cfg.proxyCommand, p.flightsOrigin(),
-                                   cfg.radiusNm ?? FLIGHTS_DEFAULT_RADIUS_NM);
+                                   cfg.radiusNm ?? FLIGHTS_DEFAULT_RADIUS_NM, cfg.localUrl);
       return html`
         <div style="margin:0 0 8px 24px" data-flight-proxy>
           <div style="font-size:10px;color:var(--text-dim);line-height:1.4;margin-bottom:4px">
-            Your browser cannot call this feed directly (it sends no usable CORS
+            ${opts?.intro ?? html`Your browser cannot call this feed directly (it sends no usable CORS
             header), so Home Assistant fetches it. Paste this into
-            <code>configuration.yaml</code>, restart HA, then enter the service name.
+            <code>configuration.yaml</code>, restart HA, then enter the service name.`}
           </div>
           <pre data-flight-yaml style="margin:0 0 4px;padding:6px 7px;border-radius:4px;border:1px solid var(--border);
                       background:#0b0e12;color:var(--text);font-size:10px;line-height:1.4;
@@ -1475,9 +1617,17 @@ export class SettingsDrawer extends LitElement {
               @click=${() => set(f => { f.proxyCommand = suggested; })}>Use ${suggested}</button>` : nothing}
           </div>
           ${!proxyName ? html`
-            <div style="font-size:10px;color:#fb8c00;margin-top:3px;line-height:1.35">
-              Not configured — nothing is being fetched. Enter the
-              <code>rest_command</code> service name (no <code>rest_command.</code> prefix).
+            <div style="font-size:10px;color:${opts?.optional ? 'var(--text-dim)' : '#fb8c00'};margin-top:3px;line-height:1.35">
+              ${opts?.optional
+                ? html`Leave this empty to keep fetching the receiver straight from the
+                   browser. Fill it in to route through Home Assistant instead.`
+                : html`Not configured — nothing is being fetched. Enter the
+                   <code>rest_command</code> service name (no <code>rest_command.</code> prefix).`}
+            </div>` : nothing}
+          ${opts?.optional && proxyName ? html`
+            <div style="font-size:10px;color:var(--text-dim);margin-top:3px;line-height:1.35">
+              Each poll now costs a Home Assistant service round-trip. Clear this
+              field to go back to fetching the receiver directly.
             </div>` : nothing}
           ${source === 'opensky' ? html`
             <div style="font-size:10px;color:var(--text-dim);margin-top:3px;line-height:1.35">
@@ -1550,18 +1700,40 @@ export class SettingsDrawer extends LitElement {
                        .value=${localUrl}
                        @change=${(e: Event) => set(f => { const v = (e.target as HTMLInputElement).value.trim(); f.localUrl = v || undefined; })}
                        style="width:100%;padding:5px 7px;border-radius:4px;border:1px solid ${mixedContent ? '#fb8c00' : 'var(--border)'};background:#111;color:var(--text);font-size:12px;box-sizing:border-box">
-                <div style="font-size:10px;color:var(--text-dim);margin-top:2px;line-height:1.35">
-                  The receiver must send an <code>Access-Control-Allow-Origin</code>
-                  header on <code>aircraft.json</code> — it does NOT by default
-                  (see docs/research/flight-tracking.md §2.2 for the one-block fix).
+                <div style="font-size:10px;color:var(--text-dim);margin-top:2px;line-height:1.35"
+                     data-flight-local-cors>
+                  To fetch this straight from the browser, the receiver must send an
+                  <code>Access-Control-Allow-Origin</code> header on
+                  <code>aircraft.json</code> — it does not by default. Or route it
+                  through Home Assistant with the block below, which needs no
+                  receiver changes.
                 </div>
                 ${mixedContent ? html`
-                  <div style="font-size:10px;color:#fb8c00;margin-top:3px;line-height:1.35">
-                    Blocked by the browser: an HTTPS panel cannot fetch an HTTP receiver.
+                  <div style="font-size:10px;color:#fb8c00;margin-top:3px;line-height:1.35"
+                       data-flight-local-mixed>
+                    An HTTPS panel cannot fetch an HTTP receiver directly. Route it
+                    through Home Assistant with the block below.
                   </div>` : nothing}
-              </div>` : nothing}
+              </div>
+              ${offline ? html`
+                <div style="margin:0 0 8px 24px;font-size:10px;color:var(--text-dim);line-height:1.4"
+                     data-flight-local-offline>
+                  Offline — there is no Home Assistant to fetch the receiver for you, so
+                  the browser fetches it directly. That is the one aircraft source that
+                  works without Home Assistant, but it needs the header above, and an
+                  HTTP receiver needs this panel served over HTTP too.
+                </div>`
+              : proxyBlock({
+                optional: true,
+                intro: html`Optional: have Home Assistant fetch the receiver instead of the
+                  browser. This needs no CORS header on the receiver and works from an
+                  HTTPS panel. Paste this into <code>configuration.yaml</code>, restart
+                  HA, then enter the service name. Home Assistant itself must be able to
+                  reach the receiver (it can on normal Docker bridge networking).`,
+              })}` : nothing}
             ${sourceRow('entity', 'Home Assistant entity',
-              'An HA rest sensor whose attributes carry an aircraft array — see the research doc. Fetched server-side, so no CORS applies.')}
+              'Any HA sensor whose attributes carry an aircraft array under aircraft, ac or flights — typically a REST sensor you already have. Home Assistant does the fetching, so no CORS applies.')}
+            ${source === 'entity' && offline ? offlineHaNotice() : nothing}
             ${source === 'entity' ? html`
               <div class="row" style="align-items:center;margin:0 0 6px 24px">
                 <span style="flex:1;font-size:11px;color:${cfg.entityId ? 'var(--text)' : 'var(--text-dim)'};
@@ -1571,6 +1743,9 @@ export class SettingsDrawer extends LitElement {
                 ${cfg.entityId ? html`<button class="btn"
                   @click=${() => set(f => { f.entityId = undefined; })}>✕</button>` : nothing}
               </div>` : nothing}
+            ${sourceRow('demo', 'Demo (synthetic traffic)',
+              'Invented aircraft, generated in this browser from the clock. No network, no Home Assistant, no receiver — the only source that works offline. Not real traffic.')}
+            ${source === 'demo' ? this._flightsDemoBlock(p, cfg, set) : nothing}
 
             <div class="row" style="align-items:center;margin-top:4px">
               <label style="font-size:12px;color:var(--text);flex:1" title="Search + display radius around home.">Radius (nm)</label>

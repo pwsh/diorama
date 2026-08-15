@@ -1253,7 +1253,8 @@
         await drawer.updateComplete; await sleep(4);
       };
 
-      eq('all five sources are offered', srcRows().length, 5);
+      eq('all six sources are offered', srcRows().length, 6);
+      ok('the synthetic demo source is offered', srcRows().includes('demo'), srcRows().join(','));
       eq('OpenSky is listed FIRST', srcRows()[0], 'opensky');
       eq('adsb.lol is listed second', srcRows()[1], 'adsblol');
       ok('airplanes.live is still offered, below them',
@@ -1347,6 +1348,285 @@
       drawer.requestUpdate(); await drawer.updateComplete; await sleep(4);
       ok('NEG … and clears once the feed is up',
         !drawer.querySelector('[data-flight-needs-proxy]'));
+
+      // ── 12a2. The `local` source may OPTIONALLY use the same proxy ────────
+      // A LAN receiver sends no CORS header and cannot be reached at all from
+      // an https panel. Both walls disappear if HA fetches it — so the block is
+      // OFFERED here, but never required, and the copy must say which is which.
+      p2.store.flights = { enabled: true, source: 'local',
+                           localUrl: 'http://192.168.1.50/tar1090/data/aircraft.json' };
+      p2.flightsStatus = 'ok';
+      drawer.requestUpdate(); await drawer.updateComplete; await sleep(4);
+
+      ok('the local source offers the proxy block too', !!proxy());
+      ok('the local YAML is a rest_command block', yamlText().includes('rest_command:'));
+      ok('the local YAML carries the typed receiver URL',
+        yamlText().includes('http://192.168.1.50/tar1090/data/aircraft.json'), yamlText());
+      // No coordinates are involved, so there is nothing to template.
+      ok('NEG the local YAML contains NO Jinja at all', !yamlText().includes('{{'), yamlText());
+      ok('NEG the local YAML never mentions a third-party provider',
+        !yamlText().includes('opensky') && !yamlText().includes('adsb.lol'));
+      ok('the local YAML suggests its own service name',
+        yamlText().includes('  diorama_local_adsb:'), yamlText());
+
+      // The two rewritten warnings. They used to point at a repo path a panel
+      // user cannot open; now each states the receiver-side fix AND the
+      // Home-Assistant route.
+      const corsHint = () => drawer.querySelector('[data-flight-local-cors]');
+      ok('the CORS hint is shown for a local receiver', !!corsHint());
+      ok('NEG it no longer points at an unopenable repo path',
+        !corsHint().textContent.includes('docs/research'), corsHint().textContent.trim());
+      ok('it still names the header the receiver would need',
+        corsHint().textContent.includes('Access-Control-Allow-Origin'));
+      ok('it offers Home Assistant as the alternative',
+        /home assistant/i.test(corsHint().textContent), corsHint().textContent.trim());
+
+      // The optional-proxy affordance must read as a CHOICE, not a failure.
+      const proxyHint = () => proxy().textContent.replace(/\s+/g, ' ');
+      ok('an empty name reads as "still fetching directly", not as silence',
+        /straight from the browser/i.test(proxyHint()), proxyHint());
+      ok('NEG local does NOT claim nothing is being fetched',
+        !/nothing is being fetched/i.test(proxyHint()), proxyHint());
+      // Honest caveat #1: HA has to be able to reach the receiver.
+      ok('the block states HA must be able to reach the receiver',
+        /reach the receiver/i.test(proxyHint()), proxyHint());
+
+      // Filling the name in surfaces honest caveat #2 (the per-poll round-trip).
+      drawer.querySelector('[data-flight-proxy-fill]').click();
+      await drawer.updateComplete; await sleep(4);
+      eq('the fill button writes the local suggestion',
+        p2.store.flights.proxyCommand, 'diorama_local_adsb');
+      ok('a configured local proxy states the per-poll service round-trip cost',
+        /round-trip/i.test(proxyHint()), proxyHint());
+
+      // NEGATIVE CONTROL: the REQUIRED-proxy wording still appears for a source
+      // that genuinely cannot be fetched any other way.
+      p2.store.flights = { enabled: true, source: 'opensky' };
+      drawer.requestUpdate(); await drawer.updateComplete; await sleep(4);
+      ok('NEG opensky still says nothing is being fetched without a proxy',
+        /nothing is being fetched/i.test(proxy().textContent.replace(/\s+/g, ' ')));
+      ok('NEG … and does not offer the browser-direct fallback',
+        !/straight from the browser/i.test(proxy().textContent.replace(/\s+/g, ' ')));
+
+      // With no receiver URL yet the YAML must be a MARKED placeholder rather
+      // than a block that looks pasteable but would fetch nothing.
+      p2.store.flights = { enabled: true, source: 'local' };
+      drawer.requestUpdate(); await drawer.updateComplete; await sleep(4);
+      ok('no receiver URL → the YAML says so instead of inventing one',
+        /SET THE RECEIVER URL/i.test(yamlText())
+        && !yamlText().includes('http://') && !yamlText().includes('https://'), yamlText());
+
+      // ── 12a3. OFFLINE (the gh-pages demo) — no HA, so no YAML to paste ───
+      // Planner.isOffline reads `offline` off the live api, exactly as it does
+      // for the real LocalApi (`readonly offline = true`). Flipping it on the
+      // stub is therefore the same switch the demo throws.
+      section('Settings drawer (offline / demo mode)');
+      const yamlEl = () => drawer.querySelector('[data-flight-yaml]');
+      const offNotice = () => drawer.querySelector('[data-flight-offline-ha]');
+
+      p2.hass.offline = true;
+      p2.store.flights = { enabled: true, source: 'opensky' };
+      p2.flightsStatus = 'needs-ha';
+      drawer.requestUpdate(); await drawer.updateComplete; await sleep(4);
+
+      ok('offline: the status line says a Home Assistant connection is needed',
+        !!drawer.querySelector('[data-flight-needs-ha]'));
+      ok('offline: NEG it does not say "needs the proxy below" — there is no below',
+        !drawer.querySelector('[data-flight-needs-proxy]'));
+      ok('offline: the offline notice replaces the proxy block', !!offNotice());
+      // The headline suppression: YAML for a configuration.yaml that does not
+      // exist, plus a field whose value could only start a doomed poll.
+      ok('offline: NEG the rest_command YAML is NOT rendered', !yamlEl());
+      ok('offline: NEG the service-name field is gone too',
+        !drawer.querySelector('[data-flight-proxy-name]'));
+      ok('offline: NEG no copy-YAML button either',
+        !drawer.querySelector('[data-flight-yaml-copy]'));
+      // Honest, and actionable: the ISS still works, and local is the way out.
+      ok('offline: the notice says the ISS still works',
+        /ISS still works/i.test(offNotice().textContent), offNotice().textContent.trim());
+      ok('offline: the notice points at the local receiver as a way out',
+        /local receiver/i.test(offNotice().textContent), offNotice().textContent.trim());
+      // …and at the source that needs no hardware at all. A user stuck offline
+      // must be told there IS a sky available, not only that this one is dead.
+      ok('offline: the notice points at the synthetic demo source',
+        /demo \(synthetic traffic\)/i.test(offNotice().textContent),
+        offNotice().textContent.trim());
+
+      // adsb.lol is equally dead offline.
+      await pickSource('adsblol');
+      ok('offline: adsb.lol is suppressed the same way', !!offNotice() && !yamlEl());
+
+      // `entity` needs HA too — no rest_command involved, but no states either.
+      await pickSource('entity');
+      ok('offline: the entity source shows the same notice', !!offNotice());
+
+      // `local` is the exception: the browser fetches the receiver itself, so
+      // it must NOT get the "unavailable" notice — it gets its own explanation.
+      await pickSource('local');
+      const locOff = () => drawer.querySelector('[data-flight-local-offline]');
+      ok('offline: local gets its OWN note, not the unavailable one',
+        !!locOff() && !offNotice(), locOff() ? locOff().textContent.trim() : 'missing');
+      ok('offline: NEG local shows no proxy block (HA cannot fetch for it)',
+        !drawer.querySelector('[data-flight-proxy]') && !yamlEl());
+      ok('offline: the local note explains the browser fetches it directly',
+        /directly/i.test(locOff().textContent), locOff().textContent.trim());
+      ok('offline: … and still names the HTTP/HTTPS constraint',
+        /HTTP/i.test(locOff().textContent), locOff().textContent.trim());
+      // The receiver URL field itself stays usable — this source can work.
+      ok('offline: the receiver URL input is still offered',
+        !!drawer.querySelector('input[placeholder^="http://192.0.2.10"]'));
+
+      // NEGATIVE CONTROL for the whole section: back ONLINE, every suppressed
+      // affordance returns. The offline flag is the only thing doing this.
+      p2.hass.offline = false;
+      await pickSource('opensky');
+      ok('NEG online: the YAML is rendered again', !!yamlEl());
+      ok('NEG online: the offline notice is gone', !offNotice());
+      ok('NEG online: the service-name field is back',
+        !!drawer.querySelector('[data-flight-proxy-name]'));
+      await pickSource('local');
+      ok('NEG online: local offers its optional proxy block again',
+        !!drawer.querySelector('[data-flight-proxy]') && !locOff());
+
+      // ── The demo (synthetic traffic) source block ────────────────────────
+      // The one source that works with nothing behind it. Two things matter
+      // here: it must never be suppressed like an HA-dependent source, and the
+      // copy must never let invented aircraft read as real traffic.
+      section('Settings drawer (demo source)');
+      {
+        const demoBlk = () => drawer.querySelector('[data-flight-demo]');
+        const demoWarn = () => drawer.querySelector('[data-flight-demo-warn]');
+        const originLine = () => drawer.querySelector('[data-flight-demo-origin]');
+        const fleetIn = () => drawer.querySelector('[data-flight-demo-fleet]');
+        const seedIn = () => drawer.querySelector('[data-flight-demo-seed]');
+        const emergBox = () => drawer.querySelector('[data-flight-demo-emerg]');
+        const setIn = async (el, v) => {
+          el.value = String(v); el.dispatchEvent(new Event('change'));
+          await drawer.updateComplete; await sleep(4);
+        };
+
+        // Selecting it must not be suppressed ONLINE…
+        await pickSource('demo');
+        ok('the demo block renders', !!demoBlk());
+        ok('NEG the HA-unavailable notice is NOT shown for it', !offNotice());
+        ok('NEG no rest_command YAML — nothing is fetched', !yamlEl());
+        ok('NEG no service-name field either',
+          !drawer.querySelector('[data-flight-proxy-name]'));
+
+        // …and, the point of the whole source, must not be suppressed OFFLINE.
+        p2.hass.offline = true;
+        drawer.requestUpdate(); await drawer.updateComplete; await sleep(4);
+        ok('offline: the demo block still renders', !!demoBlk());
+        ok('offline: NEG it is NOT replaced by the unavailable notice', !offNotice());
+        ok('offline: NEG and still no YAML', !yamlEl());
+
+        // HONESTY. The copy must say, out loud, that these are not real.
+        const warnText = () => demoWarn()?.textContent ?? '';
+        ok('the block states the aircraft are invented', /invented/i.test(warnText()),
+          warnText().trim());
+        ok('… that nothing is fetched', /nothing is fetched/i.test(warnText()));
+        ok('… and warns against reading it as real traffic',
+          /not.*real traffic/i.test(warnText()), warnText().trim());
+        // The source hint itself, seen before the block is even opened.
+        const demoHint = drawer.querySelector('[data-flight-source="demo"]').textContent;
+        ok('the source row itself says synthetic + offline + not real',
+          /synthetic/i.test(demoHint) && /offline/i.test(demoHint)
+            && /not real traffic/i.test(demoHint), demoHint.trim());
+
+        // The synthetic origin is disclosed rather than silently assumed. This
+        // planner carries a weather location from earlier sections, so drop it
+        // first — "no real location configured" is the state under test, and it
+        // is exactly what every committed demo floorplan ships as.
+        const savedWeather = p2.store.weather;
+        delete p2.store.weather;
+        drawer.requestUpdate(); await drawer.updateComplete; await sleep(4);
+        ok('the block discloses the synthetic location',
+          /synthetic location/i.test(originLine().textContent),
+          originLine().textContent.trim());
+        ok('… and prints the actual coordinates it will use',
+          originLine().textContent.includes(
+            `${FLM.DEMO_FLIGHT_ORIGIN.lat.toFixed(4)}, ${FLM.DEMO_FLIGHT_ORIGIN.lon.toFixed(4)}`),
+          originLine().textContent.trim());
+        ok('… with the lat/lon inputs offered while it is synthetic',
+          !!drawer.querySelector('[data-flight-demo-lat]')
+            && !!drawer.querySelector('[data-flight-demo-lon]'));
+
+        // NEGATIVE CONTROL: give the planner a real location and the wording
+        // must change — the "synthetic" claim is conditional, not boilerplate.
+        p2.store.weather = { source: 'openmeteo', lat: 51.5, lon: -0.12 };
+        drawer.requestUpdate(); await drawer.updateComplete; await sleep(4);
+        ok('NEG with a real location it stops claiming a synthetic one',
+          !/synthetic location/i.test(originLine().textContent),
+          originLine().textContent.trim());
+        ok('NEG … it names where the location came from instead',
+          /weather location/i.test(originLine().textContent),
+          originLine().textContent.trim());
+        ok('NEG … and shows the REAL coordinates',
+          /51\.5000,\s*-0\.1200/.test(originLine().textContent),
+          originLine().textContent.trim());
+        ok('NEG … and hides the synthetic-location inputs',
+          !drawer.querySelector('[data-flight-demo-lat]'));
+        p2.store.weather = savedWeather;
+        drawer.requestUpdate(); await drawer.updateComplete; await sleep(4);
+
+        // The knobs write through setFlights (which sanitizes), not the UI.
+        await setIn(fleetIn(), 4);
+        eq('the fleet input writes through', p2.store.flights.demo?.fleet, 4);
+        await setIn(fleetIn(), 9999);
+        ok('an over-large fleet is clamped in the planner, not the UI',
+          p2.store.flights.demo === undefined
+            || p2.store.flights.demo.fleet === undefined,
+          JSON.stringify(p2.store.flights.demo));
+        await setIn(fleetIn(), 3);
+        await setIn(seedIn(), 12);
+        eq('the seed input writes through', p2.store.flights.demo?.seed, 12);
+        await setIn(seedIn(), '');
+        ok('clearing the seed drops it', p2.store.flights.demo?.seed === undefined,
+          JSON.stringify(p2.store.flights.demo));
+
+        // The emergency aircraft is opt-OUT: checked by default, and unchecking
+        // is what stores anything at all.
+        ok('the emergency aircraft is included by default', emergBox().checked === true);
+        emergBox().checked = false; emergBox().dispatchEvent(new Event('change'));
+        await drawer.updateComplete; await sleep(4);
+        eq('unchecking stores the opt-out', p2.store.flights.demo?.emergency, false);
+        ok('NEG the checkbox now reflects it', emergBox().checked === false);
+        emergBox().checked = true; emergBox().dispatchEvent(new Event('change'));
+        await drawer.updateComplete; await sleep(4);
+        ok('re-checking normalizes the redundant `true` away',
+          p2.store.flights.demo === undefined
+            || p2.store.flights.demo.emergency === undefined,
+          JSON.stringify(p2.store.flights.demo));
+
+        // And it really does fly: the planner has aircraft, offline, with no
+        // network and no origin configured.
+        await waitFor(() => p2.flightsStatus === 'ok' && (p2.flightsNow?.length ?? 0) > 0);
+        eq('the planner reports ok offline', p2.flightsStatus, 'ok');
+        ok('… with aircraft in the sky', (p2.flightsNow?.length ?? 0) > 0,
+          `n=${p2.flightsNow?.length}`);
+        ok('… and the status line says so, not "needs a Home Assistant connection"',
+          !drawer.querySelector('[data-flight-needs-ha]'));
+
+        // Leave the drawer in the state the sweep below expects: online, still
+        // enabled, on an ordinary source (which also stops the demo's timer).
+        p2.hass.offline = false;
+        await pickSource('opensky');
+      }
+
+      // ── The docs/research dead-end sweep ─────────────────────────────────
+      // A panel user cannot open a repo path. No source hint may cite one.
+      {
+        const block = drawer.querySelector('[data-flight-source="entity"]')
+          .closest('div').parentElement;
+        const text = block.textContent;
+        ok('NEG no source hint cites an unopenable repo path',
+          !/docs\/research/i.test(text) && !/research doc/i.test(text),
+          (text.match(/[^.]*research[^.]*/i) || ['clean'])[0].trim());
+        const entHint = drawer.querySelector('[data-flight-source="entity"]').textContent;
+        ok('the entity hint is self-contained about the attribute shape',
+          /aircraft/.test(entHint) && /ac/.test(entHint) && /flights/.test(entHint),
+          entHint.trim());
+      }
 
       drawer.remove();
 

@@ -498,6 +498,53 @@ instance.
   FLIGHTS 827 → **989/989**, FLIGHTSUI 359 → **391/391**, with 19
   source mutations proving the new assertions discriminate.
 
+- **Local receiver over the same proxy · offline honesty · a demo
+  flight source** (2026-08-15, three follow-up user asks in one arc;
+  unreleased — on main past v0.65.0). The user asked whether the LAN
+  receiver could use the rest service too "so it doesn't hit the
+  restrictions". It can, and it erases BOTH at once: a server-side
+  fetch sends no `Origin` (no CORS, so the tar1090 lighttpd block is
+  never needed and the receiver is not touched) and HA↔receiver is
+  server-to-server (no mixed content, so an HTTPS panel can finally
+  read a plain-HTTP Pi). Kept OPTIONAL — unlike the cloud sources,
+  direct-fetch stays legitimate, so an empty service name means "keep
+  fetching directly", never an error. The receiver's full catch is
+  filtered by the shared `_applyFlights` and now PINNED against a
+  generated 85-row wide-catch fixture (60 inside 40 nm over the 50
+  cap, 14 out to 221 nm, ground + null-altitude rows).
+  **Then the user caught the regression I had shipped and not
+  checked**: with airplanes.live dead and the default proxied, flight
+  tracking was silently broken in the gh-pages demo — it landed on
+  `needs-proxy` and offered YAML to paste into a `configuration.yaml`
+  that does not exist. New `needs-ha` status (a strict superset of
+  needs-proxy, and correctly extended to `entity` — an HA sensor
+  cannot exist without HA, and an `error` there would be a lie since
+  nothing was ever fetched), no poll timer that can only fail, YAML
+  suppressed offline, and the ISS still flies. The reachability
+  matrix surfaced a capability worth knowing: **`local` with a
+  reachable URL is the one real aircraft source that serves a
+  Home-Assistant-less panel**, and a local fixture naming a proxy
+  DEMOTES to direct offline rather than refusing.
+  **Then**: a `demo` source so the showcase actually shows the
+  feature — pure, deterministic, zero network, `gs`/`track`
+  central-differenced from the analytic position so the existing
+  dead-reckoning carries it with no new animation system. Its 16-row
+  fleet doubles as deterministic visual coverage (all 8 archetypes,
+  all 5 speed bands, 6 liveries, banner, military skin, 7700
+  emergency, PIA + LADD, and two deliberately out-of-range aircraft so
+  the radius filter is always exercised). Design finding that would
+  have made it dead on arrival: **none of the 18 demo floorplans has a
+  calibrated landmark or weather location**, so `flightsOrigin()`
+  returned null for every one — hence a synthetic origin rung at the
+  BOTTOM of the ladder, sound because every position is
+  origin-relative. FLIGHTS 989 → **1279/1279**, FLIGHTSUI 391 →
+  **461/461**, flights-render 591/591 held, 41 further mutations all
+  discriminating. Notably the agents caught **three of their own
+  assertions passing vacuously** (a cap masking the radius filter, a
+  sort assertion on a pre-sorted fixture, an out-of-range filter with
+  nothing out of range) — the mutation discipline is what found them,
+  not review.
+
 - **Fire flicker registered instead of rebuilt + glass is pick-through**
   (2026-08-10, two user asks following the firepit hunt; v0.65.0).
   (1) A lit hearth / fire pit / heat lamp / flashing logic light
