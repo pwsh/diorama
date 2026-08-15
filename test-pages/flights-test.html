@@ -24,6 +24,15 @@
          a "ground" sentinel, a no-position entry, an mlat/alt_geom-only entry,
          a military dbFlags entry, a string-typed lat, a blank callsign.
        fixtures/adsb/garbage.json — hand-authored malformed corpus.
+       fixtures/adsb/opensky-states.json — REAL capture (2026-08-15) of
+         `curl -s 'https://opensky-network.org/api/states/all?lamin=40.4&lomin=-74.3&lamax=41.0&lomax=-73.7'`
+         (45 positional-array states over New York; 30 on the ground, 3 with a
+         blank callsign, many null-heavy). Not hand-edited.
+       fixtures/adsb/adsblol-point.json — 10 aircraft TRIMMED (unedited rows,
+         envelope preserved) from a REAL 818-aircraft capture (2026-08-15) of
+         `curl -s 'https://api.adsb.lol/v2/lat/51.89508/lon/2.79437/dist/250'`
+         — chosen to cover a "ground" sentinel, a C2 surface vehicle, military
+         and LADD dbFlags, an ultralight, a gs-less row and ordinary airliners.
 
      Build (flights.ts AND aircraft-types.ts are genuinely zero-import → plain
      transpile; sky-astro.ts pulls in sky-catalog.ts → bundle; planner per the
@@ -78,6 +87,8 @@
   const LAX = await (await fetch('./fixtures/adsb/airplanes-live-lax.json' + V)).json();
   const LOCAL = await (await fetch('./fixtures/adsb/local-aircraft.json' + V)).json();
   const GARBAGE = await (await fetch('./fixtures/adsb/garbage.json' + V)).json();
+  const OPENSKY = await (await fetch('./fixtures/adsb/opensky-states.json' + V)).json();
+  const ADSBLOL = await (await fetch('./fixtures/adsb/adsblol-point.json' + V)).json();
 
   try {
     // ── 1. Normalizer ────────────────────────────────────────────────────────
@@ -905,6 +916,11 @@
         u.includes('airplanes.live') || u.includes('wheretheiss') || u.includes('aircraft.json');
       const calls = [];
       let handler = () => null;
+      // The server-side transport: HA calls a rest_command on our behalf and
+      // hands back its body. Recorded like `calls` so a scenario can assert
+      // exactly what was asked of HA, and what was NOT.
+      const svc = [];
+      let svcReply = () => null;
       const realFetch = globalThis.fetch;
       globalThis.fetch = async (url, init) => {
         const u = String(url);
@@ -935,6 +951,10 @@
         onState(fn) { this._stateCbs.push(fn); }
         onConn(fn) { this._connCbs.push(fn); }
         callService() { return Promise.resolve(); }
+        async callServiceWithResponse(domain, service, data) {
+          svc.push({ domain, service, data });
+          return svcReply(domain, service, data);
+        }
         async getHistory() { return {}; }
         async getWeatherForecasts() { return null; }
         async getDevices() { return []; }
@@ -1670,6 +1690,185 @@
           && savedG.flights.glowRules[0].colorA === '#123456',
           JSON.stringify(savedG?.flights?.glowRules));
         quiesce(p);
+      }
+
+      // ── 8z. The server-side proxy path, end to end ─────────────────────
+      // Neither OpenSky nor adsb.lol can be fetched by the browser, so the poll
+      // asks Home Assistant to fetch them via the user's rest_command.
+      {
+        const eq = (name, got, want, extra = '') =>
+          ok(name, got === want, extra || `got ${JSON.stringify(got)} want ${JSON.stringify(want)}`);
+
+        // (a) opensky selected but NO rest_command name → explicit status, and
+        //     nothing is called at all (not the service, not the network).
+        {
+          calls.length = 0; svc.length = 0;
+          handler = () => ring(3);
+          const { p } = await boot(makeStore({
+            weather: WEATHER, flights: { enabled: true, source: 'opensky', iss: false },
+          }));
+          await waitFor(() => p.flightsStatus === 'needs-proxy');
+          eq('31a: unconfigured proxy → status needs-proxy', p.flightsStatus, 'needs-proxy');
+          eq('31a: … and ZERO service calls', svc.length, 0);
+          eq('31a: … and ZERO network calls', calls.length, 0);
+          ok('31a: … and no stale data shown', p.flightsNow === null);
+          // A direct poll must not downgrade the honest status into 'error'.
+          await p._pollFlights();
+          eq('31a: an explicit poll still reports needs-proxy', p.flightsStatus, 'needs-proxy');
+          eq('31a: … and still calls nothing', svc.length, 0);
+          quiesce(p);
+        }
+
+        // (a2) …and the ISS, a separate CORS-open feed, keeps running anyway.
+        {
+          calls.length = 0; svc.length = 0;
+          handler = u => u.includes('wheretheiss')
+            ? { latitude: 10, longitude: 20, altitude: 420, velocity: 27000, timestamp: 1784953269 }
+            : null;
+          const { p } = await boot(makeStore({
+            weather: WEATHER, flights: { enabled: true, source: 'opensky', iss: true },
+          }));
+          await waitFor(() => p.issNow !== null);
+          ok('31a2: an unconfigured aircraft proxy does NOT take the ISS down',
+            p.issNow !== null);
+          eq('31a2: … while the aircraft status stays honest', p.flightsStatus, 'needs-proxy');
+          eq('31a2: NEG no aircraft fetch was attempted', aircraftCalls().length, 0);
+          quiesce(p);
+        }
+
+        // (b) name configured → HA fetches OpenSky for us and the states land.
+        {
+          calls.length = 0; svc.length = 0;
+          handler = () => ring(3);
+          svcReply = () => ({ context: {}, response: { status: 200, content: OPENSKY } });
+          // The OpenSky fixture was captured over New York, so the observer has
+          // to stand there or the radius filter would (correctly) drop it all.
+          const NY = { source: 'openmeteo', lat: 40.7, lon: -74.0, chip: true };
+          const { p } = await boot(makeStore({
+            weather: NY,
+            flights: { enabled: true, source: 'opensky', proxyCommand: 'diorama_opensky',
+                       radiusNm: 100, iss: false },
+          }));
+          await p._pollFlights();
+          eq('31b: the rest_command domain is used', svc[0]?.domain, 'rest_command');
+          eq('31b: the configured service name is called', svc[0]?.service, 'diorama_opensky');
+          eq('31b: the bounding box is passed as service data',
+            Object.keys(svc[0]?.data ?? {}).sort().join(','), 'lamax,lamin,lomax,lomin');
+          ok('31b: the box matches the configured origin + radius',
+            JSON.stringify(svc[0].data) === JSON.stringify(
+              F.openSkyBoundingBox(40.7, -74.0, 100)), JSON.stringify(svc[0].data));
+          eq('31b: status ok after the proxied poll', p.flightsStatus, 'ok');
+          ok('31b: aircraft landed from the rest_command response',
+            (p.flightsNow?.length ?? 0) > 0, `n=${p.flightsNow?.length}`);
+          ok('31b: … and they are within the configured radius',
+            p.flightsNow.every(fp => fp.distNm <= 100));
+          // NEGATIVE CONTROL: the direct browser fetch is NOT used by this source.
+          eq('31b: NEG no browser fetch for a proxied source', aircraftCalls().length, 0);
+          quiesce(p);
+        }
+
+        // (c) the same transport carries adsb.lol's {ac:[...]}.
+        {
+          svc.length = 0;
+          svcReply = () => ({ response: { status: 200, content: ADSBLOL } });
+          // Likewise: the adsb.lol capture is centred over the North Sea.
+          const EU = { source: 'openmeteo', lat: 51.89508, lon: 2.79437, chip: true };
+          const { p } = await boot(makeStore({
+            weather: EU,
+            flights: { enabled: true, source: 'adsblol', proxyCommand: 'diorama_adsblol',
+                       radiusNm: 100, iss: false },
+          }));
+          await p._pollFlights();
+          eq('31c: the adsblol command is called', svc[0]?.service, 'diorama_adsblol');
+          eq('31c: point + radius service data (no box)',
+            Object.keys(svc[0]?.data ?? {}).sort().join(','), 'dist,lat,lon');
+          // Every normalized row in the fixture sits inside the 100 nm radius,
+          // so the whole normalized list must survive the planner's filter.
+          eq('31c: every normalized aircraft landed',
+            p.flightsNow?.length ?? 0, F.normalizeAircraftList(ADSBLOL).length);
+          ok('31c: … and they carry a recomputed distNm',
+            p.flightsNow.every(fp => Number.isFinite(fp.distNm) && fp.distNm <= 100));
+          quiesce(p);
+        }
+
+        // (d) a failing rest_command with nothing cached reports 'error', not silence.
+        {
+          svc.length = 0;
+          svcReply = () => null;
+          const { p } = await boot(makeStore({
+            weather: WEATHER,
+            flights: { enabled: true, source: 'opensky', proxyCommand: 'nope', iss: false },
+          }));
+          await p._pollFlights();
+          ok('31d: the call WAS attempted', svc.length > 0, `svc=${svc.length}`);
+          eq('31d: a failing proxy with no data → status error', p.flightsStatus, 'error');
+          quiesce(p);
+        }
+
+        // (e) MIGRATION: an existing explicit 'cloud' store keeps cloud and keeps
+        //     using the direct browser fetch — we never rewrite a stored choice.
+        {
+          calls.length = 0; svc.length = 0;
+          handler = () => ring(2);
+          const { p } = await boot(makeStore({
+            weather: WEATHER, flights: { enabled: true, source: 'cloud', radiusNm: 30, iss: false },
+          }));
+          await waitFor(() => p.flightsStatus === 'ok');
+          eq('31e: a stored cloud source is preserved', p.store.flights.source, 'cloud');
+          ok('31e: … and still hits airplanes.live directly',
+            aircraftCalls().some(u => u.includes('api.airplanes.live')), aircraftCalls()[0] || '');
+          eq('31e: … using no rest_command at all', svc.length, 0);
+          quiesce(p);
+        }
+
+        // (f) MIGRATION: an ABSENT source now resolves to OpenSky (the new
+        //     default), which surfaces as needs-proxy rather than a dead poll.
+        {
+          calls.length = 0; svc.length = 0;
+          handler = () => ring(2);
+          const { p } = await boot(makeStore({
+            weather: WEATHER, flights: { enabled: true, iss: false },
+          }));
+          await waitFor(() => p.flightsStatus === 'needs-proxy');
+          eq('31f: absent source → the OpenSky path', p.flightsStatus, 'needs-proxy');
+          eq('31f: NEG absent source does NOT fetch airplanes.live', aircraftCalls().length, 0);
+          quiesce(p);
+        }
+
+        // (g) setFlights: creation default + proxy-name sanitizing.
+        {
+          const { p } = await boot(makeStore({ weather: WEATHER }));
+          p.setFlights(f => { f.enabled = false; });
+          eq('31g: a fresh flights config is created on OpenSky',
+            p.store.flights.source, 'opensky');
+          p.setFlights(f => { f.proxyCommand = ' rest_command.My Feed '; });
+          eq('31g: setFlights sanitizes the proxy command',
+            p.store.flights.proxyCommand, 'myfeed');
+          p.setFlights(f => { f.proxyCommand = '   '; });
+          eq('31g: a blank proxy command clears back to undefined',
+            p.store.flights.proxyCommand, undefined);
+          // NEGATIVE CONTROL: an untouched field is not invented.
+          p.setFlights(f => { f.radiusNm = 20; });
+          eq('31g: NEG the cleared command stays cleared',
+            p.store.flights.proxyCommand, undefined);
+          quiesce(p);
+        }
+
+        // (h) the source-aware poll default (OpenSky's credit budget).
+        {
+          const { p } = await boot(makeStore({ weather: WEATHER }));
+          p.store.flights = { enabled: false, source: 'opensky' };
+          eq('31h: OpenSky polls every 60 s by default', p._flightsPollMs(), 60000);
+          p.store.flights = { enabled: false, source: 'cloud' };
+          eq('31h: cloud keeps the 8 s default', p._flightsPollMs(), 8000);
+          p.store.flights = { enabled: false };
+          eq('31h: an absent source takes the OpenSky default', p._flightsPollMs(), 60000);
+          p.store.flights = { enabled: false, source: 'opensky', pollSeconds: 20 };
+          eq('31h: an explicit interval still wins', p._flightsPollMs(), 20000);
+          p.store.flights = { enabled: false, source: 'opensky', pollSeconds: 999 };
+          eq('31h: NEG the 5..60 clamp is unchanged', p._flightsPollMs(), 60000);
+          quiesce(p);
+        }
       }
 
       globalThis.fetch = realFetch;
@@ -3123,6 +3322,314 @@
         resolved.every(fp => A.resolveAirlineLivery(A.airlineForCallsign(fp.callsign), {})
           === null || A.airlineForCallsign(fp.callsign).kind !== 'pia'));
     }
+
+    // ══ 30. Sources & server-side transport (2026-08 source wave) ══════════
+    // airplanes.live went 403-for-everyone and there is no longer ANY keyless
+    // CORS-open ADS-B API (measured: curl 200 + browser TypeError for both
+    // opensky and adsb.lol from a foreign origin), so the two live cloud feeds
+    // are fetched by Home Assistant through a user-defined rest_command.
+    {
+      // Local helpers — this page's shared vocabulary is ok()/near() only.
+      const eq = (name, got, want, extra = '') =>
+        ok(name, got === want, extra || `got ${JSON.stringify(got)} want ${JSON.stringify(want)}`);
+
+      // ── (a) source resolution + the ORDER contract ──────────────────────
+      eq('30a: absent source resolves to OpenSky', F.resolveFlightSource(undefined), 'opensky');
+      eq('30a: null resolves to OpenSky', F.resolveFlightSource(null), 'opensky');
+      eq('30a: unknown string resolves to OpenSky', F.resolveFlightSource('adsbfi'), 'opensky');
+      eq('30a: FLIGHTS_DEFAULT_SOURCE is opensky', F.FLIGHTS_DEFAULT_SOURCE, 'opensky');
+      eq('30a: opensky is FIRST in the source list', F.FLIGHT_SOURCES[0], 'opensky');
+      eq('30a: adsblol is second', F.FLIGHT_SOURCES[1], 'adsblol');
+      ok('30a: every listed source round-trips',
+        F.FLIGHT_SOURCES.every(v => F.resolveFlightSource(v) === v), F.FLIGHT_SOURCES.join(','));
+      // NEGATIVE CONTROL: an EXPLICIT stored source is never coerced to the
+      // default — a migrating 'cloud' user keeps 'cloud'.
+      ok('30a: NEG explicit cloud is NOT rewritten to the default',
+        F.resolveFlightSource('cloud') !== F.FLIGHTS_DEFAULT_SOURCE);
+
+      ok('30a: opensky + adsblol need the proxy',
+        F.flightSourceNeedsProxy('opensky') && F.flightSourceNeedsProxy('adsblol'));
+      ok('30a: NEG cloud/local/entity do NOT need the proxy',
+        !F.flightSourceNeedsProxy('cloud') && !F.flightSourceNeedsProxy('local')
+        && !F.flightSourceNeedsProxy('entity'));
+      ok('30a: absent source needs the proxy (it resolves to opensky)',
+        F.flightSourceNeedsProxy(undefined));
+
+      eq('30a: OpenSky default poll is 60 s (credit budget)',
+        F.flightDefaultPollSeconds('opensky'), 60);
+      eq('30a: adsblol keeps the 8 s default', F.flightDefaultPollSeconds('adsblol'), 8);
+      eq('30a: cloud keeps the 8 s default', F.flightDefaultPollSeconds('cloud'), 8);
+      eq('30a: absent source takes the OpenSky default', F.flightDefaultPollSeconds(undefined), 60);
+
+      // ── (b) rest_command name sanitizer ─────────────────────────────────
+      eq('30b: a plain name passes through',
+        F.sanitizeFlightProxyCommand('diorama_opensky'), 'diorama_opensky');
+      eq('30b: a pasted rest_command. prefix is stripped',
+        F.sanitizeFlightProxyCommand('rest_command.diorama_opensky'), 'diorama_opensky');
+      eq('30b: casing + spacing normalize',
+        F.sanitizeFlightProxyCommand('  My Flights  '), 'myflights');
+      eq('30b: blank clears to undefined', F.sanitizeFlightProxyCommand('   '), undefined);
+      eq('30b: all-invalid clears to undefined', F.sanitizeFlightProxyCommand('!!!'), undefined);
+      eq('30b: non-string clears to undefined', F.sanitizeFlightProxyCommand(42), undefined);
+      // NEGATIVE CONTROL: the sanitizer must not silently invent the default.
+      ok('30b: NEG an empty name does NOT become the suggested one',
+        F.sanitizeFlightProxyCommand('') !== F.FLIGHT_PROXY_DEFAULT_COMMAND.opensky);
+
+      // ── (c) OpenSky bounding box (point+radius → lat/lon BOX) ───────────
+      const NMD = 1852 / (6371000 * Math.PI / 180);   // nm → degrees of LATITUDE
+      const box = F.openSkyBoundingBox(40.7, -74.0, 15);
+      near('30c: latitude half-span is the arc angle', box.lamax - 40.7, 15 * NMD, 1e-4);
+      ok('30c: edges round OUTWARD, never inward',
+        box.lamax - 40.7 >= 15 * NMD && 40.7 - box.lamin >= 15 * NMD);
+      near('30c: box is latitude-symmetric', 40.7 - box.lamin, box.lamax - 40.7, 1e-4);
+      // A point exactly `radius` due EAST must fall inside — this is what the
+      // cos(lat) correction buys.
+      const eastLon = -74.0 + (15 * NMD) / Math.cos(40.7 * Math.PI / 180);
+      ok('30c: a point at the radius due east is inside the box',
+        eastLon <= box.lomax + 1e-9, `${eastLon} <= ${box.lomax}`);
+      ok('30c: a point at the radius due north is inside the box',
+        40.7 + 15 * NMD <= box.lamax + 1e-9);
+      // NEGATIVE CONTROL: the NAIVE box (no cos correction) would CLIP that
+      // eastern point at this latitude — the correction is load-bearing.
+      ok('30c: NEG a naive dLon===dLat box would clip the east point',
+        eastLon > -74.0 + 15 * NMD + 1e-9);
+      ok('30c: longitude span exceeds latitude span away from the equator',
+        (box.lomax - box.lomin) > (box.lamax - box.lamin), `${box.lomax - box.lomin}`);
+
+      const hi = F.openSkyBoundingBox(78, 15, 100);
+      ok('30c: high latitude keeps a finite, widened box',
+        isFinite(hi.lomin) && isFinite(hi.lomax)
+        && (hi.lomax - hi.lomin) > (hi.lamax - hi.lamin) * 4, `${hi.lomax - hi.lomin}`);
+      const eastHi = 15 + (100 * NMD) / Math.cos(78 * Math.PI / 180);
+      ok('30c: the high-latitude east point is still contained', eastHi <= hi.lomax + 1e-9);
+
+      const pole = F.openSkyBoundingBox(89.995, 10, 100);
+      ok('30c: near the pole the box widens to the whole globe',
+        pole.lomin === -180 && pole.lomax === 180, JSON.stringify(pole));
+      ok('30c: latitude stays clamped to ±90', pole.lamax <= 90 && pole.lamin >= -90,
+        JSON.stringify(pole));
+
+      const anti = F.openSkyBoundingBox(0, 179.95, 50);
+      ok('30c: an antimeridian-straddling box widens rather than clipping',
+        anti.lomin === -180 && anti.lomax === 180, JSON.stringify(anti));
+      const antiW = F.openSkyBoundingBox(0, -179.95, 50);
+      ok('30c: the western antimeridian widens too',
+        antiW.lomin === -180 && antiW.lomax === 180, JSON.stringify(antiW));
+
+      const bad = F.openSkyBoundingBox(40.7, -74.0, NaN);
+      near('30c: a garbage radius falls back to the default',
+        bad.lamax - 40.7, F.FLIGHTS_DEFAULT_RADIUS_NM * NMD, 1e-4);
+      ok('30c: garbage lat/lon never produces NaN',
+        Object.values(F.openSkyBoundingBox(NaN, NaN, 15)).every(Number.isFinite));
+
+      // ── (d) OpenSky /states/all normalizer, against the REAL capture ────
+      const sky = F.normalizeOpenSkyStates(OPENSKY);
+      const skyAirborne = OPENSKY.states.filter(r => r[8] !== true && (r[7] != null || r[13] != null));
+      eq('30d: every airborne state becomes a point', sky.length, skyAirborne.length);
+      eq('30d: the 30 on-ground states are dropped',
+        OPENSKY.states.length - sky.length, 30);
+      ok('30d: no point is on the ground by construction', sky.length > 0);
+
+      const gjs = sky.find(fp => fp.hex === 'a6f28c');
+      ok('30d: the sampled aircraft is present', !!gjs);
+      eq('30d: callsign is TRIMMED of its padding', gjs.callsign, 'GJS4543');
+      near('30d: latitude comes from index 6', gjs.lat, 40.6809, 1e-9);
+      near('30d: longitude comes from index 5', gjs.lon, -74.1721, 1e-9);
+      near('30d: baro altitude metres → feet', gjs.altFt, -45.72 / 0.3048, 1e-6);
+      near('30d: velocity m/s → knots', gjs.gsKt, 66.04 * 3600 / 1852, 1e-6);
+      near('30d: true_track passes through as degrees', gjs.trackDeg, 25.37, 1e-9);
+      near('30d: vertical rate m/s → ft/min', gjs.vertRateFpm, -3.25 * 60 / 0.3048, 1e-6);
+      eq('30d: squawk comes from index 14', gjs.squawk, '1327');
+      near('30d: seen_pos derives from the payload clock',
+        gjs.seenPosS, 1786809492 - 1786809356, 1e-9);
+      // NEGATIVE CONTROL: an unconverted (metres) altitude would be a different
+      // number entirely — the conversion is doing real work.
+      ok('30d: NEG the altitude is NOT the raw metre value',
+        Math.abs(gjs.altFt - (-45.72)) > 100, String(gjs.altFt));
+      ok('30d: NEG the speed is NOT the raw m/s value',
+        Math.abs(gjs.gsKt - 66.04) > 50, String(gjs.gsKt));
+      ok('30d: hex is lowercased', sky.every(fp => fp.hex === fp.hex.toLowerCase()));
+      ok('30d: /states/all carries no registry enrichment',
+        sky.every(fp => fp.reg === null && fp.typeCode === null && fp.operator === null));
+      ok('30d: and no dbFlags-derived flags',
+        sky.every(fp => !fp.military && !fp.interesting && !fp.pia && !fp.ladd));
+
+      // NEGATIVE CONTROL: the readsb normalizer cannot read this payload at all
+      // — the dedicated positional-array path is genuinely required.
+      eq('30d: NEG normalizeAircraftList cannot read OpenSky states',
+        F.normalizeAircraftList(OPENSKY).length, 0);
+
+      // Synthetic rows for the cases a single capture cannot contain.
+      const skyRow = (over = {}) => {
+        const r = ['abc123', 'TEST123 ', 'X', 1000, 1000, -74, 40.7,
+                   3048, false, 100, 90, 5, null, 3100, '1200', false, 0];
+        for (const [i, v] of Object.entries(over)) r[Number(i)] = v;
+        return r;
+      };
+      const one = over => F.normalizeOpenSkyStates({ time: 1010, states: [skyRow(over)] });
+      near('30d: a clean synthetic row converts 3048 m → 10000 ft',
+        one()[0].altFt, 10000, 1e-6);
+      eq('30d: a blank callsign becomes null', one({ 1: '   ' })[0].callsign, null);
+      eq('30d: on_ground true drops the row', one({ 8: true }).length, 0);
+      near('30d: a null baro altitude falls back to geometric',
+        one({ 7: null })[0].altFt, 3100 / 0.3048, 1e-6);
+      eq('30d: no altitude at all drops the row', one({ 7: null, 13: null }).length, 0);
+      eq('30d: a null velocity stays null (never 0)', one({ 9: null })[0].gsKt, null);
+      eq('30d: a null vertical rate stays null', one({ 11: null })[0].vertRateFpm, null);
+      eq('30d: a null squawk stays null', one({ 14: null })[0].squawk, null);
+      eq('30d: a null position drops the row', one({ 6: null }).length, 0);
+      eq('30d: an out-of-range latitude drops the row', one({ 6: 120 }).length, 0);
+      eq('30d: a blank icao24 drops the row', one({ 0: '  ' }).length, 0);
+      // Category: OpenSky's numeric enum is the SAME table as DO-260B.
+      eq('30d: category 8 maps to A7 (rotorcraft)',
+        F.normalizeOpenSkyStates({ states: [[...skyRow(), 8]] })[0].category, 'A7');
+      eq('30d: category 4 maps to A3', 
+        F.normalizeOpenSkyStates({ states: [[...skyRow(), 4]] })[0].category, 'A3');
+      eq('30d: category 0 (no information) stays null',
+        F.normalizeOpenSkyStates({ states: [[...skyRow(), 0]] })[0].category, null);
+      eq('30d: category 17 (surface service vehicle) is DROPPED as non-aircraft',
+        F.normalizeOpenSkyStates({ states: [[...skyRow(), 17]] }).length, 0);
+      eq('30d: category 11 (parachutist) is DROPPED as non-aircraft',
+        F.normalizeOpenSkyStates({ states: [[...skyRow(), 11]] }).length, 0);
+      // NEGATIVE CONTROL for the drop pair: the same row without a category is kept.
+      eq('30d: NEG the same row with no category is kept', one().length, 1);
+
+      // Never throws (the mqtt-ws discipline).
+      const skyGarbage = [null, undefined, 0, '', 'nope', [], {}, { states: null },
+        { states: 'x' }, { states: [null, 1, 'x', [], [1, 2, 3]] }, GARBAGE, LOCAL];
+      let threw = null;
+      for (const g of skyGarbage) {
+        try {
+          const r = F.normalizeOpenSkyStates(g);
+          if (!Array.isArray(r) || r.length !== 0) threw = `non-empty for ${JSON.stringify(g)}`;
+        } catch (e) { threw = String(e); }
+      }
+      ok('30d: garbage payloads return [] and never throw', threw === null, threw ?? '');
+
+      // ── (e) adsb.lol reuses the EXISTING readsb normalizer ──────────────
+      const lol = F.normalizeAircraftList(ADSBLOL);
+      const lolKept = ADSBLOL.ac.filter(a => a.alt_baro !== 'ground'
+        && !(a.category || '').startsWith('C') && a.category !== 'B3');
+      eq('30e: the {ac:[...]} envelope normalizes unchanged', lol.length, lolKept.length);
+      ok('30e: the ground sentinel is still dropped',
+        !lol.some(fp => ADSBLOL.ac.find(a => a.hex === fp.hex)?.alt_baro === 'ground'));
+      ok('30e: the C2 surface vehicles are still dropped',
+        !lol.some(fp => fp.hex === '4846d4' || fp.hex === '4481c9'));
+      ok('30e: dbFlags bit 1 still reads as military',
+        lol.find(fp => fp.hex === '43c396')?.military === true);
+      ok('30e: dbFlags bit 8 still reads as LADD',
+        lol.find(fp => fp.hex === '40212d')?.ladd === true);
+      ok('30e: an ultralight (B4) is NOT mistaken for a non-aircraft',
+        lol.some(fp => fp.hex === '407be7'));
+      ok('30e: the source dst is carried into distNm',
+        lol.every(fp => Number.isFinite(fp.distNm)));
+      ok('30e: registry enrichment survives (reg + type)',
+        lol.filter(fp => fp.reg && fp.typeCode).length >= 6,
+        String(lol.filter(fp => fp.reg && fp.typeCode).length));
+      eq('30e: "none" emergency is still collapsed to null',
+        lol.filter(fp => fp.emergency !== null).length, 0);
+
+      // The dispatcher: one call site, right normalizer each time.
+      eq('30e: normalizeFlightPayload routes adsblol to the readsb path',
+        F.normalizeFlightPayload('adsblol', ADSBLOL).length, lol.length);
+      eq('30e: … and cloud/local/entity too',
+        F.normalizeFlightPayload('cloud', LAX).length, F.normalizeAircraftList(LAX).length);
+      eq('30e: … and opensky to the states path',
+        F.normalizeFlightPayload('opensky', OPENSKY).length, sky.length);
+      // NEGATIVE CONTROL: the dispatch is real, not a no-op — crossing the
+      // payloads over yields nothing.
+      eq('30e: NEG opensky dispatch on an adsb.lol payload yields []',
+        F.normalizeFlightPayload('opensky', ADSBLOL).length, 0);
+      eq('30e: NEG adsblol dispatch on an OpenSky payload yields []',
+        F.normalizeFlightPayload('adsblol', OPENSKY).length, 0);
+
+      // ── (f) rest_command response unwrapping ────────────────────────────
+      const U = F.unwrapRestCommandPayload;
+      eq('30f: {context,response:{status,content}} peels to the body',
+        JSON.stringify(U({ context: {}, response: { status: 200, content: { ac: [1] } } })),
+        JSON.stringify({ ac: [1] }));
+      eq('30f: a bare {status,content} peels',
+        JSON.stringify(U({ status: 200, content: { ac: [] } })), JSON.stringify({ ac: [] }));
+      eq('30f: a JSON STRING content is parsed',
+        JSON.stringify(U({ status: 200, content: '{"ac":[{"hex":"a"}]}' })),
+        JSON.stringify({ ac: [{ hex: 'a' }] }));
+      eq('30f: an already-peeled payload passes through',
+        JSON.stringify(U({ ac: [] })), JSON.stringify({ ac: [] }));
+      eq('30f: an array payload passes through', JSON.stringify(U([1, 2])), JSON.stringify([1, 2]));
+      eq('30f: unparseable text → null', U({ status: 200, content: '<html>502</html>' }), null);
+      eq('30f: null → null', U(null), null);
+      eq('30f: undefined → null', U(undefined), null);
+      ok('30f: a deep envelope terminates rather than looping', (() => {
+        const deep = { response: { response: { response: { response: { response: { ac: [] } } } } } };
+        try { U(deep); return true; } catch { return false; }
+      })());
+
+      // ── (g) attribution follows the SOURCE ──────────────────────────────
+      eq('30g: opensky credits the OpenSky Network',
+        F.flightAttribution('opensky').name, '© The OpenSky Network');
+      eq('30g: opensky links to opensky-network.org',
+        F.flightAttribution('opensky').url, 'https://opensky-network.org');
+      eq('30g: adsblol credits adsb.lol', F.flightAttribution('adsblol').name, '© adsb.lol');
+      eq('30g: adsblol links to adsb.lol', F.flightAttribution('adsblol').url, 'https://adsb.lol');
+      eq('30g: cloud still credits airplanes.live',
+        F.flightAttribution('cloud').name, '© airplanes.live');
+      eq('30g: a local receiver has nobody to credit', F.flightAttribution('local'), null);
+      eq('30g: an HA entity has nobody to credit', F.flightAttribution('entity'), null);
+      eq('30g: absent source credits the default provider',
+        F.flightAttribution(undefined).name, '© The OpenSky Network');
+      // NEGATIVE CONTROL: the three credited sources are genuinely distinct.
+      ok('30g: NEG the three provider credits differ', new Set([
+        F.flightAttribution('opensky').name, F.flightAttribution('adsblol').name,
+        F.flightAttribution('cloud').name]).size === 3);
+
+      // ── (h) generated rest_command YAML ─────────────────────────────────
+      const ORIGIN = { lat: 40.7, lon: -74.0 };
+      const yOpen = F.flightProxyYaml('opensky', undefined, ORIGIN, 15);
+      ok('30h: opensky YAML declares rest_command:', yOpen.includes('rest_command:'));
+      ok('30h: opensky YAML uses the suggested service name by default',
+        yOpen.includes('  diorama_opensky:'), F.FLIGHT_PROXY_DEFAULT_COMMAND.opensky);
+      ok('30h: opensky YAML templates the whole bounding box',
+        ['{{ lamin }}', '{{ lomin }}', '{{ lamax }}', '{{ lomax }}'].every(t => yOpen.includes(t)));
+      ok('30h: opensky YAML is a GET with a timeout',
+        yOpen.includes('method: GET') && yOpen.includes('timeout:'));
+      ok('30h: opensky YAML comments the optional credentials',
+        yOpen.includes('# username: !secret') && yOpen.includes('# password: !secret')
+        && yOpen.includes('Authorization'));
+      ok('30h: opensky YAML previews the CURRENT request',
+        yOpen.includes(F.flightProxyUrlPreview('opensky', 40.7, -74.0, 15)));
+      ok('30h: the previewed URL carries the real box numbers',
+        yOpen.includes(`lamin=${box.lamin}`) && yOpen.includes(`lomax=${box.lomax}`));
+      // NEGATIVE CONTROL: the two providers' YAML never cross-contaminates.
+      ok('30h: NEG opensky YAML never mentions adsb.lol', !yOpen.includes('adsb.lol'));
+
+      const yLol = F.flightProxyYaml('adsblol', 'rest_command.My Feed', ORIGIN, 25);
+      ok('30h: adsblol YAML templates lat/lon/dist',
+        yLol.includes('{{ lat }}') && yLol.includes('{{ lon }}') && yLol.includes('{{ dist }}'));
+      ok('30h: adsblol YAML targets the adsb.lol v2 endpoint',
+        yLol.includes('https://api.adsb.lol/v2/lat/'));
+      ok('30h: a pasted/odd service name is sanitized INTO the YAML',
+        yLol.includes('  myfeed:'), yLol.split('\n').find(l => l.trim().endsWith(':')));
+      ok('30h: NEG adsblol YAML never mentions opensky', !yLol.includes('opensky'));
+      const yNoOrigin = F.flightProxyYaml('opensky', 'x', null, 15);
+      ok('30h: with no origin the preview says so instead of faking coordinates',
+        yNoOrigin.includes('calibrate a GPS landmark') && !yNoOrigin.includes('lamin=0'));
+
+      // ── (i) the service data the poll actually sends ────────────────────
+      const vOpen = F.flightProxyVars('opensky', 40.7, -74.0, 15);
+      eq('30i: opensky vars are exactly the four box edges',
+        Object.keys(vOpen).sort().join(','), 'lamax,lamin,lomax,lomin');
+      ok('30i: opensky vars ARE the bounding box',
+        JSON.stringify(vOpen) === JSON.stringify(box));
+      const vLol = F.flightProxyVars('adsblol', 40.712345678, -74.098765, 15.6);
+      eq('30i: adsblol vars are lat/lon/dist',
+        Object.keys(vLol).sort().join(','), 'dist,lat,lon');
+      eq('30i: adsblol rounds the point to 4 dp', vLol.lat, 40.7123);
+      eq('30i: adsblol rounds the radius to whole nm', vLol.dist, 16);
+      ok('30i: the previewed URL is built from those same vars',
+        F.flightProxyUrlPreview('adsblol', 40.712345678, -74.098765, 15.6)
+          === `https://api.adsb.lol/v2/lat/${vLol.lat}/lon/${vLol.lon}/dist/${vLol.dist}`);
+    }
+
   } catch (err) {
     ok('HARNESS threw', false, String(err && err.stack || err));
   }

@@ -64,15 +64,18 @@ import type {
   AlertsConfig, GroundArea, Pool, CompassConfig, Ruler, RulerEnd, DimensionMode, NeighborhoodConfig,
   FlightsConfig, Door, Window as WindowType,
 } from './types.js';
-import { normalizeAircraftList, flightBearingDistance, MAX_AIRCRAFT,
+import { normalizeFlightPayload, flightBearingDistance, MAX_AIRCRAFT,
          isEmergency, emergencySquawk, sanitizeLabelFields,
+         resolveFlightSource, flightSourceNeedsProxy, flightDefaultPollSeconds,
+         sanitizeFlightProxyCommand, FLIGHTS_DEFAULT_SOURCE,
          sanitizeFlightGlowRules, FLIGHTS_DEFAULT_RADIUS_NM,
          FLIGHT_SHELL_DEFAULT_RADIUS_M, FLIGHT_SHELL_MIN_RADIUS_M,
          FLIGHT_SHELL_MAX_RADIUS_M,
          flightVerticalScale, FLIGHT_VSCALE_DEFAULT,
          sanitizeSideText, sanitizeBannerText,
          type FlightPoint, type IssNow } from './flights.js';
-import { fetchLocalAircraft, fetchAirplanesLive, fetchIssNow } from './adsb-sources.js';
+import { fetchLocalAircraft, fetchAirplanesLive, fetchProxiedAircraft,
+         fetchIssNow } from './adsb-sources.js';
 // The ONE satellite alt/az routine (the renderer's sky uses the same function —
 // never re-derive it here). sky-astro is pure + three.js-FREE, so importing it
 // does NOT pull three into the startup graph (verified: dist/assets/app.js still
@@ -936,7 +939,10 @@ export class Planner extends EventTarget {
   flightsAt = 0;                 // ms epoch of the last successful aircraft poll
   flightsRev = 0;
   issNow: IssNow | null = null;
-  flightsStatus: 'off' | 'no-origin' | 'ok' | 'error' = 'off';
+  // 'needs-proxy' = a server-side source (opensky / adsblol) is selected but no
+  // `rest_command` name has been configured yet — nothing is called at all, and
+  // the settings drawer shows the YAML to paste. Never a silent no-op.
+  flightsStatus: 'off' | 'no-origin' | 'ok' | 'error' | 'needs-proxy' = 'off';
   private _flightsTimer: ReturnType<typeof setInterval> | null = null;
   private _issTimer: ReturnType<typeof setInterval> | null = null;
   private _flightsFetching = false;
@@ -1918,7 +1924,7 @@ export class Planner extends EventTarget {
     // 'entity' flight source: the bound rest-sensor proxy pushed new aircraft.
     // Its id is config-path (see _isSlowEntity) so the sidebar repaints too.
     const fCfg = this.store.flights;
-    if (fCfg?.enabled && (fCfg.source ?? 'cloud') === 'entity' && fCfg.entityId
+    if (fCfg?.enabled && resolveFlightSource(fCfg.source) === 'entity' && fCfg.entityId
         && (changedId === undefined || changedId === fCfg.entityId)) {
       this._recomputeFlightsFromEntity();
     }
@@ -6102,8 +6108,17 @@ export class Planner extends EventTarget {
   // source and repaint — the setWeather / setNeighborhood pattern, so switching
   // source or cadence restarts / stops the polls cleanly.
   setFlights(mut: (f: FlightsConfig) => void): void {
-    if (!this.store.flights) this.store.flights = { source: 'cloud' };
+    // Creation default is the CURRENT default source (OpenSky) — an existing
+    // store's explicit `source` is never touched here.
+    if (!this.store.flights) this.store.flights = { source: FLIGHTS_DEFAULT_SOURCE };
     mut(this.store.flights);
+    // The rest_command name is normalized HERE (pure helper in flights.ts) so a
+    // pasted `rest_command.diorama_opensky` or stray spacing still resolves,
+    // and a blank field clears back to the "not configured" sentinel.
+    if (this.store.flights.proxyCommand !== undefined) {
+      this.store.flights.proxyCommand =
+        sanitizeFlightProxyCommand(this.store.flights.proxyCommand);
+    }
     // Normalize the watch list HERE (not only in the settings UI) so every entry
     // point — settings edit, import, hand-edited config — stores the same
     // uppercase, trimmed, blank-free shape the matcher expects.
@@ -6223,7 +6238,10 @@ export class Planner extends EventTarget {
 
   private _flightsPollMs(): number {
     const p = this.store.flights?.pollSeconds;
-    return Math.max(5, Math.min(60, typeof p === 'number' && isFinite(p) ? p : 8)) * 1000;
+    // The DEFAULT is source-aware (OpenSky meters in credits — see
+    // flightDefaultPollSeconds); the 5..60 clamp is not.
+    const def = flightDefaultPollSeconds(this.store.flights?.source);
+    return Math.max(5, Math.min(60, typeof p === 'number' && isFinite(p) ? p : def)) * 1000;
   }
 
   // (Re)apply the flight config: stop both timers, then start whatever the
@@ -6250,8 +6268,21 @@ export class Planner extends EventTarget {
       return;
     }
 
-    const source = cfg.source ?? 'cloud';
-    if (source === 'entity') {
+    const source = resolveFlightSource(cfg.source);
+    // A server-side source with no rest_command configured must SAY SO, not
+    // silently poll a service that does not exist (and certainly not attempt a
+    // browser fetch we have proven cannot work). The settings drawer renders
+    // the YAML to paste plus a one-click name fill next to this status.
+    const needsProxy = flightSourceNeedsProxy(source)
+      && !sanitizeFlightProxyCommand(cfg.proxyCommand);
+    if (needsProxy) {
+      // Deliberately NOT an early return: the ISS is a separate, CORS-open feed
+      // on its own cadence, so an unconfigured aircraft proxy must not take the
+      // satellite down with it.
+      this.flightsNow = null;
+      this.flightsStatus = 'needs-proxy'; this.flightsRev++;
+      this.emitConfig();
+    } else if (source === 'entity') {
       // No timer: the bound entity pushes over state_changed (config-path, see
       // _isSlowEntity). Recompute now from whatever state is already loaded.
       this._recomputeFlightsFromEntity();
@@ -6275,18 +6306,27 @@ export class Planner extends EventTarget {
   private async _pollFlights(): Promise<void> {
     const cfg = this.store.flights;
     if (!cfg?.enabled) return;
-    const source = cfg.source ?? 'cloud';
+    const source = resolveFlightSource(cfg.source);
     if (source === 'entity') return;
+    // An unconfigured server-side proxy makes no call at all — and must not
+    // downgrade its honest 'needs-proxy' status into a generic 'error'.
+    if (flightSourceNeedsProxy(source) && !sanitizeFlightProxyCommand(cfg.proxyCommand)) return;
     const origin = this.flightsOrigin();
     if (!origin) return;
     if (this._flightsFetching) return;
     this._flightsFetching = true;
     try {
-      const json = source === 'local'
-        ? (cfg.localUrl ? await fetchLocalAircraft(cfg.localUrl) : null)
-        : await fetchAirplanesLive(origin.lat, origin.lon, this._flightsRadiusNm());
+      const radiusNm = this._flightsRadiusNm();
+      const json = flightSourceNeedsProxy(source)
+        // Server-side: HA fetches the CORS-locked provider for us through the
+        // user's rest_command and hands back the body.
+        ? await fetchProxiedAircraft(this.hass, source, cfg.proxyCommand,
+                                     origin.lat, origin.lon, radiusNm)
+        : source === 'local'
+          ? (cfg.localUrl ? await fetchLocalAircraft(cfg.localUrl) : null)
+          : await fetchAirplanesLive(origin.lat, origin.lon, radiusNm);
       if (json) {
-        this._applyFlights(normalizeAircraftList(json), origin);
+        this._applyFlights(normalizeFlightPayload(source, json), origin);
       } else if (!this.flightsNow && this.flightsStatus !== 'error') {
         // Nothing to fall back on — report once, don't spam on every retry.
         this.flightsStatus = 'error';
@@ -6311,7 +6351,7 @@ export class Planner extends EventTarget {
   // minutes), not our few-second poll.
   private _recomputeFlightsFromEntity(): void {
     const cfg = this.store.flights;
-    if (!cfg?.enabled || (cfg.source ?? 'cloud') !== 'entity' || !cfg.entityId) return;
+    if (!cfg?.enabled || resolveFlightSource(cfg.source) !== 'entity' || !cfg.entityId) return;
     const origin = this.flightsOrigin();
     if (!origin) return;
     const attrs = this.hass?.states?.[cfg.entityId]?.attributes;
@@ -6321,7 +6361,7 @@ export class Planner extends EventTarget {
       }
       return;
     }
-    this._applyFlights(normalizeAircraftList(attrs), origin);
+    this._applyFlights(normalizeFlightPayload('entity', attrs), origin);
   }
 
   // Shared post-processing for every source: fill distNm from the observer

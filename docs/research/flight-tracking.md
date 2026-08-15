@@ -739,3 +739,67 @@ different domains — don't conflate them into one function):
   patterns this doc reuses), CLAUDE.md ("Sky backdrop, sun & moon props",
   "Playful background text", "Weather core", "Geo reference & GPS device
   pins", the `_isSlowEntity`/dirty-key/lazy-3D-chunk conventions).
+
+---
+
+## §2.9 — CORRECTION, re-probed 2026-08-15 (supersedes §2's source landscape)
+
+The 2026-07 conclusion — "airplanes.live is the only CORS-open keyless ADS-B
+API; never add OpenSky" — **no longer holds, and the browser-direct transport
+for cloud sources is retired.** All three were re-probed with curl AND a real
+headless browser fetching from a foreign origin.
+
+| provider | curl | `access-control-allow-origin` | browser fetch |
+|---|---|---|---|
+| airplanes.live | **403** for everyone | — | fails |
+| adsb.lol | 200 + data | **absent entirely** | `TypeError: Failed to fetch` |
+| OpenSky | 200 + data | `https://opensky-network.org` only | `TypeError: Failed to fetch` |
+
+airplanes.live's 403 body: `{"error": "Please contact us at
+contact@airplanes.live. Your email MUST include a link to your project if you
+have one, a description of the project, and what your user base is."}` — a
+POLICY change, not an outage; a browser User-Agent does not change it. adsb.fi's
+v2 path 404s and adsb.one 403s.
+
+**The distinction that governs the design**: CORS is enforced by the *browser*,
+never by curl. A URL that returns perfect JSON in a terminal can still be
+unreadable to the panel's JavaScript. Anyone reporting "but this URL works" is
+correct and is not contradicting the finding.
+
+**OpenSky's "ToS-forbidden" note is withdrawn.** Their terms cover personal,
+non-commercial use, which is what a private home panel is. Anonymous access is
+metered in credits (~400/day; ~4000 with an account; 1–4 credits per bounding-box
+request) — hence the 60 s default poll for that source.
+
+### §2.10 — the `rest_command` proxy transport
+
+Both new sources are fetched by Home Assistant, not the browser, via a
+user-defined `rest_command` called with `return_response: true` (the same
+mechanism `weather.get_forecasts` and `calendar.get_events` already use).
+
+```yaml
+rest_command:
+  diorama_opensky:
+    url: >-
+      https://opensky-network.org/api/states/all?lamin={{ lamin }}&lomin={{ lomin }}&lamax={{ lamax }}&lomax={{ lomax }}
+    method: GET
+    timeout: 20
+    # Optional but recommended (raises the credit budget):
+    # username: !secret opensky_user      # legacy basic-auth accounts
+    # password: !secret opensky_pass
+    # headers:                            # newer OAuth2 client-credential accounts
+    #   Authorization: !secret opensky_bearer
+```
+
+adsb.lol is the same with `url: https://api.adsb.lol/v2/lat/{{ lat }}/lon/{{ lon }}/dist/{{ dist }}`.
+
+The URL is templated rather than baked so changing the radius never means
+editing YAML. HA's `rest_command` does basic auth natively; an OAuth2
+client-credentials account needs a token minted outside HA and passed as an
+`Authorization` header, which is why the emitted YAML comments both forms.
+
+**Shape note:** adsb.lol returns the readsb `{ac:[…]}` structure and reuses
+`normalizeAircraftList` unchanged. OpenSky returns POSITIONAL state arrays in SI
+units and needs `normalizeOpenSkyStates` (m→ft, m/s→kt, m/s→ft/min, trimmed
+callsign), and carries no registry enrichment or dbFlags — so registration, type,
+operator and the military/PIA/LADD flags are unavailable on that source.

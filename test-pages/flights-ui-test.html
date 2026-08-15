@@ -1238,6 +1238,116 @@
       p2.setFlights(f => { f.glowRules = undefined; });
       await drawer.updateComplete; await sleep(4);
       ok('the add button is live again below the cap', addBtn().disabled === false);
+      // ── 12a. Settings ▸ Integrations — SOURCES + the HA proxy block ───────
+      // airplanes.live closed to the public and no keyless CORS-open ADS-B API
+      // remains, so the two live cloud feeds are fetched by HA through a
+      // rest_command the user pastes. The drawer must lead with OpenSky, show
+      // that YAML, and never let an unconfigured proxy look like silence.
+      section('Settings drawer (sources + HA proxy)');
+      const srcRows = () => [...drawer.querySelectorAll('[data-flight-source]')]
+        .map(el => el.getAttribute('data-flight-source'));
+      const srcRadio = v => drawer.querySelector(`[data-flight-source="${v}"] input[type=radio]`);
+      const pickSource = async v => {
+        const r = srcRadio(v);
+        r.checked = true; r.dispatchEvent(new Event('change'));
+        await drawer.updateComplete; await sleep(4);
+      };
+
+      eq('all five sources are offered', srcRows().length, 5);
+      eq('OpenSky is listed FIRST', srcRows()[0], 'opensky');
+      eq('adsb.lol is listed second', srcRows()[1], 'adsblol');
+      ok('airplanes.live is still offered, below them',
+        srcRows().indexOf('cloud') > 1, srcRows().join(','));
+      // NEGATIVE CONTROL: the order is not alphabetical or arbitrary — 'cloud'
+      // would sort first, and it must not be first.
+      ok('NEG cloud is not the leading option', srcRows()[0] !== 'cloud');
+
+      // A store with NO source selects OpenSky in the UI (the new default).
+      p2.store.flights = { enabled: true };
+      drawer.requestUpdate(); await drawer.updateComplete; await sleep(4);
+      ok('an absent source shows OpenSky selected', srcRadio('opensky').checked === true);
+      ok('NEG … and NOT airplanes.live', srcRadio('cloud').checked === false);
+
+      // The proxy sub-block: YAML + service name.
+      const proxy = () => drawer.querySelector('[data-flight-proxy]');
+      const yamlText = () => drawer.querySelector('[data-flight-yaml]')?.textContent ?? '';
+      ok('the OpenSky proxy block is shown', !!proxy());
+      ok('it renders pasteable rest_command YAML', yamlText().includes('rest_command:'));
+      ok('the YAML templates the bounding box',
+        ['{{ lamin }}', '{{ lomin }}', '{{ lamax }}', '{{ lomax }}']
+          .every(t => yamlText().includes(t)));
+      ok('the YAML names the OpenSky endpoint',
+        yamlText().includes('opensky-network.org/api/states/all'));
+      ok('the YAML comments the optional credentials',
+        yamlText().includes('!secret opensky_user'));
+      ok('a copy button is offered', !!drawer.querySelector('[data-flight-yaml-copy]'));
+      ok('the unconfigured service name is flagged', !!drawer.querySelector('[data-flight-proxy-fill]'));
+
+      // One-click fill of the suggested name.
+      drawer.querySelector('[data-flight-proxy-fill]').click();
+      await drawer.updateComplete; await sleep(4);
+      eq('the fill button writes the suggested command',
+        p2.store.flights.proxyCommand, 'diorama_opensky');
+      eq('the YAML picks the name up', yamlText().includes('  diorama_opensky:'), true);
+      ok('NEG the fill button disappears once it matches',
+        !drawer.querySelector('[data-flight-proxy-fill]'));
+
+      // Typing a full service id is sanitized on the way into the store.
+      const nameIn = drawer.querySelector('[data-flight-proxy-name]');
+      nameIn.value = 'rest_command.My Feed';
+      nameIn.dispatchEvent(new Event('change'));
+      await drawer.updateComplete; await sleep(4);
+      eq('a pasted service id is sanitized', p2.store.flights.proxyCommand, 'myfeed');
+      eq('the YAML follows the sanitized name',
+        yamlText().includes('  myfeed:'), true);
+      drawer.querySelector('[data-flight-proxy-name]').value = '';
+      drawer.querySelector('[data-flight-proxy-name]').dispatchEvent(new Event('change'));
+      await drawer.updateComplete; await sleep(4);
+      eq('clearing the field clears the store', p2.store.flights.proxyCommand, undefined);
+
+      // adsb.lol gets its OWN YAML, not OpenSky's.
+      await pickSource('adsblol');
+      eq('picking adsb.lol writes the store', p2.store.flights.source, 'adsblol');
+      ok('the adsb.lol YAML targets the adsb.lol endpoint',
+        yamlText().includes('https://api.adsb.lol/v2/lat/'));
+      ok('… and templates lat/lon/dist',
+        ['{{ lat }}', '{{ lon }}', '{{ dist }}'].every(t => yamlText().includes(t)));
+      ok('NEG the adsb.lol YAML never mentions opensky', !yamlText().includes('opensky'));
+
+      // airplanes.live: selectable, but the 403 is stated up front.
+      await pickSource('cloud');
+      ok('choosing airplanes.live shows the access warning',
+        !!drawer.querySelector('[data-flight-cloud-warn]'));
+      ok('the warning names the HTTP status',
+        drawer.querySelector('[data-flight-cloud-warn]').textContent.includes('403'));
+      ok('NEG airplanes.live shows NO proxy block (it is a direct fetch)', !proxy());
+
+      // The poll input's default is source-aware.
+      const pollInput = () => {
+        const l = [...drawer.querySelectorAll('label')]
+          .find(el => el.textContent.replace(/\s+/g, ' ').trim() === 'Poll (s)');
+        return l ? l.parentElement.querySelector('input[type=number]') : null;
+      };
+      eq('airplanes.live shows the 8 s poll default', pollInput().value, '8');
+      await pickSource('opensky');
+      eq('OpenSky shows the 60 s poll default (credit budget)', pollInput().value, '60');
+      // NEGATIVE CONTROL: an explicit interval still displays verbatim.
+      p2.setFlights(f => { f.pollSeconds = 15; });
+      drawer.requestUpdate(); await drawer.updateComplete; await sleep(4);
+      eq('NEG an explicit poll interval is shown as stored', pollInput().value, '15');
+      p2.setFlights(f => { f.pollSeconds = undefined; });
+
+      // An unconfigured proxy must SAY so in the status line, not sit silent.
+      p2.store.flights = { enabled: true, source: 'opensky' };
+      p2.flightsStatus = 'needs-proxy';
+      drawer.requestUpdate(); await drawer.updateComplete; await sleep(4);
+      ok('the status line reports the missing proxy',
+        !!drawer.querySelector('[data-flight-needs-proxy]'));
+      p2.flightsStatus = 'ok';
+      drawer.requestUpdate(); await drawer.updateComplete; await sleep(4);
+      ok('NEG … and clears once the feed is up',
+        !drawer.querySelector('[data-flight-needs-proxy]'));
+
       drawer.remove();
 
       // ── 12b. Settings ▸ Display — background-text entry rows ───────────────

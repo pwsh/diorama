@@ -86,29 +86,40 @@ export class HassPanelAdapter implements HaApi {
     } catch { return {}; }
   }
 
-  async getWeatherForecasts(entityId: string, type: 'daily' | 'hourly'): Promise<ForecastRecord[] | null> {
-    if (!this._conn || !entityId) return null;
+  // Generic "service that returns data" call — see the HaApi doc comment. Both
+  // methods below ride it, as does the flight feature's server-side ADS-B proxy
+  // (a user-defined rest_command; the browser cannot reach those providers).
+  async callServiceWithResponse(
+    domain: string, service: string, data: Record<string, unknown>,
+    target?: Record<string, unknown>,
+  ): Promise<unknown | null> {
+    if (!this._conn || !domain || !service) return null;
     try {
       const raw = await this._conn.sendMessagePromise({
-        type: 'call_service', domain: 'weather', service: 'get_forecasts',
-        service_data: { type }, target: { entity_id: entityId },
+        type: 'call_service', domain, service, service_data: data,
+        ...(target ? { target } : {}),
         return_response: true,
       });
-      return normalizeForecasts(raw, entityId);
+      return raw ?? null;
     } catch { return null; }
+  }
+
+  async getWeatherForecasts(entityId: string, type: 'daily' | 'hourly'): Promise<ForecastRecord[] | null> {
+    if (!this._conn || !entityId) return null;
+    return normalizeForecasts(
+      await this.callServiceWithResponse(
+        'weather', 'get_forecasts', { type }, { entity_id: entityId }),
+      entityId);
   }
 
   async getCalendarEvents(entityIds: string[], startISO: string, endISO: string): Promise<CalEvent[]> {
     if (!this._conn || !entityIds.length) return [];
-    try {
-      const raw = await this._conn.sendMessagePromise({
-        type: 'call_service', domain: 'calendar', service: 'get_events',
-        service_data: { start_date_time: startISO, end_date_time: endISO },
-        target: { entity_id: entityIds },
-        return_response: true,
-      });
-      return normalizeCalendarEvents(raw, entityIds);
-    } catch { return []; }
+    return normalizeCalendarEvents(
+      await this.callServiceWithResponse(
+        'calendar', 'get_events',
+        { start_date_time: startISO, end_date_time: endISO },
+        { entity_id: entityIds }),
+      entityIds);
   }
 
   async getDevices(): Promise<Array<HaDevice>> {

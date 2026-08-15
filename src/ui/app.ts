@@ -7,6 +7,7 @@ import { seedDemoConfigs, seedModelViewer, demoSeedHash, DEMO_SEEDED_KEY, type D
 import { fmtLen } from '../geometry.js';
 import { injectSharedStyles } from '../styles.js';
 import { SIMPLE_LAYERS } from '../layer-defs.js';
+import { flightAttribution } from '../flights.js';
 import './auth-screen.js';
 import './topbar.js';
 import './sidebar.js';
@@ -395,7 +396,7 @@ export class App extends LitElement {
               ${(p.store.neighborhood?.enabled === true && p.neighborhoodData != null
                   && p.store.layers2d?.neighborhood !== false)
                 || (p.store.flights?.enabled === true
-                    && (p.store.flights.source ?? 'cloud') === 'cloud' && p.flightsNow != null
+                    && flightAttribution(p.store.flights.source) != null && p.flightsNow != null
                     && p.store.layers2d?.flights !== false) ? html`
                 <div style="position:absolute;bottom:6px;left:8px;font-size:10px;line-height:1.35;
                             color:var(--text-dim);pointer-events:none;
@@ -409,14 +410,22 @@ export class App extends LitElement {
                       <a href="https://openfreemap.org" target="_blank" rel="noopener noreferrer"
                          style="color:inherit;pointer-events:auto;text-decoration:underline">OpenFreeMap</a>
                     </div>` : nothing}
-                  ${p.store.flights?.enabled === true
-                    && (p.store.flights.source ?? 'cloud') === 'cloud' && p.flightsNow != null
-                    && p.store.layers2d?.flights !== false ? html`
-                    <div>
-                      Flight data
-                      <a href="https://airplanes.live" target="_blank" rel="noopener noreferrer"
-                         style="color:inherit;pointer-events:auto;text-decoration:underline">© airplanes.live</a>
-                    </div>` : nothing}
+                  <!-- Whose data is on screen depends on the SOURCE: OpenSky,
+                       adsb.lol and airplanes.live each require crediting, while
+                       a local receiver (the user's own) and an HA entity (whose
+                       upstream we cannot know) have nobody to credit —
+                       flightAttribution owns that ladder. -->
+                  ${(() => {
+                    const at = p.store.flights?.enabled === true && p.flightsNow != null
+                      && p.store.layers2d?.flights !== false
+                      ? flightAttribution(p.store.flights.source) : null;
+                    return at ? html`
+                    <div data-flight-attribution>
+                      ${at.text}
+                      <a href=${at.url} target="_blank" rel="noopener noreferrer"
+                         style="color:inherit;pointer-events:auto;text-decoration:underline">${at.name}</a>
+                    </div>` : nothing;
+                  })()}
                 </div>
               ` : nothing}
               <diorama-zone-edit-bar .planner=${p}></diorama-zone-edit-bar>

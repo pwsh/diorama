@@ -187,6 +187,16 @@ export interface HaApi {
   onState(fn: StateListener): void;
   onConn(fn: ConnListener): void;
   callService(domain: string, service: string, data: Record<string, unknown>): unknown;
+  // Call a service that RETURNS data (`return_response: true`) and resolve its
+  // raw `{context, response}` result — or null on any failure (unknown service,
+  // HA error, disconnected). The generic form of the weather-forecast /
+  // calendar-events calls below, which both route through it; the flight
+  // feature uses it to have HA fetch a CORS-locked ADS-B provider server-side
+  // via a user-defined `rest_command` (see src/adsb-sources.ts).
+  callServiceWithResponse(
+    domain: string, service: string, data: Record<string, unknown>,
+    target?: Record<string, unknown>,
+  ): Promise<unknown | null>;
   // Pull recorder history for the given entities over [startISO, endISO].
   // Returns normalized points per entity (empty map on failure / no data).
   getHistory(entityIds: string[], startISO: string, endISO: string): Promise<Record<string, HistoryPoint[]>>;
@@ -296,31 +306,38 @@ export class HassClient implements HaApi {
     return normalizeHistory(res.result);
   }
 
-  async getWeatherForecasts(entityId: string, type: 'daily' | 'hourly'): Promise<ForecastRecord[] | null> {
-    if (!entityId) return null;
+  async callServiceWithResponse(
+    domain: string, service: string, data: Record<string, unknown>,
+    target?: Record<string, unknown>,
+  ): Promise<unknown | null> {
+    if (!domain || !service) return null;
     try {
       const res = await this._send({
-        type: 'call_service', domain: 'weather', service: 'get_forecasts',
-        service_data: { type }, target: { entity_id: entityId },
+        type: 'call_service', domain, service, service_data: data,
+        ...(target ? { target } : {}),
         return_response: true,
       });
       if (!res.success) return null;
-      return normalizeForecasts(res.result, entityId);
+      return res.result ?? null;
     } catch { return null; }
+  }
+
+  async getWeatherForecasts(entityId: string, type: 'daily' | 'hourly'): Promise<ForecastRecord[] | null> {
+    if (!entityId) return null;
+    return normalizeForecasts(
+      await this.callServiceWithResponse(
+        'weather', 'get_forecasts', { type }, { entity_id: entityId }),
+      entityId);
   }
 
   async getCalendarEvents(entityIds: string[], startISO: string, endISO: string): Promise<CalEvent[]> {
     if (!entityIds.length) return [];
-    try {
-      const res = await this._send({
-        type: 'call_service', domain: 'calendar', service: 'get_events',
-        service_data: { start_date_time: startISO, end_date_time: endISO },
-        target: { entity_id: entityIds },
-        return_response: true,
-      });
-      if (!res.success) return [];
-      return normalizeCalendarEvents(res.result, entityIds);
-    } catch { return []; }
+    return normalizeCalendarEvents(
+      await this.callServiceWithResponse(
+        'calendar', 'get_events',
+        { start_date_time: startISO, end_date_time: endISO },
+        { entity_id: entityIds }),
+      entityIds);
   }
 
   // HA registry helpers — used by the entity picker so users can search by

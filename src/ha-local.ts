@@ -75,6 +75,10 @@ export class LocalApi implements HaApi {
     return undefined;
   }
 
+  // No HA ⇒ nothing can fetch on our behalf. Inert, like callService above —
+  // the flight feature's server-side ADS-B proxy simply reports "needs proxy".
+  async callServiceWithResponse(): Promise<unknown | null> { return null; }
+
   async getHistory(): Promise<Record<string, HistoryPoint[]>> { return {}; }
   async getWeatherForecasts(): Promise<ForecastRecord[] | null> { return null; }
   async getCalendarEvents(): Promise<CalEvent[]> { return []; }

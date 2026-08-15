@@ -1632,24 +1632,50 @@ export interface NeighborhoodConfig {
 // feature inert (no fetch, no timer, no render). MUST be in
 // Planner._normalizeStore's explicit field list or it resets on every load.
 //
-// Sources (all three carry the same normalized shape through flights.ts):
-//   'cloud'  — airplanes.live direct browser fetch; the only keyless cloud ADS-B
-//              API that sends an open CORS header. Sends the configured lat/lon
-//              to a third party.
-//   'local'  — the user's own LAN receiver aircraft.json (dump1090-fa / readsb /
-//              tar1090 / ultrafeeder). Freshest + no third party, but the
-//              receiver needs a CORS header added and must not be plain http
-//              behind an https panel.
-//   'entity' — an HA rest/template sensor that fetched the data SERVER-side
-//              (no CORS at all); its attributes carry the aircraft array. The
-//              only way to use the CORS-blocked adsb.lol / adsb.fi feeds.
+// Sources (every one carries the same normalized shape through flights.ts).
+// THE BROWSER-DIRECT TRANSPORT IS DEAD — measured 2026-08-15, there is no
+// longer ANY keyless CORS-open ADS-B API, so the two live cloud feeds are
+// fetched SERVER-SIDE by Home Assistant through a user-defined `rest_command`:
+//   'opensky' — THE DEFAULT. opensky-network.org /states/all over an HA
+//               rest_command proxy (CORS-locked to its own site, so the browser
+//               cannot call it). Positional-array states in SI units; no
+//               registry enrichment (no reg/type/operator/dbFlags). Metered in
+//               credits — anonymous ~400/day, an account ~4000/day — hence the
+//               60 s default poll for this source.
+//   'adsblol' — api.adsb.lol over the same rest_command proxy (answers fine,
+//               sends no CORS header at all). readsb `{ac:[...]}` shape, i.e.
+//               byte-for-byte what airplanes.live used to return.
+//   'cloud'   — airplanes.live direct browser fetch. WAS the only open-CORS
+//               keyless feed; since 2026-08-15 it returns HTTP 403 to everyone
+//               pending an access request emailed to contact@airplanes.live.
+//               Still selectable (a granted user keeps working, and a stored
+//               explicit choice is never silently rewritten) but no longer the
+//               default. Sends the configured lat/lon to a third party.
+//   'local'   — the user's own LAN receiver aircraft.json (dump1090-fa / readsb /
+//               tar1090 / ultrafeeder). Freshest + no third party, but the
+//               receiver needs a CORS header added and must not be plain http
+//               behind an https panel.
+//   'entity'  — an HA rest/template sensor that fetched the data SERVER-side;
+//               its attributes carry the aircraft array. Still the escape hatch
+//               for any feed we don't natively speak.
 export interface FlightsConfig {
   enabled?: boolean;                      // absent/false = feature fully inert
-  source?: 'cloud' | 'local' | 'entity';  // default 'cloud' (airplanes.live)
+  // Absent or unknown resolves to 'opensky' (FLIGHTS_DEFAULT_SOURCE /
+  // resolveFlightSource in src/flights.ts, which own the resolution).
+  source?: 'opensky' | 'adsblol' | 'cloud' | 'local' | 'entity';
+  // 'opensky' / 'adsblol' — the NAME of the `rest_command:` service the user
+  // pasted into configuration.yaml (no `rest_command.` prefix; sanitized by
+  // sanitizeFlightProxyCommand). ABSENT is the "not configured yet" sentinel:
+  // the planner reports status 'needs-proxy' and never calls, rather than
+  // hammering a service that does not exist. The settings drawer generates the
+  // exact YAML and offers a one-click fill of the suggested name.
+  proxyCommand?: string;
   localUrl?: string;                      // 'local' — the receiver's aircraft.json URL, used verbatim
   entityId?: string;                      // 'entity' — HA sensor whose attributes hold the aircraft array
   radiusNm?: number;                      // search + display radius; default 15, clamp 5..100
-  pollSeconds?: number;                   // default 8, clamp 5..60 (under airplanes.live's 1 req/s)
+  // Clamp 5..60. Default is SOURCE-AWARE (flightDefaultPollSeconds): 60 s for
+  // OpenSky's credit budget, 8 s otherwise.
+  pollSeconds?: number;
   minAltFt?: number;                      // optional altitude band filters
   maxAltFt?: number;
   showLabels?: boolean;                   // callsign labels in 3D; default true

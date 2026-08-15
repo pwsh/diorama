@@ -25,9 +25,11 @@ import {
   flightBearingDistance, isEmergency,
   FLIGHT_GLOW_PATTERNS, MAX_FLIGHT_GLOW_RULES,
   FLIGHT_SIDE_TEXT_MODES, FLIGHT_BANNER_TEXT_MODES,
+  resolveFlightSource, flightSourceNeedsProxy, flightDefaultPollSeconds,
+  flightProxyYaml, sanitizeFlightProxyCommand, FLIGHT_PROXY_DEFAULT_COMMAND,
 } from '../flights.js';
 import type {
-  FlightPoint, FlightGlowRule, FlightGlowPattern, FlightGlowCriteria,
+  FlightPoint, FlightGlowRule, FlightGlowPattern, FlightGlowCriteria, FlightSource,
 } from '../flights.js';
 import { aircraftArchetype } from '../aircraft-types.js';
 import {
@@ -1415,7 +1417,7 @@ export class SettingsDrawer extends LitElement {
     const p = this.planner;
     const cfg = p.store.flights ?? {};
     const enabled = cfg.enabled === true;
-    const source = cfg.source ?? 'cloud';
+    const source = resolveFlightSource(cfg.source);
     const set = (mut: (f: import('../types.js').FlightsConfig) => void) => p.setFlights(mut);
 
     // Live status line off the planner's own poll state.
@@ -1425,9 +1427,67 @@ export class SettingsDrawer extends LitElement {
       ? html`<span style="color:var(--text-dim)">disabled</span>`
       : status === 'no-origin'
         ? html`<span style="color:#fb8c00">needs a location — calibrate a GPS landmark or set a weather location</span>`
+        : status === 'needs-proxy'
+          ? html`<span style="color:#fb8c00" data-flight-needs-proxy>needs the Home Assistant proxy below</span>`
         : status === 'error'
-          ? html`<span style="color:#ff5252">fetch failing — check source settings</span>`
+          ? html`<span style="color:#ff5252">${source === 'cloud'
+              ? 'airplanes.live refused the request'
+              : flightSourceNeedsProxy(source)
+                ? 'the rest_command call failed — check the name and that HA was restarted'
+                : 'fetch failing — check source settings'}</span>`
           : html`<span style="color:#69f0ae">${p.flightsNow?.length ?? 0} aircraft${ageS !== null ? ` · updated ${ageS}s ago` : ''}</span>`;
+
+    // ── Server-side proxy sub-block (opensky / adsblol) ────────────────────
+    // Neither provider can be fetched by the browser (both are CORS-blocked, as
+    // is every other keyless feed since airplanes.live closed), so HA fetches
+    // them for us. The YAML is GENERATED — same helper that builds the service
+    // data the poll actually sends, so the two can never disagree.
+    const proxyName = sanitizeFlightProxyCommand(cfg.proxyCommand);
+    const suggested = FLIGHT_PROXY_DEFAULT_COMMAND[source] ?? 'diorama_flights';
+    const proxyBlock = () => {
+      const yaml = flightProxyYaml(source, cfg.proxyCommand, p.flightsOrigin(),
+                                   cfg.radiusNm ?? FLIGHTS_DEFAULT_RADIUS_NM);
+      return html`
+        <div style="margin:0 0 8px 24px" data-flight-proxy>
+          <div style="font-size:10px;color:var(--text-dim);line-height:1.4;margin-bottom:4px">
+            Your browser cannot call this feed directly (it sends no usable CORS
+            header), so Home Assistant fetches it. Paste this into
+            <code>configuration.yaml</code>, restart HA, then enter the service name.
+          </div>
+          <pre data-flight-yaml style="margin:0 0 4px;padding:6px 7px;border-radius:4px;border:1px solid var(--border);
+                      background:#0b0e12;color:var(--text);font-size:10px;line-height:1.4;
+                      white-space:pre;overflow:auto;max-height:190px;user-select:text">${yaml}</pre>
+          <div class="row" style="align-items:center;gap:6px;margin-bottom:4px">
+            <button class="btn" data-flight-yaml-copy
+                    @click=${() => { void navigator.clipboard?.writeText(yaml); }}>⧉ Copy YAML</button>
+          </div>
+          <div class="row" style="align-items:center;gap:6px">
+            <label style="font-size:12px;color:var(--text);flex:0 0 auto">Service name</label>
+            <input type="text" data-flight-proxy-name placeholder=${suggested}
+                   .value=${proxyName ?? ''}
+                   @change=${(e: Event) => set(f => {
+                     f.proxyCommand = (e.target as HTMLInputElement).value.trim() || undefined;
+                   })}
+                   style="flex:1;min-width:0;padding:5px 7px;border-radius:4px;
+                          border:1px solid ${proxyName ? 'var(--border)' : '#fb8c00'};
+                          background:#111;color:var(--text);font-size:12px;box-sizing:border-box">
+            ${proxyName !== suggested ? html`<button class="btn" data-flight-proxy-fill
+              @click=${() => set(f => { f.proxyCommand = suggested; })}>Use ${suggested}</button>` : nothing}
+          </div>
+          ${!proxyName ? html`
+            <div style="font-size:10px;color:#fb8c00;margin-top:3px;line-height:1.35">
+              Not configured — nothing is being fetched. Enter the
+              <code>rest_command</code> service name (no <code>rest_command.</code> prefix).
+            </div>` : nothing}
+          ${source === 'opensky' ? html`
+            <div style="font-size:10px;color:var(--text-dim);margin-top:3px;line-height:1.35">
+              OpenSky meters access in credits — about 400/day anonymous, 4000/day
+              with an account (1–4 per request). At the 60 s default that is
+              ~1,440 requests/day: add the credentials commented in the YAML, or
+              raise the poll interval.
+            </div>` : nothing}
+        </div>`;
+    };
 
     // Mixed content is a hard browser block, not a warning we can work around:
     // an HTTPS-served panel cannot fetch an http:// LAN receiver at all.
@@ -1435,8 +1495,9 @@ export class SettingsDrawer extends LitElement {
     const mixedContent = typeof window !== 'undefined'
       && window.location?.protocol === 'https:' && /^http:\/\//i.test(localUrl.trim());
 
-    const sourceRow = (val: 'cloud' | 'local' | 'entity', label: string, hint: string) => html`
-      <label style="display:flex;gap:8px;align-items:flex-start;cursor:pointer;font-size:12px;color:var(--text);margin:4px 0">
+    const sourceRow = (val: FlightSource, label: string, hint: string) => html`
+      <label style="display:flex;gap:8px;align-items:flex-start;cursor:pointer;font-size:12px;color:var(--text);margin:4px 0"
+             data-flight-source=${val}>
         <input type="radio" name="flightsource" .checked=${source === val}
                @change=${() => set(f => { f.source = val; })}>
         <span style="flex:1"><span>${label}</span>
@@ -1467,8 +1528,20 @@ export class SettingsDrawer extends LitElement {
         </label>
         ${enabled ? html`
           <div style="margin:6px 0 0 8px;display:flex;flex-direction:column;gap:2px">
-            ${sourceRow('cloud', 'Cloud (airplanes.live)',
-              'Sends your home coordinates to airplanes.live (third-party, non-commercial feed, no SLA).')}
+            ${sourceRow('opensky', 'OpenSky Network (recommended)',
+              'Fetched by Home Assistant through a rest_command you add below. Free and keyless, but rate-limited — an OpenSky account raises the allowance.')}
+            ${source === 'opensky' ? proxyBlock() : nothing}
+            ${sourceRow('adsblol', 'adsb.lol',
+              'Community ADS-B feed, also fetched by Home Assistant through a rest_command. Carries registrations, types and operators, which OpenSky does not.')}
+            ${source === 'adsblol' ? proxyBlock() : nothing}
+            ${sourceRow('cloud', 'Cloud (airplanes.live) — needs their permission',
+              'Closed to the public since 2026-08: every request returns "Please contact us at contact@airplanes.live. Your email MUST include a link to your project…". Keep this only if they have granted you access.')}
+            ${source === 'cloud' ? html`
+              <div style="margin:0 0 6px 24px;font-size:10px;color:#fb8c00;line-height:1.35"
+                   data-flight-cloud-warn>
+                airplanes.live now answers <code>HTTP 403</code> unless you have
+                emailed them for access. Switch to OpenSky above unless you have.
+              </div>` : nothing}
             ${sourceRow('local', 'Local receiver (LAN)',
               'Your own dump1090 / readsb / tar1090 aircraft.json — freshest, no third party.')}
             ${source === 'local' ? html`
@@ -1535,9 +1608,13 @@ export class SettingsDrawer extends LitElement {
               Lower high-altitude traffic without bringing it closer.
             </div>
             <div class="row" style="align-items:center">
-              <label style="font-size:12px;color:var(--text);flex:1" title="Poll cadence. airplanes.live documents a 1 request/second limit.">Poll (s)</label>
-              <input type="number" min="5" max="60" step="1" .value=${String(cfg.pollSeconds ?? 8)}
-                     @change=${(e: Event) => set(f => { f.pollSeconds = numOrUndef((e.target as HTMLInputElement).value, 5, 60) ?? 8; })}
+              <label style="font-size:12px;color:var(--text);flex:1" title="Poll cadence. The default is source-aware: 60 s for OpenSky (which meters access in credits), 8 s otherwise.">Poll (s)</label>
+              <input type="number" min="5" max="60" step="1"
+                     .value=${String(cfg.pollSeconds ?? flightDefaultPollSeconds(source))}
+                     @change=${(e: Event) => set(f => {
+                       f.pollSeconds = numOrUndef((e.target as HTMLInputElement).value, 5, 60)
+                         ?? flightDefaultPollSeconds(source);
+                     })}
                      style="width:80px">
             </div>
             <div class="row" style="align-items:center">

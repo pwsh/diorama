@@ -465,6 +465,39 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Flight tracking: OpenSky + adsb.lol over a server-side HA proxy**
+  (2026-08-15, user-reported "the flight tracking API went down. Add in
+  additional sources … with a default to the openskynetwork at the top
+  of the list"; unreleased — on main past v0.65.0).
+  **The shipped default was dead for EVERY user**: airplanes.live now
+  returns HTTP 403 to everyone with a body asking you to email them
+  about your project — a policy change, not an outage, unaffected by a
+  browser User-Agent. Re-probing the landscape found **no keyless
+  CORS-open ADS-B API remains**: adsb.lol answers curl 200 with NO
+  `access-control-allow-origin` at all; OpenSky answers 200 but locks
+  the header to its own site. Proven in a real headless browser from a
+  foreign origin — both `TypeError: Failed to fetch` at the same
+  instant curl returned full payloads. (The user twice pointed out the
+  URLs return JSON; they were right, and it is not a contradiction —
+  curl never asks for CORS permission, a browser always does. Worth
+  remembering as an explanation pattern.)
+  So the browser-direct transport is retired for cloud sources and both
+  new providers are fetched SERVER-SIDE by HA through a user-defined
+  `rest_command` with `return_response: true` — generalized as
+  `HaApi.callServiceWithResponse`, with the two existing
+  `return_response` call sites refactored onto it behaviour-identically.
+  New `needs-proxy` status calls NOTHING when unconfigured rather than
+  hammering a missing service; the drawer emits the exact YAML from the
+  SAME helper that builds the poll's service data, so they cannot
+  disagree. OpenSky is the default and heads the list as asked; an
+  explicit stored `cloud` is never rewritten, just explained. Source-
+  aware poll defaults (60 s OpenSky for its credit budget, 8 s others)
+  and source-aware attribution. Documented capability gap: OpenSky's
+  `/states/all` has no registry enrichment or dbFlags, so military
+  skins, privacy dimming and type archetypes do not fire on it.
+  FLIGHTS 827 → **989/989**, FLIGHTSUI 359 → **391/391**, with 19
+  source mutations proving the new assertions discriminate.
+
 - **Fire flicker registered instead of rebuilt + glass is pick-through**
   (2026-08-10, two user asks following the firepit hunt; v0.65.0).
   (1) A lit hearth / fire pit / heat lamp / flashing logic light

@@ -1357,3 +1357,333 @@ export function flightPointSpeedBand(
 export interface IssNow {
   lat: number; lon: number; altKm: number; velKmS: number; tsMs: number;
 }
+
+// ── Sources: which feed, and how it reaches the browser ────────────────────
+// (2026-08 source wave — see docs/research/flight-tracking.md §2.)
+//
+// THE BROWSER-DIRECT TRANSPORT IS DEAD AS A CONCEPT, not just as a provider.
+// Measured 2026-08-15 from a foreign origin in a real headless browser:
+//   • airplanes.live  → HTTP 403 for everyone, with a body asking you to email
+//     contact@airplanes.live with a description of your project before they
+//     re-open access. A policy change, not an outage; a browser User-Agent does
+//     not change it. It was the ONLY keyless cloud feed that ever sent
+//     `access-control-allow-origin: *`.
+//   • adsb.lol        → HTTP 200 to curl, NO CORS header at all → browser block.
+//   • opensky-network → HTTP 200 to curl, `access-control-allow-origin:
+//     https://opensky-network.org` only → browser block.
+// So there is no longer any keyless CORS-open ADS-B API. `opensky` and `adsblol`
+// are therefore fetched SERVER-SIDE by Home Assistant through a user-defined
+// `rest_command` (which returns its response body when called with
+// `return_response: true`), exactly the mechanism `weather.get_forecasts` and
+// `calendar.get_events` already ride. No CORS applies to HA's own outbound HTTP.
+export const FLIGHT_SOURCES = ['opensky', 'adsblol', 'cloud', 'local', 'entity'] as const;
+export type FlightSource = typeof FLIGHT_SOURCES[number];
+
+// DEFAULT = OpenSky. It is the one source that (a) still answers, (b) is
+// documented and stable, and (c) needs no permission email. Absent/unknown
+// resolves here; a stored explicit source is NEVER rewritten (an existing
+// `cloud` user keeps `cloud` and is told in the settings UI why it is failing).
+export const FLIGHTS_DEFAULT_SOURCE: FlightSource = 'opensky';
+
+export function resolveFlightSource(v: unknown): FlightSource {
+  return (FLIGHT_SOURCES as readonly string[]).includes(v as string)
+    ? v as FlightSource : FLIGHTS_DEFAULT_SOURCE;
+}
+
+// The two sources that cannot be fetched by the browser and must go through the
+// HA rest_command proxy.
+export function flightSourceNeedsProxy(src: unknown): boolean {
+  const s = resolveFlightSource(src);
+  return s === 'opensky' || s === 'adsblol';
+}
+
+// Suggested `rest_command:` service name per proxied source. The user may pick
+// any name; this is what the generated YAML uses and what the settings UI
+// offers as a one-click fill.
+export const FLIGHT_PROXY_DEFAULT_COMMAND: Readonly<Record<string, string>> = {
+  opensky: 'diorama_opensky',
+  adsblol: 'diorama_adsblol',
+};
+
+// Sanitize a user-typed rest_command service name to what HA will actually
+// accept: lowercase, [a-z0-9_], and with a pasted `rest_command.` domain prefix
+// stripped (the settings field asks for the service name, and pasting the full
+// service id is the obvious mistake). Blank / all-invalid → undefined, which is
+// the "not configured yet" sentinel the planner reports as `needs-proxy`.
+export function sanitizeFlightProxyCommand(v: unknown): string | undefined {
+  if (typeof v !== 'string') return undefined;
+  const bare = v.trim().replace(/^rest_command\./i, '');
+  const clean = bare.toLowerCase().replace(/[^a-z0-9_]/g, '');
+  return clean ? clean : undefined;
+}
+
+// Poll cadence default, per source. OpenSky meters access in CREDITS: an
+// anonymous caller gets ~400/day and an authenticated one ~4000/day, and one
+// bounding-box request costs 1–4 credits. At the shipped 8 s default a day is
+// ~10,800 requests — orders of magnitude over either allowance — so OpenSky
+// defaults to the 60 s clamp ceiling (~1,440/day, which fits an authenticated
+// account). The user can still choose anything in the 5..60 clamp; the settings
+// UI states the arithmetic rather than silently deciding for them. Dead
+// reckoning covers the gap between polls (the renderer already extrapolates
+// from gs/track), so a slower poll costs smoothness, not correctness.
+export const FLIGHT_POLL_DEFAULT_S = 8;
+export const FLIGHT_POLL_DEFAULT_OPENSKY_S = 60;
+
+export function flightDefaultPollSeconds(src: unknown): number {
+  return resolveFlightSource(src) === 'opensky'
+    ? FLIGHT_POLL_DEFAULT_OPENSKY_S : FLIGHT_POLL_DEFAULT_S;
+}
+
+// ── Attribution (compliance, NOT configurable) ─────────────────────────────
+// Every third-party feed we display requires crediting. `local` (the user's own
+// receiver) and `entity` (an HA sensor whose upstream we cannot know) return
+// null — we have nobody to credit and inventing one would be worse. Consumed by
+// the fixed bottom-left chip in app.ts, which shows it whenever the feed is
+// enabled AND data is resolved AND the flights layer is visible.
+export interface FlightAttribution { text: string; name: string; url: string }
+
+export function flightAttribution(src: unknown): FlightAttribution | null {
+  switch (resolveFlightSource(src)) {
+    case 'opensky':
+      return { text: 'Flight data', name: '© The OpenSky Network', url: 'https://opensky-network.org' };
+    case 'adsblol':
+      return { text: 'Flight data', name: '© adsb.lol', url: 'https://adsb.lol' };
+    case 'cloud':
+      return { text: 'Flight data', name: '© airplanes.live', url: 'https://airplanes.live' };
+    default:
+      return null;
+  }
+}
+
+// ── OpenSky bounding box ───────────────────────────────────────────────────
+// OpenSky's /states/all takes a lat/lon BOX, not a point + radius (adsb.lol and
+// airplanes.live both take point + radius). Derive the smallest box containing
+// the search circle: the latitude half-span is the arc angle, and the longitude
+// half-span is that same arc divided by cos(lat) because a degree of longitude
+// SHRINKS toward the poles — at 60°N a degree of longitude is half a degree of
+// latitude in metres, and near the pole it collapses entirely.
+//
+// Two degenerate cases, both widened rather than clipped (over-fetching is
+// harmless — the planner filters every point by true great-circle distance
+// afterwards, whereas clipping would silently lose aircraft):
+//   • very high latitude, where the longitude span exceeds the whole globe;
+//   • a box straddling the ±180° antimeridian, which OpenSky cannot express.
+export interface OpenSkyBox { lamin: number; lomin: number; lamax: number; lomax: number }
+
+export function openSkyBoundingBox(lat: number, lon: number, radiusNm: number): OpenSkyBox {
+  const la = typeof lat === 'number' && isFinite(lat) ? Math.max(-90, Math.min(90, lat)) : 0;
+  const lo = typeof lon === 'number' && isFinite(lon) ? Math.max(-180, Math.min(180, lon)) : 0;
+  const r = typeof radiusNm === 'number' && isFinite(radiusNm) && radiusNm > 0
+    ? Math.min(500, radiusNm) : FLIGHTS_DEFAULT_RADIUS_NM;
+
+  const dLat = (r * NM_M) / EARTH_R_M / DEG;          // arc angle, degrees
+  const cosLat = Math.cos(la * DEG);
+  const dLon = cosLat > 1e-9 ? dLat / cosLat : 360;   // pole → "everything"
+
+  // Round OUTWARD (floor the minima, ceil the maxima) at 5 dp — rounding to
+  // NEAREST could shave up to ~1 m off an edge and clip an aircraft sitting
+  // exactly at the search radius. Over-fetching is free; clipping is a silent
+  // data loss.
+  const dn = (v: number): number => Math.floor(v * 1e5) / 1e5;
+  const up = (v: number): number => Math.ceil(v * 1e5) / 1e5;
+  const lamin = Math.max(-90, dn(la - dLat));
+  const lamax = Math.min(90, up(la + dLat));
+
+  if (!(dLon < 180) || lo - dLon < -180 || lo + dLon > 180) {
+    return { lamin, lomin: -180, lamax, lomax: 180 };
+  }
+  return { lamin, lomin: dn(lo - dLon), lamax, lomax: up(lo + dLon) };
+}
+
+// Template variables the generated `rest_command` YAML consumes, i.e. the
+// service data the planner passes. One place builds them so the YAML shown in
+// the settings drawer and the call actually made can never disagree.
+export function flightProxyVars(
+  src: unknown, lat: number, lon: number, radiusNm: number,
+): Record<string, number> {
+  if (resolveFlightSource(src) === 'opensky') {
+    return openSkyBoundingBox(lat, lon, radiusNm) as unknown as Record<string, number>;
+  }
+  const r4 = (v: number): number =>
+    Math.round((typeof v === 'number' && isFinite(v) ? v : 0) * 1e4) / 1e4;
+  const dist = Math.max(1, Math.min(250, Math.round(
+    typeof radiusNm === 'number' && isFinite(radiusNm) ? radiusNm : FLIGHTS_DEFAULT_RADIUS_NM)));
+  return { lat: r4(lat), lon: r4(lon), dist };
+}
+
+// The exact request the user's HA will make with their current settings —
+// shown as a comment in the generated YAML so a failing proxy can be debugged
+// by pasting one URL into a browser.
+export function flightProxyUrlPreview(
+  src: unknown, lat: number, lon: number, radiusNm: number,
+): string {
+  const v = flightProxyVars(src, lat, lon, radiusNm);
+  return resolveFlightSource(src) === 'opensky'
+    ? `https://opensky-network.org/api/states/all?lamin=${v.lamin}&lomin=${v.lomin}&lamax=${v.lamax}&lomax=${v.lomax}`
+    : `https://api.adsb.lol/v2/lat/${v.lat}/lon/${v.lon}/dist/${v.dist}`;
+}
+
+// The `configuration.yaml` block the user must paste. Pure + testable: the
+// settings drawer only renders what this returns. The URL is TEMPLATED on the
+// variables above rather than baked with today's coordinates, so changing the
+// radius (or moving the home landmark) never means editing YAML again — and HA
+// only ever fetches the one provider endpoint, never an arbitrary URL the panel
+// hands it.
+export function flightProxyYaml(
+  src: unknown, command: string | undefined,
+  origin: { lat: number; lon: number } | null, radiusNm: number,
+): string {
+  const s = resolveFlightSource(src);
+  const name = sanitizeFlightProxyCommand(command)
+    ?? FLIGHT_PROXY_DEFAULT_COMMAND[s] ?? 'diorama_flights';
+  const preview = origin
+    ? `#   ${flightProxyUrlPreview(s, origin.lat, origin.lon, radiusNm)}\n`
+    : '#   (calibrate a GPS landmark or set a weather location to preview the URL)\n';
+
+  if (s === 'opensky') {
+    return '# Diorama flight tracking — OpenSky proxy.\n'
+      + '# The browser cannot call OpenSky directly (it is CORS-locked to its own\n'
+      + '# site), so Home Assistant fetches it and hands the panel the response.\n'
+      + '# Your current request:\n'
+      + preview
+      + 'rest_command:\n'
+      + `  ${name}:\n`
+      + '    url: >-\n'
+      + '      https://opensky-network.org/api/states/all?lamin={{ lamin }}&lomin={{ lomin }}&lamax={{ lamax }}&lomax={{ lomax }}\n'
+      + '    method: GET\n'
+      + '    timeout: 20\n'
+      + '    # Credentials are OPTIONAL but strongly recommended: anonymous access is\n'
+      + '    # ~400 credits/day, an account ~4000 (one box request costs 1-4 credits).\n'
+      + '    # Legacy username/password accounts:\n'
+      + '    # username: !secret opensky_user\n'
+      + '    # password: !secret opensky_pass\n'
+      + '    # Newer OAuth2 client-credential accounts — mint a bearer token and send it:\n'
+      + '    # headers:\n'
+      + '    #   Authorization: !secret opensky_bearer\n';
+  }
+  return '# Diorama flight tracking — adsb.lol proxy.\n'
+    + '# adsb.lol answers fine but sends no CORS header, so the browser cannot\n'
+    + '# call it; Home Assistant fetches it and hands the panel the response.\n'
+    + '# Your current request:\n'
+    + preview
+    + 'rest_command:\n'
+    + `  ${name}:\n`
+    + '    url: >-\n'
+    + '      https://api.adsb.lol/v2/lat/{{ lat }}/lon/{{ lon }}/dist/{{ dist }}\n'
+    + '    method: GET\n'
+    + '    timeout: 20\n';
+}
+
+// ── rest_command response unwrapping ───────────────────────────────────────
+// A `call_service` with `return_response: true` resolves to
+// `{ context, response }`, and rest_command's own response is
+// `{ status, content }` — where `content` is already-parsed JSON when the
+// endpoint answered with an application/json content type, and a raw STRING
+// otherwise. Peel all of that (defensively, in any combination, since a caller
+// may hand us an already-peeled payload) down to the aircraft envelope. Never
+// throws: a JSON string that fails to parse comes back as null.
+export function unwrapRestCommandPayload(raw: unknown): unknown {
+  let v: unknown = raw;
+  for (let i = 0; i < 4; i++) {
+    if (typeof v === 'string') {
+      try { v = JSON.parse(v); } catch { return null; }
+      continue;
+    }
+    if (!v || typeof v !== 'object' || Array.isArray(v)) break;
+    const o = v as Record<string, unknown>;
+    if ('response' in o) { v = o.response; continue; }
+    if ('content' in o) { v = o.content; continue; }
+    break;
+  }
+  return v ?? null;
+}
+
+// ── OpenSky /states/all → FlightPoint[] ────────────────────────────────────
+// OpenSky delivers `{time, states: [[...], ...]}` where each state is a
+// POSITIONAL ARRAY, not an object, and in SI units. Rather than build
+// FlightPoints here (a second construction site that would drift from the
+// readsb one), each row is mapped onto the readsb/tar1090 field names and
+// handed to `normalizeAircraftList` — so the ground filter, the C*/B3
+// non-aircraft drop, the lat/lon sanity range, the hex lowercasing and the
+// never-throws discipline are all inherited, by construction.
+//
+// Index order (opensky-api docs, verified against a live capture 2026-08-15):
+//   0 icao24 · 1 callsign (space-PADDED) · 2 origin_country · 3 time_position
+//   4 last_contact · 5 longitude · 6 latitude · 7 baro_altitude (m)
+//   8 on_ground · 9 velocity (m/s) · 10 true_track (deg) · 11 vertical_rate (m/s)
+//   12 sensors · 13 geo_altitude (m) · 14 squawk · 15 spi · 16 position_source
+//   17 category (OPTIONAL — absent from many responses)
+//
+// Capability gap, stated plainly: /states/all carries NO registry enrichment
+// (no registration, type code, operator) and no dbFlags, so `reg` / `typeCode` /
+// `typeDesc` / `operator` are null and `military` / `interesting` / `pia` /
+// `ladd` are false on every OpenSky point. Military skins, privacy dimming and
+// type-driven archetypes therefore do not fire on this source; the
+// callsign-derived airline livery still does.
+const OPENSKY_STATE_LEN = 17;
+
+// OpenSky's numeric emitter-category enum → the DO-260B code strings the rest
+// of the feature speaks ('A1'..'D7'). The two enums are the same table, so this
+// is a relabel, not a guess. 0 (no information) and 13 (reserved) → null.
+// Mapping C1..C5 through means `normalizeAircraftList` drops surface vehicles
+// and obstacles for OpenSky exactly as it does for readsb.
+const OPENSKY_CATEGORY: Readonly<Record<number, string>> = {
+  1: 'A0', 2: 'A1', 3: 'A2', 4: 'A3', 5: 'A4', 6: 'A5', 7: 'A6', 8: 'A7',
+  9: 'B1', 10: 'B2', 11: 'B3', 12: 'B4', 14: 'B6', 15: 'B7',
+  16: 'C1', 17: 'C2', 18: 'C3', 19: 'C4', 20: 'C5',
+};
+
+const M_TO_FT = 1 / FT_M;                 // 3.28084
+const MS_TO_KT = 3600 / NM_M;             // 1.943844
+const MS_TO_FPM = 60 / FT_M;              // 196.850394
+
+export function normalizeOpenSkyStates(json: unknown): FlightPoint[] {
+  const src: unknown = Array.isArray(json)
+    ? json
+    : (json && typeof json === 'object' ? (json as Record<string, unknown>).states : null);
+  if (!Array.isArray(src)) return [];
+  const nowS = (json && typeof json === 'object' && !Array.isArray(json))
+    ? num((json as Record<string, unknown>).time) : null;
+
+  const rows: Record<string, unknown>[] = [];
+  for (const raw of src) {
+    if (!Array.isArray(raw) || raw.length < OPENSKY_STATE_LEN) continue;
+    const icao = raw[0];
+    if (typeof icao !== 'string' || !icao.trim()) continue;
+
+    const baroM = num(raw[7]);
+    const geoM = num(raw[13]);
+    const onGround = raw[8] === true;
+    const vel = num(raw[9]);
+    const vert = num(raw[11]);
+    const tPos = num(raw[3]);
+    const catNum = num(raw.length > 17 ? raw[17] : null);
+    const callsign = typeof raw[1] === 'string' ? raw[1].trim() : '';
+
+    rows.push({
+      hex: icao,
+      flight: callsign,
+      lat: num(raw[6]),
+      lon: num(raw[5]),
+      // The on-ground sentinel is the SAME string readsb emits, so the existing
+      // "a taxiing aircraft is not a flight overhead" drop applies unchanged.
+      alt_baro: onGround ? 'ground' : (baroM !== null ? baroM * M_TO_FT : null),
+      alt_geom: geoM !== null ? geoM * M_TO_FT : null,
+      gs: vel !== null ? vel * MS_TO_KT : null,
+      track: num(raw[10]),
+      baro_rate: vert !== null ? vert * MS_TO_FPM : null,
+      squawk: typeof raw[14] === 'string' ? raw[14] : null,
+      category: catNum !== null ? (OPENSKY_CATEGORY[catNum] ?? null) : null,
+      seen_pos: nowS !== null && tPos !== null ? Math.max(0, nowS - tPos) : null,
+    });
+  }
+  return normalizeAircraftList(rows);
+}
+
+// The one dispatch point every source's raw payload goes through, so the
+// planner has a single call site and no source `switch` of its own.
+export function normalizeFlightPayload(src: unknown, json: unknown): FlightPoint[] {
+  return resolveFlightSource(src) === 'opensky'
+    ? normalizeOpenSkyStates(json)
+    : normalizeAircraftList(json);
+}
