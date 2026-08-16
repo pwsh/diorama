@@ -108,7 +108,14 @@ Then pick a **source**:
 | **Local receiver (LAN)** | Your own dump1090 / readsb / tar1090 `aircraft.json`. Freshest data, nothing leaves your network. | Two ways to set it up — see below. |
 | **Home Assistant entity** | A rest/template sensor that fetched the data server-side; its attributes carry the aircraft list. | Works, but pushes the whole aircraft list through HA's state machine and recorder every poll. The `rest_command` options above avoid that. |
 | **Demo (synthetic traffic)** | Invented aircraft on fixed circuits. No network, no Home Assistant. | Not real traffic. It's for previewing the feature, or for a display that has no data source. |
-| **airplanes.live** | Formerly the default. | **Now returns 403 to everyone** unless you've emailed them for access. Selectable so an approved user keeps working. |
+| **airplanes.live** | Formerly the default. | **Requires you to be a feeder** — you contribute data from your own receiver. Public requests return 403. Kept selectable for feeders, but see below. |
+
+> **If you're an airplanes.live feeder, use your own receiver instead.** Access
+> requires feeding them data, which means you already have an ADS-B receiver on
+> your network. Pointing Diorama at it directly gives you the same aircraft
+> sooner, off your own hardware, without the round trip out to their API — and
+> it's the lightest option available. Set it up as **Local receiver (LAN)**
+> below.
 
 #### Setting up a local receiver
 

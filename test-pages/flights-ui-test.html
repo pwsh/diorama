@@ -1321,6 +1321,24 @@
         !!drawer.querySelector('[data-flight-cloud-warn]'));
       ok('the warning names the HTTP status',
         drawer.querySelector('[data-flight-cloud-warn]').textContent.includes('403'));
+      // The access requirement is FEEDING them data, not emailing them — and
+      // anyone who qualifies necessarily owns a receiver, so the warning must
+      // send them to the local source rather than leaving that unsaid.
+      const cloudWarnText = () => drawer.querySelector('[data-flight-cloud-warn]')
+        .textContent.replace(/\s+/g, ' ').trim();
+      const cloudHintText = () => drawer.querySelector('[data-flight-source="cloud"]')
+        .textContent.replace(/\s+/g, ' ').trim();
+      ok('the warning states the feeder requirement',
+        /feed them data from your own ADS-B receiver/i.test(cloudWarnText()), cloudWarnText());
+      ok('… and the source hint says it too, before you select it',
+        /feeding your own receiver.s ADS-B data/i.test(cloudHintText()), cloudHintText());
+      ok('the warning points a feeder at the local receiver',
+        /Local receiver \(LAN\)/.test(cloudWarnText()), cloudWarnText());
+      // NEGATIVE CONTROL: pointing a feeder at the local source must not have
+      // disabled airplanes.live for someone who does have access. (That it is
+      // still SELECTED by the pickSource above is already covered — the warning
+      // block only renders while source === 'cloud'.)
+      ok('NEG airplanes.live is still selectable', srcRadio('cloud').disabled !== true);
       ok('NEG airplanes.live shows NO proxy block (it is a direct fetch)', !proxy());
 
       // The poll input's default is source-aware.

@@ -381,7 +381,15 @@ the ISS rendered in the 3D sky. **Sources**: `opensky` (**the DEFAULT** — open
 claimed airplanes.live was "the ONLY CORS-open keyless ADS-B API" and that OpenSky was
 "ToS-forbidden — never add it"; BOTH are superseded): airplanes.live now returns **HTTP 403 to
 everyone**, body `"Please contact us at contact@airplanes.live…"` — a POLICY change, not an
-outage, and a browser User-Agent does not change it; adsb.lol answers 200 to curl with **no
+outage, and a browser User-Agent does not change it. **ACCESS REQUIRES BEING A FEEDER**
+(2026-08-15, user-supplied — emailing is the request mechanism, not the qualification), which
+has a design consequence, not just an annotation: **every user eligible for airplanes.live
+already owns a local receiver**, so for all of them the `local` source is also available AND
+strictly lighter (§2.11a). Keep `cloud` SELECTABLE (a granted feeder must keep working, and a
+stored explicit source is never rewritten) but NEVER recommend it — the correct guidance for
+anyone who qualifies is "use your own receiver directly". The default stays `opensky`, right
+for the majority case: no receiver at all, therefore ineligible and with nothing local to point
+at. adsb.lol answers 200 to curl with **no
 `access-control-allow-origin` header at all**; OpenSky answers 200 to curl with
 `access-control-allow-origin: https://opensky-network.org` only. In-browser both fail
 `TypeError: Failed to fetch` at the same instant curl gets full payloads — **curl never asks for

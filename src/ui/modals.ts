@@ -1684,13 +1684,16 @@ export class SettingsDrawer extends LitElement {
             ${sourceRow('adsblol', 'adsb.lol',
               'Community ADS-B feed, also fetched by Home Assistant through a rest_command. Carries registrations, types and operators, which OpenSky does not.')}
             ${source === 'adsblol' ? proxyBlock() : nothing}
-            ${sourceRow('cloud', 'Cloud (airplanes.live) — needs their permission',
-              'Closed to the public since 2026-08: every request returns "Please contact us at contact@airplanes.live. Your email MUST include a link to your project…". Keep this only if they have granted you access.')}
+            ${sourceRow('cloud', 'Cloud (airplanes.live) — feeders only',
+              'Closed to the public since 2026-08: access requires feeding your own receiver’s ADS-B data to them. Keep this only if you already have access.')}
             ${source === 'cloud' ? html`
               <div style="margin:0 0 6px 24px;font-size:10px;color:#fb8c00;line-height:1.35"
                    data-flight-cloud-warn>
-                airplanes.live now answers <code>HTTP 403</code> unless you have
-                emailed them for access. Switch to OpenSky above unless you have.
+                airplanes.live answers <code>HTTP 403</code> unless you feed them
+                data from your own ADS-B receiver. If you do, <b>Local receiver
+                (LAN)</b> below is the better source: it is your own data, fewer
+                hops, and the aircraft payload never goes through Home Assistant.
+                Otherwise use OpenSky above.
               </div>` : nothing}
             ${sourceRow('local', 'Local receiver (LAN)',
               'Your own dump1090 / readsb / tar1090 aircraft.json — freshest, no third party.')}

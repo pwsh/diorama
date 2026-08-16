@@ -890,3 +890,30 @@ Wire-format aside: OpenSky's positional state arrays measure ≈128 bytes per
 aircraft (`opensky-states.json`, 5 768 bytes / 45 states) — roughly **4× denser
 than the readsb shape**, precisely because they carry no registry enrichment.
 That density and the §2.9 capability gap are the same fact seen twice.
+
+#### §2.11b — airplanes.live access requires FEEDING (2026-08-15, user-supplied)
+
+§2.9 recorded that airplanes.live began answering HTTP 403 to everyone with a
+body asking you to email `contact@airplanes.live` with a link to your project.
+The missing half of that policy, supplied by the user: **access requires being a
+FEEDER** — you contribute ADS-B data from your own receiver. Emailing is the
+request mechanism, not the qualification.
+
+That has a design consequence worth stating explicitly, because it changes the
+recommendation rather than merely annotating it:
+
+> **The set of users eligible for airplanes.live is a subset of the set that
+> already owns a local receiver.** A feeder by definition has a receiver on their
+> own network. So for every user who *can* use this source, the `local` source is
+> also available — and per §2.11a it is strictly lighter (one LAN hop; no HA
+> WebSocket contention; no round trip to a third-party API for data derived from
+> their own antenna in the first place).
+
+So `cloud` should be kept SELECTABLE (a granted feeder's config must keep
+working, and we must never silently rewrite a stored explicit source) but should
+never be recommended: the correct guidance for anyone who qualifies is "use your
+own receiver directly". The settings copy and the published guide both say this.
+
+The default stays `opensky`, which is right for the majority case — a user with
+no receiver at all, who is therefore ineligible for airplanes.live and has
+nothing local to point at.
