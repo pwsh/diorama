@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Getting started — Diorama</title>
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="topbar">
+<button class="menu-btn" aria-label="Toggle navigation" onclick="document.body.classList.toggle('nav-open')">☰</button><a class="brand" href="../index.html">Diorama</a>
+<nav class="topnav"><a class="topnav-link" href="../index.html">Home</a><a class="topnav-link active" href="../guide/getting-started.html">Guide</a><a class="topnav-link" href="../models/index.html">Models</a><a class="topnav-link" href="../floorplans/index.html">Floor plans</a><a class="topnav-link" href="../demo/index.html?demo=ranch-3bed">Live demo</a></nav>
+<span class="brand-meta">v0.66.1 · 2026-08-17</span>
+</header>
+<div class="layout"><aside class="sidebar"><nav class="nav"><a class="nav-link active" href="getting-started.html">Getting started</a><a class="nav-link" href="editor.html">The 2D editor</a><a class="nav-link" href="3d-view.html">The 3D view</a><a class="nav-link" href="devices.html">Devices &amp; bindings</a><a class="nav-link" href="info-displays.html">Info displays &amp; alerts</a><a class="nav-link" href="avatars-people.html">Avatars &amp; people</a><a class="nav-link" href="vehicles.html">Vehicles &amp; aircraft</a><a class="nav-link" href="yard-terrain.html">Yard &amp; terrain</a><a class="nav-link" href="outdoor-weather.html">Weather, sky &amp; geo</a><a class="nav-link" href="neighborhood-flights.html">Neighborhood &amp; flights</a><a class="nav-link" href="kiosk-modes.html">Kiosk &amp; display modes</a><a class="nav-link" href="configurations.html">Configurations, notes &amp; offline</a></nav></aside><main class="main"><div class="prose"><h1 id="getting-started">Getting started<a class="hlink" href="#getting-started" aria-label="Link to this section">#</a></h1>
+<p>Diorama is a graphical dashboard for Home Assistant. You build a virtual copy of your home — walls, rooms, furniture, and devices — and see live device state in its actual spatial context. Click anything to control it. The 3D view renders in a 2000-era <em>Sims</em> cartoon style, and the people and pets moving through your home show up as animated figures.</p>
+<p>It has first-class support for HLK-LD2450 mmWave radar (multi-target tracking with animated figures that walk, sit, and run contextual activities), but the model is generic: any Home Assistant entity can be placed and bound — lights, switches, fans, media players, environmental sensors, cameras, locks, covers, and more.</p>
+<h2 id="try-it-in-your-browser">Try it in your browser<a class="hlink" href="#try-it-in-your-browser" aria-label="Link to this section">#</a></h2>
+<p>Want to see it before installing anything? The <a href="../demo/index.html?demo=ranch-3bed">live demo</a> runs the full app <strong>entirely in your browser</strong> in offline mode — no Home Assistant, no install, no account. It comes preloaded with a dozen sample homes you can switch between and edit freely. Every change is saved only in your own browser&#39;s local storage, and a <strong>Reset demo</strong> button restores the samples at any time. Bound devices show no live state offline, but everything else — drawing, placing, the 3D view — works exactly as it does against a real Home Assistant.</p>
+<h2 id="requirements">Requirements<a class="hlink" href="#requirements" aria-label="Link to this section">#</a></h2>
+<ul><li><strong>Home Assistant</strong> — any recent version. Diorama talks to HA over its WebSocket API.</li><li><strong>A browser</strong> — desktop for building your plan; tablets and TVs work great for kiosk display.</li><li><strong><a href="https://hacs.xyz">HACS</a></strong> if you want the one-click install below. (You can also deploy it by hand, or run it fully standalone with no Home Assistant at all — see <a href="configurations.html">Configurations, notes &amp; offline</a>.)</li></ul>
+<h2 id="install-with-hacs">Install with HACS<a class="hlink" href="#install-with-hacs" aria-label="Link to this section">#</a></h2>
+<p>Diorama is distributed as a HACS <strong>custom repository</strong> — it is not in the HACS default store, so you add it once by URL.</p>
+<p><strong>1. Add the custom repository</strong></p>
+<ul><li>Open <strong>HACS</strong> in the Home Assistant sidebar.</li><li>Click the <strong>⋮</strong> menu (top right) → <strong>Custom repositories</strong>.</li><li>Repository: <code>https://github.com/pwsh/diorama</code></li><li>Type: <strong>Dashboard</strong></li><li>Click <strong>Add</strong>, then close the dialog.</li></ul>
+<p><strong>2. Download it</strong></p>
+<ul><li>Search HACS for <strong>Diorama</strong> and open it.</li><li>Click <strong>Download</strong> and pick the latest release. HACS unpacks the release zip into <code>config/www/community/diorama/</code>.</li></ul>
+<p>The release is a multi-file bundle (the 3D renderer is code-split into its own chunk that loads on demand), which is why Diorama ships as a zip release rather than a single file.</p>
+<p><strong>3. Register the panel</strong></p>
+<p>Add this to <code>configuration.yaml</code> and <strong>restart Home Assistant</strong> — <code>panel_custom</code> is only read at startup:</p>
+<pre><code>panel_custom:
+  - name: diorama-panel
+    sidebar_title: &quot;Diorama&quot;
+    sidebar_icon: mdi:floor-plan
+    url_path: diorama
+    module_url: /hacsfiles/diorama/diorama-panel.js
+    embed_iframe: false</code></pre>
+<p><strong>Diorama</strong> now appears in your HA sidebar. Panel mode rides Home Assistant&#39;s own authentication, so there are no tokens to paste.</p>
+<blockquote><p><strong>Home Assistant 2026.8 note</strong>: HA Core 2026.8 changed how custom panels are<br>hosted. Diorama <strong>v0.61.0 or later</strong> handles both old and new HA versions;<br>older Diorama builds render collapsed under HA 2026.8 (blank canvas, toolbar<br>at the top of the page). Update Diorama, then reset the frontend cache — in<br>the companion app: Settings ▸ Companion app ▸ Debugging ▸ *Reset frontend<br>cache* — and restart the app. Don&#39;t add the <code>handle_safe_area</code> option some<br>HA frontend notes mention: HA core 2026.8.0 rejects it and the panel fails<br>to load entirely.</p></blockquote>
+<h2 id="the-panel-vs-iframe-modes">The panel vs. iframe modes<a class="hlink" href="#the-panel-vs-iframe-modes" aria-label="Link to this section">#</a></h2>
+<p>The <strong>native panel</strong> above is the recommended setup: no iframe, no token, and HA handles authentication for you.</p>
+<p>If you deploy the files manually (copy <code>dist/</code> to <code>config/www/diorama/</code> instead of installing through HACS), the <code>module_url</code> becomes <code>/local/diorama/diorama-panel.js</code> instead of the <code>/hacsfiles/...</code> path.</p>
+<p>There is also an <strong>iframe fallback</strong> for setups where the native panel is not an option. It loads Diorama as a standalone page and asks you to paste a Long-Lived Access Token on first load:</p>
+<pre><code>panel_iframe:
+  diorama:
+    title: &quot;Diorama&quot;
+    icon: mdi:floor-plan
+    url: &quot;/local/diorama/index.html&quot;
+    require_admin: false</code></pre>
+<p>Prefer the native panel whenever you can — it is simpler and needs no token.</p>
+<h2 id="your-first-floor-plan">Your first floor plan<a class="hlink" href="#your-first-floor-plan" aria-label="Link to this section">#</a></h2>
+<p>Once the panel opens, you are in <strong>Edit</strong> mode with an empty floor.</p>
+<ol><li><strong>Create a floor.</strong> Use the Floors section in the sidebar to name your first floor (for example, &quot;Main level&quot;). Add more floors later for multi-story homes.</li><li><strong>Draw walls.</strong> Pick the Wall tool and click to place wall segments; endpoints snap and weld together so rooms close cleanly. Walls come in full, half, railing, and invisible kinds (invisible walls close off a floor region without drawing anything). A closed loop of walls becomes a floor patch in 3D.</li><li><strong>Add rooms.</strong> Drop a room anchor inside a closed wall loop and give it a name — or bind it to a Home Assistant <strong>area</strong> and let it take the area&#39;s name (which also narrows the entity pickers for that room to that area&#39;s entities). Room names drive contextual behavior: a room named &quot;kitchen&quot; gates snack and coffee thought bubbles, and a room&#39;s TV scopes what a seated figure watches.</li><li><strong>Place furniture.</strong> Drop sofas, beds, tables, appliances, plants, and more from the toolbar along the bottom of the editor — it shows a real 3D thumbnail of every piece. Sittable pieces become seats your figures use; some pieces anchor activities like eating, working, or watching TV.</li><li><strong>Add doors and windows.</strong> These snap onto the nearest wall automatically, cutting a real opening that figures walk through.</li><li><strong>Bind an entity.</strong> Drop a light, switch, sensor, or appliance, then use the entity picker (filter by domain or by HA device, or search by name) to bind it to a real Home Assistant entity. The fixture now reflects live state — a bound light glows when it is on, and clicking it toggles the real device.</li></ol>
+<p>Switch to the <strong>3D view</strong> at any time to see your plan rendered in the Sims style, with live figures walking through it.</p>
+<h2 id="where-settings-live">Where settings live<a class="hlink" href="#where-settings-live" aria-label="Link to this section">#</a></h2>
+<p>Most day-to-day building happens in the left <strong>sidebar</strong>: floors, tools, sensors, furniture, fixtures, rooms, layers, and more, each in a collapsible section.</p>
+<p>Broader options live in the <strong>Settings</strong> drawer:</p>
+<ul><li><strong>Connection</strong> — your Home Assistant link, or exit offline mode.</li><li><strong>Display</strong> — 3D scene appearance (lighting preset, floor and wall colors, textures), camera options, the on-screen compass, sky backdrop and background text, the temperature comfort band, and avatar behavior toggles (outfit changes, props, using unbound devices).</li><li><strong>Weather</strong> — weather source, chip appearance, weather alerts, and 3D weather effects.</li><li><strong>Avatars</strong> — load, activate, and import avatar packs.</li><li><strong>Integrations</strong> — Bermuda BLE positioning, the MQTT bridge (for Frigate and Valetudo), the Alert Center, the neighborhood overlay, and flight tracking.</li><li><strong>Data</strong> — named configurations (save, rename, import, export), the notes field for the active configuration, and other data tools.</li></ul>
+<p>From here, continue to <a href="editor.html">The 2D editor</a> to learn the drawing tools in depth, or jump to <a href="kiosk-modes.html">Kiosk &amp; display modes</a> to put a plan on a wall tablet.</p>
+</div></main></div>
+<script>
+document.querySelectorAll('.nav-link').forEach(function(a){a.addEventListener('click',function(){document.body.classList.remove('nav-open');});});
+</script>
+</body>
+</html>

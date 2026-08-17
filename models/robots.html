@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Robots — Diorama</title>
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="topbar">
+<button class="menu-btn" aria-label="Toggle navigation" onclick="document.body.classList.toggle('nav-open')">☰</button><a class="brand" href="../index.html">Diorama</a>
+<nav class="topnav"><a class="topnav-link" href="../index.html">Home</a><a class="topnav-link" href="../guide/getting-started.html">Guide</a><a class="topnav-link active" href="../models/index.html">Models</a><a class="topnav-link" href="../floorplans/index.html">Floor plans</a><a class="topnav-link" href="../demo/index.html?demo=ranch-3bed">Live demo</a></nav>
+<span class="brand-meta">v0.65.0 · 2026-08-13</span>
+</header>
+<div class="layout"><aside class="sidebar"><nav class="nav"><a class="nav-link" href="appliances.html">Appliances</a><a class="nav-link" href="bathroom.html">Bathroom</a><a class="nav-link" href="doors-windows.html">Doors &amp; windows</a><a class="nav-link" href="flying-models.html">Flying models</a><a class="nav-link" href="furniture.html">Furniture</a><a class="nav-link" href="lighting.html">Lighting</a><a class="nav-link" href="outdoor.html">Outdoor &amp; yard</a><a class="nav-link active" href="robots.html">Robots</a><a class="nav-link" href="sensors.html">Sensors</a><a class="nav-link" href="switches-controls.html">Switches &amp; controls</a><a class="nav-link" href="theater.html">Home theater</a><a class="nav-link" href="vehicle.html">Vehicle / garage</a><a class="nav-link" href="vehicle-models.html">Vehicle models</a><div class="nav-group"><a class="nav-link nav-group-head" href="avatars/index.html">Avatars</a><div class="nav-sub"><a class="nav-link" href="avatars/base.html">Base</a><a class="nav-link" href="avatars/cartoons.html">Cartoons</a><a class="nav-link" href="avatars/pop-culture.html">Pop Culture</a><a class="nav-link" href="avatars/sci-fi.html">Sci Fi</a><a class="nav-link" href="avatars/video-games.html">Video Games</a></div></div></nav></aside><main class="main"><div class="page-head"><h1>Robots</h1><p class="intro">Robot vacuum and lawn mower — dock plus a roaming rig cycling LED states.</p></div><section class="group"><h2>Robots</h2><div class="grid"><article class="card" id="m-vacuum"><a class="card-img" href="#m-vacuum"><img loading="lazy" src="media/robots/vacuum.gif" alt="Robot vacuum" width="240" height="240"></a><div class="card-body"><div class="card-label">Robot vacuum</div><code class="card-id">vacuum</code><div class="card-notes">dock + roam + LED states</div></div></article><article class="card" id="m-mower"><a class="card-img" href="#m-mower"><img loading="lazy" src="media/robots/mower.gif" alt="Lawn mower" width="240" height="240"></a><div class="card-body"><div class="card-label">Lawn mower</div><code class="card-id">mower</code><div class="card-notes">dock + roam + LED states</div></div></article></div></section></main></div>
+<script>
+document.querySelectorAll('.nav-link').forEach(function(a){a.addEventListener('click',function(){document.body.classList.remove('nav-open');});});
+</script>
+</body>
+</html>

@@ -1,0 +1,3590 @@
+{
+  "diorama": 2,
+  "name": "Large Multilevel — Aldergate",
+  "exportedAt": "2026-08-10T00:00:00.000Z",
+  "store": {
+    "v": 2,
+    "floors": [
+      {
+        "id": "large-multilevel-fl1",
+        "name": "Basement",
+        "w": 19200,
+        "d": 9750,
+        "walls": [
+          {
+            "id": "large-multilevel-w1",
+            "points": [
+              {
+                "x": 0,
+                "y": 0
+              },
+              {
+                "x": 19200,
+                "y": 0
+              },
+              {
+                "x": 19200,
+                "y": 9750
+              },
+              {
+                "x": 0,
+                "y": 9750
+              },
+              {
+                "x": 0,
+                "y": 0
+              }
+            ]
+          },
+          {
+            "id": "large-multilevel-w2",
+            "points": [
+              {
+                "x": 7200,
+                "y": 0
+              },
+              {
+                "x": 7200,
+                "y": 9750
+              }
+            ]
+          },
+          {
+            "id": "large-multilevel-w3",
+            "points": [
+              {
+                "x": 11200,
+                "y": 0
+              },
+              {
+                "x": 11200,
+                "y": 4200
+              }
+            ]
+          },
+          {
+            "id": "large-multilevel-w4",
+            "points": [
+              {
+                "x": 13200,
+                "y": 0
+              },
+              {
+                "x": 13200,
+                "y": 4200
+              }
+            ]
+          },
+          {
+            "id": "large-multilevel-w5",
+            "points": [
+              {
+                "x": 16700,
+                "y": 0
+              },
+              {
+                "x": 16700,
+                "y": 4200
+              }
+            ]
+          },
+          {
+            "id": "large-multilevel-w6",
+            "points": [
+              {
+                "x": 16700,
+                "y": 2400
+              },
+              {
+                "x": 19200,
+                "y": 2400
+              }
+            ]
+          },
+          {
+            "id": "large-multilevel-w7",
+            "points": [
+              {
+                "x": 9700,
+                "y": 4200
+              },
+              {
+                "x": 9700,
+                "y": 9750
+              }
+            ]
+          },
+          {
+            "id": "large-multilevel-w8",
+            "points": [
+              {
+                "x": 12200,
+                "y": 4200
+              },
+              {
+                "x": 12200,
+                "y": 9750
+              }
+            ]
+          },
+          {
+            "id": "large-multilevel-w9",
+            "points": [
+              {
+                "x": 12200,
+                "y": 7300
+              },
+              {
+                "x": 19200,
+                "y": 7300
+              }
+            ]
+          },
+          {
+            "id": "large-multilevel-w10",
+            "points": [
+              {
+                "x": 7200,
+                "y": 4200
+              },
+              {
+                "x": 19200,
+                "y": 4200
+              }
+            ]
+          }
+        ],
+        "furniture": [
+          {
+            "id": "large-multilevel-fn1",
+            "x": 900,
+            "y": 900,
+            "w": 900,
+            "h": 400,
+            "kind": "cabinet",
+            "rotation": 90,
+            "label": "Utility shelving"
+          },
+          {
+            "id": "large-multilevel-fn2",
+            "x": 1200,
+            "y": 3000,
+            "w": 800,
+            "h": 800,
+            "kind": "block",
+            "label": "Furnace"
+          },
+          {
+            "id": "large-multilevel-fn3",
+            "x": 2400,
+            "y": 3000,
+            "w": 600,
+            "h": 600,
+            "kind": "block",
+            "label": "Water heater"
+          },
+          {
+            "id": "large-multilevel-fn4",
+            "x": 9200,
+            "y": 4050,
+            "w": 1300,
+            "h": 180,
+            "kind": "wall_tv",
+            "elevation": 600,
+            "localState": "off"
+          },
+          {
+            "id": "large-multilevel-fn5",
+            "x": 9200,
+            "y": 2000,
+            "w": 2600,
+            "h": 2000,
+            "kind": "sofa_u",
+            "rotation": 180
+          },
+          {
+            "id": "large-multilevel-fn6",
+            "x": 9200,
+            "y": 3400,
+            "w": 700,
+            "h": 700,
+            "kind": "ottoman"
+          },
+          {
+            "id": "large-multilevel-fn7",
+            "x": 8300,
+            "y": 450,
+            "w": 500,
+            "h": 500,
+            "kind": "chair",
+            "rotation": 180
+          },
+          {
+            "id": "large-multilevel-fn8",
+            "x": 10100,
+            "y": 450,
+            "w": 500,
+            "h": 500,
+            "kind": "chair",
+            "rotation": 180
+          },
+          {
+            "id": "large-multilevel-fn9",
+            "x": 7427,
+            "y": 3748,
+            "w": 800,
+            "h": 350,
+            "kind": "bookshelf",
+            "rotation": 270,
+            "label": "AV storage"
+          },
+          {
+            "id": "large-multilevel-fn10",
+            "x": 12200,
+            "y": 600,
+            "w": 1800,
+            "h": 650,
+            "kind": "counter",
+            "rotation": 180,
+            "label": "Bar"
+          },
+          {
+            "id": "large-multilevel-fn11",
+            "x": 11700,
+            "y": 600,
+            "w": 800,
+            "h": 550,
+            "kind": "kitchen_sink",
+            "rotation": 180,
+            "label": "Bar sink"
+          },
+          {
+            "id": "large-multilevel-fn12",
+            "x": 11600,
+            "y": 1000,
+            "w": 400,
+            "h": 400,
+            "kind": "stool"
+          },
+          {
+            "id": "large-multilevel-fn13",
+            "x": 12200,
+            "y": 1000,
+            "w": 400,
+            "h": 400,
+            "kind": "stool"
+          },
+          {
+            "id": "large-multilevel-fn14",
+            "x": 12800,
+            "y": 1000,
+            "w": 400,
+            "h": 400,
+            "kind": "stool"
+          },
+          {
+            "id": "large-multilevel-fn15",
+            "x": 12850,
+            "y": 3900,
+            "w": 500,
+            "h": 400,
+            "kind": "cabinet",
+            "label": "Back bar"
+          },
+          {
+            "id": "large-multilevel-fn16",
+            "x": 12850,
+            "y": 3300,
+            "w": 500,
+            "h": 500,
+            "kind": "fridge",
+            "label": "Beverage fridge"
+          },
+          {
+            "id": "large-multilevel-fn17",
+            "x": 14950,
+            "y": 3132,
+            "w": 1524,
+            "h": 2032,
+            "kind": "bed"
+          },
+          {
+            "id": "large-multilevel-fn18",
+            "x": 13700,
+            "y": 3850,
+            "w": 500,
+            "h": 400,
+            "kind": "nightstand"
+          },
+          {
+            "id": "large-multilevel-fn19",
+            "x": 16300,
+            "y": 3850,
+            "w": 500,
+            "h": 400,
+            "kind": "nightstand"
+          },
+          {
+            "id": "large-multilevel-fn20",
+            "x": 13852,
+            "y": 600,
+            "w": 1200,
+            "h": 500,
+            "kind": "dresser",
+            "rotation": 180
+          },
+          {
+            "id": "large-multilevel-fn21",
+            "x": 14950,
+            "y": 2600,
+            "w": 2000,
+            "h": 1600,
+            "kind": "rug",
+            "color": "#d9c9a8"
+          },
+          {
+            "id": "large-multilevel-fn22",
+            "x": 17700,
+            "y": 400,
+            "w": 480,
+            "h": 700,
+            "kind": "toilet",
+            "rotation": 180
+          },
+          {
+            "id": "large-multilevel-fn23",
+            "x": 17700,
+            "y": 2073,
+            "w": 760,
+            "h": 550,
+            "kind": "sink_vanity",
+            "label": "Vanity"
+          },
+          {
+            "id": "large-multilevel-fn24",
+            "x": 18700,
+            "y": 1200,
+            "w": 900,
+            "h": 900,
+            "kind": "shower",
+            "rotation": 90
+          },
+          {
+            "id": "large-multilevel-fn25",
+            "x": 17950,
+            "y": 3300,
+            "w": 1200,
+            "h": 600,
+            "kind": "wardrobe"
+          },
+          {
+            "id": "large-multilevel-fn26",
+            "x": 8450,
+            "y": 5800,
+            "w": 700,
+            "h": 1600,
+            "kind": "exercise_equipment",
+            "label": "Treadmill"
+          },
+          {
+            "id": "large-multilevel-fn27",
+            "x": 8450,
+            "y": 7600,
+            "w": 700,
+            "h": 1600,
+            "kind": "exercise_equipment",
+            "label": "Bike"
+          },
+          {
+            "id": "large-multilevel-fn28",
+            "x": 8450,
+            "y": 8800,
+            "w": 1500,
+            "h": 400,
+            "kind": "bench",
+            "label": "Weight bench"
+          },
+          {
+            "id": "large-multilevel-fn29",
+            "x": 8450,
+            "y": 9200,
+            "w": 2000,
+            "h": 1200,
+            "kind": "rug",
+            "label": "Gym mat"
+          },
+          {
+            "id": "large-multilevel-fn30",
+            "x": 10325,
+            "y": 7000,
+            "w": 1000,
+            "h": 3600,
+            "kind": "stairs",
+            "label": "Stairs to Main",
+            "stairLinkId": "large-multilevel-stair-lower"
+          },
+          {
+            "id": "large-multilevel-fn31",
+            "x": 14450,
+            "y": 5750,
+            "w": 2600,
+            "h": 1400,
+            "kind": "table",
+            "label": "Pool table"
+          },
+          {
+            "id": "large-multilevel-fn32",
+            "x": 17800,
+            "y": 5400,
+            "w": 2000,
+            "h": 900,
+            "kind": "sofa",
+            "rotation": 180
+          },
+          {
+            "id": "large-multilevel-fn33",
+            "x": 17800,
+            "y": 6300,
+            "w": 1100,
+            "h": 600,
+            "kind": "coffee_table"
+          },
+          {
+            "id": "large-multilevel-fn34",
+            "x": 17800,
+            "y": 7250,
+            "w": 1300,
+            "h": 180,
+            "kind": "wall_tv",
+            "elevation": 1000,
+            "localState": "off"
+          },
+          {
+            "id": "large-multilevel-fn35",
+            "x": 12500,
+            "y": 6798,
+            "w": 900,
+            "h": 400,
+            "kind": "cabinet",
+            "rotation": 270,
+            "label": "Game storage"
+          },
+          {
+            "id": "large-multilevel-fn36",
+            "x": 14450,
+            "y": 5750,
+            "w": 3000,
+            "h": 1800,
+            "kind": "rug"
+          },
+          {
+            "id": "large-multilevel-fn37",
+            "x": 13000,
+            "y": 8500,
+            "w": 900,
+            "h": 400,
+            "kind": "cabinet"
+          },
+          {
+            "id": "large-multilevel-fn38",
+            "x": 15500,
+            "y": 8500,
+            "w": 900,
+            "h": 400,
+            "kind": "cabinet"
+          },
+          {
+            "id": "large-multilevel-fn39",
+            "x": 18000,
+            "y": 8500,
+            "w": 900,
+            "h": 400,
+            "kind": "cabinet"
+          }
+        ],
+        "lights": [
+          {
+            "id": "large-multilevel-lt1",
+            "x": 3600,
+            "y": 4875,
+            "entity_id": null,
+            "iconKind": "strip",
+            "rotation": 0,
+            "length": 3000,
+            "label": "Mechanical"
+          },
+          {
+            "id": "large-multilevel-lt2",
+            "x": 9200,
+            "y": 2100,
+            "entity_id": null,
+            "iconKind": "recessed",
+            "radius": 700,
+            "label": "Theater"
+          },
+          {
+            "id": "large-multilevel-lt3",
+            "x": 12200,
+            "y": 2100,
+            "entity_id": null,
+            "iconKind": "pendant",
+            "label": "Wet Bar"
+          },
+          {
+            "id": "large-multilevel-lt4",
+            "x": 14950,
+            "y": 2100,
+            "entity_id": null,
+            "iconKind": "bulb",
+            "label": "Guest Bedroom"
+          },
+          {
+            "id": "large-multilevel-lt5",
+            "x": 17950,
+            "y": 1200,
+            "entity_id": null,
+            "iconKind": "sconce",
+            "radius": 500,
+            "label": "Guest Bath"
+          },
+          {
+            "id": "large-multilevel-lt6",
+            "x": 8450,
+            "y": 6975,
+            "entity_id": null,
+            "iconKind": "strip",
+            "rotation": 90,
+            "length": 3000,
+            "label": "Gym"
+          },
+          {
+            "id": "large-multilevel-lt7",
+            "x": 10950,
+            "y": 6975,
+            "entity_id": null,
+            "iconKind": "bulb",
+            "label": "Stair Hall"
+          },
+          {
+            "id": "large-multilevel-lt8",
+            "x": 15700,
+            "y": 5750,
+            "entity_id": null,
+            "iconKind": "bulb",
+            "label": "Rec / Game Room"
+          },
+          {
+            "id": "large-multilevel-lt9",
+            "x": 17800,
+            "y": 6900,
+            "entity_id": null,
+            "iconKind": "lamp",
+            "height": 1400,
+            "label": "Rec lamp"
+          },
+          {
+            "id": "large-multilevel-lt10",
+            "x": 15700,
+            "y": 8525,
+            "entity_id": null,
+            "iconKind": "bulb",
+            "label": "Rear Storage"
+          }
+        ],
+        "switches": [
+          {
+            "id": "large-multilevel-sw1",
+            "x": 11700,
+            "y": 4400,
+            "entity_id": null,
+            "rotation": 0,
+            "label": "Stair Hall"
+          }
+        ],
+        "sensors": [],
+        "motionSensors": [],
+        "roamers": [
+          {
+            "id": "large-multilevel-ro1",
+            "name": "Aldous",
+            "avatarKinds": [
+              "adult",
+              "professional"
+            ],
+            "color": "#4fc3f7"
+          },
+          {
+            "id": "large-multilevel-ro2",
+            "name": "Rowan",
+            "avatarKinds": [
+              "teen",
+              "athlete"
+            ],
+            "color": "#ba68c8"
+          },
+          {
+            "id": "large-multilevel-ro3",
+            "name": "Perry",
+            "avatarKinds": [
+              "dog"
+            ],
+            "color": "#a1887f"
+          }
+        ],
+        "envSensors": [],
+        "look3d": {
+          "floorTex": "concrete",
+          "floorColor": "#9aa0a6",
+          "wallColor": "#e3ded4"
+        },
+        "doors": [
+          {
+            "id": "large-multilevel-dr1",
+            "x": 7200,
+            "y": 7000,
+            "w": 900,
+            "rotation": 90,
+            "entity_id": null,
+            "label": "Mechanical ↔ Gym"
+          },
+          {
+            "id": "large-multilevel-dr2",
+            "x": 7200,
+            "y": 2100,
+            "w": 800,
+            "rotation": 90,
+            "entity_id": null,
+            "label": "Mechanical ↔ Theater"
+          },
+          {
+            "id": "large-multilevel-dr3",
+            "x": 8000,
+            "y": 4200,
+            "w": 800,
+            "rotation": 0,
+            "entity_id": null,
+            "label": "Theater ↔ Gym"
+          },
+          {
+            "id": "large-multilevel-dr4",
+            "x": 11700,
+            "y": 4200,
+            "w": 900,
+            "rotation": 0,
+            "entity_id": null,
+            "label": "Bar ↔ Stair Hall"
+          },
+          {
+            "id": "large-multilevel-dr5",
+            "x": 14950,
+            "y": 4200,
+            "w": 800,
+            "rotation": 0,
+            "entity_id": null,
+            "label": "Guest ↔ Rec"
+          },
+          {
+            "id": "large-multilevel-dr6",
+            "x": 16700,
+            "y": 1200,
+            "w": 800,
+            "rotation": 90,
+            "entity_id": null,
+            "label": "Guest Bath"
+          },
+          {
+            "id": "large-multilevel-dr7",
+            "x": 16700,
+            "y": 3600,
+            "w": 800,
+            "rotation": 90,
+            "entity_id": null,
+            "label": "Guest Closet"
+          },
+          {
+            "id": "large-multilevel-dr8",
+            "x": 9700,
+            "y": 7000,
+            "w": 900,
+            "rotation": 90,
+            "entity_id": null,
+            "label": "Gym ↔ Stair Hall"
+          },
+          {
+            "id": "large-multilevel-dr9",
+            "x": 11200,
+            "y": 1800,
+            "w": 1200,
+            "rotation": 270,
+            "entity_id": null,
+            "label": "Theater ↔ Bar"
+          },
+          {
+            "id": "large-multilevel-dr10",
+            "x": 15500,
+            "y": 7300,
+            "w": 900,
+            "rotation": 0,
+            "entity_id": null,
+            "label": "Rec ↔ Storage"
+          }
+        ],
+        "windows": [
+          {
+            "id": "large-multilevel-win1",
+            "x": 19200,
+            "y": 2100,
+            "w": 1200,
+            "rotation": 90,
+            "entity_id": null,
+            "sill": 1800,
+            "height": 900,
+            "kind": "casement_pair",
+            "label": "Guest egress"
+          },
+          {
+            "id": "large-multilevel-win2",
+            "x": 19200,
+            "y": 5750,
+            "w": 1500,
+            "rotation": 90,
+            "entity_id": null,
+            "sill": 1800,
+            "height": 1000,
+            "kind": "sliding",
+            "label": "Rec egress"
+          }
+        ],
+        "bg": null,
+        "model3d": null,
+        "rooms": [
+          {
+            "id": "large-multilevel-rm1",
+            "name": "Mechanical / Storage",
+            "anchor": {
+              "x": 3600,
+              "y": 4875
+            }
+          },
+          {
+            "id": "large-multilevel-rm2",
+            "name": "Home Theater",
+            "anchor": {
+              "x": 9200,
+              "y": 2100
+            }
+          },
+          {
+            "id": "large-multilevel-rm3",
+            "name": "Wet Bar",
+            "anchor": {
+              "x": 12200,
+              "y": 2100
+            }
+          },
+          {
+            "id": "large-multilevel-rm4",
+            "name": "Guest Bedroom",
+            "anchor": {
+              "x": 14950,
+              "y": 2100
+            }
+          },
+          {
+            "id": "large-multilevel-rm5",
+            "name": "Guest Bath",
+            "anchor": {
+              "x": 17950,
+              "y": 1200
+            }
+          },
+          {
+            "id": "large-multilevel-rm6",
+            "name": "Guest Closet",
+            "anchor": {
+              "x": 17950,
+              "y": 3300
+            }
+          },
+          {
+            "id": "large-multilevel-rm7",
+            "name": "Gym / Fitness",
+            "anchor": {
+              "x": 8450,
+              "y": 6975
+            }
+          },
+          {
+            "id": "large-multilevel-rm8",
+            "name": "Basement Stair Hall",
+            "anchor": {
+              "x": 10950,
+              "y": 6975
+            }
+          },
+          {
+            "id": "large-multilevel-rm9",
+            "name": "Rec / Game Room",
+            "anchor": {
+              "x": 15700,
+              "y": 5750
+            }
+          },
+          {
+            "id": "large-multilevel-rm10",
+            "name": "Rear Storage",
+            "anchor": {
+              "x": 15700,
+              "y": 8525
+            }
+          }
+        ],
+        "bleProxies": [],
+        "alarmPanels": [],
+        "safetySensors": [],
+        "robots": [],
+        "presenceZones": [],
+        "cameras": [],
+        "groundAreas": [],
+        "voidAreas": []
+      },
+      {
+        "id": "large-multilevel-fl2",
+        "name": "Main Level",
+        "w": 19200,
+        "d": 9750,
+        "walls": [
+          {
+            "id": "large-multilevel-w11",
+            "points": [
+              {
+                "x": 0,
+                "y": 0
+              },
+              {
+                "x": 19200,
+                "y": 0
+              },
+              {
+                "x": 19200,
+                "y": 9750
+              },
+              {
+                "x": 0,
+                "y": 9750
+              },
+              {
+                "x": 0,
+                "y": 0
+              }
+            ]
+          },
+          {
+            "id": "large-multilevel-w12",
+            "points": [
+              {
+                "x": 7200,
+                "y": 0
+              },
+              {
+                "x": 7200,
+                "y": 9750
+              }
+            ]
+          },
+          {
+            "id": "large-multilevel-w13",
+            "points": [
+              {
+                "x": 0,
+                "y": 6600
+              },
+              {
+                "x": 7200,
+                "y": 6600
+              }
+            ]
+          },
+          {
+            "id": "large-multilevel-w14",
+            "points": [
+              {
+                "x": 4200,
+                "y": 6600
+              },
+              {
+                "x": 4200,
+                "y": 8200
+              }
+            ]
+          },
+          {
+            "id": "large-multilevel-w15",
+            "points": [
+              {
+                "x": 6200,
+                "y": 6600
+              },
+              {
+                "x": 6200,
+                "y": 8200
+              }
+            ]
+          },
+          {
+            "id": "large-multilevel-w16",
+            "points": [
+              {
+                "x": 4200,
+                "y": 8200
+              },
+              {
+                "x": 6200,
+                "y": 8200
+              }
+            ]
+          },
+          {
+            "id": "large-multilevel-w17",
+            "points": [
+              {
+                "x": 9700,
+                "y": 0
+              },
+              {
+                "x": 9700,
+                "y": 4200
+              }
+            ]
+          },
+          {
+            "id": "large-multilevel-w18",
+            "points": [
+              {
+                "x": 12200,
+                "y": 0
+              },
+              {
+                "x": 12200,
+                "y": 4200
+              }
+            ]
+          },
+          {
+            "id": "large-multilevel-w19",
+            "points": [
+              {
+                "x": 15700,
+                "y": 0
+              },
+              {
+                "x": 15700,
+                "y": 4200
+              }
+            ]
+          },
+          {
+            "id": "large-multilevel-w20",
+            "points": [
+              {
+                "x": 9700,
+                "y": 4200
+              },
+              {
+                "x": 9700,
+                "y": 9750
+              }
+            ]
+          },
+          {
+            "id": "large-multilevel-w21",
+            "points": [
+              {
+                "x": 12200,
+                "y": 4200
+              },
+              {
+                "x": 12200,
+                "y": 9750
+              }
+            ]
+          },
+          {
+            "id": "large-multilevel-w22",
+            "points": [
+              {
+                "x": 16700,
+                "y": 4200
+              },
+              {
+                "x": 16700,
+                "y": 6600
+              }
+            ]
+          },
+          {
+            "id": "large-multilevel-w23",
+            "points": [
+              {
+                "x": 7200,
+                "y": 4200
+              },
+              {
+                "x": 9700,
+                "y": 4200
+              }
+            ]
+          },
+          {
+            "id": "large-multilevel-w24",
+            "points": [
+              {
+                "x": 12200,
+                "y": 4200
+              },
+              {
+                "x": 19200,
+                "y": 4200
+              }
+            ]
+          },
+          {
+            "id": "large-multilevel-w25",
+            "points": [
+              {
+                "x": 7200,
+                "y": 6200
+              },
+              {
+                "x": 9700,
+                "y": 6200
+              }
+            ]
+          }
+        ],
+        "furniture": [
+          {
+            "id": "large-multilevel-fn40",
+            "x": 800,
+            "y": 6300,
+            "w": 900,
+            "h": 400,
+            "kind": "cabinet"
+          },
+          {
+            "id": "large-multilevel-fn41",
+            "x": 3500,
+            "y": 6300,
+            "w": 900,
+            "h": 400,
+            "kind": "cabinet"
+          },
+          {
+            "id": "large-multilevel-fn42",
+            "x": 5248,
+            "y": 6223,
+            "w": 1800,
+            "h": 650,
+            "kind": "counter",
+            "label": "Workbench"
+          },
+          {
+            "id": "large-multilevel-fn43",
+            "x": 300,
+            "y": 8948,
+            "w": 1500,
+            "h": 400,
+            "kind": "bench",
+            "rotation": 270
+          },
+          {
+            "id": "large-multilevel-fn44",
+            "x": 3848,
+            "y": 8000,
+            "w": 1200,
+            "h": 600,
+            "kind": "wardrobe",
+            "rotation": 90
+          },
+          {
+            "id": "large-multilevel-fn45",
+            "x": 5200,
+            "y": 7000,
+            "w": 480,
+            "h": 700,
+            "kind": "toilet",
+            "rotation": 180
+          },
+          {
+            "id": "large-multilevel-fn46",
+            "x": 5750,
+            "y": 7032,
+            "w": 760,
+            "h": 550,
+            "kind": "sink_vanity",
+            "rotation": 90,
+            "label": "Vanity"
+          },
+          {
+            "id": "large-multilevel-fn47",
+            "x": 8450,
+            "y": 600,
+            "w": 1400,
+            "h": 700,
+            "kind": "desk",
+            "rotation": 180
+          },
+          {
+            "id": "large-multilevel-fn48",
+            "x": 8450,
+            "y": 1300,
+            "w": 500,
+            "h": 500,
+            "kind": "chair"
+          },
+          {
+            "id": "large-multilevel-fn49",
+            "x": 7652,
+            "y": 3700,
+            "w": 800,
+            "h": 350,
+            "kind": "bookshelf"
+          },
+          {
+            "id": "large-multilevel-fn50",
+            "x": 8450,
+            "y": 2100,
+            "w": 1600,
+            "h": 1400,
+            "kind": "rug"
+          },
+          {
+            "id": "large-multilevel-fn51",
+            "x": 9950,
+            "y": 3300,
+            "w": 1400,
+            "h": 400,
+            "kind": "table",
+            "rotation": 270,
+            "label": "Console"
+          },
+          {
+            "id": "large-multilevel-fn52",
+            "x": 10950,
+            "y": 3900,
+            "w": 1500,
+            "h": 400,
+            "kind": "bench"
+          },
+          {
+            "id": "large-multilevel-fn53",
+            "x": 10950,
+            "y": 2100,
+            "w": 1200,
+            "h": 2400,
+            "kind": "rug"
+          },
+          {
+            "id": "large-multilevel-fn54",
+            "x": 13950,
+            "y": 3700,
+            "w": 2000,
+            "h": 900,
+            "kind": "sofa"
+          },
+          {
+            "id": "large-multilevel-fn55",
+            "x": 13950,
+            "y": 2900,
+            "w": 1100,
+            "h": 600,
+            "kind": "coffee_table"
+          },
+          {
+            "id": "large-multilevel-fn56",
+            "x": 13100,
+            "y": 2600,
+            "w": 500,
+            "h": 500,
+            "kind": "chair",
+            "rotation": 270,
+            "label": "Accent chair"
+          },
+          {
+            "id": "large-multilevel-fn57",
+            "x": 14800,
+            "y": 2600,
+            "w": 500,
+            "h": 500,
+            "kind": "chair",
+            "rotation": 90,
+            "label": "Accent chair"
+          },
+          {
+            "id": "large-multilevel-fn58",
+            "x": 12652,
+            "y": 600,
+            "w": 800,
+            "h": 350,
+            "kind": "bookshelf",
+            "rotation": 180
+          },
+          {
+            "id": "large-multilevel-fn59",
+            "x": 13950,
+            "y": 2900,
+            "w": 2600,
+            "h": 1800,
+            "kind": "rug"
+          },
+          {
+            "id": "large-multilevel-fn60",
+            "x": 17450,
+            "y": 2100,
+            "w": 2000,
+            "h": 1100,
+            "kind": "table",
+            "label": "Dining table"
+          },
+          {
+            "id": "large-multilevel-fn61",
+            "x": 16650,
+            "y": 1500,
+            "w": 500,
+            "h": 500,
+            "kind": "chair",
+            "rotation": 180
+          },
+          {
+            "id": "large-multilevel-fn62",
+            "x": 17450,
+            "y": 1500,
+            "w": 500,
+            "h": 500,
+            "kind": "chair",
+            "rotation": 180
+          },
+          {
+            "id": "large-multilevel-fn63",
+            "x": 18250,
+            "y": 1500,
+            "w": 500,
+            "h": 500,
+            "kind": "chair",
+            "rotation": 180
+          },
+          {
+            "id": "large-multilevel-fn64",
+            "x": 16650,
+            "y": 2700,
+            "w": 500,
+            "h": 500,
+            "kind": "chair"
+          },
+          {
+            "id": "large-multilevel-fn65",
+            "x": 17450,
+            "y": 2700,
+            "w": 500,
+            "h": 500,
+            "kind": "chair"
+          },
+          {
+            "id": "large-multilevel-fn66",
+            "x": 18250,
+            "y": 2700,
+            "w": 500,
+            "h": 500,
+            "kind": "chair"
+          },
+          {
+            "id": "large-multilevel-fn67",
+            "x": 17450,
+            "y": 600,
+            "w": 1200,
+            "h": 500,
+            "kind": "dresser",
+            "rotation": 180,
+            "label": "Buffet"
+          },
+          {
+            "id": "large-multilevel-fn68",
+            "x": 17450,
+            "y": 2100,
+            "w": 2700,
+            "h": 1900,
+            "kind": "rug"
+          },
+          {
+            "id": "large-multilevel-fn69",
+            "x": 7452,
+            "y": 4702,
+            "w": 900,
+            "h": 400,
+            "kind": "cabinet",
+            "rotation": 270
+          },
+          {
+            "id": "large-multilevel-fn70",
+            "x": 9448,
+            "y": 4702,
+            "w": 900,
+            "h": 400,
+            "kind": "cabinet",
+            "rotation": 90
+          },
+          {
+            "id": "large-multilevel-fn71",
+            "x": 14450,
+            "y": 5000,
+            "w": 2000,
+            "h": 1000,
+            "kind": "island"
+          },
+          {
+            "id": "large-multilevel-fn72",
+            "x": 13200,
+            "y": 4582,
+            "w": 760,
+            "h": 660,
+            "kind": "stove",
+            "rotation": 180
+          },
+          {
+            "id": "large-multilevel-fn73",
+            "x": 13200,
+            "y": 4550,
+            "w": 520,
+            "h": 390,
+            "kind": "microwave",
+            "rotation": 180,
+            "elevation": 1400
+          },
+          {
+            "id": "large-multilevel-fn74",
+            "x": 12632,
+            "y": 5200,
+            "w": 910,
+            "h": 760,
+            "kind": "fridge",
+            "rotation": 270
+          },
+          {
+            "id": "large-multilevel-fn75",
+            "x": 15500,
+            "y": 6400,
+            "w": 800,
+            "h": 550,
+            "kind": "kitchen_sink",
+            "rotation": 180
+          },
+          {
+            "id": "large-multilevel-fn76",
+            "x": 15000,
+            "y": 6400,
+            "w": 610,
+            "h": 620,
+            "kind": "dishwasher",
+            "rotation": 180
+          },
+          {
+            "id": "large-multilevel-fn77",
+            "x": 12600,
+            "y": 6600,
+            "w": 900,
+            "h": 400,
+            "kind": "cabinet",
+            "rotation": 270
+          },
+          {
+            "id": "large-multilevel-fn78",
+            "x": 16400,
+            "y": 6300,
+            "w": 250,
+            "h": 250,
+            "kind": "coffee_maker",
+            "elevation": 900
+          },
+          {
+            "id": "large-multilevel-fn79",
+            "x": 16400,
+            "y": 6000,
+            "w": 300,
+            "h": 200,
+            "kind": "toaster",
+            "elevation": 900
+          },
+          {
+            "id": "large-multilevel-fn80",
+            "x": 18300,
+            "y": 5400,
+            "w": 800,
+            "h": 1200,
+            "kind": "table",
+            "label": "Breakfast"
+          },
+          {
+            "id": "large-multilevel-fn81",
+            "x": 18300,
+            "y": 4650,
+            "w": 500,
+            "h": 500,
+            "kind": "chair",
+            "rotation": 180
+          },
+          {
+            "id": "large-multilevel-fn82",
+            "x": 18300,
+            "y": 6150,
+            "w": 500,
+            "h": 500,
+            "kind": "chair"
+          },
+          {
+            "id": "large-multilevel-fn83",
+            "x": 17750,
+            "y": 5400,
+            "w": 500,
+            "h": 500,
+            "kind": "chair",
+            "rotation": 270
+          },
+          {
+            "id": "large-multilevel-fn84",
+            "x": 18850,
+            "y": 5400,
+            "w": 500,
+            "h": 500,
+            "kind": "chair",
+            "rotation": 90
+          },
+          {
+            "id": "large-multilevel-fn85",
+            "x": 14200,
+            "y": 8300,
+            "w": 2600,
+            "h": 1800,
+            "kind": "sofa_l_left",
+            "label": "Sectional"
+          },
+          {
+            "id": "large-multilevel-fn86",
+            "x": 14200,
+            "y": 7900,
+            "w": 1100,
+            "h": 600,
+            "kind": "coffee_table"
+          },
+          {
+            "id": "large-multilevel-fn87",
+            "x": 14200,
+            "y": 8700,
+            "w": 700,
+            "h": 700,
+            "kind": "ottoman"
+          },
+          {
+            "id": "large-multilevel-fn88",
+            "x": 14200,
+            "y": 9650,
+            "w": 1300,
+            "h": 180,
+            "kind": "wall_tv",
+            "elevation": 900,
+            "localState": "off"
+          },
+          {
+            "id": "large-multilevel-fn89",
+            "x": 12652,
+            "y": 9550,
+            "w": 800,
+            "h": 350,
+            "kind": "bookshelf"
+          },
+          {
+            "id": "large-multilevel-fn90",
+            "x": 17800,
+            "y": 8300,
+            "w": 800,
+            "h": 350,
+            "kind": "bookshelf",
+            "rotation": 270
+          },
+          {
+            "id": "large-multilevel-fn91",
+            "x": 16800,
+            "y": 8300,
+            "w": 500,
+            "h": 500,
+            "kind": "chair",
+            "rotation": 90,
+            "label": "Reading chair"
+          },
+          {
+            "id": "large-multilevel-fn92",
+            "x": 13000,
+            "y": 6900,
+            "w": 400,
+            "h": 400,
+            "kind": "plant"
+          },
+          {
+            "id": "large-multilevel-fn93",
+            "x": 14200,
+            "y": 8300,
+            "w": 3600,
+            "h": 2400,
+            "kind": "rug"
+          },
+          {
+            "id": "large-multilevel-fn94",
+            "x": 10325,
+            "y": 7000,
+            "w": 1000,
+            "h": 1000,
+            "kind": "stair_landing",
+            "label": "Landing from Basement",
+            "stairLinkId": "large-multilevel-stair-lower"
+          },
+          {
+            "id": "large-multilevel-fn95",
+            "x": 11575,
+            "y": 7000,
+            "w": 1000,
+            "h": 3600,
+            "kind": "stairs",
+            "label": "Stairs to Upper",
+            "stairLinkId": "large-multilevel-stair-upper"
+          },
+          {
+            "id": "large-multilevel-fn96",
+            "x": 8000,
+            "y": -600,
+            "w": 600,
+            "h": 700,
+            "kind": "trash_bin"
+          },
+          {
+            "id": "large-multilevel-fn97",
+            "x": 8700,
+            "y": -600,
+            "w": 600,
+            "h": 700,
+            "kind": "recycle_bin"
+          }
+        ],
+        "lights": [
+          {
+            "id": "large-multilevel-lt11",
+            "x": 3600,
+            "y": 3300,
+            "entity_id": null,
+            "iconKind": "strip",
+            "rotation": 0,
+            "length": 4000,
+            "label": "Garage"
+          },
+          {
+            "id": "large-multilevel-lt12",
+            "x": 2100,
+            "y": 8175,
+            "entity_id": null,
+            "iconKind": "bulb",
+            "label": "Mudroom"
+          },
+          {
+            "id": "large-multilevel-lt13",
+            "x": 5200,
+            "y": 7600,
+            "entity_id": null,
+            "iconKind": "sconce",
+            "radius": 500,
+            "label": "Powder Room"
+          },
+          {
+            "id": "large-multilevel-lt14",
+            "x": 8450,
+            "y": 2100,
+            "entity_id": null,
+            "iconKind": "bulb",
+            "label": "Home Office"
+          },
+          {
+            "id": "large-multilevel-lt15",
+            "x": 10950,
+            "y": 2100,
+            "entity_id": null,
+            "iconKind": "pendant",
+            "label": "Foyer"
+          },
+          {
+            "id": "large-multilevel-lt16",
+            "x": 13950,
+            "y": 2100,
+            "entity_id": null,
+            "iconKind": "bulb",
+            "label": "Living Room"
+          },
+          {
+            "id": "large-multilevel-lt17",
+            "x": 17450,
+            "y": 2100,
+            "entity_id": null,
+            "iconKind": "bowl",
+            "label": "Dining uplight"
+          },
+          {
+            "id": "large-multilevel-lt18",
+            "x": 8450,
+            "y": 5200,
+            "entity_id": null,
+            "iconKind": "bulb",
+            "label": "Pantry"
+          },
+          {
+            "id": "large-multilevel-lt19",
+            "x": 10950,
+            "y": 7000,
+            "entity_id": null,
+            "iconKind": "bulb",
+            "label": "Stair Hall"
+          },
+          {
+            "id": "large-multilevel-lt20",
+            "x": 14450,
+            "y": 5000,
+            "entity_id": null,
+            "iconKind": "pendant",
+            "label": "Kitchen island"
+          },
+          {
+            "id": "large-multilevel-lt21",
+            "x": 14450,
+            "y": 6000,
+            "entity_id": null,
+            "iconKind": "round",
+            "label": "Kitchen"
+          },
+          {
+            "id": "large-multilevel-lt22",
+            "x": 17950,
+            "y": 5400,
+            "entity_id": null,
+            "iconKind": "pendant",
+            "label": "Breakfast"
+          },
+          {
+            "id": "large-multilevel-lt23",
+            "x": 15700,
+            "y": 8175,
+            "entity_id": null,
+            "iconKind": "bulb",
+            "label": "Great Room"
+          },
+          {
+            "id": "large-multilevel-lt24",
+            "x": 14000,
+            "y": 9475,
+            "entity_id": null,
+            "iconKind": "fireplace",
+            "label": "Fireplace"
+          }
+        ],
+        "switches": [
+          {
+            "id": "large-multilevel-sw2",
+            "x": 10100,
+            "y": 200,
+            "entity_id": null,
+            "rotation": 0,
+            "label": "Foyer"
+          },
+          {
+            "id": "large-multilevel-sw3",
+            "x": 15300,
+            "y": 9550,
+            "entity_id": null,
+            "rotation": 90,
+            "label": "Patio"
+          }
+        ],
+        "sensors": [],
+        "motionSensors": [],
+        "roamers": [],
+        "envSensors": [],
+        "look3d": {
+          "floorTex": "wood",
+          "floorColor": "#c9a06a",
+          "wallColor": "#f2ede4"
+        },
+        "doors": [
+          {
+            "id": "large-multilevel-dr11",
+            "x": 10500,
+            "y": 0,
+            "w": 900,
+            "rotation": 0,
+            "entity_id": null,
+            "lockEntity": null,
+            "doorbellEntity": null,
+            "label": "Front"
+          },
+          {
+            "id": "large-multilevel-dr12",
+            "x": 300,
+            "y": 0,
+            "w": 2300,
+            "rotation": 0,
+            "entity_id": null,
+            "kind": "garage",
+            "label": "Garage bay 1"
+          },
+          {
+            "id": "large-multilevel-dr13",
+            "x": 2700,
+            "y": 0,
+            "w": 2300,
+            "rotation": 0,
+            "entity_id": null,
+            "kind": "garage",
+            "label": "Garage bay 2"
+          },
+          {
+            "id": "large-multilevel-dr14",
+            "x": 5100,
+            "y": 0,
+            "w": 2300,
+            "rotation": 0,
+            "entity_id": null,
+            "kind": "garage",
+            "label": "Garage bay 3"
+          },
+          {
+            "id": "large-multilevel-dr15",
+            "x": 2000,
+            "y": 6600,
+            "w": 900,
+            "rotation": 0,
+            "entity_id": null,
+            "label": "Garage ↔ Mudroom"
+          },
+          {
+            "id": "large-multilevel-dr16",
+            "x": 0,
+            "y": 8000,
+            "w": 900,
+            "rotation": 90,
+            "entity_id": null,
+            "label": "Mudroom exterior"
+          },
+          {
+            "id": "large-multilevel-dr17",
+            "x": 7200,
+            "y": 8000,
+            "w": 900,
+            "rotation": 90,
+            "entity_id": null,
+            "label": "Mudroom ↔ Hall"
+          },
+          {
+            "id": "large-multilevel-dr18",
+            "x": 4800,
+            "y": 8200,
+            "w": 800,
+            "rotation": 0,
+            "entity_id": null,
+            "label": "Powder Room"
+          },
+          {
+            "id": "large-multilevel-dr19",
+            "x": 9700,
+            "y": 2100,
+            "w": 800,
+            "rotation": 90,
+            "entity_id": null,
+            "label": "Office"
+          },
+          {
+            "id": "large-multilevel-dr20",
+            "x": 12200,
+            "y": 1800,
+            "w": 1200,
+            "rotation": 270,
+            "entity_id": null,
+            "label": "Foyer ↔ Living"
+          },
+          {
+            "id": "large-multilevel-dr21",
+            "x": 15700,
+            "y": 1800,
+            "w": 1200,
+            "rotation": 270,
+            "entity_id": null,
+            "label": "Living ↔ Dining"
+          },
+          {
+            "id": "large-multilevel-dr22",
+            "x": 8450,
+            "y": 6200,
+            "w": 800,
+            "rotation": 0,
+            "entity_id": null,
+            "label": "Pantry ↔ Back Hall"
+          },
+          {
+            "id": "large-multilevel-dr23",
+            "x": 9700,
+            "y": 8000,
+            "w": 900,
+            "rotation": 90,
+            "entity_id": null,
+            "label": "Back Hall ↔ Stair Hall"
+          },
+          {
+            "id": "large-multilevel-dr24",
+            "x": 12200,
+            "y": 8000,
+            "w": 1200,
+            "rotation": 270,
+            "entity_id": null,
+            "label": "Stair Hall ↔ Great Room"
+          },
+          {
+            "id": "large-multilevel-dr25",
+            "x": 16200,
+            "y": 4200,
+            "w": 900,
+            "rotation": 0,
+            "entity_id": null,
+            "label": "Dining ↔ Kitchen"
+          },
+          {
+            "id": "large-multilevel-dr26",
+            "x": 16700,
+            "y": 5400,
+            "w": 1200,
+            "rotation": 270,
+            "entity_id": null,
+            "label": "Kitchen ↔ Breakfast"
+          },
+          {
+            "id": "large-multilevel-dr27",
+            "x": 15500,
+            "y": 9750,
+            "w": 1800,
+            "rotation": 0,
+            "entity_id": null,
+            "label": "Great Room patio"
+          }
+        ],
+        "windows": [
+          {
+            "id": "large-multilevel-win3",
+            "x": 8450,
+            "y": 0,
+            "w": 1200,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 900,
+            "height": 1200,
+            "kind": "double_hung",
+            "label": "Office front"
+          },
+          {
+            "id": "large-multilevel-win4",
+            "x": 13950,
+            "y": 0,
+            "w": 1800,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 700,
+            "height": 1500,
+            "kind": "picture",
+            "label": "Living front"
+          },
+          {
+            "id": "large-multilevel-win5",
+            "x": 17450,
+            "y": 0,
+            "w": 1800,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 700,
+            "height": 1500,
+            "kind": "picture",
+            "label": "Dining front"
+          },
+          {
+            "id": "large-multilevel-win6",
+            "x": 19200,
+            "y": 5400,
+            "w": 1500,
+            "rotation": 90,
+            "entity_id": null,
+            "sill": 900,
+            "height": 1200,
+            "kind": "casement_pair",
+            "label": "Breakfast side"
+          },
+          {
+            "id": "large-multilevel-win7",
+            "x": 13000,
+            "y": 9750,
+            "w": 2000,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 700,
+            "height": 1800,
+            "kind": "picture",
+            "label": "Great Room rear"
+          },
+          {
+            "id": "large-multilevel-win8",
+            "x": 17500,
+            "y": 9750,
+            "w": 1800,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 700,
+            "height": 1500,
+            "kind": "picture",
+            "label": "Great Room rear"
+          },
+          {
+            "id": "large-multilevel-win9",
+            "x": 2000,
+            "y": 9750,
+            "w": 1000,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 1200,
+            "height": 900,
+            "label": "Mudroom rear"
+          },
+          {
+            "id": "large-multilevel-win10",
+            "x": 0,
+            "y": 3000,
+            "w": 900,
+            "rotation": 90,
+            "entity_id": null,
+            "sill": 1500,
+            "height": 900,
+            "label": "Garage side"
+          }
+        ],
+        "bg": null,
+        "model3d": null,
+        "rooms": [
+          {
+            "id": "large-multilevel-rm11",
+            "name": "Garage",
+            "anchor": {
+              "x": 3600,
+              "y": 3300
+            }
+          },
+          {
+            "id": "large-multilevel-rm12",
+            "name": "Mudroom",
+            "anchor": {
+              "x": 2100,
+              "y": 8175
+            }
+          },
+          {
+            "id": "large-multilevel-rm13",
+            "name": "Powder Room",
+            "anchor": {
+              "x": 5200,
+              "y": 7600
+            }
+          },
+          {
+            "id": "large-multilevel-rm14",
+            "name": "Coat Closet",
+            "anchor": {
+              "x": 6700,
+              "y": 8175
+            }
+          },
+          {
+            "id": "large-multilevel-rm15",
+            "name": "Home Office",
+            "anchor": {
+              "x": 8450,
+              "y": 2100
+            }
+          },
+          {
+            "id": "large-multilevel-rm16",
+            "name": "Foyer",
+            "anchor": {
+              "x": 10950,
+              "y": 2100
+            }
+          },
+          {
+            "id": "large-multilevel-rm17",
+            "name": "Living Room",
+            "anchor": {
+              "x": 13950,
+              "y": 2100
+            }
+          },
+          {
+            "id": "large-multilevel-rm18",
+            "name": "Dining Room",
+            "anchor": {
+              "x": 17450,
+              "y": 2100
+            }
+          },
+          {
+            "id": "large-multilevel-rm19",
+            "name": "Pantry",
+            "anchor": {
+              "x": 8450,
+              "y": 5200
+            }
+          },
+          {
+            "id": "large-multilevel-rm20",
+            "name": "Back Hall",
+            "anchor": {
+              "x": 8450,
+              "y": 7975
+            }
+          },
+          {
+            "id": "large-multilevel-rm21",
+            "name": "Main Stair Hall",
+            "anchor": {
+              "x": 10950,
+              "y": 7000
+            }
+          },
+          {
+            "id": "large-multilevel-rm22",
+            "name": "Kitchen",
+            "anchor": {
+              "x": 14450,
+              "y": 5400
+            }
+          },
+          {
+            "id": "large-multilevel-rm23",
+            "name": "Breakfast Room",
+            "anchor": {
+              "x": 17950,
+              "y": 5400
+            }
+          },
+          {
+            "id": "large-multilevel-rm24",
+            "name": "Great Room",
+            "anchor": {
+              "x": 15700,
+              "y": 8175
+            }
+          }
+        ],
+        "bleProxies": [],
+        "alarmPanels": [],
+        "safetySensors": [],
+        "robots": [],
+        "presenceZones": [],
+        "cameras": [],
+        "groundAreas": [],
+        "voidAreas": []
+      },
+      {
+        "id": "large-multilevel-fl3",
+        "name": "Upper Level",
+        "w": 19200,
+        "d": 9750,
+        "walls": [
+          {
+            "id": "large-multilevel-w26",
+            "points": [
+              {
+                "x": 0,
+                "y": 0
+              },
+              {
+                "x": 19200,
+                "y": 0
+              },
+              {
+                "x": 19200,
+                "y": 9750
+              },
+              {
+                "x": 0,
+                "y": 9750
+              },
+              {
+                "x": 0,
+                "y": 0
+              }
+            ]
+          },
+          {
+            "id": "large-multilevel-w27",
+            "points": [
+              {
+                "x": 7200,
+                "y": 0
+              },
+              {
+                "x": 7200,
+                "y": 9750
+              }
+            ]
+          },
+          {
+            "id": "large-multilevel-w28",
+            "points": [
+              {
+                "x": 3400,
+                "y": 0
+              },
+              {
+                "x": 3400,
+                "y": 9750
+              }
+            ]
+          },
+          {
+            "id": "large-multilevel-w29",
+            "points": [
+              {
+                "x": 4400,
+                "y": 0
+              },
+              {
+                "x": 4400,
+                "y": 4600
+              }
+            ]
+          },
+          {
+            "id": "large-multilevel-w30",
+            "points": [
+              {
+                "x": 4400,
+                "y": 5300
+              },
+              {
+                "x": 4400,
+                "y": 9750
+              }
+            ]
+          },
+          {
+            "id": "large-multilevel-w31",
+            "points": [
+              {
+                "x": 6400,
+                "y": 0
+              },
+              {
+                "x": 6400,
+                "y": 4600
+              }
+            ]
+          },
+          {
+            "id": "large-multilevel-w32",
+            "points": [
+              {
+                "x": 6400,
+                "y": 5300
+              },
+              {
+                "x": 6400,
+                "y": 9750
+              }
+            ]
+          },
+          {
+            "id": "large-multilevel-w33",
+            "points": [
+              {
+                "x": 0,
+                "y": 4600
+              },
+              {
+                "x": 3400,
+                "y": 4600
+              }
+            ]
+          },
+          {
+            "id": "large-multilevel-w34",
+            "points": [
+              {
+                "x": 0,
+                "y": 6000
+              },
+              {
+                "x": 3400,
+                "y": 6000
+              }
+            ]
+          },
+          {
+            "id": "large-multilevel-w35",
+            "points": [
+              {
+                "x": 4400,
+                "y": 2600
+              },
+              {
+                "x": 6400,
+                "y": 2600
+              }
+            ]
+          },
+          {
+            "id": "large-multilevel-w36",
+            "points": [
+              {
+                "x": 4400,
+                "y": 5300
+              },
+              {
+                "x": 6400,
+                "y": 5300
+              }
+            ]
+          },
+          {
+            "id": "large-multilevel-w37",
+            "points": [
+              {
+                "x": 11700,
+                "y": 0
+              },
+              {
+                "x": 11700,
+                "y": 4200
+              }
+            ]
+          },
+          {
+            "id": "large-multilevel-w38",
+            "points": [
+              {
+                "x": 14200,
+                "y": 0
+              },
+              {
+                "x": 14200,
+                "y": 4200
+              }
+            ]
+          },
+          {
+            "id": "large-multilevel-w39",
+            "points": [
+              {
+                "x": 17200,
+                "y": 0
+              },
+              {
+                "x": 17200,
+                "y": 4200
+              }
+            ]
+          },
+          {
+            "id": "large-multilevel-w40",
+            "points": [
+              {
+                "x": 17200,
+                "y": 2400
+              },
+              {
+                "x": 19200,
+                "y": 2400
+              }
+            ]
+          },
+          {
+            "id": "large-multilevel-w41",
+            "points": [
+              {
+                "x": 9700,
+                "y": 4200
+              },
+              {
+                "x": 9700,
+                "y": 9750
+              }
+            ]
+          },
+          {
+            "id": "large-multilevel-w42",
+            "points": [
+              {
+                "x": 7200,
+                "y": 5300
+              },
+              {
+                "x": 9700,
+                "y": 5300
+              }
+            ]
+          },
+          {
+            "id": "large-multilevel-w43",
+            "points": [
+              {
+                "x": 7200,
+                "y": 6900
+              },
+              {
+                "x": 9700,
+                "y": 6900
+              }
+            ]
+          },
+          {
+            "id": "large-multilevel-w44",
+            "points": [
+              {
+                "x": 12200,
+                "y": 4200
+              },
+              {
+                "x": 12200,
+                "y": 9750
+              }
+            ]
+          },
+          {
+            "id": "large-multilevel-w45",
+            "points": [
+              {
+                "x": 12200,
+                "y": 5300
+              },
+              {
+                "x": 19200,
+                "y": 5300
+              }
+            ]
+          },
+          {
+            "id": "large-multilevel-w46",
+            "points": [
+              {
+                "x": 16700,
+                "y": 4200
+              },
+              {
+                "x": 16700,
+                "y": 8500
+              }
+            ]
+          },
+          {
+            "id": "large-multilevel-w47",
+            "points": [
+              {
+                "x": 16700,
+                "y": 7400
+              },
+              {
+                "x": 19200,
+                "y": 7400
+              }
+            ]
+          },
+          {
+            "id": "large-multilevel-w48",
+            "points": [
+              {
+                "x": 12200,
+                "y": 8500
+              },
+              {
+                "x": 19200,
+                "y": 8500
+              }
+            ]
+          },
+          {
+            "id": "large-multilevel-w49",
+            "points": [
+              {
+                "x": 7200,
+                "y": 4200
+              },
+              {
+                "x": 19200,
+                "y": 4200
+              }
+            ]
+          }
+        ],
+        "furniture": [
+          {
+            "id": "large-multilevel-fn98",
+            "x": 1700,
+            "y": 3532,
+            "w": 1524,
+            "h": 2032,
+            "kind": "bed"
+          },
+          {
+            "id": "large-multilevel-fn99",
+            "x": 600,
+            "y": 3800,
+            "w": 500,
+            "h": 400,
+            "kind": "nightstand"
+          },
+          {
+            "id": "large-multilevel-fn100",
+            "x": 2800,
+            "y": 3800,
+            "w": 500,
+            "h": 400,
+            "kind": "nightstand"
+          },
+          {
+            "id": "large-multilevel-fn101",
+            "x": 652,
+            "y": 600,
+            "w": 1200,
+            "h": 500,
+            "kind": "dresser",
+            "rotation": 180
+          },
+          {
+            "id": "large-multilevel-fn102",
+            "x": 1700,
+            "y": 2600,
+            "w": 1800,
+            "h": 1400,
+            "kind": "rug",
+            "color": "#d9c9a8"
+          },
+          {
+            "id": "large-multilevel-fn103",
+            "x": 1700,
+            "y": 5300,
+            "w": 1200,
+            "h": 600,
+            "kind": "wardrobe"
+          },
+          {
+            "id": "large-multilevel-fn104",
+            "x": 5400,
+            "y": 700,
+            "w": 480,
+            "h": 700,
+            "kind": "toilet",
+            "rotation": 180
+          },
+          {
+            "id": "large-multilevel-fn105",
+            "x": 5400,
+            "y": 2273,
+            "w": 760,
+            "h": 550,
+            "kind": "sink_vanity",
+            "label": "Vanity"
+          },
+          {
+            "id": "large-multilevel-fn106",
+            "x": 5900,
+            "y": 1500,
+            "w": 900,
+            "h": 900,
+            "kind": "shower",
+            "rotation": 90
+          },
+          {
+            "id": "large-multilevel-fn107",
+            "x": 5350,
+            "y": 3900,
+            "w": 690,
+            "h": 700,
+            "kind": "washer"
+          },
+          {
+            "id": "large-multilevel-fn108",
+            "x": 6003,
+            "y": 3900,
+            "w": 690,
+            "h": 700,
+            "kind": "dryer"
+          },
+          {
+            "id": "large-multilevel-fn109",
+            "x": 5700,
+            "y": 2900,
+            "w": 900,
+            "h": 400,
+            "kind": "cabinet",
+            "rotation": 180
+          },
+          {
+            "id": "large-multilevel-fn110",
+            "x": 1700,
+            "y": 8682,
+            "w": 1524,
+            "h": 2032,
+            "kind": "bed"
+          },
+          {
+            "id": "large-multilevel-fn111",
+            "x": 600,
+            "y": 8950,
+            "w": 500,
+            "h": 400,
+            "kind": "nightstand"
+          },
+          {
+            "id": "large-multilevel-fn112",
+            "x": 2800,
+            "y": 8950,
+            "w": 500,
+            "h": 400,
+            "kind": "nightstand"
+          },
+          {
+            "id": "large-multilevel-fn113",
+            "x": 652,
+            "y": 6300,
+            "w": 1200,
+            "h": 500,
+            "kind": "dresser",
+            "rotation": 180
+          },
+          {
+            "id": "large-multilevel-fn114",
+            "x": 2400,
+            "y": 6400,
+            "w": 1400,
+            "h": 700,
+            "kind": "desk",
+            "rotation": 180
+          },
+          {
+            "id": "large-multilevel-fn115",
+            "x": 1700,
+            "y": 8000,
+            "w": 1800,
+            "h": 1400,
+            "kind": "rug",
+            "color": "#d9c9a8"
+          },
+          {
+            "id": "large-multilevel-fn116",
+            "x": 5400,
+            "y": 9200,
+            "w": 1200,
+            "h": 600,
+            "kind": "wardrobe"
+          },
+          {
+            "id": "large-multilevel-fn117",
+            "x": 9450,
+            "y": 3133,
+            "w": 1930,
+            "h": 2030,
+            "kind": "bed_king"
+          },
+          {
+            "id": "large-multilevel-fn118",
+            "x": 8200,
+            "y": 3600,
+            "w": 500,
+            "h": 400,
+            "kind": "nightstand"
+          },
+          {
+            "id": "large-multilevel-fn119",
+            "x": 10600,
+            "y": 3600,
+            "w": 500,
+            "h": 400,
+            "kind": "nightstand"
+          },
+          {
+            "id": "large-multilevel-fn120",
+            "x": 8000,
+            "y": 600,
+            "w": 1200,
+            "h": 500,
+            "kind": "dresser",
+            "rotation": 180
+          },
+          {
+            "id": "large-multilevel-fn121",
+            "x": 9450,
+            "y": 1800,
+            "w": 1500,
+            "h": 400,
+            "kind": "bench"
+          },
+          {
+            "id": "large-multilevel-fn122",
+            "x": 9450,
+            "y": 2600,
+            "w": 3000,
+            "h": 2200,
+            "kind": "rug",
+            "color": "#d7dee2"
+          },
+          {
+            "id": "large-multilevel-fn123",
+            "x": 12600,
+            "y": 3800,
+            "w": 500,
+            "h": 500,
+            "kind": "chair",
+            "label": "Accent chair"
+          },
+          {
+            "id": "large-multilevel-fn124",
+            "x": 12950,
+            "y": 600,
+            "w": 500,
+            "h": 500,
+            "kind": "chair",
+            "rotation": 180,
+            "label": "Accent chair"
+          },
+          {
+            "id": "large-multilevel-fn125",
+            "x": 12950,
+            "y": 2200,
+            "w": 1100,
+            "h": 600,
+            "kind": "coffee_table"
+          },
+          {
+            "id": "large-multilevel-fn126",
+            "x": 11927,
+            "y": 2100,
+            "w": 800,
+            "h": 350,
+            "kind": "bookshelf",
+            "rotation": 270
+          },
+          {
+            "id": "large-multilevel-fn127",
+            "x": 15700,
+            "y": 3132,
+            "w": 1524,
+            "h": 2032,
+            "kind": "bed"
+          },
+          {
+            "id": "large-multilevel-fn128",
+            "x": 14700,
+            "y": 3600,
+            "w": 500,
+            "h": 400,
+            "kind": "nightstand"
+          },
+          {
+            "id": "large-multilevel-fn129",
+            "x": 16700,
+            "y": 2600,
+            "w": 500,
+            "h": 400,
+            "kind": "nightstand"
+          },
+          {
+            "id": "large-multilevel-fn130",
+            "x": 15700,
+            "y": 600,
+            "w": 1400,
+            "h": 700,
+            "kind": "desk",
+            "rotation": 180
+          },
+          {
+            "id": "large-multilevel-fn131",
+            "x": 15700,
+            "y": 2600,
+            "w": 1800,
+            "h": 1400,
+            "kind": "rug",
+            "color": "#d9c9a8"
+          },
+          {
+            "id": "large-multilevel-fn132",
+            "x": 18200,
+            "y": 400,
+            "w": 480,
+            "h": 700,
+            "kind": "toilet",
+            "rotation": 180
+          },
+          {
+            "id": "large-multilevel-fn133",
+            "x": 17650,
+            "y": 2073,
+            "w": 760,
+            "h": 550,
+            "kind": "sink_vanity",
+            "label": "Vanity"
+          },
+          {
+            "id": "large-multilevel-fn134",
+            "x": 18500,
+            "y": 1500,
+            "w": 900,
+            "h": 900,
+            "kind": "shower",
+            "rotation": 90
+          },
+          {
+            "id": "large-multilevel-fn135",
+            "x": 18400,
+            "y": 3300,
+            "w": 1200,
+            "h": 600,
+            "kind": "wardrobe"
+          },
+          {
+            "id": "large-multilevel-fn136",
+            "x": 8100,
+            "y": 6450,
+            "w": 1500,
+            "h": 700,
+            "kind": "bathtub"
+          },
+          {
+            "id": "large-multilevel-fn137",
+            "x": 8250,
+            "y": 5650,
+            "w": 1200,
+            "h": 550,
+            "kind": "sink_vanity",
+            "rotation": 180,
+            "label": "Double vanity"
+          },
+          {
+            "id": "large-multilevel-fn138",
+            "x": 9298,
+            "y": 5700,
+            "w": 480,
+            "h": 700,
+            "kind": "toilet",
+            "rotation": 90
+          },
+          {
+            "id": "large-multilevel-fn139",
+            "x": 8000,
+            "y": 9200,
+            "w": 1200,
+            "h": 600,
+            "kind": "wardrobe",
+            "label": "Hers"
+          },
+          {
+            "id": "large-multilevel-fn140",
+            "x": 8300,
+            "y": 8000,
+            "w": 1200,
+            "h": 600,
+            "kind": "wardrobe",
+            "rotation": 180,
+            "label": "His"
+          },
+          {
+            "id": "large-multilevel-fn141",
+            "x": 8450,
+            "y": 8650,
+            "w": 900,
+            "h": 400,
+            "kind": "cabinet",
+            "label": "Island"
+          },
+          {
+            "id": "large-multilevel-fn142",
+            "x": 14450,
+            "y": 6368,
+            "w": 1524,
+            "h": 2032,
+            "kind": "bed",
+            "rotation": 180
+          },
+          {
+            "id": "large-multilevel-fn143",
+            "x": 13300,
+            "y": 6300,
+            "w": 500,
+            "h": 400,
+            "kind": "nightstand",
+            "rotation": 180
+          },
+          {
+            "id": "large-multilevel-fn144",
+            "x": 15600,
+            "y": 6300,
+            "w": 500,
+            "h": 400,
+            "kind": "nightstand",
+            "rotation": 180
+          },
+          {
+            "id": "large-multilevel-fn145",
+            "x": 12852,
+            "y": 8198,
+            "w": 1200,
+            "h": 500,
+            "kind": "dresser"
+          },
+          {
+            "id": "large-multilevel-fn146",
+            "x": 15400,
+            "y": 8100,
+            "w": 1400,
+            "h": 700,
+            "kind": "desk"
+          },
+          {
+            "id": "large-multilevel-fn147",
+            "x": 14450,
+            "y": 7000,
+            "w": 1800,
+            "h": 1400,
+            "kind": "rug",
+            "color": "#d9c9a8"
+          },
+          {
+            "id": "large-multilevel-fn148",
+            "x": 17700,
+            "y": 5800,
+            "w": 480,
+            "h": 700,
+            "kind": "toilet",
+            "rotation": 180
+          },
+          {
+            "id": "large-multilevel-fn149",
+            "x": 17700,
+            "y": 7073,
+            "w": 760,
+            "h": 550,
+            "kind": "sink_vanity",
+            "label": "Vanity"
+          },
+          {
+            "id": "large-multilevel-fn150",
+            "x": 18700,
+            "y": 6300,
+            "w": 900,
+            "h": 900,
+            "kind": "shower",
+            "rotation": 90
+          },
+          {
+            "id": "large-multilevel-fn151",
+            "x": 17950,
+            "y": 7900,
+            "w": 1200,
+            "h": 600,
+            "kind": "wardrobe"
+          },
+          {
+            "id": "large-multilevel-fn152",
+            "x": 17000,
+            "y": 9248,
+            "w": 2000,
+            "h": 900,
+            "kind": "sofa"
+          },
+          {
+            "id": "large-multilevel-fn153",
+            "x": 14000,
+            "y": 9250,
+            "w": 1100,
+            "h": 600,
+            "kind": "coffee_table"
+          },
+          {
+            "id": "large-multilevel-fn154",
+            "x": 18500,
+            "y": 9400,
+            "w": 800,
+            "h": 350,
+            "kind": "bookshelf"
+          },
+          {
+            "id": "large-multilevel-fn155",
+            "x": 15500,
+            "y": 9200,
+            "w": 500,
+            "h": 500,
+            "kind": "chair",
+            "rotation": 90,
+            "label": "Reading chair"
+          },
+          {
+            "id": "large-multilevel-fn156",
+            "x": 16500,
+            "y": 8900,
+            "w": 2000,
+            "h": 1400,
+            "kind": "rug"
+          },
+          {
+            "id": "large-multilevel-fn157",
+            "x": 11575,
+            "y": 7000,
+            "w": 1000,
+            "h": 1000,
+            "kind": "stair_landing",
+            "label": "Landing from Main",
+            "stairLinkId": "large-multilevel-stair-upper"
+          }
+        ],
+        "lights": [
+          {
+            "id": "large-multilevel-lt25",
+            "x": 1700,
+            "y": 2300,
+            "entity_id": null,
+            "iconKind": "bulb",
+            "label": "Bedroom 4"
+          },
+          {
+            "id": "large-multilevel-lt26",
+            "x": 1700,
+            "y": 7875,
+            "entity_id": null,
+            "iconKind": "bulb",
+            "label": "Bedroom 5"
+          },
+          {
+            "id": "large-multilevel-lt27",
+            "x": 3900,
+            "y": 4875,
+            "entity_id": null,
+            "iconKind": "sconce",
+            "radius": 500,
+            "label": "Upper Hall"
+          },
+          {
+            "id": "large-multilevel-lt28",
+            "x": 5400,
+            "y": 1300,
+            "entity_id": null,
+            "iconKind": "sconce",
+            "radius": 500,
+            "label": "Hall Bath"
+          },
+          {
+            "id": "large-multilevel-lt29",
+            "x": 5400,
+            "y": 3600,
+            "entity_id": null,
+            "iconKind": "bulb",
+            "label": "Laundry"
+          },
+          {
+            "id": "large-multilevel-lt30",
+            "x": 9450,
+            "y": 2100,
+            "entity_id": null,
+            "iconKind": "bulb",
+            "label": "Primary Bedroom"
+          },
+          {
+            "id": "large-multilevel-lt31",
+            "x": 8300,
+            "y": 3600,
+            "entity_id": null,
+            "iconKind": "lamp",
+            "height": 1400,
+            "label": "Primary lamp"
+          },
+          {
+            "id": "large-multilevel-lt32",
+            "x": 12950,
+            "y": 2100,
+            "entity_id": null,
+            "iconKind": "bulb",
+            "label": "Sitting"
+          },
+          {
+            "id": "large-multilevel-lt33",
+            "x": 15700,
+            "y": 2100,
+            "entity_id": null,
+            "iconKind": "bulb",
+            "label": "Bedroom 2"
+          },
+          {
+            "id": "large-multilevel-lt34",
+            "x": 8450,
+            "y": 6100,
+            "entity_id": null,
+            "iconKind": "sconce",
+            "radius": 500,
+            "label": "Spa Bath"
+          },
+          {
+            "id": "large-multilevel-lt35",
+            "x": 8900,
+            "y": 6300,
+            "entity_id": null,
+            "iconKind": "heatlamp",
+            "label": "Spa Bath heat lamp"
+          },
+          {
+            "id": "large-multilevel-lt36",
+            "x": 10950,
+            "y": 7000,
+            "entity_id": null,
+            "iconKind": "bulb",
+            "label": "Stair Hall"
+          },
+          {
+            "id": "large-multilevel-lt37",
+            "x": 15700,
+            "y": 4750,
+            "entity_id": null,
+            "iconKind": "sconce",
+            "radius": 500,
+            "label": "Upper Hallway"
+          },
+          {
+            "id": "large-multilevel-lt38",
+            "x": 14450,
+            "y": 6900,
+            "entity_id": null,
+            "iconKind": "bulb",
+            "label": "Bedroom 3"
+          },
+          {
+            "id": "large-multilevel-lt39",
+            "x": 17950,
+            "y": 6350,
+            "entity_id": null,
+            "iconKind": "sconce",
+            "radius": 500,
+            "label": "Bedroom 3 Bath"
+          },
+          {
+            "id": "large-multilevel-lt40",
+            "x": 15700,
+            "y": 9125,
+            "entity_id": null,
+            "iconKind": "pendant",
+            "label": "Loft"
+          }
+        ],
+        "switches": [],
+        "sensors": [],
+        "motionSensors": [],
+        "roamers": [],
+        "envSensors": [],
+        "look3d": {
+          "floorTex": "none",
+          "floorColor": "#d9c9a8",
+          "wallColor": "#eef1ee"
+        },
+        "doors": [
+          {
+            "id": "large-multilevel-dr28",
+            "x": 3400,
+            "y": 2300,
+            "w": 800,
+            "rotation": 90,
+            "entity_id": null,
+            "label": "Bedroom 4"
+          },
+          {
+            "id": "large-multilevel-dr29",
+            "x": 2600,
+            "y": 4600,
+            "w": 800,
+            "rotation": 0,
+            "entity_id": null,
+            "label": "Bedroom 4 Closet"
+          },
+          {
+            "id": "large-multilevel-dr30",
+            "x": 3400,
+            "y": 7900,
+            "w": 800,
+            "rotation": 90,
+            "entity_id": null,
+            "label": "Bedroom 5"
+          },
+          {
+            "id": "large-multilevel-dr31",
+            "x": 4400,
+            "y": 1300,
+            "w": 800,
+            "rotation": 90,
+            "entity_id": null,
+            "label": "Hall Bath"
+          },
+          {
+            "id": "large-multilevel-dr32",
+            "x": 4400,
+            "y": 3800,
+            "w": 800,
+            "rotation": 90,
+            "entity_id": null,
+            "label": "Laundry"
+          },
+          {
+            "id": "large-multilevel-dr33",
+            "x": 4400,
+            "y": 7000,
+            "w": 800,
+            "rotation": 90,
+            "entity_id": null,
+            "label": "Bed 5 Closet"
+          },
+          {
+            "id": "large-multilevel-dr34",
+            "x": 7200,
+            "y": 4950,
+            "w": 900,
+            "rotation": 90,
+            "entity_id": null,
+            "label": "Hall ↔ Connector"
+          },
+          {
+            "id": "large-multilevel-dr35",
+            "x": 9700,
+            "y": 4950,
+            "w": 1200,
+            "rotation": 90,
+            "entity_id": null,
+            "label": "Connector ↔ Stair Hall"
+          },
+          {
+            "id": "large-multilevel-dr36",
+            "x": 11700,
+            "y": 3600,
+            "w": 800,
+            "rotation": 270,
+            "entity_id": null,
+            "label": "Primary ↔ Sitting"
+          },
+          {
+            "id": "large-multilevel-dr37",
+            "x": 8500,
+            "y": 4200,
+            "w": 800,
+            "rotation": 0,
+            "entity_id": null,
+            "label": "Primary ↔ Spa Bath"
+          },
+          {
+            "id": "large-multilevel-dr38",
+            "x": 8900,
+            "y": 6900,
+            "w": 800,
+            "rotation": 0,
+            "entity_id": null,
+            "label": "Spa ↔ Closets"
+          },
+          {
+            "id": "large-multilevel-dr39",
+            "x": 9700,
+            "y": 8200,
+            "w": 900,
+            "rotation": 90,
+            "entity_id": null,
+            "label": "Closets ↔ Stair Hall"
+          },
+          {
+            "id": "large-multilevel-dr40",
+            "x": 12200,
+            "y": 9500,
+            "w": 900,
+            "rotation": 90,
+            "entity_id": null,
+            "label": "Loft"
+          },
+          {
+            "id": "large-multilevel-dr41",
+            "x": 13000,
+            "y": 4200,
+            "w": 800,
+            "rotation": 0,
+            "entity_id": null,
+            "label": "Sitting ↔ Hallway"
+          },
+          {
+            "id": "large-multilevel-dr42",
+            "x": 15700,
+            "y": 4200,
+            "w": 800,
+            "rotation": 0,
+            "entity_id": null,
+            "label": "Bedroom 2 ↔ Hallway"
+          },
+          {
+            "id": "large-multilevel-dr43",
+            "x": 17200,
+            "y": 1200,
+            "w": 800,
+            "rotation": 90,
+            "entity_id": null,
+            "label": "Bedroom 2 Bath"
+          },
+          {
+            "id": "large-multilevel-dr44",
+            "x": 17200,
+            "y": 3800,
+            "w": 800,
+            "rotation": 90,
+            "entity_id": null,
+            "label": "Bedroom 2 Closet"
+          },
+          {
+            "id": "large-multilevel-dr45",
+            "x": 14450,
+            "y": 5300,
+            "w": 800,
+            "rotation": 0,
+            "entity_id": null,
+            "label": "Bedroom 3 ↔ Hallway"
+          },
+          {
+            "id": "large-multilevel-dr46",
+            "x": 16700,
+            "y": 6300,
+            "w": 800,
+            "rotation": 90,
+            "entity_id": null,
+            "label": "Bedroom 3 Bath"
+          },
+          {
+            "id": "large-multilevel-dr47",
+            "x": 16700,
+            "y": 7900,
+            "w": 700,
+            "rotation": 90,
+            "entity_id": null,
+            "label": "Bedroom 3 Closet"
+          }
+        ],
+        "windows": [
+          {
+            "id": "large-multilevel-win11",
+            "x": 0,
+            "y": 2300,
+            "w": 900,
+            "rotation": 90,
+            "entity_id": null,
+            "sill": 900,
+            "height": 1200,
+            "kind": "double_hung",
+            "label": "Bedroom 4 side"
+          },
+          {
+            "id": "large-multilevel-win12",
+            "x": 0,
+            "y": 7875,
+            "w": 900,
+            "rotation": 90,
+            "entity_id": null,
+            "sill": 900,
+            "height": 1200,
+            "kind": "double_hung",
+            "label": "Bedroom 5 side"
+          },
+          {
+            "id": "large-multilevel-win13",
+            "x": 5400,
+            "y": 0,
+            "w": 600,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 1300,
+            "height": 900,
+            "kind": "casement_pair",
+            "label": "Hall Bath"
+          },
+          {
+            "id": "large-multilevel-win14",
+            "x": 9450,
+            "y": 0,
+            "w": 900,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 900,
+            "height": 1200,
+            "kind": "double_hung",
+            "label": "Primary front"
+          },
+          {
+            "id": "large-multilevel-win15",
+            "x": 12950,
+            "y": 0,
+            "w": 900,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 900,
+            "height": 1200,
+            "kind": "double_hung",
+            "label": "Sitting front"
+          },
+          {
+            "id": "large-multilevel-win16",
+            "x": 15700,
+            "y": 0,
+            "w": 900,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 900,
+            "height": 1200,
+            "kind": "double_hung",
+            "label": "Bedroom 2 front"
+          },
+          {
+            "id": "large-multilevel-win17",
+            "x": 19200,
+            "y": 1200,
+            "w": 600,
+            "rotation": 90,
+            "entity_id": null,
+            "sill": 1300,
+            "height": 900,
+            "kind": "casement_pair",
+            "label": "Bedroom 2 Bath"
+          },
+          {
+            "id": "large-multilevel-win18",
+            "x": 15700,
+            "y": 9750,
+            "w": 900,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 900,
+            "height": 1200,
+            "kind": "double_hung",
+            "label": "Loft rear"
+          }
+        ],
+        "bg": null,
+        "model3d": null,
+        "rooms": [
+          {
+            "id": "large-multilevel-rm25",
+            "name": "Bedroom 4",
+            "anchor": {
+              "x": 1700,
+              "y": 2300
+            }
+          },
+          {
+            "id": "large-multilevel-rm26",
+            "name": "Bedroom 4 Closet",
+            "anchor": {
+              "x": 1700,
+              "y": 5300
+            }
+          },
+          {
+            "id": "large-multilevel-rm27",
+            "name": "Bedroom 5",
+            "anchor": {
+              "x": 1700,
+              "y": 7875
+            }
+          },
+          {
+            "id": "large-multilevel-rm28",
+            "name": "Upper Hall",
+            "anchor": {
+              "x": 3900,
+              "y": 3000
+            }
+          },
+          {
+            "id": "large-multilevel-rm29",
+            "name": "Hall Bath",
+            "anchor": {
+              "x": 5400,
+              "y": 1300
+            }
+          },
+          {
+            "id": "large-multilevel-rm30",
+            "name": "Laundry Room",
+            "anchor": {
+              "x": 5400,
+              "y": 3600
+            }
+          },
+          {
+            "id": "large-multilevel-rm31",
+            "name": "Storage Sliver",
+            "anchor": {
+              "x": 6800,
+              "y": 2300
+            }
+          },
+          {
+            "id": "large-multilevel-rm32",
+            "name": "Bedroom 5 Closet / Linen",
+            "anchor": {
+              "x": 5400,
+              "y": 7525
+            }
+          },
+          {
+            "id": "large-multilevel-rm33",
+            "name": "Primary Bedroom",
+            "anchor": {
+              "x": 9450,
+              "y": 2100
+            }
+          },
+          {
+            "id": "large-multilevel-rm34",
+            "name": "Primary Sitting Area",
+            "anchor": {
+              "x": 12950,
+              "y": 2100
+            }
+          },
+          {
+            "id": "large-multilevel-rm35",
+            "name": "Bedroom 2",
+            "anchor": {
+              "x": 15700,
+              "y": 2100
+            }
+          },
+          {
+            "id": "large-multilevel-rm36",
+            "name": "Bedroom 2 Bath",
+            "anchor": {
+              "x": 18200,
+              "y": 1200
+            }
+          },
+          {
+            "id": "large-multilevel-rm37",
+            "name": "Bedroom 2 Closet",
+            "anchor": {
+              "x": 18200,
+              "y": 3300
+            }
+          },
+          {
+            "id": "large-multilevel-rm38",
+            "name": "West Hall Connector",
+            "anchor": {
+              "x": 8450,
+              "y": 4750
+            }
+          },
+          {
+            "id": "large-multilevel-rm39",
+            "name": "Primary Spa Bath",
+            "anchor": {
+              "x": 8450,
+              "y": 6100
+            }
+          },
+          {
+            "id": "large-multilevel-rm40",
+            "name": "Primary Closets",
+            "anchor": {
+              "x": 8450,
+              "y": 8325
+            }
+          },
+          {
+            "id": "large-multilevel-rm41",
+            "name": "Upper Stair Hall",
+            "anchor": {
+              "x": 10950,
+              "y": 7000
+            }
+          },
+          {
+            "id": "large-multilevel-rm42",
+            "name": "Upper Hallway",
+            "anchor": {
+              "x": 15700,
+              "y": 4750
+            }
+          },
+          {
+            "id": "large-multilevel-rm43",
+            "name": "Bedroom 3",
+            "anchor": {
+              "x": 14450,
+              "y": 6900
+            }
+          },
+          {
+            "id": "large-multilevel-rm44",
+            "name": "Bedroom 3 Bath",
+            "anchor": {
+              "x": 17950,
+              "y": 6350
+            }
+          },
+          {
+            "id": "large-multilevel-rm45",
+            "name": "Bedroom 3 Closet",
+            "anchor": {
+              "x": 17950,
+              "y": 7950
+            }
+          },
+          {
+            "id": "large-multilevel-rm46",
+            "name": "Loft / Bonus Room",
+            "anchor": {
+              "x": 15700,
+              "y": 9125
+            }
+          }
+        ],
+        "bleProxies": [],
+        "alarmPanels": [],
+        "safetySensors": [],
+        "robots": [],
+        "presenceZones": [],
+        "cameras": [],
+        "groundAreas": [],
+        "voidAreas": []
+      }
+    ],
+    "currentFloorId": "large-multilevel-fl1",
+    "activeSensorId": null,
+    "coverage": true,
+    "imperial": false,
+    "showDetails": false,
+    "useRawTargets": false,
+    "showMotionZones": true,
+    "scene3d": {
+      "preset": "day",
+      "lightMode": "clock",
+      "floorTex": "wood",
+      "floorColor": "#c9a06a",
+      "wallColor": "#f2ede4",
+      "wallCutaway": true,
+      "glassHouse": false,
+      "plumbobs": true
+    },
+    "customObjects": [],
+    "people": [],
+    "bleShowUnknown": true,
+    "notes": "~4,590 sq ft (427 m²) · 3 levels + garage · 46 rooms\n\nA transitional-craftsman luxury spec home stacked three levels high over an\nidentical 19,200 × 9,750 mm footprint so the exterior walls and central stair\ncore line up between floors. A walkout finished basement built for entertaining,\na main level of formal front rooms flowing into an open kitchen/great-room, and\na hotel-quiet upper level of bedrooms. Two stair connections use matching\nstairLinkIds so avatars transit floor to floor: the basement flight lands in the\nmain-level stair hall, and the main flight lands in the upper landing. Oak main\nlevel, carpet-toned bedrooms upstairs, polished concrete downstairs; clock\nlighting shifts the scene day→dusk→night.\n\nBASEMENT (floors[0] — the fun floor)\nHome Theater: wall-mounted screen, U-sectional + ottoman, back-row chairs, AV shelf.\nWet Bar: bar counter with sink, three stools, back-bar cabinet, beverage fridge.\nGuest Bedroom / Bath / Closet: queen bed, nightstands, dresser, rug; en-suite + egress.\nGym / Fitness: treadmill, bike, weight bench, floor mat.\nRec / Game Room: pool table, sofa, coffee table, wall TV, game-storage cabinet, rug.\nMechanical / Storage + Rear Storage: furnace/water-heater stand-ins, shelving cabinets.\nBasement Stair Hall: the physical flight up to the main level.\n\nMAIN LEVEL (floors[1])\nGarage (3-car): storage cabinets + a workbench; three bay doors.\nMudroom / Powder Room / Coat Closet: bench, coat wardrobe, powder vanity + toilet.\nHome Office: desk, chair, bookshelf, rug; front-lit.\nFoyer: console table, bench, runner rug; front door + foyer switch.\nLiving Room + Dining Room: formal front rooms (sofa/chairs/bookshelf; dining table\n  for six + buffet), open archways off the foyer, picture windows to the street.\nPantry: walk-in shelving off the service path.\nKitchen: island, stove, over-range microwave, fridge, sink + dishwasher facing the\n  great room, pantry cabinet, counter coffee maker + toaster; island pendant.\nBreakfast Room: round table with four chairs; pendant + casement window.\nGreat Room: L-sectional, coffee table, ottoman, wall TV flanked by bookshelves, a\n  reading chair, plant, big rug, a fireplace light, and patio doors to the yard.\nMain Stair Hall: the basement landing (west lane) + the flight up to the upper level.\n\nUPPER LEVEL (floors[2])\nPrimary Bedroom + Sitting Area: king bed, nightstands, dresser, end-of-bed bench,\n  big rug; a sitting anteroom with accent chairs, coffee table, bookshelf.\nPrimary Spa Bath + His/Hers Closets: freestanding tub/shower, double vanity, water\n  closet; dual wardrobes + a center island cabinet.\nBedroom 2 (en-suite) + Bedroom 3 (en-suite): beds, nightstands, desks, rugs, private\n  baths + closets.\nBedroom 4 + Bedroom 5: secondary bedrooms over the garage; beds, nightstands,\n  dressers, a study desk, closets.\nHall Bath + Laundry Room: shared bath (toilet/vanity/shower) + washer/dryer/cabinet.\nLoft / Bonus Room: sofa, coffee table, bookshelf, reading chair, rug.\nUpper Stair Hall: the landing arriving from the main level.\n\nFixture detail: the dining room hangs a bowl uplight instead of a pendant, and the\n  primary spa bath adds a ceiling heat lamp over the tub."
+  }
+}

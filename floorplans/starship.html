@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SSV Diorama — Starship Deck — Diorama</title>
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="topbar">
+<button class="menu-btn" aria-label="Toggle navigation" onclick="document.body.classList.toggle('nav-open')">☰</button><a class="brand" href="../index.html">Diorama</a>
+<nav class="topnav"><a class="topnav-link" href="../index.html">Home</a><a class="topnav-link" href="../guide/getting-started.html">Guide</a><a class="topnav-link" href="../models/index.html">Models</a><a class="topnav-link active" href="../floorplans/index.html">Floor plans</a><a class="topnav-link" href="../demo/index.html?demo=ranch-3bed">Live demo</a></nav>
+<span class="brand-meta">v0.66.1 · 2026-08-17</span>
+</header>
+<div class="layout"><aside class="sidebar"><nav class="nav"><a class="nav-link" href="index.html">All floor plans</a><a class="nav-link" href="appliance-showroom.html">Appliance Showroom — Watt’s Cooking</a><a class="nav-link" href="bungalow-cottage-yard.html">Bungalow — Cottage + Yard</a><a class="nav-link" href="garden-center.html">Lawn &amp; Garden Center — The Potting Shed</a><a class="nav-link" href="interior-design-store.html">Interior Design Studio — Vignette &amp; Co.</a><a class="nav-link" href="large-multilevel.html">Large Multilevel — Aldergate</a><a class="nav-link" href="one-bedroom-apartment.html">One-Bedroom Apartment</a><a class="nav-link" href="open-concept-entertainer.html">Open-Concept Entertainer</a><a class="nav-link" href="open-concept-modern.html">Open-Concept Modern</a><a class="nav-link" href="ranch-3bed.html">Ranch — 3 Bed / 2 Bath</a><a class="nav-link" href="ranch-smart-home.html">Ranch — Smart Home</a><a class="nav-link" href="small-bungalow.html">Small 2-Bed Bungalow</a><a class="nav-link active" href="starship.html">SSV Diorama — Starship Deck</a><a class="nav-link" href="studio-apartment.html">Studio Apartment</a><a class="nav-link" href="townhouse-3level.html">Townhouse — 3 Level</a><a class="nav-link" href="townhouse-minimal.html">Townhouse — Minimalist</a><a class="nav-link" href="two-story-colonial.html">Two-Story Colonial</a><a class="nav-link" href="underground-hangout.html">The Bunker — Underground Hangout</a><a class="nav-link" href="zoo.html">Pocket Zoo — Toon Safari</a></nav></aside><main class="main"><div class="page-head"><h1>SSV Diorama — Starship Deck</h1></div><a class="demo-btn" href="../demo/index.html?demo=starship">▶ Open in live demo</a><a class="dl-btn" href="starship.json" download>Download floorplan JSON</a><p class="intro">Explore it live above, or import the JSON in Diorama under <strong>Settings ▸ Data ▸ Configurations ▸ Import</strong>.</p><div class="plan-notes">~78 m² pressurised deck (15.6 × 9.6 m hull) · 1 floor · 8 compartments · crewed
+
+A starship deck instead of a house. The &quot;building&quot; is a hull outline: a flat
+stern to the west, two long parallel flanks, and an angular bow assembled from
+six short wall segments converging on an apex — the classic wedge silhouette,
+drawn entirely with ordinary walls. A full-length central corridor runs the spine
+of the ship and every compartment hatches onto it, so the whole deck is one
+connected walkable space (and one nav region).
+
+BRIDGE (bow) — the captain&#39;s chair faces a wall-mounted main viewscreen at the
+apex, flanked by three console banks (helm, ops, tactical) arranged in an arc,
+comm speakers on the bulkhead, and six raked picture-window viewports wrapped
+around the bow so the sky backdrop reads as space through the glass.
+ENGINEERING (stern, starboard) — a stacked-cylinder warp core glowing cyan under
+  a reactor console, spares locker and data racks.
+CARGO HOLD (stern, port) — three crates and a supply pod under plain bay lighting,
+  with a viewport onto the flank.
+CREW QUARTERS (starboard) — two bunks in niches with a violet night strip, crew
+  lockers and a chair.
+MESS HALL (port) — mess table with a bench and a chair, galley cooler with an
+  over-counter rehydrator, and a galley sink under warm task lighting.
+MED BAY (starboard) — a med bunk, pharmacy and instrument cabinets, a scrub sink,
+  and a wall-mounted vitals display under clinical white strips.
+AIRLOCK (port) — deliberately bare: two EVA suit lockers, an intercom, an amber
+  warning strip, and a genuine DOUBLE door — an inner hatch onto the corridor and
+  an outer hatch through the port hull.
+
+CUSTOM OBJECTS — the warp core (base, glowing column, three light rings, cap and
+a bright crown sphere) and the console bank (body, lip, raked screen bezel, a lit
+screen face and two indicator panels) are authored ObjectRecipes carried in
+Store.customObjects; the console bank is instanced four times at three sizes.
+
+AVATARS — the deck crew are demo AI presences confined to their compartments
+(bridge watch, engineering watch, med bay watch, mess watch) drawn from the
+always-on base packs (Sci-Fi, Robotic, Aliens, Careers). The four free-range
+roamers include a bridge command pair drawn from the `star-trek-tng` FRANCHISE
+pack — franchise packs ship unloaded, so this config also sets Store.avatarPacks
+to load and activate it.
+
+LIGHTING — night preset, concrete deck plating, wall cutaway on and below-horizon
+orbit enabled so the camera can duck under the hull. Every fixture is UNBOUND
+with localState &quot;on&quot;, so the ship is lit with no Home Assistant attached.</div><section class="group"><h2>Deck 1</h2><p class="intro">8 rooms · 150 m² footprint</p><div class="shot-grid"><figure class="shot"><img loading="lazy" src="img/starship/2d-0.png" alt="Deck 1 — 2D plan"><figcaption>2D plan</figcaption></figure><figure class="shot"><img loading="lazy" src="img/starship/iso-0.png" alt="Deck 1 — 3D isometric"><figcaption>3D isometric</figcaption></figure></section><section class="group"><h2>Glass-house overview</h2><figure class="shot"><img loading="lazy" src="img/starship/glasshouse.png" alt="SSV Diorama — Starship Deck — glass-house overview"><figcaption>All stories at once, other floors translucent.</figcaption></figure></section></main></div>
+<script>
+document.querySelectorAll('.nav-link').forEach(function(a){a.addEventListener('click',function(){document.body.classList.remove('nav-open');});});
+</script>
+</body>
+</html>

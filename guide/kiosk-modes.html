@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kiosk &amp; display modes — Diorama</title>
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="topbar">
+<button class="menu-btn" aria-label="Toggle navigation" onclick="document.body.classList.toggle('nav-open')">☰</button><a class="brand" href="../index.html">Diorama</a>
+<nav class="topnav"><a class="topnav-link" href="../index.html">Home</a><a class="topnav-link active" href="../guide/getting-started.html">Guide</a><a class="topnav-link" href="../models/index.html">Models</a><a class="topnav-link" href="../floorplans/index.html">Floor plans</a><a class="topnav-link" href="../demo/index.html?demo=ranch-3bed">Live demo</a></nav>
+<span class="brand-meta">v0.66.1 · 2026-08-17</span>
+</header>
+<div class="layout"><aside class="sidebar"><nav class="nav"><a class="nav-link" href="getting-started.html">Getting started</a><a class="nav-link" href="editor.html">The 2D editor</a><a class="nav-link" href="3d-view.html">The 3D view</a><a class="nav-link" href="devices.html">Devices &amp; bindings</a><a class="nav-link" href="info-displays.html">Info displays &amp; alerts</a><a class="nav-link" href="avatars-people.html">Avatars &amp; people</a><a class="nav-link" href="vehicles.html">Vehicles &amp; aircraft</a><a class="nav-link" href="yard-terrain.html">Yard &amp; terrain</a><a class="nav-link" href="outdoor-weather.html">Weather, sky &amp; geo</a><a class="nav-link" href="neighborhood-flights.html">Neighborhood &amp; flights</a><a class="nav-link active" href="kiosk-modes.html">Kiosk &amp; display modes</a><a class="nav-link" href="configurations.html">Configurations, notes &amp; offline</a></nav></aside><main class="main"><div class="prose"><h1 id="kiosk-display-modes">Kiosk &amp; display modes<a class="hlink" href="#kiosk-display-modes" aria-label="Link to this section">#</a></h1>
+<p>Diorama has three modes, so the same plan can be a full editor on your desktop and a locked-down live display on a wall tablet or TV.</p>
+<h2 id="the-three-modes">The three modes<a class="hlink" href="#the-three-modes" aria-label="Link to this section">#</a></h2>
+<div class="table-wrap"><table><thead><tr><th>Mode</th><th>What you can do</th></tr></thead><tbody><tr><td><strong>Edit</strong></td><td>The full editor: draw walls, place and bind fixtures, change settings. This is the default, and the only mode that saves changes.</td></tr><tr><td><strong>Kiosk</strong></td><td>See your views and control devices — click a light to toggle it, open an alarm keypad — but nothing is editable and nothing is written back. Device toggles are session-only.</td></tr><tr><td><strong>View only</strong></td><td>Pure visualization. No editing, no interaction; the plan just shows live state.</td></tr></tbody></table></div>
+<p>Switch modes from the topbar mode selector. In Kiosk and View modes the sidebar, floor editing tools, and settings are hidden — only what a viewer needs remains.</p>
+<p>Kiosk and View modes never save. Even a light you toggle in Kiosk mode lives only in the current browser session; it is never persisted to Home Assistant or to local storage. This is deliberate: a shared wall tablet should never rewrite your saved plan.</p>
+<h2 id="boot-straight-into-a-view-with-url-parameters">Boot straight into a view with URL parameters<a class="hlink" href="#boot-straight-into-a-view-with-url-parameters" aria-label="Link to this section">#</a></h2>
+<p>You can drive Diorama entirely from the URL, which is how you point a tablet or TV at a specific, locked display:</p>
+<pre><code>/diorama?mode=kiosk&amp;lock=1&amp;view=3d&amp;floor=First&amp;view3d=Living%20room
+/diorama?mode=view&amp;lock=1&amp;view=2d&amp;layers=simple</code></pre>
+<p>Supported parameters:</p>
+<div class="table-wrap"><table><thead><tr><th>Parameter</th><th>Effect</th></tr></thead><tbody><tr><td><code>mode</code></td><td><code>edit</code>, <code>kiosk</code>, or <code>view</code>.</td></tr><tr><td><code>lock=1</code></td><td>Hide the mode switcher so the device stays in the chosen mode.</td></tr><tr><td><code>view</code></td><td><code>2d</code> or <code>3d</code>.</td></tr><tr><td><code>floor</code></td><td>Which floor to show (by name or id). Disabled floors are ignored.</td></tr><tr><td><code>layers</code></td><td>A saved layer preset by name or id, or the built-in <code>simple</code> / <code>full</code>.</td></tr><tr><td><code>view3d</code></td><td>A saved 3D camera view by name or id.</td></tr><tr><td><code>cam</code></td><td>An explicit 3D camera pose: <code>x,y,z,tx,ty,tz</code>.</td></tr></tbody></table></div>
+<p>Templates fall back gracefully — if a named floor, layer preset, or saved view no longer exists, Diorama uses sensible defaults rather than showing an error.</p>
+<h2 id="the-kiosk-link-button">The Kiosk link button<a class="hlink" href="#the-kiosk-link-button" aria-label="Link to this section">#</a></h2>
+<p>You do not have to hand-write those URLs. Set up the exact view you want in the editor, then use the <strong>🔗 Kiosk link</strong> button in the topbar. It copies a URL that reproduces your current view — mode, floor, 2D/3D, layers, and (in 3D) the current camera pose baked into a <code>cam=</code> parameter. Paste that into your tablet&#39;s browser or a wall-panel dashboard.</p>
+<h2 id="the-lovelace-card">The Lovelace card<a class="hlink" href="#the-lovelace-card" aria-label="Link to this section">#</a></h2>
+<p>Diorama also ships a <strong>dashboard card</strong>, so a floor plan or a 3D room view can sit on any Lovelace dashboard beside your other cards. It rides Home Assistant&#39;s own connection (no token) and is <strong>read-only</strong>: build and edit the plan in the panel, then <em>show</em> it in cards.</p>
+<p><strong>1. Register the card resource</strong> (once):</p>
+<ul><li><strong>Settings → Dashboards → ⋮ (top right) → Resources → Add resource</strong></li><li>URL: <code>/hacsfiles/diorama/diorama-card.js</code></li><li>Type: <strong>JavaScript Module</strong></li></ul>
+<p><strong>2. Add the card</strong> from the dashboard card picker (search &quot;Diorama&quot; — it registers itself, and has a small visual editor), or in YAML:</p>
+<pre><code>type: custom:diorama-card
+view: 2d          # 2d (floor plan) | 3d (room view)   — default 2d
+mode: kiosk       # kiosk (tap to control) | view (display only) — default kiosk
+floor: Kitchen    # floor name or id (optional; default = current/first floor)
+layers: simple    # a 2D-layer preset name/id, or &quot;simple&quot; | &quot;full&quot; (optional)
+view3d: Iso       # a saved 3D view name/id (3D only, optional)
+cam: [x,y,z,tx,ty,tz]   # explicit 3D camera pose (3D only, optional)
+compact: false    # hide the overlay chrome; auto-on below ~360px wide
+panelPath: /diorama     # href for the ⤢ &quot;open full panel&quot; link (default /diorama)
+scene:            # 3D-only look overrides for THIS card (optional)
+  glassHouse: true
+  wallCutaway: true
+  cinematicOrbit: true
+  fovV: 45</code></pre>
+<div class="table-wrap"><table><thead><tr><th>Field</th><th>Values</th><th>Default</th><th>Notes</th></tr></thead><tbody><tr><td><code>view</code></td><td><code>2d</code> or <code>3d</code></td><td><code>2d</code></td><td>3D loads the renderer only when a 3D card mounts.</td></tr><tr><td><code>mode</code></td><td><code>kiosk</code> or <code>view</code></td><td><code>kiosk</code></td><td><code>edit</code> is rejected — a card never edits or saves the plan. <code>view</code> disables tap-to-control.</td></tr><tr><td><code>floor</code></td><td>floor name or id</td><td>current/first</td><td>Shared across cards on a tab (last-applied wins).</td></tr><tr><td><code>layers</code></td><td>preset name/id, <code>simple</code>, <code>full</code>, or an explicit <code>{layer: true/false}</code> map</td><td>plan default</td><td>The same presets as the panel&#39;s 2D Layers; the editor&#39;s <strong>Custom…</strong> option writes the map form.</td></tr><tr><td><code>scene</code></td><td>a map of 3D options</td><td>inherits the plan</td><td>3D only, and <strong>card-local</strong> — see below.</td></tr><tr><td><code>view3d</code></td><td>saved view name/id</td><td>iso framing</td><td>3D only.</td></tr><tr><td><code>cam</code></td><td>6 numbers</td><td>—</td><td>3D only; an explicit pose, and it wins over <code>view3d</code>.</td></tr><tr><td><code>compact</code></td><td><code>true</code> or <code>false</code></td><td>auto (below 360 px)</td><td>Hides the view-preset bar, reset button, weather chip, and compass.</td></tr><tr><td><code>panelPath</code></td><td>url path</td><td><code>/diorama</code></td><td>The <code>url_path</code> of your <code>panel_custom</code> panel, for the ⤢ link.</td></tr></tbody></table></div>
+<h3 id="card-local-3d-look">Card-local 3D look<a class="hlink" href="#card-local-3d-look" aria-label="Link to this section">#</a></h3>
+<p>A 3D card can override the plan&#39;s scene settings <strong>for itself only</strong>, so a dashboard card can be a slowly orbiting glass-house showpiece while the panel stays as you left it. In the card&#39;s visual editor these appear as (inherit) / On / Off dropdowns; in YAML they go under <code>scene</code>:</p>
+<p><code>glassHouse</code>, <code>wallCutaway</code>, <code>autoFollow</code>, <code>cinematicOrbit</code>, <code>simsCam</code>, <code>plumbobs</code>, and <code>skyBackdrop</code>, plus <code>fovV</code> (10–120) and <code>fovH</code> (10–150).</p>
+<p>Anything you leave out is inherited from the plan. 2D cards ignore <code>scene</code> entirely.</p>
+<h3 id="one-shared-connection">One shared connection<a class="hlink" href="#one-shared-connection" aria-label="Link to this section">#</a></h3>
+<p>Every Diorama card on a tab shares <strong>one</strong> live connection, so add as many as you like — a 2D card beside a 3D card, several rooms — at no extra cost.</p>
+<p>Two things to know about that sharing:</p>
+<ul><li><strong>The floor is shared</strong>, not per card. Cards on the same tab can show different views (one 2D, one 3D) and different modes, but the last-applied <code>floor</code> wins for all of them.</li><li>Cards are permanently kiosk-locked at the connection level, so nothing on a dashboard can ever write back to your saved plan.</li></ul>
+<h2 id="device-local-view-memory">Device-local view memory<a class="hlink" href="#device-local-view-memory" aria-label="Link to this section">#</a></h2>
+<p>Each device remembers the last view (2D or 3D) it was showing, stored locally in that browser, so a tablet reopens where it left off. A <code>view=</code> URL parameter always wins over the remembered view, so a locked kiosk URL stays put.</p>
+<h2 id="touch-behavior">Touch behavior<a class="hlink" href="#touch-behavior" aria-label="Link to this section">#</a></h2>
+<p>Diorama is built to behave well on touch screens:</p>
+<ul><li><strong>Tap to control.</strong> In Kiosk mode, tapping a light, switch, appliance, door lock, alarm keypad, or other bound fixture toggles or opens it, just like a click.</li><li><strong>Double-tap</strong> on a light opens its color and brightness controls (where available).</li><li><strong>Two-finger</strong> gestures pan and zoom the 2D plan and orbit the 3D view; they will not accidentally open the Home Assistant sidebar drawer, except for an intentional swipe that starts right at the left edge of the screen.</li><li>The 3D view caps its pixel ratio and guards against WebGL context loss, so tablets stay smooth and recover cleanly if the browser drops the GL context.</li></ul>
+<h2 id="running-on-tablets-and-tvs">Running on tablets and TVs<a class="hlink" href="#running-on-tablets-and-tvs" aria-label="Link to this section">#</a></h2>
+<p>Because everything you need is in the URL, putting Diorama on a wall is straightforward:</p>
+<ol><li>Build and lay out the view you want in <strong>Edit</strong> mode.</li><li>Save the layer preset and/or 3D camera view you want to show.</li><li>Use the <strong>🔗 Kiosk link</strong> button to copy a locked URL, or assemble one from the parameter table above.</li><li>Open that URL on the tablet or TV browser (or point a kiosk-browser app or a Home Assistant dashboard card at it).</li></ol>
+<p>Add <code>lock=1</code> so the device cannot be bumped out of Kiosk or View mode, and pick the floor, view, and camera that make the best always-on display for that spot in your home.</p>
+<p>For plans you want available even without a Home Assistant connection, see offline standalone mode in <a href="configurations.html">Configurations, notes &amp; offline</a>.</p>
+</div></main></div>
+<script>
+document.querySelectorAll('.nav-link').forEach(function(a){a.addEventListener('click',function(){document.body.classList.remove('nav-open');});});
+</script>
+</body>
+</html>

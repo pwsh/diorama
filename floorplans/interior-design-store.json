@@ -1,0 +1,1192 @@
+{
+  "diorama": 2,
+  "name": "Interior Design Studio — Vignette & Co.",
+  "exportedAt": "2026-08-10T00:00:00.000Z",
+  "store": {
+    "v": 2,
+    "floors": [
+      {
+        "id": "interior-design-store-fl1",
+        "name": "Studio Floor",
+        "w": 13000,
+        "d": 11000,
+        "walls": [
+          {
+            "id": "interior-design-store-w1",
+            "points": [
+              {
+                "x": 0,
+                "y": 0
+              },
+              {
+                "x": 13000,
+                "y": 0
+              }
+            ]
+          },
+          {
+            "id": "interior-design-store-w2",
+            "points": [
+              {
+                "x": 13000,
+                "y": 0
+              },
+              {
+                "x": 13000,
+                "y": 11000
+              }
+            ]
+          },
+          {
+            "id": "interior-design-store-w3",
+            "points": [
+              {
+                "x": 13000,
+                "y": 11000
+              },
+              {
+                "x": 0,
+                "y": 11000
+              }
+            ]
+          },
+          {
+            "id": "interior-design-store-w4",
+            "points": [
+              {
+                "x": 0,
+                "y": 11000
+              },
+              {
+                "x": 0,
+                "y": 0
+              }
+            ]
+          },
+          {
+            "id": "interior-design-store-w6",
+            "points": [
+              {
+                "x": 4400,
+                "y": 0
+              },
+              {
+                "x": 4400,
+                "y": 11000
+              }
+            ],
+            "kind": "invisible"
+          },
+          {
+            "id": "interior-design-store-w7",
+            "points": [
+              {
+                "x": 8700,
+                "y": 0
+              },
+              {
+                "x": 8700,
+                "y": 11000
+              }
+            ],
+            "kind": "invisible"
+          },
+          {
+            "id": "interior-design-store-w8",
+            "points": [
+              {
+                "x": 0,
+                "y": 5600
+              },
+              {
+                "x": 13000,
+                "y": 5600
+              }
+            ],
+            "kind": "invisible"
+          },
+          {
+            "id": "interior-design-store-w9",
+            "points": [
+              {
+                "x": 4400,
+                "y": 0
+              },
+              {
+                "x": 4400,
+                "y": 2200
+              }
+            ],
+            "kind": "half"
+          },
+          {
+            "id": "interior-design-store-w10",
+            "points": [
+              {
+                "x": 4400,
+                "y": 8000
+              },
+              {
+                "x": 4400,
+                "y": 11000
+              }
+            ],
+            "kind": "railing"
+          },
+          {
+            "id": "interior-design-store-w11",
+            "points": [
+              {
+                "x": 8700,
+                "y": 3000
+              },
+              {
+                "x": 8700,
+                "y": 5600
+              }
+            ],
+            "kind": "half"
+          },
+          {
+            "id": "interior-design-store-w12",
+            "points": [
+              {
+                "x": 8700,
+                "y": 5600
+              },
+              {
+                "x": 8700,
+                "y": 7600
+              }
+            ],
+            "kind": "railing"
+          },
+          {
+            "id": "interior-design-store-w5",
+            "points": [
+              {
+                "x": 1400,
+                "y": 5600
+              },
+              {
+                "x": 3600,
+                "y": 5600
+              }
+            ],
+            "kind": "half"
+          },
+          {
+            "id": "interior-design-store-w13",
+            "points": [
+              {
+                "x": 9600,
+                "y": 5600
+              },
+              {
+                "x": 12200,
+                "y": 5600
+              }
+            ],
+            "kind": "railing"
+          }
+        ],
+        "furniture": [
+          {
+            "id": "interior-design-store-fn1",
+            "x": 2200,
+            "y": 4400,
+            "w": 2000,
+            "h": 900,
+            "kind": "sofa",
+            "label": "Staged sofa",
+            "color": "#5c6b73"
+          },
+          {
+            "id": "interior-design-store-fn2",
+            "x": 2200,
+            "y": 3200,
+            "w": 1100,
+            "h": 600,
+            "kind": "coffee_table"
+          },
+          {
+            "id": "interior-design-store-fn3",
+            "x": 700,
+            "y": 3400,
+            "w": 500,
+            "h": 500,
+            "kind": "chair",
+            "rotation": 270,
+            "label": "Accent chair"
+          },
+          {
+            "id": "interior-design-store-fn4",
+            "x": 300,
+            "y": 1600,
+            "w": 800,
+            "h": 350,
+            "kind": "bookshelf",
+            "rotation": 270,
+            "label": "Styled shelf"
+          },
+          {
+            "id": "interior-design-store-fn5",
+            "x": 4100,
+            "y": 2400,
+            "w": 1600,
+            "h": 450,
+            "kind": "tv_stand",
+            "rotation": 90,
+            "label": "Media console"
+          },
+          {
+            "id": "interior-design-store-fn6",
+            "x": 4100,
+            "y": 2400,
+            "w": 1450,
+            "h": 250,
+            "kind": "tv",
+            "rotation": 90,
+            "elevation": 550,
+            "localState": "off"
+          },
+          {
+            "id": "interior-design-store-fn7",
+            "x": 2200,
+            "y": 3800,
+            "w": 3000,
+            "h": 2200,
+            "kind": "rug",
+            "color": "#7a5c48"
+          },
+          {
+            "id": "interior-design-store-fn8",
+            "x": 500,
+            "y": 4600,
+            "w": 400,
+            "h": 400,
+            "kind": "plant"
+          },
+          {
+            "id": "interior-design-store-fn9",
+            "x": 6500,
+            "y": 3200,
+            "w": 1800,
+            "h": 1000,
+            "kind": "table",
+            "label": "Staged dining table"
+          },
+          {
+            "id": "interior-design-store-fn10",
+            "x": 5500,
+            "y": 3200,
+            "w": 500,
+            "h": 500,
+            "kind": "chair",
+            "rotation": 270
+          },
+          {
+            "id": "interior-design-store-fn11",
+            "x": 7500,
+            "y": 3200,
+            "w": 500,
+            "h": 500,
+            "kind": "chair",
+            "rotation": 90
+          },
+          {
+            "id": "interior-design-store-fn12",
+            "x": 6500,
+            "y": 2200,
+            "w": 500,
+            "h": 500,
+            "kind": "chair",
+            "rotation": 180
+          },
+          {
+            "id": "interior-design-store-fn13",
+            "x": 6500,
+            "y": 4200,
+            "w": 500,
+            "h": 500,
+            "kind": "chair"
+          },
+          {
+            "id": "interior-design-store-fn14",
+            "x": 6500,
+            "y": 800,
+            "w": 1400,
+            "h": 500,
+            "kind": "dresser",
+            "label": "Sideboard"
+          },
+          {
+            "id": "interior-design-store-fn15",
+            "x": 6500,
+            "y": 3200,
+            "w": 3200,
+            "h": 2400,
+            "kind": "rug",
+            "color": "#6b5340"
+          },
+          {
+            "id": "interior-design-store-fn16",
+            "x": 8300,
+            "y": 900,
+            "w": 400,
+            "h": 400,
+            "kind": "plant"
+          },
+          {
+            "id": "interior-design-store-fn17",
+            "x": 10600,
+            "y": 1400,
+            "w": 1600,
+            "h": 800,
+            "kind": "desk",
+            "label": "Staged desk"
+          },
+          {
+            "id": "interior-design-store-fn18",
+            "x": 10600,
+            "y": 2400,
+            "w": 500,
+            "h": 500,
+            "kind": "chair"
+          },
+          {
+            "id": "interior-design-store-fn19",
+            "x": 12700,
+            "y": 1400,
+            "w": 800,
+            "h": 350,
+            "kind": "bookshelf",
+            "rotation": 90,
+            "label": "Library wall"
+          },
+          {
+            "id": "interior-design-store-fn20",
+            "x": 12700,
+            "y": 2400,
+            "w": 800,
+            "h": 350,
+            "kind": "bookshelf",
+            "rotation": 90,
+            "label": "Library wall"
+          },
+          {
+            "id": "interior-design-store-fn21",
+            "x": 11800,
+            "y": 4600,
+            "w": 900,
+            "h": 400,
+            "kind": "cabinet",
+            "rotation": 180,
+            "label": "Filing cabinet"
+          },
+          {
+            "id": "interior-design-store-fn22",
+            "x": 9200,
+            "y": 4800,
+            "w": 400,
+            "h": 400,
+            "kind": "plant"
+          },
+          {
+            "id": "interior-design-store-fn23",
+            "x": 10600,
+            "y": 2200,
+            "w": 2800,
+            "h": 2200,
+            "kind": "rug",
+            "color": "#4f5a63"
+          },
+          {
+            "id": "interior-design-store-fn24",
+            "x": 2200,
+            "y": 9800,
+            "w": 1524,
+            "h": 2032,
+            "kind": "bed",
+            "label": "Staged queen bed"
+          },
+          {
+            "id": "interior-design-store-fn25",
+            "x": 900,
+            "y": 9400,
+            "w": 500,
+            "h": 400,
+            "kind": "nightstand"
+          },
+          {
+            "id": "interior-design-store-fn26",
+            "x": 3500,
+            "y": 9400,
+            "w": 500,
+            "h": 400,
+            "kind": "nightstand"
+          },
+          {
+            "id": "interior-design-store-fn27",
+            "x": 700,
+            "y": 6600,
+            "w": 1200,
+            "h": 500,
+            "kind": "dresser"
+          },
+          {
+            "id": "interior-design-store-fn28",
+            "x": 3600,
+            "y": 6600,
+            "w": 1200,
+            "h": 600,
+            "kind": "wardrobe"
+          },
+          {
+            "id": "interior-design-store-fn29",
+            "x": 2200,
+            "y": 8300,
+            "w": 1400,
+            "h": 400,
+            "kind": "bench",
+            "label": "Bed-end bench"
+          },
+          {
+            "id": "interior-design-store-fn30",
+            "x": 2200,
+            "y": 8600,
+            "w": 3200,
+            "h": 2600,
+            "kind": "rug",
+            "color": "#8a7a63"
+          },
+          {
+            "id": "interior-design-store-fn31",
+            "x": 4000,
+            "y": 10400,
+            "w": 400,
+            "h": 400,
+            "kind": "plant"
+          },
+          {
+            "id": "interior-design-store-fn32",
+            "x": 7600,
+            "y": 6500,
+            "w": 2000,
+            "h": 800,
+            "kind": "desk",
+            "label": "Checkout desk"
+          },
+          {
+            "id": "interior-design-store-fn33",
+            "x": 7600,
+            "y": 7500,
+            "w": 500,
+            "h": 500,
+            "kind": "chair"
+          },
+          {
+            "id": "interior-design-store-fn34",
+            "x": 4700,
+            "y": 8600,
+            "w": 800,
+            "h": 350,
+            "kind": "bookshelf",
+            "rotation": 270,
+            "label": "Nook shelf"
+          },
+          {
+            "id": "interior-design-store-fn35",
+            "x": 4700,
+            "y": 9600,
+            "w": 800,
+            "h": 350,
+            "kind": "bookshelf",
+            "rotation": 270,
+            "label": "Nook shelf"
+          },
+          {
+            "id": "interior-design-store-fn36",
+            "x": 5800,
+            "y": 9400,
+            "w": 600,
+            "h": 800,
+            "kind": "rocking_chair",
+            "label": "Reading rocker"
+          },
+          {
+            "id": "interior-design-store-fn37",
+            "x": 5800,
+            "y": 8400,
+            "w": 700,
+            "h": 700,
+            "kind": "ottoman"
+          },
+          {
+            "id": "interior-design-store-fn38",
+            "x": 5700,
+            "y": 8900,
+            "w": 2600,
+            "h": 2600,
+            "kind": "rug",
+            "color": "#6d5f4f"
+          },
+          {
+            "id": "interior-design-store-fn39",
+            "x": 8400,
+            "y": 10400,
+            "w": 400,
+            "h": 400,
+            "kind": "plant"
+          },
+          {
+            "id": "interior-design-store-fn40",
+            "x": 11300,
+            "y": 7900,
+            "w": 1800,
+            "h": 750,
+            "kind": "chaise",
+            "rotation": 270,
+            "label": "Hearth chaise",
+            "color": "#7d6552"
+          },
+          {
+            "id": "interior-design-store-fn41",
+            "x": 11400,
+            "y": 9600,
+            "w": 600,
+            "h": 800,
+            "kind": "rocking_chair",
+            "rotation": 270,
+            "label": "Hearth rocker"
+          },
+          {
+            "id": "interior-design-store-fn42",
+            "x": 12000,
+            "y": 8700,
+            "w": 1100,
+            "h": 600,
+            "kind": "coffee_table",
+            "rotation": 90
+          },
+          {
+            "id": "interior-design-store-fn43",
+            "x": 9200,
+            "y": 9600,
+            "w": 800,
+            "h": 350,
+            "kind": "bookshelf",
+            "rotation": 270,
+            "label": "Lounge shelf"
+          },
+          {
+            "id": "interior-design-store-fn44",
+            "x": 11400,
+            "y": 8600,
+            "w": 3000,
+            "h": 2600,
+            "kind": "rug",
+            "color": "#8c5f45"
+          },
+          {
+            "id": "interior-design-store-fn45",
+            "x": 12600,
+            "y": 6400,
+            "w": 400,
+            "h": 400,
+            "kind": "plant"
+          },
+          {
+            "id": "interior-design-store-fn46",
+            "x": 9600,
+            "y": 6300,
+            "w": 400,
+            "h": 400,
+            "kind": "plant"
+          }
+        ],
+        "lights": [
+          {
+            "id": "interior-design-store-lt1",
+            "x": 3600,
+            "y": 4600,
+            "entity_id": null,
+            "iconKind": "lamp",
+            "height": 1500,
+            "localState": "on",
+            "label": "Living lamp"
+          },
+          {
+            "id": "interior-design-store-lt2",
+            "x": 2200,
+            "y": 1500,
+            "entity_id": null,
+            "iconKind": "recessed",
+            "radius": 700,
+            "localState": "on",
+            "label": "Living can"
+          },
+          {
+            "id": "interior-design-store-lt3",
+            "x": 1200,
+            "y": 4200,
+            "entity_id": null,
+            "iconKind": "recessed",
+            "radius": 700,
+            "label": "Living can"
+          },
+          {
+            "id": "interior-design-store-lt4",
+            "x": 6500,
+            "y": 3200,
+            "entity_id": null,
+            "iconKind": "pendant",
+            "localState": "on",
+            "label": "Dining pendant"
+          },
+          {
+            "id": "interior-design-store-lt5",
+            "x": 6500,
+            "y": 1500,
+            "entity_id": null,
+            "iconKind": "tiered",
+            "localState": "on",
+            "label": "Sideboard chandelier"
+          },
+          {
+            "id": "interior-design-store-lt6",
+            "x": 10600,
+            "y": 3600,
+            "entity_id": null,
+            "iconKind": "round",
+            "localState": "on",
+            "label": "Office panel"
+          },
+          {
+            "id": "interior-design-store-lt7",
+            "x": 10600,
+            "y": 900,
+            "entity_id": null,
+            "iconKind": "under_cabinet",
+            "rotation": 0,
+            "length": 1600,
+            "localState": "on",
+            "label": "Desk task light"
+          },
+          {
+            "id": "interior-design-store-lt8",
+            "x": 1100,
+            "y": 10600,
+            "entity_id": null,
+            "iconKind": "sconce",
+            "radius": 500,
+            "rotation": 180,
+            "localState": "on",
+            "label": "Bed sconce L"
+          },
+          {
+            "id": "interior-design-store-lt9",
+            "x": 3300,
+            "y": 10600,
+            "entity_id": null,
+            "iconKind": "sconce",
+            "radius": 500,
+            "rotation": 180,
+            "localState": "on",
+            "label": "Bed sconce R"
+          },
+          {
+            "id": "interior-design-store-lt10",
+            "x": 2200,
+            "y": 7000,
+            "entity_id": null,
+            "iconKind": "bulb",
+            "label": "Bedroom ceiling"
+          },
+          {
+            "id": "interior-design-store-lt11",
+            "x": 5800,
+            "y": 9000,
+            "entity_id": null,
+            "iconKind": "string",
+            "radius": 1400,
+            "localState": "on",
+            "label": "Nook string"
+          },
+          {
+            "id": "interior-design-store-lt12",
+            "x": 4900,
+            "y": 10200,
+            "entity_id": null,
+            "iconKind": "jar",
+            "localState": "on",
+            "label": "Nook lantern"
+          },
+          {
+            "id": "interior-design-store-lt13",
+            "x": 6700,
+            "y": 8500,
+            "entity_id": null,
+            "iconKind": "lamp",
+            "height": 1500,
+            "localState": "on",
+            "label": "Reading lamp"
+          },
+          {
+            "id": "interior-design-store-lt14",
+            "x": 7600,
+            "y": 6500,
+            "entity_id": null,
+            "iconKind": "round",
+            "localState": "on",
+            "label": "Checkout panel"
+          },
+          {
+            "id": "interior-design-store-lt15",
+            "x": 12725,
+            "y": 8300,
+            "entity_id": null,
+            "iconKind": "fireplace",
+            "rotation": 90,
+            "localState": "on",
+            "label": "Showroom hearth"
+          },
+          {
+            "id": "interior-design-store-lt16",
+            "x": 10400,
+            "y": 7400,
+            "entity_id": null,
+            "iconKind": "bowl",
+            "localState": "on",
+            "label": "Lounge uplight"
+          },
+          {
+            "id": "interior-design-store-lt17",
+            "x": 12800,
+            "y": 6000,
+            "entity_id": null,
+            "iconKind": "wall_sconce",
+            "radius": 500,
+            "rotation": 90,
+            "label": "Lounge sconce"
+          },
+          {
+            "id": "interior-design-store-lt18",
+            "x": 4400,
+            "y": 4200,
+            "entity_id": null,
+            "iconKind": "spot",
+            "radius": 800,
+            "localState": "on",
+            "label": "Track spot"
+          },
+          {
+            "id": "interior-design-store-lt19",
+            "x": 8700,
+            "y": 2000,
+            "entity_id": null,
+            "iconKind": "spot",
+            "radius": 800,
+            "localState": "on",
+            "label": "Track spot"
+          },
+          {
+            "id": "interior-design-store-lt20",
+            "x": 8700,
+            "y": 8800,
+            "entity_id": null,
+            "iconKind": "spot",
+            "radius": 800,
+            "localState": "on",
+            "label": "Track spot"
+          },
+          {
+            "id": "interior-design-store-lt21",
+            "x": 4400,
+            "y": 6600,
+            "entity_id": null,
+            "iconKind": "spot",
+            "radius": 800,
+            "localState": "on",
+            "label": "Track spot"
+          }
+        ],
+        "switches": [
+          {
+            "id": "interior-design-store-sw1",
+            "x": 7800,
+            "y": 200,
+            "entity_id": null,
+            "rotation": 0,
+            "label": "Entrance bank"
+          },
+          {
+            "id": "interior-design-store-sw2",
+            "x": 200,
+            "y": 6600,
+            "entity_id": null,
+            "rotation": 90,
+            "label": "Stock room"
+          },
+          {
+            "id": "interior-design-store-sw3",
+            "x": 12800,
+            "y": 5000,
+            "entity_id": null,
+            "rotation": 90,
+            "label": "Lounge"
+          }
+        ],
+        "sensors": [],
+        "motionSensors": [
+          {
+            "id": "interior-design-store-mo1",
+            "x": 2200,
+            "y": 2000,
+            "heading": 0,
+            "fov": 360,
+            "range": 4000,
+            "label": "Living vignette presence",
+            "entity_id": null,
+            "color": "#b39ddb",
+            "avatar": true,
+            "demo": true,
+            "avatarKinds": [
+              "adult",
+              "supermodel"
+            ]
+          },
+          {
+            "id": "interior-design-store-mo2",
+            "x": 6700,
+            "y": 9800,
+            "heading": 0,
+            "fov": 360,
+            "range": 4000,
+            "label": "Nook presence",
+            "entity_id": null,
+            "color": "#4db6ac",
+            "avatar": true,
+            "demo": true,
+            "avatarKinds": [
+              "professional",
+              "teen"
+            ]
+          },
+          {
+            "id": "interior-design-store-mo3",
+            "x": 10300,
+            "y": 7300,
+            "heading": 0,
+            "fov": 360,
+            "range": 4000,
+            "label": "Lounge presence",
+            "entity_id": null,
+            "color": "#ffab91",
+            "avatar": true,
+            "demo": true,
+            "avatarKinds": [
+              "elder",
+              "adult"
+            ]
+          }
+        ],
+        "roamers": [
+          {
+            "id": "interior-design-store-ro1",
+            "name": "Iris",
+            "avatarKinds": [
+              "supermodel",
+              "professional"
+            ],
+            "color": "#ce93d8"
+          },
+          {
+            "id": "interior-design-store-ro2",
+            "name": "Theo",
+            "avatarKinds": [
+              "adult",
+              "elder"
+            ],
+            "color": "#80cbc4"
+          },
+          {
+            "id": "interior-design-store-ro3",
+            "name": "Wren",
+            "avatarKinds": [
+              "teen",
+              "adult"
+            ],
+            "color": "#ffb74d"
+          }
+        ],
+        "envSensors": [
+          {
+            "id": "interior-design-store-env1",
+            "x": 8500,
+            "y": 5300,
+            "entity_id": null,
+            "kind": "temperature",
+            "label": "Showroom temp",
+            "height": 1500
+          },
+          {
+            "id": "interior-design-store-env2",
+            "x": 4600,
+            "y": 1200,
+            "entity_id": null,
+            "kind": "illuminance",
+            "label": "Window-wall lux",
+            "height": 1400
+          }
+        ],
+        "look3d": {
+          "floorTex": "wood",
+          "floorColor": "#c8a878",
+          "wallColor": "#f4efe6"
+        },
+        "doors": [
+          {
+            "id": "interior-design-store-dr1",
+            "x": 8000,
+            "y": 0,
+            "w": 1600,
+            "rotation": 0,
+            "entity_id": null,
+            "doorbellEntity": null,
+            "label": "Studio entrance"
+          },
+          {
+            "id": "interior-design-store-dr2",
+            "x": 5600,
+            "y": 11000,
+            "w": 900,
+            "rotation": 0,
+            "entity_id": null,
+            "kind": "sliding",
+            "label": "Service / stock"
+          }
+        ],
+        "windows": [
+          {
+            "id": "interior-design-store-win1",
+            "x": 1500,
+            "y": 0,
+            "w": 1800,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 800,
+            "height": 1500,
+            "kind": "double_hung",
+            "label": "Double-hung + split drapes",
+            "curtain": {
+              "style": "split",
+              "color": "#c9b79c"
+            },
+            "curtainPos": 55
+          },
+          {
+            "id": "interior-design-store-win2",
+            "x": 3400,
+            "y": 0,
+            "w": 1400,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 800,
+            "height": 1500,
+            "kind": "casement_pair",
+            "label": "Casement pair + side drape",
+            "curtain": {
+              "style": "vertical",
+              "side": "left",
+              "color": "#8fa6a0"
+            },
+            "curtainPos": 20
+          },
+          {
+            "id": "interior-design-store-win3",
+            "x": 6200,
+            "y": 0,
+            "w": 2200,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 400,
+            "height": 2000,
+            "kind": "sliding",
+            "label": "Slider + roman shade",
+            "curtain": {
+              "style": "horizontal",
+              "color": "#e2d6bd"
+            },
+            "curtainPos": 80
+          },
+          {
+            "id": "interior-design-store-win4",
+            "x": 11200,
+            "y": 0,
+            "w": 2400,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 600,
+            "height": 1900,
+            "kind": "picture",
+            "label": "Picture window + open drapes",
+            "curtain": {
+              "style": "split",
+              "color": "#b98d72"
+            },
+            "curtainPos": 100
+          },
+          {
+            "id": "interior-design-store-win5",
+            "x": 13000,
+            "y": 3000,
+            "w": 1600,
+            "rotation": 90,
+            "entity_id": null,
+            "sill": 900,
+            "height": 1400,
+            "kind": "double_hung",
+            "label": "East double-hung",
+            "curtain": {
+              "style": "vertical",
+              "side": "right",
+              "color": "#a8949f"
+            },
+            "curtainPos": 40
+          },
+          {
+            "id": "interior-design-store-win6",
+            "x": 3000,
+            "y": 11000,
+            "w": 2000,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 900,
+            "height": 1300,
+            "kind": "sliding",
+            "label": "Bedroom slider",
+            "curtain": {
+              "style": "horizontal",
+              "color": "#cfd6d9"
+            },
+            "curtainPos": 100
+          }
+        ],
+        "bg": null,
+        "model3d": null,
+        "rooms": [
+          {
+            "id": "interior-design-store-rm1",
+            "name": "Living Room Vignette",
+            "anchor": {
+              "x": 2200,
+              "y": 2800
+            }
+          },
+          {
+            "id": "interior-design-store-rm2",
+            "name": "Dining Vignette",
+            "anchor": {
+              "x": 6500,
+              "y": 2800
+            }
+          },
+          {
+            "id": "interior-design-store-rm3",
+            "name": "Home Office Vignette",
+            "anchor": {
+              "x": 10800,
+              "y": 2800
+            }
+          },
+          {
+            "id": "interior-design-store-rm4",
+            "name": "Bedroom Vignette",
+            "anchor": {
+              "x": 2200,
+              "y": 8300
+            }
+          },
+          {
+            "id": "interior-design-store-rm5",
+            "name": "Reading Nook & Checkout",
+            "anchor": {
+              "x": 6500,
+              "y": 8300
+            }
+          },
+          {
+            "id": "interior-design-store-rm6",
+            "name": "Fireplace Lounge",
+            "anchor": {
+              "x": 10800,
+              "y": 8300
+            }
+          }
+        ],
+        "bleProxies": [],
+        "alarmPanels": [],
+        "safetySensors": [
+          {
+            "id": "interior-design-store-sf1",
+            "x": 6600,
+            "y": 5300,
+            "kind": "smoke",
+            "entity_id": null,
+            "label": "Showroom smoke"
+          }
+        ],
+        "robots": [],
+        "presenceZones": [],
+        "cameras": [],
+        "groundAreas": [],
+        "voidAreas": [],
+        "rulers": [
+          {
+            "id": "interior-design-store-ru1",
+            "a": {
+              "kind": "wall",
+              "wallId": "interior-design-store-w4"
+            },
+            "b": {
+              "kind": "wall",
+              "wallId": "interior-design-store-w2"
+            }
+          },
+          {
+            "id": "interior-design-store-ru2",
+            "a": {
+              "kind": "wall",
+              "wallId": "interior-design-store-w1"
+            },
+            "b": {
+              "kind": "wall",
+              "wallId": "interior-design-store-w5"
+            }
+          }
+        ],
+        "dimensionMode": "outside"
+      }
+    ],
+    "currentFloorId": "interior-design-store-fl1",
+    "activeSensorId": null,
+    "coverage": true,
+    "imperial": false,
+    "showDetails": false,
+    "useRawTargets": false,
+    "showMotionZones": true,
+    "scene3d": {
+      "preset": "day",
+      "floorTex": "wood",
+      "floorColor": "#c8a878",
+      "wallColor": "#f4efe6",
+      "wallCutaway": true,
+      "plumbobs": true
+    },
+    "customObjects": [],
+    "people": [],
+    "bleShowUnknown": true,
+    "notes": "~1,539 sq ft (143 m²) showroom · 1 floor · 6 vignettes — staging & dimensions showcase\n\nA furniture / interior-design studio whose entire floor is a walk-through catalogue:\nsix fully-dressed room vignettes with no doors between them. Each vignette is a real\nRoom — it is closed into a wall loop by INVISIBLE chords (which the nav rasterizer\nignores) and separated visually by short half-wall and railing stubs laid on the same\nlines, so sightlines stay open across the whole studio and a shopper can wander from\none staged room straight into the next.\n\nThe south elevation is the window wall: a double-hung, a casement pair, a full-height\nslider and a picture window, each dressed with a different curtain treatment and\nopenness (split drapes half-drawn, a single side drape nearly closed, a roman shade\nmostly raised, and open drapes), plus an east double-hung and a bedroom slider.\n\nDimension display is switched on: `outside` mode puts CAD dimension lines on every\nexterior wall segment plus the overall structure extents, and two rulers anchored to\nopposing exterior walls report the clear inside width and depth — anchored to the wall\nobjects, so they re-measure themselves if the shell is ever edited.\n\nLiving Room Vignette: staged sofa and coffee table on a large rug, an accent chair, a\n  styled bookshelf, and a media console with a TV; floor lamp plus recessed cans.\nDining Vignette: a four-chair dining table on a rug with a sideboard under the slider;\n  pendant over the table and a tiered chandelier over the sideboard.\nHome Office Vignette: a staged desk and chair, two library-wall bookshelves, a filing\n  cabinet and a plant; flat round ceiling panel plus an under-cabinet task strip.\nBedroom Vignette: queen bed with matching nightstands, dresser, wardrobe and a bed-end\n  bench on a wool rug, lit by a sconce pair flanking the headboard.\nReading Nook & Checkout: two nook shelves, a rocking chair with an ottoman under string\n  lights and a jar lantern, and the studio checkout desk.\nFireplace Lounge: a wall-locked hearth with a chaise and a rocking chair drawn up to it,\n  a coffee table, a lounge shelf and plants; uplight bowl and a wall sconce.\n\nThree unbound demo AI-avatar presence sensors (living, nook, lounge) keep a browsing\nshopper in each of those vignettes; three roamers wander the whole floor. Temperature\nand illuminance env sensors and a smoke detector sit on the circulation spine.\n\nBack of house: the stock-room opening on the north wall is a barn slider — the\n  showroom sells the look, so it wears it."
+  }
+}

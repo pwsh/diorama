@@ -1,0 +1,1628 @@
+{
+  "diorama": 2,
+  "name": "Pocket Zoo — Toon Safari",
+  "exportedAt": "2026-08-10T00:00:00.000Z",
+  "store": {
+    "v": 2,
+    "floors": [
+      {
+        "id": "zoo-fl1",
+        "name": "Zoo Grounds",
+        "w": 18000,
+        "d": 14000,
+        "walls": [
+          {
+            "id": "zoo-w1",
+            "points": [
+              {
+                "x": 10600,
+                "y": 700
+              },
+              {
+                "x": 17300,
+                "y": 700
+              },
+              {
+                "x": 17300,
+                "y": 13300
+              },
+              {
+                "x": 700,
+                "y": 13300
+              },
+              {
+                "x": 700,
+                "y": 700
+              }
+            ],
+            "kind": "hedge"
+          },
+          {
+            "id": "zoo-w2",
+            "points": [
+              {
+                "x": 700,
+                "y": 700
+              },
+              {
+                "x": 7400,
+                "y": 700
+              }
+            ],
+            "kind": "hedge"
+          },
+          {
+            "id": "zoo-w3",
+            "points": [
+              {
+                "x": 1800,
+                "y": 8200
+              },
+              {
+                "x": 6200,
+                "y": 8200
+              },
+              {
+                "x": 6200,
+                "y": 12800
+              },
+              {
+                "x": 1800,
+                "y": 12800
+              },
+              {
+                "x": 1800,
+                "y": 8200
+              }
+            ],
+            "kind": "fence_chainlink"
+          },
+          {
+            "id": "zoo-w4",
+            "points": [
+              {
+                "x": 7600,
+                "y": 8200
+              },
+              {
+                "x": 11200,
+                "y": 8200
+              },
+              {
+                "x": 11200,
+                "y": 12800
+              },
+              {
+                "x": 7600,
+                "y": 12800
+              },
+              {
+                "x": 7600,
+                "y": 8200
+              }
+            ],
+            "kind": "fence_chainlink"
+          },
+          {
+            "id": "zoo-w5",
+            "points": [
+              {
+                "x": 12600,
+                "y": 8200
+              },
+              {
+                "x": 16400,
+                "y": 8200
+              },
+              {
+                "x": 16400,
+                "y": 12800
+              },
+              {
+                "x": 12600,
+                "y": 12800
+              },
+              {
+                "x": 12600,
+                "y": 8200
+              }
+            ],
+            "kind": "fence_chainlink"
+          },
+          {
+            "id": "zoo-w6",
+            "points": [
+              {
+                "x": 1800,
+                "y": 3400
+              },
+              {
+                "x": 5400,
+                "y": 3400
+              },
+              {
+                "x": 5400,
+                "y": 6000
+              },
+              {
+                "x": 1800,
+                "y": 6000
+              },
+              {
+                "x": 1800,
+                "y": 3400
+              }
+            ],
+            "kind": "fence_picket"
+          },
+          {
+            "id": "zoo-w7",
+            "points": [
+              {
+                "x": 12800,
+                "y": 3400
+              },
+              {
+                "x": 16400,
+                "y": 3400
+              },
+              {
+                "x": 16400,
+                "y": 6000
+              },
+              {
+                "x": 12800,
+                "y": 6000
+              },
+              {
+                "x": 12800,
+                "y": 3400
+              }
+            ],
+            "kind": "fence_chainlink"
+          },
+          {
+            "id": "zoo-w8",
+            "points": [
+              {
+                "x": 6400,
+                "y": 3400
+              },
+              {
+                "x": 9000,
+                "y": 3400
+              },
+              {
+                "x": 9000,
+                "y": 5800
+              },
+              {
+                "x": 6400,
+                "y": 5800
+              },
+              {
+                "x": 6400,
+                "y": 3400
+              }
+            ]
+          }
+        ],
+        "furniture": [
+          {
+            "id": "zoo-fn2",
+            "x": 6000,
+            "y": 2200,
+            "w": 1800,
+            "h": 650,
+            "kind": "counter",
+            "label": "Ticket counter"
+          },
+          {
+            "id": "zoo-fn3",
+            "x": 6000,
+            "y": 1500,
+            "w": 400,
+            "h": 400,
+            "kind": "stool",
+            "rotation": 180,
+            "label": "Ticket stool"
+          },
+          {
+            "id": "zoo-fn1",
+            "x": 6400,
+            "y": 1300,
+            "w": 400,
+            "h": 400,
+            "kind": "block",
+            "label": "Zoo flagpole",
+            "customKindId": "zoo-flagpole"
+          },
+          {
+            "id": "zoo-fn4",
+            "x": 8000,
+            "y": 1500,
+            "w": 1500,
+            "h": 400,
+            "kind": "bench",
+            "rotation": 180
+          },
+          {
+            "id": "zoo-fn5",
+            "x": 4000,
+            "y": 1500,
+            "w": 1500,
+            "h": 400,
+            "kind": "bench",
+            "rotation": 180
+          },
+          {
+            "id": "zoo-fn6",
+            "x": 10200,
+            "y": 1250,
+            "w": 600,
+            "h": 700,
+            "kind": "trash_bin"
+          },
+          {
+            "id": "zoo-fn7",
+            "x": 15600,
+            "y": 1200,
+            "w": 600,
+            "h": 700,
+            "kind": "recycle_bin"
+          },
+          {
+            "id": "zoo-fn8",
+            "x": 11900,
+            "y": 1600,
+            "w": 1800,
+            "h": 1500,
+            "kind": "picnic_table"
+          },
+          {
+            "id": "zoo-fn9",
+            "x": 1900,
+            "y": 2000,
+            "w": 2200,
+            "h": 2200,
+            "kind": "palm_tree",
+            "label": "Plaza palm"
+          },
+          {
+            "id": "zoo-fn10",
+            "x": 10100,
+            "y": 4700,
+            "w": 1000,
+            "h": 2400,
+            "kind": "ramp",
+            "label": "Spine accessibility ramp"
+          },
+          {
+            "id": "zoo-fn11",
+            "x": 13500,
+            "y": 1600,
+            "w": 700,
+            "h": 1200,
+            "kind": "lawn_chair",
+            "rotation": 180
+          },
+          {
+            "id": "zoo-fn12",
+            "x": 14400,
+            "y": 1600,
+            "w": 700,
+            "h": 1200,
+            "kind": "lawn_chair",
+            "rotation": 180
+          },
+          {
+            "id": "zoo-fn13",
+            "x": 15300,
+            "y": 2000,
+            "w": 450,
+            "h": 450,
+            "kind": "bird_bath"
+          },
+          {
+            "id": "zoo-fn14",
+            "x": 2600,
+            "y": 11800,
+            "w": 900,
+            "h": 900,
+            "kind": "tree"
+          },
+          {
+            "id": "zoo-fn15",
+            "x": 5400,
+            "y": 12000,
+            "w": 900,
+            "h": 900,
+            "kind": "tree"
+          },
+          {
+            "id": "zoo-fn16",
+            "x": 2300,
+            "y": 10500,
+            "w": 800,
+            "h": 600,
+            "kind": "rock_cluster"
+          },
+          {
+            "id": "zoo-fn17",
+            "x": 4050,
+            "y": 10500,
+            "w": 2000,
+            "h": 2000,
+            "kind": "spruce_tree",
+            "label": "Savanna shade spruce"
+          },
+          {
+            "id": "zoo-fn18",
+            "x": 2400,
+            "y": 9400,
+            "w": 800,
+            "h": 600,
+            "kind": "rock_cluster"
+          },
+          {
+            "id": "zoo-fn19",
+            "x": 5500,
+            "y": 9200,
+            "w": 700,
+            "h": 700,
+            "kind": "bush"
+          },
+          {
+            "id": "zoo-fn20",
+            "x": 2500,
+            "y": 12300,
+            "w": 700,
+            "h": 700,
+            "kind": "bush"
+          },
+          {
+            "id": "zoo-fn21",
+            "x": 9800,
+            "y": 11800,
+            "w": 800,
+            "h": 600,
+            "kind": "rock_cluster"
+          },
+          {
+            "id": "zoo-fn22",
+            "x": 8500,
+            "y": 12100,
+            "w": 800,
+            "h": 600,
+            "kind": "rock_cluster"
+          },
+          {
+            "id": "zoo-fn23",
+            "x": 10400,
+            "y": 9400,
+            "w": 800,
+            "h": 600,
+            "kind": "rock_cluster",
+            "rotation": 90
+          },
+          {
+            "id": "zoo-fn24",
+            "x": 8300,
+            "y": 10600,
+            "w": 800,
+            "h": 800,
+            "kind": "pine_tree"
+          },
+          {
+            "id": "zoo-fn25",
+            "x": 10600,
+            "y": 12300,
+            "w": 700,
+            "h": 700,
+            "kind": "bush"
+          },
+          {
+            "id": "zoo-fn26",
+            "x": 13400,
+            "y": 9300,
+            "w": 900,
+            "h": 900,
+            "kind": "tree"
+          },
+          {
+            "id": "zoo-fn27",
+            "x": 15700,
+            "y": 12100,
+            "w": 800,
+            "h": 800,
+            "kind": "pine_tree"
+          },
+          {
+            "id": "zoo-fn28",
+            "x": 13300,
+            "y": 12300,
+            "w": 800,
+            "h": 800,
+            "kind": "pine_tree"
+          },
+          {
+            "id": "zoo-fn29",
+            "x": 15600,
+            "y": 9400,
+            "w": 800,
+            "h": 600,
+            "kind": "rock_cluster"
+          },
+          {
+            "id": "zoo-fn30",
+            "x": 15900,
+            "y": 10800,
+            "w": 700,
+            "h": 700,
+            "kind": "bush"
+          },
+          {
+            "id": "zoo-fn31",
+            "x": 2500,
+            "y": 4100,
+            "w": 800,
+            "h": 600,
+            "kind": "rock_cluster"
+          },
+          {
+            "id": "zoo-fn32",
+            "x": 4700,
+            "y": 4000,
+            "w": 800,
+            "h": 600,
+            "kind": "rock_cluster",
+            "rotation": 90
+          },
+          {
+            "id": "zoo-fn33",
+            "x": 4800,
+            "y": 5400,
+            "w": 450,
+            "h": 450,
+            "kind": "bird_bath"
+          },
+          {
+            "id": "zoo-fn34",
+            "x": 2300,
+            "y": 5400,
+            "w": 700,
+            "h": 700,
+            "kind": "bush"
+          },
+          {
+            "id": "zoo-fn35",
+            "x": 14500,
+            "y": 4200,
+            "w": 2400,
+            "h": 1300,
+            "kind": "swingset",
+            "label": "Climbing frame"
+          },
+          {
+            "id": "zoo-fn36",
+            "x": 13300,
+            "y": 5500,
+            "w": 700,
+            "h": 700,
+            "kind": "bush"
+          },
+          {
+            "id": "zoo-fn37",
+            "x": 15800,
+            "y": 5500,
+            "w": 800,
+            "h": 600,
+            "kind": "rock_cluster"
+          },
+          {
+            "id": "zoo-fn38",
+            "x": 7300,
+            "y": 4000,
+            "w": 1400,
+            "h": 700,
+            "kind": "desk",
+            "rotation": 180,
+            "label": "Keeper desk"
+          },
+          {
+            "id": "zoo-fn39",
+            "x": 7300,
+            "y": 4750,
+            "w": 500,
+            "h": 500,
+            "kind": "chair"
+          },
+          {
+            "id": "zoo-fn40",
+            "x": 8650,
+            "y": 4000,
+            "w": 900,
+            "h": 400,
+            "kind": "cabinet",
+            "rotation": 90,
+            "label": "Feed store"
+          },
+          {
+            "id": "zoo-fn41",
+            "x": 6700,
+            "y": 4600,
+            "w": 800,
+            "h": 350,
+            "kind": "bookshelf",
+            "rotation": 270,
+            "label": "Vet manuals"
+          },
+          {
+            "id": "zoo-fn42",
+            "x": 1250,
+            "y": 7400,
+            "w": 900,
+            "h": 900,
+            "kind": "tree"
+          },
+          {
+            "id": "zoo-fn43",
+            "x": 16850,
+            "y": 7400,
+            "w": 700,
+            "h": 700,
+            "kind": "bush"
+          },
+          {
+            "id": "zoo-fn44",
+            "x": 11900,
+            "y": 7000,
+            "w": 900,
+            "h": 450,
+            "kind": "flower_bed"
+          },
+          {
+            "id": "zoo-fn45",
+            "x": 6800,
+            "y": 7000,
+            "w": 900,
+            "h": 450,
+            "kind": "flower_bed"
+          }
+        ],
+        "lights": [
+          {
+            "id": "zoo-lt1",
+            "x": 9000,
+            "y": 900,
+            "entity_id": null,
+            "iconKind": "flood",
+            "radius": 2400,
+            "rotation": 0,
+            "localState": "on",
+            "label": "Entry flood"
+          },
+          {
+            "id": "zoo-lt2",
+            "x": 9000,
+            "y": 2400,
+            "entity_id": null,
+            "iconKind": "string",
+            "rotation": 0,
+            "length": 7000,
+            "localState": "on",
+            "label": "Plaza string lights"
+          },
+          {
+            "id": "zoo-lt3",
+            "x": 3900,
+            "y": 7000,
+            "entity_id": null,
+            "iconKind": "lamp",
+            "radius": 1700,
+            "height": 3200,
+            "localState": "on",
+            "label": "Promenade lamp W"
+          },
+          {
+            "id": "zoo-lt4",
+            "x": 9400,
+            "y": 7000,
+            "entity_id": null,
+            "iconKind": "lamp",
+            "radius": 1700,
+            "height": 3200,
+            "localState": "on",
+            "label": "Promenade lamp C"
+          },
+          {
+            "id": "zoo-lt5",
+            "x": 14500,
+            "y": 7000,
+            "entity_id": null,
+            "iconKind": "lamp",
+            "radius": 1700,
+            "height": 3200,
+            "localState": "on",
+            "label": "Promenade lamp E"
+          },
+          {
+            "id": "zoo-lt6",
+            "x": 2600,
+            "y": 11200,
+            "entity_id": null,
+            "iconKind": "ground_spot",
+            "rotation": 0,
+            "localState": "on",
+            "label": "Savanna uplight"
+          },
+          {
+            "id": "zoo-lt7",
+            "x": 9800,
+            "y": 11100,
+            "entity_id": null,
+            "iconKind": "ground_spot",
+            "rotation": 180,
+            "localState": "on",
+            "label": "Bluff uplight"
+          },
+          {
+            "id": "zoo-lt8",
+            "x": 14200,
+            "y": 11300,
+            "entity_id": null,
+            "iconKind": "inground",
+            "localState": "on",
+            "label": "Bear pond uplight"
+          },
+          {
+            "id": "zoo-lt9",
+            "x": 3600,
+            "y": 4300,
+            "entity_id": null,
+            "iconKind": "inground",
+            "localState": "on",
+            "label": "Penguin pool uplight"
+          },
+          {
+            "id": "zoo-lt10",
+            "x": 15000,
+            "y": 4700,
+            "entity_id": null,
+            "iconKind": "ground_spot",
+            "rotation": 270,
+            "localState": "on",
+            "label": "Primate uplight"
+          },
+          {
+            "id": "zoo-lt11",
+            "x": 10100,
+            "y": 5000,
+            "entity_id": null,
+            "iconKind": "step",
+            "localState": "on",
+            "label": "Spine step light"
+          },
+          {
+            "id": "zoo-lt12",
+            "x": 8200,
+            "y": 5200,
+            "entity_id": null,
+            "iconKind": "bulb",
+            "height": 2400,
+            "label": "Keeper Hut"
+          }
+        ],
+        "switches": [
+          {
+            "id": "zoo-sw1",
+            "x": 7200,
+            "y": 5700,
+            "entity_id": null,
+            "rotation": 0,
+            "label": "Hut lights"
+          },
+          {
+            "id": "zoo-sw2",
+            "x": 6000,
+            "y": 2600,
+            "entity_id": null,
+            "rotation": 180,
+            "label": "Plaza lights"
+          }
+        ],
+        "sensors": [],
+        "motionSensors": [
+          {
+            "id": "zoo-mo1",
+            "x": 4000,
+            "y": 10800,
+            "heading": 0,
+            "fov": 360,
+            "range": 6000,
+            "label": "Savanna herd",
+            "entity_id": null,
+            "color": "#e0a63c",
+            "plumbobColor": "#ffd54f",
+            "avatar": true,
+            "demo": true,
+            "avatarKinds": [
+              "giraffe",
+              "zebra",
+              "elephant"
+            ]
+          },
+          {
+            "id": "zoo-mo2",
+            "x": 2900,
+            "y": 9800,
+            "heading": 0,
+            "fov": 360,
+            "range": 6000,
+            "label": "Savanna kangaroo",
+            "entity_id": null,
+            "color": "#c98b4b",
+            "avatar": true,
+            "demo": true,
+            "avatarKinds": [
+              "kangaroo"
+            ]
+          },
+          {
+            "id": "zoo-mo3",
+            "x": 9400,
+            "y": 10800,
+            "heading": 0,
+            "fov": 360,
+            "range": 6000,
+            "label": "Big Cat Bluff",
+            "entity_id": null,
+            "color": "#e2703a",
+            "plumbobColor": "#ff7043",
+            "avatar": true,
+            "demo": true,
+            "avatarKinds": [
+              "lion",
+              "tiger"
+            ]
+          },
+          {
+            "id": "zoo-mo4",
+            "x": 14500,
+            "y": 10800,
+            "heading": 0,
+            "fov": 360,
+            "range": 6000,
+            "label": "Bear Hollow",
+            "entity_id": null,
+            "color": "#8d6e63",
+            "plumbobColor": "#a1887f",
+            "avatar": true,
+            "demo": true,
+            "avatarKinds": [
+              "bear",
+              "panda"
+            ]
+          },
+          {
+            "id": "zoo-mo5",
+            "x": 3600,
+            "y": 4500,
+            "heading": 0,
+            "fov": 360,
+            "range": 5000,
+            "label": "Penguin Cove",
+            "entity_id": null,
+            "color": "#4fc3f7",
+            "plumbobColor": "#81d4fa",
+            "avatar": true,
+            "demo": true,
+            "avatarKinds": [
+              "penguin",
+              "hippo"
+            ]
+          },
+          {
+            "id": "zoo-mo6",
+            "x": 14600,
+            "y": 5400,
+            "heading": 0,
+            "fov": 360,
+            "range": 5000,
+            "label": "Primate Island",
+            "entity_id": null,
+            "color": "#81c784",
+            "plumbobColor": "#a5d6a7",
+            "avatar": true,
+            "demo": true,
+            "avatarKinds": [
+              "monkey",
+              "gorilla"
+            ]
+          }
+        ],
+        "roamers": [
+          {
+            "id": "zoo-ro1",
+            "name": "Visitor — Nadia",
+            "avatarKinds": [
+              "adult",
+              "supermodel"
+            ],
+            "color": "#f06292"
+          },
+          {
+            "id": "zoo-ro2",
+            "name": "Visitor — Bo",
+            "avatarKinds": [
+              "child",
+              "teen"
+            ],
+            "color": "#4fc3f7"
+          },
+          {
+            "id": "zoo-ro3",
+            "name": "Keeper Sam",
+            "avatarKinds": [
+              "farmer",
+              "professional"
+            ],
+            "color": "#8bc34a"
+          },
+          {
+            "id": "zoo-ro4",
+            "name": "Zoo dog",
+            "avatarKinds": [
+              "dog"
+            ],
+            "color": "#a1887f"
+          }
+        ],
+        "envSensors": [
+          {
+            "id": "zoo-env1",
+            "x": 4000,
+            "y": 8900,
+            "entity_id": null,
+            "kind": "temperature",
+            "label": "Savanna temp",
+            "height": 1600
+          },
+          {
+            "id": "zoo-env2",
+            "x": 3600,
+            "y": 5600,
+            "entity_id": null,
+            "kind": "humidity",
+            "label": "Penguin RH",
+            "height": 1600
+          },
+          {
+            "id": "zoo-env3",
+            "x": 8300,
+            "y": 5400,
+            "entity_id": null,
+            "kind": "co2",
+            "label": "Hut CO₂",
+            "height": 1500
+          },
+          {
+            "id": "zoo-env4",
+            "x": 9000,
+            "y": 3000,
+            "entity_id": null,
+            "kind": "illuminance",
+            "label": "Plaza lux",
+            "height": 1600
+          }
+        ],
+        "look3d": {
+          "floorTex": "none",
+          "floorColor": "#5f8f42",
+          "wallColor": "#cfd8dc"
+        },
+        "doors": [
+          {
+            "id": "zoo-dr1",
+            "x": 3400,
+            "y": 8200,
+            "w": 1000,
+            "rotation": 0,
+            "entity_id": null,
+            "kind": "gate",
+            "label": "Savanna gate"
+          },
+          {
+            "id": "zoo-dr2",
+            "x": 8900,
+            "y": 8200,
+            "w": 1000,
+            "rotation": 0,
+            "entity_id": null,
+            "kind": "gate",
+            "label": "Big Cat gate"
+          },
+          {
+            "id": "zoo-dr3",
+            "x": 14000,
+            "y": 8200,
+            "w": 1000,
+            "rotation": 0,
+            "entity_id": null,
+            "kind": "gate",
+            "label": "Bear Hollow gate"
+          },
+          {
+            "id": "zoo-dr4",
+            "x": 3000,
+            "y": 6000,
+            "w": 1000,
+            "rotation": 0,
+            "entity_id": null,
+            "kind": "gate",
+            "label": "Penguin gate"
+          },
+          {
+            "id": "zoo-dr5",
+            "x": 14000,
+            "y": 6000,
+            "w": 1000,
+            "rotation": 0,
+            "entity_id": null,
+            "kind": "gate",
+            "label": "Primate gate"
+          },
+          {
+            "id": "zoo-dr6",
+            "x": 7200,
+            "y": 5800,
+            "w": 900,
+            "rotation": 0,
+            "entity_id": null,
+            "label": "Keeper Hut"
+          }
+        ],
+        "windows": [
+          {
+            "id": "zoo-win1",
+            "x": 9000,
+            "y": 4400,
+            "w": 1000,
+            "rotation": 90,
+            "entity_id": null,
+            "sill": 900,
+            "height": 1000,
+            "label": "Hut east"
+          },
+          {
+            "id": "zoo-win2",
+            "x": 6400,
+            "y": 4400,
+            "w": 1000,
+            "rotation": 90,
+            "entity_id": null,
+            "sill": 900,
+            "height": 1000,
+            "label": "Hut west"
+          }
+        ],
+        "bg": null,
+        "model3d": null,
+        "rooms": [
+          {
+            "id": "zoo-rm1",
+            "name": "Savanna Paddock",
+            "anchor": {
+              "x": 4000,
+              "y": 10500
+            }
+          },
+          {
+            "id": "zoo-rm2",
+            "name": "Big Cat Bluff",
+            "anchor": {
+              "x": 9400,
+              "y": 10500
+            }
+          },
+          {
+            "id": "zoo-rm3",
+            "name": "Bear Hollow",
+            "anchor": {
+              "x": 14500,
+              "y": 10500
+            }
+          },
+          {
+            "id": "zoo-rm4",
+            "name": "Penguin Cove",
+            "anchor": {
+              "x": 3600,
+              "y": 4600
+            }
+          },
+          {
+            "id": "zoo-rm5",
+            "name": "Primate Island",
+            "anchor": {
+              "x": 14600,
+              "y": 4700
+            }
+          },
+          {
+            "id": "zoo-rm6",
+            "name": "Keeper Hut",
+            "anchor": {
+              "x": 8300,
+              "y": 5200
+            }
+          }
+        ],
+        "bleProxies": [],
+        "alarmPanels": [],
+        "safetySensors": [
+          {
+            "id": "zoo-sf1",
+            "x": 7800,
+            "y": 4200,
+            "kind": "smoke",
+            "entity_id": null,
+            "label": "Keeper Hut smoke"
+          }
+        ],
+        "robots": [],
+        "presenceZones": [],
+        "cameras": [
+          {
+            "id": "zoo-cam1",
+            "x": 9000,
+            "y": 1100,
+            "rotation": 0,
+            "fov": 100,
+            "range": 9000,
+            "height": 3200,
+            "entity_id": null,
+            "label": "Entry cam"
+          },
+          {
+            "id": "zoo-cam2",
+            "x": 9400,
+            "y": 7600,
+            "rotation": 0,
+            "fov": 90,
+            "range": 7000,
+            "height": 3000,
+            "entity_id": null,
+            "label": "Bluff cam"
+          }
+        ],
+        "groundAreas": [
+          {
+            "id": "zoo-ga1",
+            "kind": "grass",
+            "points": [
+              {
+                "x": 700,
+                "y": 700
+              },
+              {
+                "x": 17300,
+                "y": 700
+              },
+              {
+                "x": 17300,
+                "y": 13300
+              },
+              {
+                "x": 700,
+                "y": 13300
+              }
+            ]
+          },
+          {
+            "id": "zoo-ga2",
+            "kind": "concrete",
+            "points": [
+              {
+                "x": 700,
+                "y": 700
+              },
+              {
+                "x": 17300,
+                "y": 700
+              },
+              {
+                "x": 17300,
+                "y": 3300
+              },
+              {
+                "x": 700,
+                "y": 3300
+              }
+            ]
+          },
+          {
+            "id": "zoo-ga3",
+            "kind": "blacktop",
+            "points": [
+              {
+                "x": 1400,
+                "y": 6200
+              },
+              {
+                "x": 16600,
+                "y": 6200
+              },
+              {
+                "x": 16600,
+                "y": 7800
+              },
+              {
+                "x": 1400,
+                "y": 7800
+              }
+            ]
+          },
+          {
+            "id": "zoo-ga4",
+            "kind": "concrete",
+            "points": [
+              {
+                "x": 9500,
+                "y": 3300
+              },
+              {
+                "x": 10700,
+                "y": 3300
+              },
+              {
+                "x": 10700,
+                "y": 6200
+              },
+              {
+                "x": 9500,
+                "y": 6200
+              }
+            ]
+          },
+          {
+            "id": "zoo-ga5",
+            "kind": "concrete",
+            "points": [
+              {
+                "x": 3400,
+                "y": 7800
+              },
+              {
+                "x": 4400,
+                "y": 7800
+              },
+              {
+                "x": 4400,
+                "y": 8300
+              },
+              {
+                "x": 3400,
+                "y": 8300
+              }
+            ]
+          },
+          {
+            "id": "zoo-ga6",
+            "kind": "concrete",
+            "points": [
+              {
+                "x": 8900,
+                "y": 7800
+              },
+              {
+                "x": 9900,
+                "y": 7800
+              },
+              {
+                "x": 9900,
+                "y": 8300
+              },
+              {
+                "x": 8900,
+                "y": 8300
+              }
+            ]
+          },
+          {
+            "id": "zoo-ga7",
+            "kind": "concrete",
+            "points": [
+              {
+                "x": 14000,
+                "y": 7800
+              },
+              {
+                "x": 15000,
+                "y": 7800
+              },
+              {
+                "x": 15000,
+                "y": 8300
+              },
+              {
+                "x": 14000,
+                "y": 8300
+              }
+            ]
+          },
+          {
+            "id": "zoo-ga8",
+            "kind": "concrete",
+            "points": [
+              {
+                "x": 3000,
+                "y": 5900
+              },
+              {
+                "x": 4000,
+                "y": 5900
+              },
+              {
+                "x": 4000,
+                "y": 6300
+              },
+              {
+                "x": 3000,
+                "y": 6300
+              }
+            ]
+          },
+          {
+            "id": "zoo-ga9",
+            "kind": "concrete",
+            "points": [
+              {
+                "x": 14000,
+                "y": 5900
+              },
+              {
+                "x": 15000,
+                "y": 5900
+              },
+              {
+                "x": 15000,
+                "y": 6300
+              },
+              {
+                "x": 14000,
+                "y": 6300
+              }
+            ]
+          },
+          {
+            "id": "zoo-ga10",
+            "kind": "concrete",
+            "points": [
+              {
+                "x": 7100,
+                "y": 5700
+              },
+              {
+                "x": 8200,
+                "y": 5700
+              },
+              {
+                "x": 8200,
+                "y": 6300
+              },
+              {
+                "x": 7100,
+                "y": 6300
+              }
+            ]
+          },
+          {
+            "id": "zoo-ga11",
+            "kind": "sand",
+            "points": [
+              {
+                "x": 1900,
+                "y": 8300
+              },
+              {
+                "x": 6100,
+                "y": 8300
+              },
+              {
+                "x": 6100,
+                "y": 12700
+              },
+              {
+                "x": 1900,
+                "y": 12700
+              }
+            ]
+          },
+          {
+            "id": "zoo-ga12",
+            "kind": "rock",
+            "points": [
+              {
+                "x": 7700,
+                "y": 8300
+              },
+              {
+                "x": 11100,
+                "y": 8300
+              },
+              {
+                "x": 11100,
+                "y": 12700
+              },
+              {
+                "x": 7700,
+                "y": 12700
+              }
+            ]
+          },
+          {
+            "id": "zoo-ga13",
+            "kind": "grass",
+            "points": [
+              {
+                "x": 12700,
+                "y": 8300
+              },
+              {
+                "x": 16300,
+                "y": 8300
+              },
+              {
+                "x": 16300,
+                "y": 12700
+              },
+              {
+                "x": 12700,
+                "y": 12700
+              }
+            ]
+          },
+          {
+            "id": "zoo-ga14",
+            "kind": "water",
+            "points": [
+              {
+                "x": 13100,
+                "y": 10500
+              },
+              {
+                "x": 15300,
+                "y": 10500
+              },
+              {
+                "x": 15300,
+                "y": 12200
+              },
+              {
+                "x": 13100,
+                "y": 12200
+              }
+            ]
+          },
+          {
+            "id": "zoo-ga15",
+            "kind": "water",
+            "points": [
+              {
+                "x": 1900,
+                "y": 3500
+              },
+              {
+                "x": 5300,
+                "y": 3500
+              },
+              {
+                "x": 5300,
+                "y": 5100
+              },
+              {
+                "x": 1900,
+                "y": 5100
+              }
+            ]
+          },
+          {
+            "id": "zoo-ga16",
+            "kind": "rock",
+            "points": [
+              {
+                "x": 1900,
+                "y": 5100
+              },
+              {
+                "x": 5300,
+                "y": 5100
+              },
+              {
+                "x": 5300,
+                "y": 5900
+              },
+              {
+                "x": 1900,
+                "y": 5900
+              }
+            ]
+          },
+          {
+            "id": "zoo-ga17",
+            "kind": "grass",
+            "points": [
+              {
+                "x": 12900,
+                "y": 3500
+              },
+              {
+                "x": 16300,
+                "y": 3500
+              },
+              {
+                "x": 16300,
+                "y": 5900
+              },
+              {
+                "x": 12900,
+                "y": 5900
+              }
+            ]
+          },
+          {
+            "id": "zoo-ga18",
+            "kind": "mulch",
+            "points": [
+              {
+                "x": 15700,
+                "y": 3600
+              },
+              {
+                "x": 16300,
+                "y": 3600
+              },
+              {
+                "x": 16300,
+                "y": 5800
+              },
+              {
+                "x": 15700,
+                "y": 5800
+              }
+            ]
+          },
+          {
+            "id": "zoo-ga19",
+            "kind": "grass",
+            "points": [
+              {
+                "x": 10900,
+                "y": 800
+              },
+              {
+                "x": 16200,
+                "y": 800
+              },
+              {
+                "x": 16200,
+                "y": 2600
+              },
+              {
+                "x": 10900,
+                "y": 2600
+              }
+            ]
+          }
+        ],
+        "voidAreas": []
+      }
+    ],
+    "currentFloorId": "zoo-fl1",
+    "activeSensorId": null,
+    "coverage": true,
+    "imperial": false,
+    "showDetails": false,
+    "useRawTargets": false,
+    "showMotionZones": true,
+    "scene3d": {
+      "preset": "day",
+      "lightMode": "clock",
+      "floorTex": "none",
+      "floorColor": "#5f8f42",
+      "wallColor": "#cfd8dc",
+      "wallCutaway": true,
+      "plumbobs": true,
+      "skyBackdrop": true,
+      "cinematicOrbit": true
+    },
+    "customObjects": [
+      {
+        "id": "zoo-flagpole",
+        "label": "Flagpole",
+        "w": 400,
+        "h": 400,
+        "ht": 5200,
+        "back": "none",
+        "color": 11583173,
+        "frontArrow": false,
+        "primitives": [
+          {
+            "shape": "cylinder",
+            "size": [
+              220,
+              260,
+              120
+            ],
+            "pos": [
+              0,
+              60,
+              0
+            ],
+            "color": "#78909c"
+          },
+          {
+            "shape": "cylinder",
+            "size": [
+              55,
+              80,
+              5000
+            ],
+            "pos": [
+              0,
+              2620,
+              0
+            ],
+            "color": "#cfd8dc"
+          },
+          {
+            "shape": "sphere",
+            "size": [
+              95,
+              0,
+              0
+            ],
+            "pos": [
+              0,
+              5180,
+              0
+            ],
+            "color": "#ffd54f"
+          },
+          {
+            "shape": "box",
+            "size": [
+              1200,
+              720,
+              26
+            ],
+            "pos": [
+              600,
+              4460,
+              0
+            ],
+            "color": "#2e7d32"
+          },
+          {
+            "shape": "box",
+            "size": [
+              1200,
+              200,
+              32
+            ],
+            "pos": [
+              600,
+              4820,
+              0
+            ],
+            "color": "#f5f5f5"
+          }
+        ]
+      }
+    ],
+    "people": [],
+    "bleShowUnknown": true,
+    "notes": "252 m² lot (18 × 14 m) · 1 floor · 5 fenced enclosures + keeper hut · mostly outdoor\n\nA pocket zoo built to show off two things at once: outdoor authoring (fences,\ngates, ground paint, yard objects) and CONFINED demo avatars. Each enclosure is a\nclosed fence loop, which makes it a real wall loop and therefore a real Room; a\ndemo motion sensor dropped inside that loop projects an always-on AI animal that\nthe renderer hard-confines to its home room — so the lion stays on the bluff and\nthe penguin stays in the cove, with no scripting at all. Visitors are free-range\nroamers who follow the paths (and, being visitors, occasionally let themselves\nthrough a keeper gate). Because most pens carry a POOL of two or three species,\neach respawn re-rolls which animal is out that day.\n\nLAYOUT — a concrete entry plaza runs the full width of the south edge: ticket\ncounter and stool, benches, bins, a flagpole, and a picnic lawn at the east end.\nA blacktop promenade crosses the middle of the lot with concrete spurs branching\nto every gate, and a north–south spine links the plaza to the promenade. The\nperimeter is a clipped hedge, left OPEN at the entry.\n\nENCLOSURES (each fenced, gated and habitat-painted):\n  • Savanna Paddock — chain-link over sand, acacias and rock outcrops. A giraffe /\n    zebra / elephant herd plus a resident kangaroo (two sensors, two animals).\n  • Big Cat Bluff — chain-link over rock, boulder stacks and a pine. Lion / tiger.\n  • Bear Hollow — chain-link over grass with a spring-fed pond and two pines.\n    Bear / panda.\n  • Penguin Cove — picket fence around a big pool with a rock haul-out ledge and a\n    bird bath. Penguin / hippo.\n  • Primate Island — chain-link over grass with a climbing frame and a mulch\n    border. Monkey / gorilla.\n\nKEEPER HUT — the only enclosed building: desk and chair, a feed-store cabinet, vet\nmanuals on a shelf, windows east and west onto the service alleys, a CO₂ probe and\na smoke detector.\n\nFIXTURES — everything is UNBOUND, so the plan demos with no Home Assistant: an\nentry floodlight, plaza string lights, three promenade lamp posts, ground-spot and\nin-ground uplights on the habitats, a step light on the spine, temperature /\nhumidity / CO₂ / lux env sensors, and two security cameras. The entry flagpole is\na custom object recipe (base + pole + gold finial + flag) carried in the config,\nso the plan also exercises Store.customObjects.\n\nAVATARS — every animal comes from the built-in base packs (Zoo Animals, Domestic\nAnimals), which ship loaded and active, so this plan needs no avatar-pack opt-in.\n\nGrounds additions: a palm anchoring the entry plaza, a shade spruce in the savanna\n  browse lawn (the bulk-stone cluster shifted west to make room), and a step-free\n  ramp on the concrete spine between the plaza and the promenade."
+  }
+}

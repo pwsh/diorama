@@ -1,0 +1,1452 @@
+{
+  "diorama": 2,
+  "name": "SSV Diorama — Starship Deck",
+  "exportedAt": "2026-08-10T00:00:00.000Z",
+  "store": {
+    "v": 2,
+    "floors": [
+      {
+        "id": "starship-fl1",
+        "name": "Deck 1",
+        "w": 15600,
+        "d": 9600,
+        "walls": [
+          {
+            "id": "starship-w1",
+            "points": [
+              {
+                "x": 800,
+                "y": 2000
+              },
+              {
+                "x": 800,
+                "y": 7600
+              },
+              {
+                "x": 11000,
+                "y": 7600
+              },
+              {
+                "x": 12200,
+                "y": 7200
+              },
+              {
+                "x": 13200,
+                "y": 6500
+              },
+              {
+                "x": 14000,
+                "y": 5600
+              },
+              {
+                "x": 14400,
+                "y": 4800
+              },
+              {
+                "x": 14000,
+                "y": 4000
+              },
+              {
+                "x": 13200,
+                "y": 3100
+              },
+              {
+                "x": 12200,
+                "y": 2400
+              },
+              {
+                "x": 11000,
+                "y": 2000
+              },
+              {
+                "x": 800,
+                "y": 2000
+              }
+            ]
+          },
+          {
+            "id": "starship-w2",
+            "points": [
+              {
+                "x": 800,
+                "y": 4200
+              },
+              {
+                "x": 11000,
+                "y": 4200
+              }
+            ]
+          },
+          {
+            "id": "starship-w3",
+            "points": [
+              {
+                "x": 800,
+                "y": 5600
+              },
+              {
+                "x": 11000,
+                "y": 5600
+              }
+            ]
+          },
+          {
+            "id": "starship-w4",
+            "points": [
+              {
+                "x": 11000,
+                "y": 2000
+              },
+              {
+                "x": 11000,
+                "y": 7600
+              }
+            ]
+          },
+          {
+            "id": "starship-w5",
+            "points": [
+              {
+                "x": 4400,
+                "y": 2000
+              },
+              {
+                "x": 4400,
+                "y": 4200
+              }
+            ]
+          },
+          {
+            "id": "starship-w6",
+            "points": [
+              {
+                "x": 4400,
+                "y": 5600
+              },
+              {
+                "x": 4400,
+                "y": 7600
+              }
+            ]
+          },
+          {
+            "id": "starship-w7",
+            "points": [
+              {
+                "x": 7600,
+                "y": 2000
+              },
+              {
+                "x": 7600,
+                "y": 4200
+              }
+            ]
+          },
+          {
+            "id": "starship-w8",
+            "points": [
+              {
+                "x": 7600,
+                "y": 5600
+              },
+              {
+                "x": 7600,
+                "y": 7600
+              }
+            ]
+          }
+        ],
+        "furniture": [
+          {
+            "id": "starship-fn1",
+            "x": 2000,
+            "y": 2900,
+            "w": 1200,
+            "h": 1200,
+            "kind": "block",
+            "label": "Warp core",
+            "customKindId": "ssv-warp-core"
+          },
+          {
+            "id": "starship-fn2",
+            "x": 3400,
+            "y": 2500,
+            "w": 1600,
+            "h": 700,
+            "kind": "block",
+            "label": "Reactor console",
+            "customKindId": "ssv-console"
+          },
+          {
+            "id": "starship-fn3",
+            "x": 1150,
+            "y": 2600,
+            "w": 900,
+            "h": 400,
+            "kind": "cabinet",
+            "rotation": 270,
+            "label": "Spares locker"
+          },
+          {
+            "id": "starship-fn4",
+            "x": 4150,
+            "y": 3400,
+            "w": 800,
+            "h": 350,
+            "kind": "bookshelf",
+            "rotation": 90,
+            "label": "Data racks"
+          },
+          {
+            "id": "starship-fn5",
+            "x": 1400,
+            "y": 6800,
+            "w": 1000,
+            "h": 1000,
+            "kind": "block",
+            "label": "Cargo crate",
+            "color": "#4b5560"
+          },
+          {
+            "id": "starship-fn6",
+            "x": 2800,
+            "y": 7000,
+            "w": 1600,
+            "h": 1000,
+            "kind": "block",
+            "label": "Cargo crate",
+            "color": "#55606c"
+          },
+          {
+            "id": "starship-fn7",
+            "x": 3950,
+            "y": 6200,
+            "w": 700,
+            "h": 1000,
+            "kind": "block",
+            "label": "Supply pod",
+            "color": "#3f4954"
+          },
+          {
+            "id": "starship-fn8",
+            "x": 5100,
+            "y": 3050,
+            "w": 900,
+            "h": 1900,
+            "kind": "bed_twin",
+            "label": "Bunk 1",
+            "sharedBedCovers": false
+          },
+          {
+            "id": "starship-fn9",
+            "x": 6400,
+            "y": 3050,
+            "w": 900,
+            "h": 1900,
+            "kind": "bed_twin",
+            "label": "Bunk 2",
+            "sharedBedCovers": false
+          },
+          {
+            "id": "starship-fn10",
+            "x": 7250,
+            "y": 2750,
+            "w": 1200,
+            "h": 500,
+            "kind": "dresser",
+            "rotation": 90,
+            "label": "Crew lockers"
+          },
+          {
+            "id": "starship-fn11",
+            "x": 7250,
+            "y": 3800,
+            "w": 500,
+            "h": 500,
+            "kind": "chair"
+          },
+          {
+            "id": "starship-fn12",
+            "x": 5750,
+            "y": 3000,
+            "w": 2600,
+            "h": 1600,
+            "kind": "rug",
+            "color": "#1b2430"
+          },
+          {
+            "id": "starship-fn13",
+            "x": 5300,
+            "y": 6700,
+            "w": 1200,
+            "h": 800,
+            "kind": "table",
+            "label": "Mess table"
+          },
+          {
+            "id": "starship-fn14",
+            "x": 5250,
+            "y": 7350,
+            "w": 1500,
+            "h": 400,
+            "kind": "bench"
+          },
+          {
+            "id": "starship-fn15",
+            "x": 6200,
+            "y": 6700,
+            "w": 500,
+            "h": 500,
+            "kind": "chair",
+            "rotation": 90
+          },
+          {
+            "id": "starship-fn16",
+            "x": 7000,
+            "y": 7150,
+            "w": 910,
+            "h": 760,
+            "kind": "fridge",
+            "label": "Galley cooler",
+            "localState": "on"
+          },
+          {
+            "id": "starship-fn17",
+            "x": 7000,
+            "y": 7150,
+            "w": 520,
+            "h": 390,
+            "kind": "microwave",
+            "elevation": 1900,
+            "label": "Rehydrator"
+          },
+          {
+            "id": "starship-fn18",
+            "x": 7250,
+            "y": 6250,
+            "w": 800,
+            "h": 550,
+            "kind": "kitchen_sink",
+            "rotation": 90,
+            "label": "Galley sink"
+          },
+          {
+            "id": "starship-fn19",
+            "x": 9200,
+            "y": 3000,
+            "w": 990,
+            "h": 1910,
+            "kind": "bed_twin",
+            "rotation": 90,
+            "label": "Med bunk",
+            "sharedBedCovers": false
+          },
+          {
+            "id": "starship-fn20",
+            "x": 7900,
+            "y": 2600,
+            "w": 900,
+            "h": 400,
+            "kind": "cabinet",
+            "rotation": 270,
+            "label": "Pharmacy"
+          },
+          {
+            "id": "starship-fn21",
+            "x": 10500,
+            "y": 2600,
+            "w": 900,
+            "h": 400,
+            "kind": "cabinet",
+            "rotation": 90,
+            "label": "Instruments"
+          },
+          {
+            "id": "starship-fn22",
+            "x": 10300,
+            "y": 3800,
+            "w": 560,
+            "h": 470,
+            "kind": "sink",
+            "label": "Scrub sink"
+          },
+          {
+            "id": "starship-fn23",
+            "x": 9800,
+            "y": 2400,
+            "w": 700,
+            "h": 200,
+            "kind": "tv",
+            "rotation": 180,
+            "elevation": 1500,
+            "label": "Vitals display",
+            "localState": "on"
+          },
+          {
+            "id": "starship-fn24",
+            "x": 7900,
+            "y": 6600,
+            "w": 900,
+            "h": 400,
+            "kind": "cabinet",
+            "rotation": 270,
+            "label": "EVA suit locker"
+          },
+          {
+            "id": "starship-fn25",
+            "x": 10700,
+            "y": 6600,
+            "w": 900,
+            "h": 400,
+            "kind": "cabinet",
+            "rotation": 90,
+            "label": "EVA suit locker"
+          },
+          {
+            "id": "starship-fn26",
+            "x": 9300,
+            "y": 7450,
+            "w": 200,
+            "h": 280,
+            "kind": "speaker_bookshelf",
+            "rotation": 180,
+            "elevation": 1900,
+            "label": "Lock intercom"
+          },
+          {
+            "id": "starship-fn27",
+            "x": 14100,
+            "y": 4800,
+            "w": 1000,
+            "h": 180,
+            "kind": "wall_tv",
+            "rotation": 90,
+            "elevation": 1200,
+            "label": "Main viewscreen",
+            "localState": "playing"
+          },
+          {
+            "id": "starship-fn28",
+            "x": 12500,
+            "y": 4900,
+            "w": 950,
+            "h": 1000,
+            "kind": "theater_recliner",
+            "rotation": 270,
+            "label": "Captain's chair"
+          },
+          {
+            "id": "starship-fn29",
+            "x": 12300,
+            "y": 3500,
+            "w": 1600,
+            "h": 700,
+            "kind": "block",
+            "label": "Helm console",
+            "customKindId": "ssv-console"
+          },
+          {
+            "id": "starship-fn30",
+            "x": 12200,
+            "y": 6200,
+            "w": 1600,
+            "h": 700,
+            "kind": "block",
+            "rotation": 180,
+            "label": "Ops console",
+            "customKindId": "ssv-console"
+          },
+          {
+            "id": "starship-fn31",
+            "x": 13500,
+            "y": 4900,
+            "w": 1200,
+            "h": 600,
+            "kind": "block",
+            "rotation": 270,
+            "label": "Tactical console",
+            "customKindId": "ssv-console"
+          },
+          {
+            "id": "starship-fn32",
+            "x": 11200,
+            "y": 3000,
+            "w": 200,
+            "h": 280,
+            "kind": "speaker_bookshelf",
+            "rotation": 270,
+            "elevation": 1500,
+            "label": "Comms"
+          },
+          {
+            "id": "starship-fn33",
+            "x": 11200,
+            "y": 6600,
+            "w": 200,
+            "h": 280,
+            "kind": "speaker_bookshelf",
+            "rotation": 270,
+            "elevation": 1500,
+            "label": "Comms"
+          },
+          {
+            "id": "starship-fn34",
+            "x": 12300,
+            "y": 4900,
+            "w": 2400,
+            "h": 2400,
+            "kind": "rug",
+            "color": "#141c26"
+          }
+        ],
+        "lights": [
+          {
+            "id": "starship-lt1",
+            "x": 5900,
+            "y": 4900,
+            "entity_id": null,
+            "iconKind": "strip",
+            "color": "#b3e5fc",
+            "radius": 2200,
+            "rotation": 0,
+            "length": 9600,
+            "localState": "on",
+            "label": "Corridor spine"
+          },
+          {
+            "id": "starship-lt2",
+            "x": 2000,
+            "y": 4400,
+            "entity_id": null,
+            "iconKind": "step",
+            "localState": "on",
+            "label": "Corridor step W"
+          },
+          {
+            "id": "starship-lt3",
+            "x": 9600,
+            "y": 4400,
+            "entity_id": null,
+            "iconKind": "step",
+            "localState": "on",
+            "label": "Corridor step E"
+          },
+          {
+            "id": "starship-lt4",
+            "x": 2000,
+            "y": 3100,
+            "entity_id": null,
+            "iconKind": "strip",
+            "color": "#26c6da",
+            "radius": 2000,
+            "rotation": 0,
+            "length": 2600,
+            "localState": "on",
+            "label": "Reactor glow"
+          },
+          {
+            "id": "starship-lt5",
+            "x": 3600,
+            "y": 2300,
+            "entity_id": null,
+            "iconKind": "under_cabinet",
+            "color": "#ffca28",
+            "rotation": 0,
+            "length": 1600,
+            "localState": "on",
+            "label": "Console task"
+          },
+          {
+            "id": "starship-lt6",
+            "x": 2400,
+            "y": 6600,
+            "entity_id": null,
+            "iconKind": "strip",
+            "color": "#cfd8dc",
+            "radius": 2000,
+            "rotation": 0,
+            "length": 3000,
+            "localState": "on",
+            "label": "Cargo bay"
+          },
+          {
+            "id": "starship-lt7",
+            "x": 6000,
+            "y": 3100,
+            "entity_id": null,
+            "iconKind": "strip",
+            "color": "#7c4dff",
+            "radius": 1200,
+            "rotation": 90,
+            "length": 1800,
+            "localState": "on",
+            "label": "Bunk night strip"
+          },
+          {
+            "id": "starship-lt8",
+            "x": 5900,
+            "y": 6600,
+            "entity_id": null,
+            "iconKind": "round",
+            "radius": 2000,
+            "localState": "on",
+            "label": "Mess overhead"
+          },
+          {
+            "id": "starship-lt9",
+            "x": 6600,
+            "y": 7400,
+            "entity_id": null,
+            "iconKind": "under_cabinet",
+            "color": "#ffe082",
+            "rotation": 0,
+            "length": 1600,
+            "localState": "on",
+            "label": "Galley task"
+          },
+          {
+            "id": "starship-lt10",
+            "x": 9300,
+            "y": 3100,
+            "entity_id": null,
+            "iconKind": "strip",
+            "color": "#e0f7fa",
+            "radius": 2000,
+            "rotation": 0,
+            "length": 2600,
+            "localState": "on",
+            "label": "Med bay clinical"
+          },
+          {
+            "id": "starship-lt11",
+            "x": 9300,
+            "y": 6600,
+            "entity_id": null,
+            "iconKind": "strip",
+            "color": "#ff7043",
+            "radius": 1800,
+            "rotation": 0,
+            "length": 2600,
+            "localState": "on",
+            "label": "Airlock warning"
+          },
+          {
+            "id": "starship-lt12",
+            "x": 12600,
+            "y": 4800,
+            "entity_id": null,
+            "iconKind": "recessed",
+            "radius": 2600,
+            "localState": "on",
+            "label": "Bridge overhead"
+          },
+          {
+            "id": "starship-lt13",
+            "x": 12300,
+            "y": 6600,
+            "entity_id": null,
+            "iconKind": "strip",
+            "color": "#4dd0e1",
+            "radius": 1600,
+            "rotation": 35,
+            "length": 2400,
+            "localState": "on",
+            "label": "Bridge cove P"
+          },
+          {
+            "id": "starship-lt14",
+            "x": 12300,
+            "y": 3000,
+            "entity_id": null,
+            "iconKind": "strip",
+            "color": "#4dd0e1",
+            "radius": 1600,
+            "rotation": 325,
+            "length": 2400,
+            "localState": "on",
+            "label": "Bridge cove S"
+          }
+        ],
+        "switches": [
+          {
+            "id": "starship-sw1",
+            "x": 1900,
+            "y": 4300,
+            "entity_id": null,
+            "rotation": 0,
+            "label": "Engineering"
+          },
+          {
+            "id": "starship-sw2",
+            "x": 5300,
+            "y": 4300,
+            "entity_id": null,
+            "rotation": 0,
+            "label": "Crew"
+          },
+          {
+            "id": "starship-sw3",
+            "x": 8500,
+            "y": 5500,
+            "entity_id": null,
+            "rotation": 180,
+            "label": "Airlock"
+          },
+          {
+            "id": "starship-sw4",
+            "x": 11100,
+            "y": 5200,
+            "entity_id": null,
+            "rotation": 90,
+            "label": "Bridge"
+          }
+        ],
+        "sensors": [],
+        "motionSensors": [
+          {
+            "id": "starship-mo1",
+            "x": 12000,
+            "y": 4900,
+            "heading": 0,
+            "fov": 360,
+            "range": 6000,
+            "label": "Bridge watch",
+            "entity_id": null,
+            "color": "#4dd0e1",
+            "plumbobColor": "#80deea",
+            "avatar": true,
+            "demo": true,
+            "avatarKinds": [
+              "astronaut",
+              "space-marine"
+            ]
+          },
+          {
+            "id": "starship-mo2",
+            "x": 2600,
+            "y": 3600,
+            "heading": 0,
+            "fov": 360,
+            "range": 5000,
+            "label": "Engineering watch",
+            "entity_id": null,
+            "color": "#ffca28",
+            "plumbobColor": "#ffe082",
+            "avatar": true,
+            "demo": true,
+            "avatarKinds": [
+              "robot",
+              "sleek-android",
+              "tech_expert"
+            ]
+          },
+          {
+            "id": "starship-mo3",
+            "x": 9300,
+            "y": 3600,
+            "heading": 0,
+            "fov": 360,
+            "range": 5000,
+            "label": "Med Bay watch",
+            "entity_id": null,
+            "color": "#e0f7fa",
+            "plumbobColor": "#b2ebf2",
+            "avatar": true,
+            "demo": true,
+            "avatarKinds": [
+              "doctor",
+              "nurse"
+            ]
+          },
+          {
+            "id": "starship-mo4",
+            "x": 6000,
+            "y": 6200,
+            "heading": 0,
+            "fov": 360,
+            "range": 5000,
+            "label": "Mess watch",
+            "entity_id": null,
+            "color": "#a5d6a7",
+            "plumbobColor": "#c8e6c9",
+            "avatar": true,
+            "demo": true,
+            "avatarKinds": [
+              "alien",
+              "martian",
+              "grey-alien"
+            ]
+          }
+        ],
+        "roamers": [
+          {
+            "id": "starship-ro1",
+            "name": "Captain",
+            "avatarKinds": [
+              "star-trek-tng/captain-bald",
+              "star-trek-tng/commander-bearded"
+            ],
+            "color": "#e53935"
+          },
+          {
+            "id": "starship-ro2",
+            "name": "Ops officer",
+            "avatarKinds": [
+              "star-trek-tng/android-officer",
+              "star-trek-tng/engineer-visor"
+            ],
+            "color": "#ffb300"
+          },
+          {
+            "id": "starship-ro3",
+            "name": "Science officer",
+            "avatarKinds": [
+              "scientist",
+              "cyborg"
+            ],
+            "color": "#4dd0e1"
+          },
+          {
+            "id": "starship-ro4",
+            "name": "Deck hand",
+            "avatarKinds": [
+              "adult",
+              "professional",
+              "retro-spaceman"
+            ],
+            "color": "#90a4ae"
+          }
+        ],
+        "envSensors": [
+          {
+            "id": "starship-env1",
+            "x": 2000,
+            "y": 3900,
+            "entity_id": null,
+            "kind": "temperature",
+            "label": "Reactor temp",
+            "height": 1500
+          },
+          {
+            "id": "starship-env2",
+            "x": 9300,
+            "y": 6100,
+            "entity_id": null,
+            "kind": "pressure",
+            "label": "Lock pressure",
+            "height": 1500
+          },
+          {
+            "id": "starship-env3",
+            "x": 5900,
+            "y": 5000,
+            "entity_id": null,
+            "kind": "co2",
+            "label": "Life support CO₂",
+            "height": 1500
+          },
+          {
+            "id": "starship-env4",
+            "x": 6000,
+            "y": 3600,
+            "entity_id": null,
+            "kind": "humidity",
+            "label": "Berth RH",
+            "height": 1500
+          },
+          {
+            "id": "starship-env5",
+            "x": 12600,
+            "y": 5400,
+            "entity_id": null,
+            "kind": "radon",
+            "label": "Hull radiation",
+            "height": 1500
+          }
+        ],
+        "look3d": {
+          "floorTex": "concrete",
+          "floorColor": "#2e3540",
+          "wallColor": "#39424e"
+        },
+        "doors": [
+          {
+            "id": "starship-dr1",
+            "x": 1800,
+            "y": 4200,
+            "w": 1200,
+            "rotation": 0,
+            "entity_id": null,
+            "label": "Engineering hatch"
+          },
+          {
+            "id": "starship-dr2",
+            "x": 5400,
+            "y": 4200,
+            "w": 1200,
+            "rotation": 0,
+            "entity_id": null,
+            "label": "Crew hatch"
+          },
+          {
+            "id": "starship-dr3",
+            "x": 8600,
+            "y": 4200,
+            "w": 1200,
+            "rotation": 0,
+            "entity_id": null,
+            "label": "Med Bay hatch"
+          },
+          {
+            "id": "starship-dr4",
+            "x": 1800,
+            "y": 5600,
+            "w": 1400,
+            "rotation": 0,
+            "entity_id": null,
+            "label": "Cargo hatch"
+          },
+          {
+            "id": "starship-dr5",
+            "x": 4500,
+            "y": 5600,
+            "w": 1200,
+            "rotation": 0,
+            "entity_id": null,
+            "label": "Mess hatch"
+          },
+          {
+            "id": "starship-dr6",
+            "x": 8600,
+            "y": 5600,
+            "w": 1200,
+            "rotation": 0,
+            "entity_id": null,
+            "label": "Airlock inner door"
+          },
+          {
+            "id": "starship-dr7",
+            "x": 9200,
+            "y": 7600,
+            "w": 1200,
+            "rotation": 0,
+            "entity_id": null,
+            "label": "Airlock outer hatch"
+          },
+          {
+            "id": "starship-dr8",
+            "x": 11000,
+            "y": 4400,
+            "w": 1000,
+            "rotation": 270,
+            "entity_id": null,
+            "label": "Bridge hatch"
+          }
+        ],
+        "windows": [
+          {
+            "id": "starship-win1",
+            "x": 12700,
+            "y": 6850,
+            "w": 900,
+            "rotation": 35,
+            "entity_id": null,
+            "sill": 900,
+            "height": 1300,
+            "kind": "picture",
+            "label": "Bow port P3"
+          },
+          {
+            "id": "starship-win2",
+            "x": 13600,
+            "y": 6050,
+            "w": 900,
+            "rotation": 48,
+            "entity_id": null,
+            "sill": 900,
+            "height": 1300,
+            "kind": "picture",
+            "label": "Bow port P2"
+          },
+          {
+            "id": "starship-win3",
+            "x": 14200,
+            "y": 5200,
+            "w": 700,
+            "rotation": 63,
+            "entity_id": null,
+            "sill": 900,
+            "height": 1300,
+            "kind": "picture",
+            "label": "Bow port P1"
+          },
+          {
+            "id": "starship-win4",
+            "x": 14200,
+            "y": 4400,
+            "w": 700,
+            "rotation": 297,
+            "entity_id": null,
+            "sill": 900,
+            "height": 1300,
+            "kind": "picture",
+            "label": "Bow port S1"
+          },
+          {
+            "id": "starship-win5",
+            "x": 13600,
+            "y": 3550,
+            "w": 900,
+            "rotation": 312,
+            "entity_id": null,
+            "sill": 900,
+            "height": 1300,
+            "kind": "picture",
+            "label": "Bow port S2"
+          },
+          {
+            "id": "starship-win6",
+            "x": 12700,
+            "y": 2750,
+            "w": 900,
+            "rotation": 325,
+            "entity_id": null,
+            "sill": 900,
+            "height": 1300,
+            "kind": "picture",
+            "label": "Bow port S3"
+          },
+          {
+            "id": "starship-win7",
+            "x": 2200,
+            "y": 7600,
+            "w": 1200,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 1100,
+            "height": 900,
+            "kind": "picture",
+            "label": "Cargo viewport"
+          },
+          {
+            "id": "starship-win8",
+            "x": 5400,
+            "y": 7600,
+            "w": 1400,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 1100,
+            "height": 900,
+            "kind": "picture",
+            "label": "Mess viewport"
+          },
+          {
+            "id": "starship-win9",
+            "x": 5400,
+            "y": 2000,
+            "w": 1400,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 1100,
+            "height": 900,
+            "kind": "picture",
+            "label": "Crew viewport"
+          },
+          {
+            "id": "starship-win10",
+            "x": 9300,
+            "y": 2000,
+            "w": 1200,
+            "rotation": 0,
+            "entity_id": null,
+            "sill": 1100,
+            "height": 900,
+            "kind": "picture",
+            "label": "Med Bay viewport"
+          }
+        ],
+        "bg": null,
+        "model3d": null,
+        "rooms": [
+          {
+            "id": "starship-rm1",
+            "name": "Engineering",
+            "anchor": {
+              "x": 2400,
+              "y": 3100
+            }
+          },
+          {
+            "id": "starship-rm2",
+            "name": "Cargo Hold",
+            "anchor": {
+              "x": 2400,
+              "y": 6600
+            }
+          },
+          {
+            "id": "starship-rm3",
+            "name": "Crew Quarters",
+            "anchor": {
+              "x": 6000,
+              "y": 3100
+            }
+          },
+          {
+            "id": "starship-rm4",
+            "name": "Mess Hall",
+            "anchor": {
+              "x": 6000,
+              "y": 6600
+            }
+          },
+          {
+            "id": "starship-rm5",
+            "name": "Med Bay",
+            "anchor": {
+              "x": 9300,
+              "y": 3100
+            }
+          },
+          {
+            "id": "starship-rm6",
+            "name": "Airlock",
+            "anchor": {
+              "x": 9300,
+              "y": 6600
+            }
+          },
+          {
+            "id": "starship-rm7",
+            "name": "Main Corridor",
+            "anchor": {
+              "x": 5900,
+              "y": 4900
+            }
+          },
+          {
+            "id": "starship-rm8",
+            "name": "Bridge",
+            "anchor": {
+              "x": 12600,
+              "y": 4800
+            }
+          }
+        ],
+        "bleProxies": [],
+        "alarmPanels": [
+          {
+            "id": "starship-ap1",
+            "x": 11060,
+            "y": 5000,
+            "rotation": 90,
+            "entity_id": null,
+            "label": "Bridge alert panel",
+            "allowControl": true
+          }
+        ],
+        "safetySensors": [
+          {
+            "id": "starship-sf1",
+            "x": 2600,
+            "y": 2400,
+            "kind": "smoke",
+            "entity_id": null,
+            "label": "Reactor smoke"
+          },
+          {
+            "id": "starship-sf2",
+            "x": 6200,
+            "y": 7200,
+            "kind": "co",
+            "entity_id": null,
+            "label": "Galley CO"
+          },
+          {
+            "id": "starship-sf3",
+            "x": 9300,
+            "y": 7000,
+            "kind": "gas",
+            "entity_id": null,
+            "label": "Lock gas"
+          }
+        ],
+        "robots": [],
+        "presenceZones": [],
+        "cameras": [
+          {
+            "id": "starship-cam1",
+            "x": 5900,
+            "y": 4300,
+            "rotation": 90,
+            "fov": 100,
+            "range": 11000,
+            "height": 2400,
+            "entity_id": null,
+            "label": "Corridor cam"
+          },
+          {
+            "id": "starship-cam2",
+            "x": 9300,
+            "y": 7500,
+            "rotation": 180,
+            "fov": 90,
+            "range": 5000,
+            "height": 2400,
+            "entity_id": null,
+            "label": "Airlock cam"
+          }
+        ],
+        "groundAreas": [],
+        "voidAreas": []
+      }
+    ],
+    "currentFloorId": "starship-fl1",
+    "activeSensorId": null,
+    "coverage": true,
+    "imperial": false,
+    "showDetails": false,
+    "useRawTargets": false,
+    "showMotionZones": true,
+    "scene3d": {
+      "preset": "night",
+      "lightMode": "manual",
+      "floorTex": "concrete",
+      "floorColor": "#2e3540",
+      "wallColor": "#39424e",
+      "glassHouse": false,
+      "wallCutaway": true,
+      "plumbobs": true,
+      "skyBackdrop": true,
+      "cinematicOrbit": true,
+      "belowHorizon": true
+    },
+    "customObjects": [
+      {
+        "id": "ssv-warp-core",
+        "label": "Warp core",
+        "w": 1200,
+        "h": 1200,
+        "ht": 2600,
+        "back": "none",
+        "color": 2541274,
+        "frontArrow": false,
+        "primitives": [
+          {
+            "shape": "cylinder",
+            "size": [
+              500,
+              570,
+              220
+            ],
+            "pos": [
+              0,
+              110,
+              0
+            ],
+            "color": "#37474f"
+          },
+          {
+            "shape": "cylinder",
+            "size": [
+              300,
+              300,
+              1900
+            ],
+            "pos": [
+              0,
+              1160,
+              0
+            ],
+            "color": "#26c6da"
+          },
+          {
+            "shape": "cylinder",
+            "size": [
+              430,
+              430,
+              150
+            ],
+            "pos": [
+              0,
+              620,
+              0
+            ],
+            "color": "#80deea"
+          },
+          {
+            "shape": "cylinder",
+            "size": [
+              430,
+              430,
+              150
+            ],
+            "pos": [
+              0,
+              1220,
+              0
+            ],
+            "color": "#80deea"
+          },
+          {
+            "shape": "cylinder",
+            "size": [
+              430,
+              430,
+              150
+            ],
+            "pos": [
+              0,
+              1820,
+              0
+            ],
+            "color": "#80deea"
+          },
+          {
+            "shape": "cylinder",
+            "size": [
+              300,
+              470,
+              350
+            ],
+            "pos": [
+              0,
+              2285,
+              0
+            ],
+            "color": "#455a64"
+          },
+          {
+            "shape": "sphere",
+            "size": [
+              180,
+              0,
+              0
+            ],
+            "pos": [
+              0,
+              2520,
+              0
+            ],
+            "color": "#e0f7fa"
+          }
+        ]
+      },
+      {
+        "id": "ssv-console",
+        "label": "Console bank",
+        "w": 1600,
+        "h": 700,
+        "ht": 1100,
+        "back": "none",
+        "color": 2831165,
+        "frontArrow": true,
+        "primitives": [
+          {
+            "shape": "box",
+            "size": [
+              1600,
+              880,
+              700
+            ],
+            "pos": [
+              0,
+              440,
+              0
+            ],
+            "color": "#2b333d"
+          },
+          {
+            "shape": "box",
+            "size": [
+              1520,
+              70,
+              640
+            ],
+            "pos": [
+              0,
+              915,
+              0
+            ],
+            "color": "#3d4854"
+          },
+          {
+            "shape": "box",
+            "size": [
+              1400,
+              420,
+              70
+            ],
+            "pos": [
+              0,
+              1010,
+              250
+            ],
+            "rot": [
+              22,
+              0,
+              0
+            ],
+            "color": "#0d1b2a"
+          },
+          {
+            "shape": "box",
+            "size": [
+              1280,
+              320,
+              24
+            ],
+            "pos": [
+              0,
+              1020,
+              290
+            ],
+            "rot": [
+              22,
+              0,
+              0
+            ],
+            "color": "#4dd0e1"
+          },
+          {
+            "shape": "box",
+            "size": [
+              280,
+              140,
+              24
+            ],
+            "pos": [
+              -570,
+              950,
+              356
+            ],
+            "color": "#ffca28"
+          },
+          {
+            "shape": "box",
+            "size": [
+              280,
+              140,
+              24
+            ],
+            "pos": [
+              570,
+              950,
+              356
+            ],
+            "color": "#ff7043"
+          }
+        ]
+      }
+    ],
+    "people": [],
+    "bleShowUnknown": true,
+    "avatarPacks": {
+      "star-trek-tng": {
+        "loaded": true,
+        "active": true
+      }
+    },
+    "notes": "~78 m² pressurised deck (15.6 × 9.6 m hull) · 1 floor · 8 compartments · crewed\n\nA starship deck instead of a house. The \"building\" is a hull outline: a flat\nstern to the west, two long parallel flanks, and an angular bow assembled from\nsix short wall segments converging on an apex — the classic wedge silhouette,\ndrawn entirely with ordinary walls. A full-length central corridor runs the spine\nof the ship and every compartment hatches onto it, so the whole deck is one\nconnected walkable space (and one nav region).\n\nBRIDGE (bow) — the captain's chair faces a wall-mounted main viewscreen at the\napex, flanked by three console banks (helm, ops, tactical) arranged in an arc,\ncomm speakers on the bulkhead, and six raked picture-window viewports wrapped\naround the bow so the sky backdrop reads as space through the glass.\nENGINEERING (stern, starboard) — a stacked-cylinder warp core glowing cyan under\n  a reactor console, spares locker and data racks.\nCARGO HOLD (stern, port) — three crates and a supply pod under plain bay lighting,\n  with a viewport onto the flank.\nCREW QUARTERS (starboard) — two bunks in niches with a violet night strip, crew\n  lockers and a chair.\nMESS HALL (port) — mess table with a bench and a chair, galley cooler with an\n  over-counter rehydrator, and a galley sink under warm task lighting.\nMED BAY (starboard) — a med bunk, pharmacy and instrument cabinets, a scrub sink,\n  and a wall-mounted vitals display under clinical white strips.\nAIRLOCK (port) — deliberately bare: two EVA suit lockers, an intercom, an amber\n  warning strip, and a genuine DOUBLE door — an inner hatch onto the corridor and\n  an outer hatch through the port hull.\n\nCUSTOM OBJECTS — the warp core (base, glowing column, three light rings, cap and\na bright crown sphere) and the console bank (body, lip, raked screen bezel, a lit\nscreen face and two indicator panels) are authored ObjectRecipes carried in\nStore.customObjects; the console bank is instanced four times at three sizes.\n\nAVATARS — the deck crew are demo AI presences confined to their compartments\n(bridge watch, engineering watch, med bay watch, mess watch) drawn from the\nalways-on base packs (Sci-Fi, Robotic, Aliens, Careers). The four free-range\nroamers include a bridge command pair drawn from the `star-trek-tng` FRANCHISE\npack — franchise packs ship unloaded, so this config also sets Store.avatarPacks\nto load and activate it.\n\nLIGHTING — night preset, concrete deck plating, wall cutaway on and below-horizon\norbit enabled so the camera can duck under the hull. Every fixture is UNBOUND\nwith localState \"on\", so the ship is lit with no Home Assistant attached."
+  }
+}

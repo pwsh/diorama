@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Home — Diorama</title>
+<link rel="stylesheet" href="assets/site.css">
+</head>
+<body>
+<header class="topbar">
+<a class="brand" href="index.html">Diorama</a>
+<nav class="topnav"><a class="topnav-link active" href="index.html">Home</a><a class="topnav-link" href="guide/getting-started.html">Guide</a><a class="topnav-link" href="models/index.html">Models</a><a class="topnav-link" href="floorplans/index.html">Floor plans</a><a class="topnav-link" href="demo/index.html?demo=ranch-3bed">Live demo</a></nav>
+<span class="brand-meta">v0.66.1 · 2026-08-17</span>
+</header>
+<div class="layout"><main class="main main-solo"><section class="hero">
+<h1>Diorama — a graphical dashboard for Home Assistant</h1>
+<p class="tag">Build a virtual copy of your home — walls, rooms, furniture, and devices — and see live Home Assistant state in its actual spatial context. Click anything to control it. The 3D view renders in a 2000-era <em>Sims</em> cartoon style, with the people and pets moving through your home shown as animated figures.</p>
+<div class="cta-row"><a class="dl-btn" href="demo/index.html?demo=ranch-3bed">▶ Try the live demo</a><a class="dl-btn" href="guide/getting-started.html">Get started</a><a class="dl-btn" href="models/index.html">Model gallery</a><a class="dl-btn" href="floorplans/index.html">Floor plans</a><a class="dl-btn" href="https://github.com/pwsh/diorama">GitHub</a></div>
+</section>
+<section class="group" id="try-it-in-your-browser"><h2>Try it in your browser</h2>
+<p>The <a href="demo/index.html?demo=ranch-3bed">live demo</a> runs the <strong>full app entirely in your browser</strong> — no Home Assistant, no install, no account. It loads in offline mode preloaded with a dozen sample homes you can switch between and edit freely: move walls, drop furniture and devices, and orbit the Sims-style 3D view. Every change is saved only in <em>your</em> browser's local storage; a <strong>Reset demo</strong> button restores the samples at any time.</p>
+<p><a class="dl-btn" href="demo/index.html?demo=ranch-3bed">▶ Open the live demo</a></p>
+</section>
+<section class="group" id="what-it-does"><h2>What it does</h2>
+<div class="feature-grid"><div class="tile"><span class="tile-title">The Sims, for your house</span><span class="tile-count">The 3D view renders in a 2000-era Sims cartoon style — flat toon shading, cartoon outlines, blob shadows, a dimetric camera, and a glass-house / wall-cutaway doll’s-house view.</span></div><div class="tile"><span class="tile-title">Live presence with personality</span><span class="tile-count">Figures walk around furniture and through doorways, sit down, and run contextual activities — making coffee, watching a TV that’s actually on, working out, sleeping two-to-a-bed — with time- and place-aware thought bubbles.</span></div><div class="tile"><span class="tile-title">First-class mmWave radar</span><span class="tile-count">Multi-sensor, multi-target HLK-LD2450 tracking with in-place zone and object editing, per-sensor colors, and animated figures that reflect where people actually are.</span></div><div class="tile"><span class="tile-title">Build it fast, bind anything</span><span class="tile-count">A visual toolbar with real 3D thumbnails for every piece, live dimensions as you drag, rulers and CAD dimension lines — then bind lights, switches, fans, media players, sensors, cameras, locks, covers, thermostats, alarm keypads, vacuums and mowers, and click to control. Bind rooms to your Home Assistant areas and the entity pickers narrow themselves.</span></div><div class="tile"><span class="tile-title">Know who’s who</span><span class="tile-count">A People registry (names, colors, pets), BLE / Bermuda indoor positioning solved from your Bluetooth proxies, and identity fusion that dresses a precise radar figure in a person’s avatar and name label.</span></div><div class="tile"><span class="tile-title">A garage full of models</span><span class="tile-count">Opt-in vehicle packs put real-sized cars, buses, fire engines and tanks in your driveway — and warbirds, airliners and rockets in the sky, towing a banner with your message or skinning the real military aircraft passing overhead.</span></div><div class="tile"><span class="tile-title">Your yard, in full</span><span class="tile-count">Ground coverings and raised terraces, fences, hedges and gates, paths and driveways, sprinklers, flagpoles, and pools and spas with heater, pump, light, and water-chemistry bindings.</span></div><div class="tile"><span class="tile-title">The neighborhood &amp; the sky</span><span class="tile-count">Surrounding buildings, roads, and water from OpenStreetMap; live aircraft and the ISS overhead; an astronomically correct night sky for your latitude; and weather with 3D rain, snow, fog, wind, and lightning.</span></div><div class="tile"><span class="tile-title">On the wall or on a dashboard</span><span class="tile-count">Lock a plan into a live wall display with URL templates for mode, floor, view, layers, and camera — or drop a read-only Diorama card straight onto a Lovelace dashboard.</span></div><div class="tile"><span class="tile-title">Try it, or run it offline</span><span class="tile-count">A full editable demo runs in your browser with no install at all — and Diorama works the same served statically with no Home Assistant, with multiple named configurations and export / import.</span></div></div>
+</section>
+<section class="group" id="install"><h2>Install</h2>
+<p>Diorama installs through <a href="https://hacs.xyz">HACS</a> as a custom repository (<code>https://github.com/pwsh/diorama</code>, type <strong>Dashboard</strong>). After downloading it, register the native panel in <code>configuration.yaml</code> and restart Home Assistant:</p>
+<pre><code>panel_custom:
+  - name: diorama-panel
+    sidebar_title: &quot;Diorama&quot;
+    sidebar_icon: mdi:floor-plan
+    url_path: diorama
+    module_url: /hacsfiles/diorama/diorama-panel.js
+    embed_iframe: false</code></pre>
+<p>Panel mode rides Home Assistant’s own authentication — no tokens needed. Full steps, the iframe fallback, and offline standalone mode are in the <a href="guide/getting-started.html">Getting started</a> guide.</p>
+</section></main></div>
+<script>
+document.querySelectorAll('.nav-link').forEach(function(a){a.addEventListener('click',function(){document.body.classList.remove('nav-open');});});
+</script>
+</body>
+</html>

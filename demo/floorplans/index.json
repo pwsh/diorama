@@ -1,0 +1,74 @@
+[
+  {
+    "slug": "appliance-showroom",
+    "name": "Appliance Showroom — Watt’s Cooking"
+  },
+  {
+    "slug": "bungalow-cottage-yard",
+    "name": "Bungalow — Cottage + Yard"
+  },
+  {
+    "slug": "garden-center",
+    "name": "Lawn & Garden Center — The Potting Shed"
+  },
+  {
+    "slug": "interior-design-store",
+    "name": "Interior Design Studio — Vignette & Co."
+  },
+  {
+    "slug": "large-multilevel",
+    "name": "Large Multilevel — Aldergate"
+  },
+  {
+    "slug": "one-bedroom-apartment",
+    "name": "One-Bedroom Apartment"
+  },
+  {
+    "slug": "open-concept-entertainer",
+    "name": "Open-Concept Entertainer"
+  },
+  {
+    "slug": "open-concept-modern",
+    "name": "Open-Concept Modern"
+  },
+  {
+    "slug": "ranch-3bed",
+    "name": "Ranch — 3 Bed / 2 Bath"
+  },
+  {
+    "slug": "ranch-smart-home",
+    "name": "Ranch — Smart Home"
+  },
+  {
+    "slug": "small-bungalow",
+    "name": "Small 2-Bed Bungalow"
+  },
+  {
+    "slug": "starship",
+    "name": "SSV Diorama — Starship Deck"
+  },
+  {
+    "slug": "studio-apartment",
+    "name": "Studio Apartment"
+  },
+  {
+    "slug": "townhouse-3level",
+    "name": "Townhouse — 3 Level"
+  },
+  {
+    "slug": "townhouse-minimal",
+    "name": "Townhouse — Minimalist"
+  },
+  {
+    "slug": "two-story-colonial",
+    "name": "Two-Story Colonial"
+  },
+  {
+    "slug": "underground-hangout",
+    "name": "The Bunker — Underground Hangout"
+  },
+  {
+    "slug": "zoo",
+    "name": "Pocket Zoo — Toon Safari"
+  }
+]
