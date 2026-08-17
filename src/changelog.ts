@@ -23,6 +23,14 @@ export const CHANGELOG_DISPLAY_COUNT = 10;
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: 'v0.66.1', name: 'feeders only', date: '2026-08-15',
+    notes: [
+      'airplanes.live access requires feeding them data from your own ADS-B receiver — the settings block now says so before you pick it',
+      'If you are a feeder you already own a receiver, so Diorama points you at Local receiver (LAN) instead: your own data, fewer hops, and it never goes through Home Assistant',
+      'airplanes.live stays selectable and keeps working if you have access',
+    ],
+  },
+  {
     version: 'v0.66.0', name: 'ground control', date: '2026-08-15',
     notes: [
       'Flight tracking works again: airplanes.live now blocks everyone, so OpenSky is the new default and Home Assistant fetches it for you — Settings writes the YAML to paste, with your own location already filled in',

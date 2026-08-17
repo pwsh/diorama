@@ -1,6 +1,6 @@
 # Project status & pick-up guide
 
-Last updated: 2026-08-15, at **v0.66.0**. This is the single document to
+Last updated: 2026-08-15, at **v0.66.1**. This is the single document to
 read (alongside `CLAUDE.md`) to resume work with full context.
 
 ## Where things stand
