@@ -250,12 +250,19 @@ export function build() {
   // ---------- Top floor furnishing ----------
   const topFurn = [
     ...t.stairs,
-    // Secondary bedroom
-    furn('bed', 1200, 900, { rotation: 180 }),
+    // Secondary bedroom — the tightest bedside run in the library. Head wall is
+    // 3900 mm but the east 600 mm is the door dr14 approach zone (x ≥ 3300), so
+    // the queen + two nightstands + dresser must fit x 50–3300. Content is
+    // 500 + 1524 + 500 + 500 = 3024 and BEDSIDE GAP holds ≥ 30 mm rail
+    // clearance, so at bed x 1200 both nightstands sat 162 mm inside the
+    // mattress with nowhere to retreat (the west one had only 50 mm to the
+    // wall). Shifting the bed to 1400 and walking the east pieces out gives
+    // 38 mm each side of the bed and 30 mm to the dresser, all inside the run.
+    furn('bed', 1400, 900, { rotation: 180 }),
     furn('nightstand', 350, 300, { rotation: 180 }),
-    furn('nightstand', 2050, 300, { rotation: 180 }),
-    furn('dresser', 2900, 600, { rotation: 270 }),
-    furn('rug', 1200, 1400, { rotation: 0, w: 2000, h: 1800 }),
+    furn('nightstand', 2450, 300, { rotation: 180 }),
+    furn('dresser', 2980, 600, { rotation: 270 }),
+    furn('rug', 1400, 1400, { rotation: 0, w: 2000, h: 1800 }),
     // Hall bath
     furn('sink', 4850, 350, { rotation: 180 }),
     furn('toilet', 4300, 400, { rotation: 180 }),
@@ -266,9 +273,11 @@ export function build() {
     // Upstairs hallway
     furn('rug', 3150, 4800, { rotation: 0, w: 2500, h: 900, label: 'Runner' }),
     // Primary bedroom
+    // King is 1930 wide (x 1135–3065); ±1200 sat 15 mm inside the mattress,
+    // ±1250 clears the rail by 35 mm (550 mm still free to each side wall).
     furn('bed_king', 2100, 10400, { rotation: 0 }),
-    furn('nightstand', 900, 10400, { rotation: 0 }),
-    furn('nightstand', 3300, 10400, { rotation: 0 }),
+    furn('nightstand', 850, 10400, { rotation: 0 }),
+    furn('nightstand', 3350, 10400, { rotation: 0 }),
     furn('dresser', 300, 7200, { rotation: 270, w: 1400, h: 550 }),
     furn('bench', 2100, 8600, { rotation: 180 }),
     furn('chair', 3700, 6800, { rotation: 90, label: 'Reading chair' }),

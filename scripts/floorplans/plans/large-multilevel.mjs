@@ -425,9 +425,14 @@ export function build() {
     // Bedroom 5 Closet / Linen
     furn('wardrobe', 5400, 9200, { rotation: 0 }),
     // Primary Bedroom
+    // BEDSIDE GAP: a nightstand sits BESIDE the mattress, never inside it — the
+    // rail-to-nightstand clearance is held at ≥ 30 mm everywhere in this library
+    // (coordinates rounded to 10 mm). The king is 1930 wide (x 8485–10415), so
+    // the east nightstand at 10600 sat 65 mm inside the mattress while its twin
+    // at 8200 was correctly clear; 10700 restores the symmetric ±1250 offset.
     furn('bed_king', 9450, 3600, { rotation: 0 }),
     furn('nightstand', 8200, 3600, { rotation: 0 }),
-    furn('nightstand', 10600, 3600, { rotation: 0 }),
+    furn('nightstand', 10700, 3600, { rotation: 0 }),
     furn('dresser', 8000, 600, { rotation: 180 }),
     furn('bench', 9450, 1800, { rotation: 0 }),
     furn('rug', 9450, 2600, { rotation: 0, w: 3000, h: 2200, color: '#d7dee2' }),
@@ -436,10 +441,11 @@ export function build() {
     furn('chair', 12950, 600, { rotation: 180, label: 'Accent chair' }),
     furn('coffee_table', 12950, 2200, { rotation: 0 }),
     furn('bookshelf', 11900, 2100, { rotation: 270 }),
-    // Bedroom 2
+    // Bedroom 2 — queen is 1524 wide (x 14938–16462); ±1000 put both
+    // nightstands 12 mm inside the mattress, ±1050 clears the rail by 38 mm.
     furn('bed', 15700, 3600, { rotation: 0 }),
-    furn('nightstand', 14700, 3600, { rotation: 0 }),
-    furn('nightstand', 16700, 2600, { rotation: 0 }),
+    furn('nightstand', 14650, 3600, { rotation: 0 }),
+    furn('nightstand', 16750, 2600, { rotation: 0 }),
     furn('desk', 15700, 600, { rotation: 180 }),
     furn('rug', 15700, 2600, { rotation: 0, w: 1800, h: 1400, color: carpet }),
     // Bedroom 2 Bath

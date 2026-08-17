@@ -119,15 +119,21 @@ export function buildRanchBones(b) {
     furn('plant', 6600, 1500, { rotation: 0 }),
     // Bedroom 2 — canonical queen footprint (1524 × 2032), headboard (local +Y) on
     // the front wall under the window.
+    // BEDSIDE GAP: the nightstand goes BESIDE the mattress, never inside it —
+    // ≥ 30 mm rail clearance, coordinates rounded to 10 mm. The queen is 1524
+    // wide (x 938–2462), so ±1000 buried each nightstand 12 mm; ±1050 clears
+    // the rail by 38 mm and still leaves 350 mm to each side wall.
     furn('bed', 1700, 1050, { rotation: 180 }),
-    furn('nightstand', 700, 700, { rotation: 180 }),
-    furn('nightstand', 2700, 700, { rotation: 180 }),
+    furn('nightstand', 650, 700, { rotation: 180 }),
+    furn('nightstand', 2750, 700, { rotation: 180 }),
     furn('dresser', 300, 2900, { rotation: 270 }),
     furn('bookshelf', 2900, 3400, { rotation: 90 }),
     furn('rug', 1700, 2200, { rotation: 0, w: 1800, h: 1400, color: carpetT }),
     // Bedroom 3 — canonical full footprint (1370 × 1910)
+    // Full bed is 1370 wide (x 5515–6885); 5300 sat 35 mm inside the mattress,
+    // 5230 clears the rail by 35 mm with 430 mm still free to the west wall.
     furn('bed_full', 6200, 2650, { rotation: 180 }),
-    furn('nightstand', 5300, 2200, { rotation: 180 }),
+    furn('nightstand', 5230, 2200, { rotation: 180 }),
     furn('dresser', 7700, 4900, { rotation: 90 }),
     furn('desk', 5000, 5300, { rotation: 0 }),
     furn('rug', 6200, 3800, { rotation: 0, w: 1600, h: 1300, color: carpetT }),

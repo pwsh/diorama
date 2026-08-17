@@ -1,7 +1,7 @@
 {
   "diorama": 2,
   "name": "Large Multilevel — Aldergate",
-  "exportedAt": "2026-08-10T00:00:00.000Z",
+  "exportedAt": "2026-08-17T00:00:00.000Z",
   "store": {
     "v": 2,
     "floors": [
@@ -2609,7 +2609,7 @@
           },
           {
             "id": "large-multilevel-fn119",
-            "x": 10600,
+            "x": 10700,
             "y": 3600,
             "w": 500,
             "h": 400,
@@ -2687,7 +2687,7 @@
           },
           {
             "id": "large-multilevel-fn128",
-            "x": 14700,
+            "x": 14650,
             "y": 3600,
             "w": 500,
             "h": 400,
@@ -2695,7 +2695,7 @@
           },
           {
             "id": "large-multilevel-fn129",
-            "x": 16700,
+            "x": 16750,
             "y": 2600,
             "w": 500,
             "h": 400,

@@ -89,8 +89,13 @@ export function build() {
     // rot 0 = apron north into the bath; at 180 the step-over side was 2 mm off
     // the south wall the tub backs onto.
     furn('bathtub', 19800, 7500, { rotation: 0, w: 1700, h: 750 }),
-    // Bedroom 3 (guest) — canonical queen footprint (1524 × 2032)
-    furn('bed', 18200, 10200, { rotation: 0 }),
+    // Bedroom 3 (guest) — canonical queen footprint (1524 × 2032).
+    // Same fix as open-concept-modern (shared shell): at y 10200 the headboard
+    // end reached y 11216, clipping both the y 11200 wall and the top of the
+    // x 18700 partition; the settle pass took the larger push and slid the bed
+    // 314 mm WEST into the nightstand. y 10100 clears both and restores the
+    // authored 288 mm bedside gaps.
+    furn('bed', 18200, 10100, { rotation: 0 }),
     furn('nightstand', 16900, 10200, { rotation: 0 }),
     furn('nightstand', 19500, 10200, { rotation: 0 }),
     furn('dresser', 16500, 8400, { rotation: 180 }),

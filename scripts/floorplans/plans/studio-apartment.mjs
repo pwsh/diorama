@@ -79,9 +79,13 @@ export function build() {
     // Bedroom nook (north wall) — canonical queen (1524 × 2032, the notes call it
     // a queen), headboard flush on the north wall. Was 1700 × 2100 with the head
     // pointing INTO the room and the foot at the wall.
+    // BEDSIDE GAP: nightstands sit BESIDE the mattress, never inside it —
+    // ≥ 30 mm rail clearance, coordinates rounded to 10 mm. The queen spans
+    // x 1088–2612, so ±950 buried each nightstand 62 mm; ±1050 clears the rail
+    // by 38 mm (500 mm still free to the west wall).
     furn('bed', 1850, 5284, { rotation: 0 }),
-    furn('nightstand', 900, 5300, { rotation: 180 }),
-    furn('nightstand', 2800, 5300, { rotation: 180 }),
+    furn('nightstand', 800, 5300, { rotation: 180 }),
+    furn('nightstand', 2900, 5300, { rotation: 180 }),
     furn('dresser', 3600, 6000, { rotation: 0, w: 1200, h: 550 }),
     furn('wardrobe', 4700, 6000, { rotation: 0, w: 1000, h: 600 }),
     // Living area (entry pocket + extension)

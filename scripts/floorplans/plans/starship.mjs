@@ -137,8 +137,12 @@ export function build() {
     furn('block', 3950, 6200, { w: 700, h: 1000, label: 'Supply pod', color: '#3f4954' }),
 
     // ── Crew Quarters (starboard) ──────────────────────────────────────────
-    furn('bed_twin', 5100, 3050, { rotation: 0, w: 900, h: 1900, label: 'Bunk 1', sharedBedCovers: false }),
-    furn('bed_twin', 6400, 3050, { rotation: 0, w: 900, h: 1900, label: 'Bunk 2', sharedBedCovers: false }),
+    // Canonical bed_twin footprint (990 × 1910) — the hand-authored 900 × 1900
+    // was off-spec for no reason the room needs: at full size the bunks span
+    // x 4605–5595 and 5905–6895, still 310 mm apart and 105 mm clear of the
+    // crew lockers, with 45 mm to the forward bulkhead.
+    furn('bed_twin', 5100, 3050, { rotation: 0, label: 'Bunk 1', sharedBedCovers: false }),
+    furn('bed_twin', 6400, 3050, { rotation: 0, label: 'Bunk 2', sharedBedCovers: false }),
     furn('dresser', 7250, 2750, { rotation: 90, label: 'Crew lockers' }),
     furn('chair', 7250, 3800, { rotation: 0 }),
     furn('rug', 5750, 3000, { rotation: 0, w: 2600, h: 1600, color: '#1b2430' }),

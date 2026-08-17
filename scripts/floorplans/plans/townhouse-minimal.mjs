@@ -69,17 +69,23 @@ export function build() {
     ...t.stairs,
     // Canonical full footprint (1370 × 1910); headboard (local +Y) on the front
     // wall under the window, nightstand beside the head.
-    furn('bed_full', 1200, 900, { rotation: 180 }),
+    // BEDSIDE GAP ≥ 30 mm: the full bed at x 1200 spans 515–1885, burying the
+    // nightstand 85 mm. The nightstand cannot retreat (only 50 mm to the west
+    // wall), so the bed moves east to 1320 — 35 mm of rail clearance, and the
+    // room is open to the east so nothing else shifts.
+    furn('bed_full', 1320, 900, { rotation: 180 }),
     furn('nightstand', 350, 300, { rotation: 180 }),
-    furn('rug', 1200, 1500, { rotation: 0, w: 1800, h: 1600 }),
+    furn('rug', 1320, 1500, { rotation: 0, w: 1800, h: 1600 }),
     furn('sink', 4650, 300, { rotation: 180 }),
     furn('toilet', 5500, 1350, { rotation: 90 }),
     furn('washer', 300, 3700, { rotation: 270 }),
     furn('dryer', 300, 4700, { rotation: 270 }),
     // Canonical king footprint (1930 × 2030); headboard on the rear wall.
+    // King is 1930 wide (x 1135–3065); ±1200 sat 15 mm inside the mattress,
+    // ±1250 clears the rail by 35 mm (550 mm still free to each side wall).
     furn('bed_king', 2100, 10400, { rotation: 0 }),
-    furn('nightstand', 900, 10400, { rotation: 0 }),
-    furn('nightstand', 3300, 10400, { rotation: 0 }),
+    furn('nightstand', 850, 10400, { rotation: 0 }),
+    furn('nightstand', 3350, 10400, { rotation: 0 }),
     furn('rug', 2100, 9800, { rotation: 0, w: 2400, h: 2200 }),
     furn('wardrobe', 5350, 7200, { rotation: 90 }),
     furn('sink_vanity', 4500, 8600, { rotation: 270, w: 1200, h: 550 }),

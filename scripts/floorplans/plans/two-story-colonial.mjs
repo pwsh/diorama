@@ -266,9 +266,13 @@ export function build() {
 
   const furniture2 = [
     // Bedroom 2
+    // BEDSIDE GAP: a nightstand sits BESIDE the mattress, never inside it —
+    // ≥ 30 mm rail clearance, coordinates rounded to 10 mm. The queen is 1524
+    // wide (x 938–2462), so ±1000 buried each nightstand 12 mm; ±1050 clears
+    // the rail by 38 mm with 350 mm still free to each side wall.
     furn('bed', 1700, 1100, { rotation: 180 }),
-    furn('nightstand', 700, 700, { rotation: 180 }),
-    furn('nightstand', 2700, 700, { rotation: 180 }),
+    furn('nightstand', 650, 700, { rotation: 180 }),
+    furn('nightstand', 2750, 700, { rotation: 180 }),
     furn('dresser', 300, 3600, { rotation: 270 }),
     furn('desk', 3900, 3600, { rotation: 90 }),
     furn('rug', 1700, 2300, { rotation: 0, w: 1800, h: 1400, color: carpet }),
@@ -310,9 +314,12 @@ export function build() {
     furn('ottoman', 2325, 7200, { rotation: 0 }),
     furn('rug', 2325, 7800, { rotation: 0, w: 2700, h: 2100, color: '#d7dee2' }),
     // Bedroom 4
+    // Queen spans x 7938–9462; ±1000 buried both nightstands 12 mm. ±1050
+    // clears the rail by 38 mm — the west one lands flush on the x 7350
+    // partition's inner face (7400), which is where a bedside table belongs.
     furn('bed', 8700, 8700, { rotation: 0 }),
-    furn('nightstand', 7700, 9500, { rotation: 0 }),
-    furn('nightstand', 9700, 8700, { rotation: 0 }),
+    furn('nightstand', 7650, 9500, { rotation: 0 }),
+    furn('nightstand', 9750, 8700, { rotation: 0 }),
     furn('dresser', 10000, 6300, { rotation: 90 }),
     furn('desk', 7700, 6300, { rotation: 270 }),
     furn('rug', 8700, 8000, { rotation: 0, w: 1800, h: 1400, color: carpet }),

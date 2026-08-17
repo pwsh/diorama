@@ -1,7 +1,7 @@
 {
   "diorama": 2,
   "name": "Open-Concept Modern",
-  "exportedAt": "2026-08-10T00:00:00.000Z",
+  "exportedAt": "2026-08-17T00:00:00.000Z",
   "store": {
     "v": 2,
     "floors": [
@@ -677,8 +677,8 @@
           },
           {
             "id": "open-concept-modern-fn46",
-            "x": 17886,
-            "y": 10132,
+            "x": 18200,
+            "y": 10100,
             "w": 1524,
             "h": 2032,
             "kind": "bed"

@@ -177,8 +177,15 @@ export function build() {
     // rot 0 = apron north into the bath; at 180 the step-over side was 2 mm off
     // the south wall the tub backs onto.
     furn('bathtub', 19800, 7500, { rotation: 0, w: 1700, h: 750 }),
-    // Bedroom 3 — canonical queen footprint (1524 × 2032)
-    furn('bed', 18200, 10200, { rotation: 0 }),
+    // Bedroom 3 — canonical queen footprint (1524 × 2032).
+    // y 10200 put the headboard end at y 11216, poking 16 mm past the y 11200
+    // wall — and 16 mm of that sliver also clipped the TOP of the x 18700
+    // partition below it. The settle pass takes the LARGER push, so it shoved
+    // the bed 314 mm WEST (not 66 mm north), landing it 26 mm inside the west
+    // nightstand. y 10100 keeps the headboard 34 mm off the wall face, clears
+    // the partition entirely, and restores the authored 288 mm bedside gaps —
+    // identical to Bedroom 2 above.
+    furn('bed', 18200, 10100, { rotation: 0 }),
     furn('nightstand', 16900, 10200, { rotation: 0 }),
     furn('nightstand', 19500, 10200, { rotation: 0 }),
     furn('desk', 15400, 8800, { rotation: 270 }),
