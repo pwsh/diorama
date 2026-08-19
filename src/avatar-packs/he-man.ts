@@ -6,7 +6,7 @@
 import type { AvatarPackDef } from '../avatars.js';
 
 const pack: AvatarPackDef = {
-  id: 'he-man', version: 4, label: 'He-Man',
+  id: 'he-man', version: 5, label: 'He-Man',
   path: ['Cartoons', 'He-Man'], builtin: true, franchise: true,
   avatars: [
     // He-Man — bronzed barbarian, blond bob, crossed harness w/ red gem, back sword.
@@ -74,20 +74,16 @@ const pack: AvatarPackDef = {
       personality: { bobMul: 0.85, swayMul: 0.5, cadenceMul: 0.9, ampMul: 0.85 }, bubbles: ['🦅', '✨', '🔮', '🏰'] },
 
     // Battle Cat — green tiger MOUNT (huge sk 1.9), red saddle + headguard.
-    // approx: canonical tiger stripes added as thin dark qback boxes (no coat-pattern field).
     { id: 'he-man/battle-cat', label: 'Battle Tiger (green & red saddle)', rig: 'quadruped', pet: true,
       quadruped: { sk: 1.05, bodyLen: 900, bodyW: 260, bodyH: 300, legLen: 1.1, headR: 140, neckLen: 0,
         ears: 'round', tail: 'up', tailLen: 1.2, snout: 0.7, coat: 0x4a7a3a, belly: 0x8ac06a,
-        earColor: 0x2f5a28, snoutColor: 0xd8d4b0 },
+        earColor: 0x2f5a28, snoutColor: 0xd8d4b0,
+        pattern: { kind: 'stripes', color: 0x1c3a18, count: 8, seed: 41 } },
       accessories: [
         { shape: 'box', size: [200, 90, 170], anchor: 'qhead', pos: [0, 60, -20], color: 0xb0281c },
         { shape: 'box', size: [210, 14, 18], anchor: 'qhead', pos: [0, 108, -20], color: 0xc9a227 },
         { shape: 'box', size: [240, 90, 260], anchor: 'qback', pos: [0, 60, 0], color: 0x8a1f18 },
         { shape: 'box', size: [30, 30, 280], anchor: 'qback', pos: [0, 108, 0], color: 0xc9a227 },
-        { shape: 'box', size: [16, 70, 200], anchor: 'qback', pos: [-70, 40, -120], color: 0x1c3a18 },
-        { shape: 'box', size: [16, 70, 200], anchor: 'qback', pos: [-20, 45, -120], color: 0x1c3a18 },
-        { shape: 'box', size: [16, 70, 200], anchor: 'qback', pos: [30, 45, -120], color: 0x1c3a18 },
-        { shape: 'box', size: [16, 70, 200], anchor: 'qback', pos: [80, 40, -120], color: 0x1c3a18 },
       ],
       personality: { bobMul: 1.2, swayMul: 1.3, cadenceMul: 0.8, ampMul: 1.3 }, bubbles: ['🐯', '💨', '😾', '🔥'] },
 

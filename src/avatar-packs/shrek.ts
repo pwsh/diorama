@@ -7,7 +7,7 @@
 import type { AvatarPackDef } from '../avatars.js';
 
 const pack: AvatarPackDef = {
-  id: 'shrek', version: 3, label: 'Shrek',
+  id: 'shrek', version: 4, label: 'Shrek',
   path: ['Cartoons', 'Shrek'], builtin: true, franchise: true,
   avatars: [
     // Shrek — bald olive-green ogre, big pointed ears, brown vest over poet shirt.
@@ -133,8 +133,10 @@ const pack: AvatarPackDef = {
         { shape: 'sphere', size: 16, anchor: 'chest', pos: [0, -20, -12], color: 0x2f9e44 }, // gumdrop button
         { shape: 'cylinder', size: [26, 26, 8], anchor: 'handL', pos: [0, 0, 0], color: 0xf5f2ea }, // icing cuff L
         { shape: 'cylinder', size: [26, 26, 8], anchor: 'handR', pos: [0, 0, 0], color: 0xf5f2ea }, // icing cuff R
+        { shape: 'cylinder', size: [30, 30, 10], anchor: 'ankleL', pos: [0, 0, 0], color: 0xf5f2ea }, // icing ankle cuff L
+        { shape: 'cylinder', size: [30, 30, 10], anchor: 'ankleR', pos: [0, 0, 0], color: 0xf5f2ea }, // icing ankle cuff R
       ],
-      // approx: icing smile is one straight box (no curved geometry); ankle icing omitted (no foot anchor).
+      // approx: icing smile is one straight box (no curved geometry).
       personality: { bobMul: 1.35, swayMul: 1.2, cadenceMul: 1.4, ampMul: 0.5 },
       bubbles: ['🍪', '😊', '🧁', '💪'] },
   ],

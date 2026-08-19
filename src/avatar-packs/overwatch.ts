@@ -4,7 +4,7 @@
 import type { AvatarPackDef } from '../avatars.js';
 
 const pack: AvatarPackDef = {
-  id: 'overwatch', version: 3, label: 'Overwatch',
+  id: 'overwatch', version: 4, label: 'Overwatch',
   path: ['Video Games', 'Overwatch'], builtin: true, franchise: true,
   avatars: [
     // Tracer / Lena Oxton — brown bomber jacket, orange boots, chronal-accelerator glow.
@@ -67,9 +67,8 @@ const pack: AvatarPackDef = {
     // Genji Shimada — silver-white armor traced with green energy, back-mounted katana.
     { id: 'overwatch/cyber-ninja', label: 'Cyber ninja (silver armor, green energy lines)', rig: 'humanoid',
       humanoid: { sk: 0.95, headR: 118, headShape: 'sphere', skin: 0xdcdcd8, body: 0xdcdcd8, legColor: 0xb8b8b4, shoe: 0x2a2a2c,
-        eyes: 'redvisor', emI: 0.3, steel: true, hands: 'box', limbR: 0.85, armL: 1.0, legL: 1.05 },
+        eyes: 'visor', eyeColor: 0x2ecc71, emI: 0.3, steel: true, hands: 'box', limbR: 0.85, armL: 1.0, legL: 1.05 },
       accessories: [
-        // approx: eyes:'redvisor' geometry, canon glow is green — parked eye-color-override gap.
         { shape: 'box', size: [20, 90, 6], anchor: 'chest', pos: [0, 0, -12], color: 0x2ecc71, emissiveIntensity: 0.5 },
         { shape: 'box', size: [10, 60, 6], anchor: 'shoulderL', pos: [0, -30, -8], color: 0x2ecc71, emissiveIntensity: 0.5 },
         { shape: 'box', size: [10, 60, 6], anchor: 'shoulderR', pos: [0, -30, -8], color: 0x2ecc71, emissiveIntensity: 0.5 },

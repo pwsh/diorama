@@ -11,7 +11,7 @@
 import type { AvatarPackDef } from '../avatars.js';
 
 const pack: AvatarPackDef = {
-  id: 'disney-animals', version: 3, label: 'Disney Animals',
+  id: 'disney-animals', version: 4, label: 'Disney Animals',
   path: ['Cartoons', 'Disney Animals'], builtin: true, franchise: true,
   avatars: [
     // The flagship mascot mouse — black body, red shorts, giant round black ears.
@@ -137,10 +137,9 @@ const pack: AvatarPackDef = {
       personality: { bobMul: 1.3, swayMul: 1.1, cadenceMul: 1.0, ampMul: 1.15 }, bubbles: ['🦁', '👑', '☀️', '😸'] },
 
     // Flying elephant calf — soft grey, oversized ears bigger than the body, trunk, blue eyes.
-    // approx: 'round' ears enum is a placeholder; the huge ear read is carried by qhead accessories.
     { id: 'disney-animals/flying-elephant-calf', label: 'Elephant Calf (oversized ears)', rig: 'quadruped', pet: true,
       quadruped: { sk: 1.1, bodyLen: 704, bodyW: 260, bodyH: 288, legLen: 0.9, headR: 320, neckLen: 0,
-        ears: 'round', tail: 'tuft', tailLen: 0.55, snout: 0, coat: 0x9ea0a0, belly: 0xb8bab8,
+        ears: 'flap', tail: 'tuft', tailLen: 0.55, snout: 0, coat: 0x9ea0a0, belly: 0xb8bab8,
         earColor: 0x9ea0a0, snoutColor: 0x9ea0a0 },
       accessories: [
         { shape: 'sphere', size: [340, 300, 40], anchor: 'qhead', pos: [-260, 20, -20], rot: [0, -0.5, 0.2], color: 0x9ea0a0, sphereArc: [0, 6.283, 0, 1.6] },
@@ -154,18 +153,12 @@ const pack: AvatarPackDef = {
       personality: { bobMul: 1.1, swayMul: 1.2, cadenceMul: 0.75, ampMul: 0.9 }, bubbles: ['🐘', '🎪', '🪶', '💧'] },
 
     // Spotted fawn — reddish-brown dappled coat, long gangly legs, big dark eyes, flag tail.
-    // approx: dapple spots reduced to 8 hand-placed spheres (no scatter-authoring path).
     { id: 'disney-animals/spotted-fawn', label: 'Spotted Fawn (long legs, dappled coat)', rig: 'quadruped', pet: true,
       quadruped: { sk: 0.9, bodyLen: 544, bodyW: 150, bodyH: 216, legLen: 1.3, headR: 110, neckLen: 90,
         ears: 'long', tail: 'up', tailLen: 0.3, snout: 1.0, coat: 0xb5623a, belly: 0xe8d9b5,
-        earColor: 0xb5623a, snoutColor: 0x2a1f1a },
+        earColor: 0xb5623a, snoutColor: 0x2a1f1a,
+        pattern: { kind: 'dapples', color: 0xe8d9b5, count: 9, seed: 17 } },
       accessories: [
-        { shape: 'sphere', size: [16, 6, 16], anchor: 'qback', pos: [-50, 55, -60], color: 0xe8d9b5 },
-        { shape: 'sphere', size: [15, 6, 15], anchor: 'qback', pos: [40, 58, -30], color: 0xe8d9b5 },
-        { shape: 'sphere', size: [16, 6, 16], anchor: 'qback', pos: [-30, 60, 20], color: 0xe8d9b5 },
-        { shape: 'sphere', size: [14, 6, 14], anchor: 'qback', pos: [45, 56, 40], color: 0xe8d9b5 },
-        { shape: 'sphere', size: [16, 6, 16], anchor: 'qback', pos: [-55, 52, 70], color: 0xe8d9b5 },
-        { shape: 'sphere', size: [14, 6, 14], anchor: 'qback', pos: [10, 60, 0], color: 0xe8d9b5 },
         { shape: 'sphere', size: 24, anchor: 'qhead', pos: [-45, 20, 55], color: 0x1c1410 },
         { shape: 'sphere', size: 24, anchor: 'qhead', pos: [45, 20, 55], color: 0x1c1410 },
       ],

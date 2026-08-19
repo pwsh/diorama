@@ -8,11 +8,8 @@ const pauldrons = (col: number, size: [number, number, number] = [70, 55, 50]): 
   { shape: 'box', size, anchor: 'shoulderL', rot: [0, 0, 0.2], color: col, emissiveIntensity: 0 },
   { shape: 'box', size, anchor: 'shoulderR', rot: [0, 0, -0.2], color: col, emissiveIntensity: 0 },
 ];
-// approx: T-visor — thin vertical dark bar layered over the 'visor' band.
-const TVISOR: AvatarPrimitive = { shape: 'box', size: [12, 64, 8], anchor: 'face', pos: [0, -4, -10], color: 0x1a1a1a, emissiveIntensity: 0 };
-
 const pack: AvatarPackDef = {
-  id: 'star-wars-mandalorian', version: 4, label: 'Star Wars: The Mandalorian',
+  id: 'star-wars-mandalorian', version: 5, label: 'Star Wars: The Mandalorian',
   path: ['Sci-Fi', 'Star Wars', 'The Mandalorian'], builtin: true, franchise: true,
   base: {
     rig: 'humanoid',
@@ -25,15 +22,14 @@ const pack: AvatarPackDef = {
   avatars: [
     // Din Djarin
     { id: 'star-wars-mandalorian/beskar-bounty-hunter', label: 'Bounty hunter (silver beskar, cape)', rig: 'humanoid',
-      humanoid: { skin: 0xc7c9cc, body: 0xc7c9cc, legColor: 0xa8abb0, shoe: 0x2a2622, steel: true, limbR: 1.05 },
+      humanoid: { skin: 0xc7c9cc, body: 0xc7c9cc, legColor: 0xa8abb0, shoe: 0x2a2622, steel: true, limbR: 1.05, eyes: 't_visor' },
       accessories: [
         { shape: 'cylinder', size: [15, 15, 30], anchor: 'crown', pos: [40, 20, 0], rot: [0.3, 0, 0], color: 0x8a8a8a, emissiveIntensity: 0 },
         ...pauldrons(0xc7c9cc),
         { shape: 'cape', size: [320, 600, 480], anchor: 'back', pos: [0, -140, 12], rot: [0.12, 0, 0], color: 0x3b3b3d, animate: { kind: 'sway', speed: 0.6, amp: 0.15 } },
         { shape: 'box', size: [160, 40, 20], anchor: 'hip', pos: [0, 0, -6], color: 0x2a2622, emissiveIntensity: 0 },
         { shape: 'box', size: [30, 60, 25], anchor: 'hip', pos: [70, -10, -6], color: 0x1c1a17, emissiveIntensity: 0 },
-        { shape: 'cylinder', size: [17, 17, 6], anchor: 'chest', pos: [0, 20, -12], rot: [1.57, 0, 0], color: 0x8a8a8a, emissiveIntensity: 0 },
-        TVISOR],
+        { shape: 'cylinder', size: [17, 17, 6], anchor: 'chest', pos: [0, 20, -12], rot: [1.57, 0, 0], color: 0x8a8a8a, emissiveIntensity: 0 }],
       personality: { bobMul: 0.75, swayMul: 0.6, cadenceMul: 0.9, ampMul: 0.8 },
       bubbles: ['🛡️', '🔫', '🎯', '🤨'] },
     // Grogu — the Child (green, huge drooping ears)
@@ -81,24 +77,21 @@ const pack: AvatarPackDef = {
       personality: { bobMul: 0.6, swayMul: 0.5, cadenceMul: 0.8, ampMul: 0.7 },
       bubbles: ['🔥', '⚒️', '🛡️', '📿'] },
     // Imperial remnant shock trooper
-    // approx: redvisor color is fixed red — use plain 'visor' (black band) + T bar.
     { id: 'star-wars-mandalorian/remnant-trooper', label: 'Shock trooper (white Imperial armor)', rig: 'humanoid',
-      humanoid: { skin: 0xe6e2d8, body: 0xe6e2d8, legColor: 0xe6e2d8, shoe: 0x1c1a17, eyes: 'visor', emI: 0, limbR: 1.0 },
+      humanoid: { skin: 0xe6e2d8, body: 0xe6e2d8, legColor: 0xe6e2d8, shoe: 0x1c1a17, eyes: 't_visor', emI: 0, limbR: 1.0 },
       accessories: [
         ...pauldrons(0xe6e2d8, [60, 30, 45]),
-        { shape: 'box', size: [50, 30, 10], anchor: 'chest', pos: [0, 10, -8], color: 0x1c1a17, emissiveIntensity: 0 },
-        TVISOR],
+        { shape: 'box', size: [50, 30, 10], anchor: 'chest', pos: [0, 10, -8], color: 0x1c1a17, emissiveIntensity: 0 }],
       personality: { bobMul: 0.7, swayMul: 0.5, cadenceMul: 1.0, ampMul: 0.75 },
       bubbles: ['🎯', '🔫', '📡', '😬'] },
     // Bo-Katan Kryze — blue-grey armor, owl-wing helm
     { id: 'star-wars-mandalorian/nite-owl-warrior', label: 'Warrior (blue-grey armor, owl helm)', rig: 'humanoid',
-      humanoid: { sk: 0.98, headR: 124, skin: 0x5b7a99, body: 0x5b7a99, legColor: 0x8a97a3, shoe: 0x2a2622, eyes: 'visor', steel: true, limbR: 0.95, armL: 0.98 },
+      humanoid: { sk: 0.98, headR: 124, skin: 0x5b7a99, body: 0x5b7a99, legColor: 0x8a97a3, shoe: 0x2a2622, eyes: 't_visor', steel: true, limbR: 0.95, armL: 0.98 },
       accessories: [
         { shape: 'cone', size: [20, 60, 20], anchor: 'crown', pos: [-45, 10, 20], rot: [0.4, 0, 0.3], color: 0x8a97a3, emissiveIntensity: 0 },
         { shape: 'cone', size: [20, 60, 20], anchor: 'crown', pos: [45, 10, 20], rot: [0.4, 0, -0.3], color: 0x8a97a3, emissiveIntensity: 0 },
         { shape: 'cylinder', size: [12, 12, 32], anchor: 'crown', pos: [35, 15, 0], rot: [0.3, 0, 0], color: 0x8a8a8a, emissiveIntensity: 0 },
-        ...pauldrons(0x5b7a99, [68, 52, 48]),
-        TVISOR],
+        ...pauldrons(0x5b7a99, [68, 52, 48])],
       personality: { bobMul: 0.85, swayMul: 0.7, cadenceMul: 1.0, ampMul: 0.9 },
       bubbles: ['⚔️', '👑', '🦉', '🛡️'] },
     // IG-11 — assassin-turned-nurse droid

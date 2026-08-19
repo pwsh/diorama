@@ -26715,7 +26715,13 @@ export class ThreeDRenderer {
     } else if (spec.eyes === 't_visor') {
       // Mandalorian-style helmet: a face band (helmet color) with a dark T slot —
       // a vertical bar down the center + a horizontal bar across the brow.
-      const bandMat = this._mat({ color: 0x9aa1a8, emissive: 0x9aa1a8, emissiveIntensity: 0.12, metalness: 0.7, roughness: 0.35 });
+      // The band IS the helmet's face plate, so it takes the rig's RESOLVED head
+      // (skin) color — beskar silver, white trooper, green bounty hunter, or a
+      // 'tint' identity helmet all read as one piece. A hardcoded silver (the
+      // original) fought every non-silver helmet, which is why the shipped packs
+      // were still approximating a T-visor with a dark bar over the 'visor' band.
+      // `eyeColor` still tints the SLOT glow only (documented in AUTHORING.md).
+      const bandMat = this._mat({ color: spec.skin, emissive: spec.skin, emissiveIntensity: 0.12, metalness: 0.7, roughness: 0.35 });
       const band = new THREE.Mesh(new THREE.BoxGeometry(HEAD_R * 1.2, HEAD_R * 0.95, HEAD_R * 0.12), bandMat);
       band.position.set(0, headY + HEAD_R * 0.02, faceZ - HEAD_R * 0.02);
       root.add(band);

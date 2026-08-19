@@ -5,7 +5,7 @@
 import type { AvatarPackDef } from '../avatars.js';
 
 const pack: AvatarPackDef = {
-  id: 'star-wars-ot', version: 4, label: 'Star Wars: Original Trilogy',
+  id: 'star-wars-ot', version: 5, label: 'Star Wars: Original Trilogy',
   path: ['Sci-Fi', 'Star Wars', 'Original Trilogy'], builtin: true, franchise: true,
   avatars: [
     // Luke Skywalker
@@ -120,11 +120,9 @@ const pack: AvatarPackDef = {
       bubbles: ['🎯', '📡', '⚠️', '🤖'] },
     // Boba Fett
     { id: 'star-wars-ot/boba', label: 'Bounty hunter (green armor)', rig: 'humanoid',
-      humanoid: { headR: 126, skin: 0x3f5a34, body: 0x3f5a34, legColor: 0x2f4327, shoe: 0x232a1e, eyes: 'visor', emI: 0.1, hands: 'box', limbR: 1.1, steel: false },
+      humanoid: { headR: 126, skin: 0x3f5a34, body: 0x3f5a34, legColor: 0x2f4327, shoe: 0x232a1e, eyes: 't_visor', emI: 0.1, hands: 'box', limbR: 1.1, steel: false },
       accessories: [
         { shape: 'cylinder', size: [8, 8, 80], anchor: 'crown', pos: [40, 20, 0], color: 0x1c1c1e, emissiveIntensity: 0 },
-        // approx: narrow T-visor via a thin vertical dark bar over the visor band
-        { shape: 'box', size: [12, 60, 8], anchor: 'face', pos: [0, -6, -12], color: 0x1c1c1e, emissiveIntensity: 0 },
         { shape: 'box', size: [30, 40, 8], anchor: 'chest', pos: [-30, 10, -8], color: 0xa4271f, emissiveIntensity: 0 },
         { shape: 'box', size: [30, 40, 8], anchor: 'chest', pos: [30, 10, -8], color: 0xc9982f, emissiveIntensity: 0 },
         { shape: 'cone', size: [180, 220, 180], anchor: 'hip', pos: [0, -80, 0], color: 0x6b5c3f, emissiveIntensity: 0 },

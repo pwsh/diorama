@@ -450,12 +450,22 @@ Approximated with conventions in the shipped packs; see
   canvas-painted DECAL PLANES proud of the torso — text/glyph/print —
   never body texture maps; `HumanoidFields.decals`).
 - ✅ Animated appendages — SHIPPED 2026-07 Phase 4b (`AvatarPrimitive.animate` sway/flap/orbit/spin, hop/knuckle gaits, quad `earAnimate`); per-tentacle idle channels + orbiting secondary props still approximated.
-- Extra eye styles (compound, T-visor, sleepy, luminous-bulbous, eye color
-  overrides) and quad eye customization.
-- Additional anchors: wrist/cuff, ankle/foot, limb-midpoint (knee/elbow pads).
-- Quad `legColor` (dark "points" legs — feet-only `pawColor` shipped),
-  giant-flap ear enum, broad-muzzle snout shape, pattern/scatter generator
-  for stripes/spots/dapples.
+- ✅ Extra eye styles (`compound` / `t_visor` / `sleepy` / `luminous` +
+  `eyeColor`) and quad eye customization — SHIPPED Phase 4 (`8ed6376`).
+  `t_visor`'s band took the rig's resolved skin 2026-08-19 (it was hardcoded
+  silver, which is why four Star Wars members were still faking it with a dark
+  bar over the plain `visor`).
+- ✅ Additional anchors: wrist/cuff, ankle/foot, limb-midpoint (knee/elbow
+  pads) — SHIPPED Phase 4, all eight, world-space test-pinned, `root`
+  fallback on legless rigs, `wristL/R` registered in `handAccessories` so they
+  hide during prop sessions.
+- ✅ Quad `legColor`, giant-flap ear enum, broad-muzzle snout shape,
+  pattern/scatter generator for stripes/spots/dapples — SHIPPED Phase 4.
+  REMAINING sub-gap: the pattern generator is VERTICAL-only — no orientation
+  param, so horizontal stripes (sesame-street) are still approximated by hand.
+  NB these bullets read as OPEN until 2026-08-19 despite line 244 recording
+  Phase 4 shipped; a whole agent pass was briefed off them before the code was
+  checked. Cross-check the ledger before trusting a backlog bullet.
 - ✅ Sessile/rooted mode (phase 4) + pose-aware hand props / two-handed
   prop convention (`AvatarPrimitive.twoHanded`, 2026-07-17).
 - ✅ **Situational costume swaps** — SHIPPED 2026-07-18

@@ -408,6 +408,31 @@
   ok('t_visor: eyeColor tints the slot glow', tBars.length === 2 && tBars.some(b => b.material.emissive
     && chNear(b.material.emissive.getHex(), 0xff3300)),
     tBars.length ? tBars[0].material.emissive.getHex().toString(16) : '-');
+  // t_visor band = the HELMET face plate: it must take the rig's RESOLVED head
+  // (skin) colour, not a hardcoded silver, or a green/white/blue helmet reads as
+  // a silver plate glued to a coloured head (which is why the shipped packs were
+  // still faking a T-visor with a dark bar over the plain 'visor' band).
+  const tvBand = nonOutline(tvisor.group).find(m => m.geometry.type === 'BoxGeometry'
+    && !m.userData.outlineSkip && m.position.y > 1550
+    && Math.abs(m.geometry.parameters.width - 126 * 1.2) < 0.5);
+  ok('t_visor: band takes the rig skin colour', !!tvBand
+    && chNear(tvBand.material.color.getHex(), simsHex(TINT)),
+    tvBand ? tvBand.material.color.getHex().toString(16) : 'no band');
+  // Negative control for the same rule: a rig with an EXPLICIT helmet colour gets
+  // that colour on the band (proves the assertion above is not just matching a
+  // constant that happens to equal TINT).
+  mod.ThreeDRenderer.registerAvatarPack({
+    id: 'ey2', version: 1, label: 'Eyes2', path: ['EY2'], builtin: true,
+    avatars: [{ id: 'ey2/green', label: 'G', rig: 'humanoid', humanoid: { eyes: 't_visor', skin: 0x3f5a34 } }],
+  });
+  const tvGreen = r._buildHumanoid(TINT, 'ey2/green');
+  const tvgBand = nonOutline(tvGreen.group).find(m => m.geometry.type === 'BoxGeometry'
+    && !m.userData.outlineSkip && m.position.y > 1550
+    && Math.abs(m.geometry.parameters.width - 126 * 1.2) < 0.5);
+  ok('t_visor: explicit helmet colour wins', !!tvgBand
+    && chNear(tvgBand.material.color.getHex(), simsHex(0x3f5a34)),
+    tvgBand ? tvgBand.material.color.getHex().toString(16) : 'no band');
+
   // sleepy: generic eyes present + 2 skin-tone lid boxes over the upper eye.
   const lids = nonOutline(sleepy.group).filter(m => m.geometry.type === 'BoxGeometry'
     && near(m.position.y, 1636 + 126 * 0.2, 8) && Math.abs(m.geometry.parameters.width - 126 * 0.42) < 0.5);
@@ -544,6 +569,32 @@
   const qd = qspots.group.children.filter(m => m.isMesh && m.geometry.type === 'CylinderGeometry'
     && Math.abs(m.geometry.parameters.height - 8) < 0.5);
   ok('pattern: quad dapples built', qd.length === 8, `n=${qd.length}`);
+
+  // Determinism WITHOUT an explicit seed: the generator falls back to a hash of
+  // the avatar id, so REBUILDING the same rig (every _keyFloor rebuild does) must
+  // reproduce the identical scatter — the house "no Math.random in a builder"
+  // rule. Two different ids must still differ (else the assertion is vacuous).
+  mod.ThreeDRenderer.registerAvatarPack({
+    id: 'pt2', version: 1, label: 'Pattern2', path: ['PT2'], builtin: true,
+    avatars: [
+      { id: 'pt2/a', label: 'A', rig: 'humanoid', humanoid: { pattern: { kind: 'spots', color: 0x113355, count: 7 } } },
+      { id: 'pt2/b', label: 'B', rig: 'humanoid', humanoid: { pattern: { kind: 'spots', color: 0x113355, count: 7 } } },
+      { id: 'pt2/qd', label: 'QD', rig: 'quadruped', pet: true, quadruped: { pattern: { kind: 'dapples', color: 0x442200, count: 7 } } },
+    ],
+  });
+  const unseeded1 = discs(r._buildHumanoid(TINT, 'pt2/a'));
+  const unseeded2 = discs(r._buildHumanoid(TINT, 'pt2/a'));
+  const unseededB = discs(r._buildHumanoid(TINT, 'pt2/b'));
+  ok('pattern: unseeded rebuild is identical (id-hash)', unseeded1.length === 7
+    && posKey(unseeded1) === posKey(unseeded2), `n=${unseeded1.length}`);
+  ok('pattern: unseeded differs per avatar id', unseeded1.length
+    && posKey(unseeded1) !== posKey(unseededB));
+  // Same guarantee on the QUAD path (its own _addPattern ctx / branch).
+  const qDiscs = (rig) => rig.group.children.filter(m => m.isMesh
+    && m.geometry.type === 'CylinderGeometry' && Math.abs(m.geometry.parameters.height - 8) < 0.5);
+  const q1 = qDiscs(r._buildQuadruped(0x808080, 'pt2/qd'));
+  const q2 = qDiscs(r._buildQuadruped(0x808080, 'pt2/qd'));
+  ok('pattern: quad unseeded rebuild is identical', q1.length === 7 && posKey(q1) === posKey(q2), `n=${q1.length}`);
 
   // ── Phase 4a: sessile / rooted mode ────────────────────────────────────────
   mod.ThreeDRenderer.registerAvatarPack({

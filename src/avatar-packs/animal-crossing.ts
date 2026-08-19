@@ -7,14 +7,14 @@ import type { AvatarPackDef } from '../avatars.js';
 const CREAM = 0xf5ecd0, DARKBROWN = 0x5c4030, NOSE = 0x201812;
 
 const pack: AvatarPackDef = {
-  id: 'animal-crossing', version: 1, label: 'Animal Crossing',
+  id: 'animal-crossing', version: 2, label: 'Animal Crossing',
   path: ['Video Games', 'Animal Crossing'], builtin: true, franchise: true,
   // Whole pack shares chibi proportions; prominent ear accessories → earSkip.
   base: { rig: 'humanoid', humanoid: { sk: 0.7, headR: 155, limbR: 1.15, hands: 'sphere', eyes: 'dots', armL: 0.85, legL: 0.75, footMul: [1.15, 0.85, 1.05], earSkip: true } },
   avatars: [
     // Tom Nook
     { id: 'animal-crossing/tom-nook', label: 'Shopkeeper (raccoon, blue apron)', rig: 'humanoid',
-      humanoid: { sk: 0.72, headR: 158, limbR: 1.1, skin: 0x9a7a54, body: 0x9a7a54, legColor: DARKBROWN, shoe: 0x3f2c1e, eyes: 'almond', armL: 0.8, legL: 0.7 }, // approx: sleepy eyes → 'almond'
+      humanoid: { sk: 0.72, headR: 158, limbR: 1.1, skin: 0x9a7a54, body: 0x9a7a54, legColor: DARKBROWN, shoe: 0x3f2c1e, eyes: 'sleepy', armL: 0.8, legL: 0.7 },
       accessories: [
         { shape: 'sphere', size: [70, 30, 10], anchor: 'face', pos: [0, 15, -5], color: DARKBROWN },
         { shape: 'sphere', size: [35, 25, 45], anchor: 'face', pos: [0, -15, -10], color: DARKBROWN },

@@ -6,7 +6,7 @@
 import type { AvatarPackDef } from '../avatars.js';
 
 const pack: AvatarPackDef = {
-  id: 'movies-lotr', version: 4, label: 'The Lord of the Rings',
+  id: 'movies-lotr', version: 6, label: 'The Lord of the Rings',
   path: ['Pop Culture', 'Movies', 'The Lord of the Rings'], builtin: true, franchise: true,
   // Shared un-magical earthbound base: no emissive, sphere hands.
   base: { humanoid: { emI: 0, hands: 'sphere' } },
@@ -20,10 +20,10 @@ const pack: AvatarPackDef = {
         { shape: 'cylinder', size: [18, 18, 6], anchor: 'neck', pos: [0, 4, -84], rot: [1.57, 0, 0], color: 0xd8d8c0 },
         { shape: 'cape', size: [150, 345, 225], anchor: 'back', pos: [0, -160, 14], rot: [0.12, 0, 0], color: 0x4f6b47, animate: { kind: 'sway', speed: 0.6, amp: 0.15 } },
         { shape: 'box', size: [180, 20, 150], anchor: 'hip', pos: [0, 0, 0], color: 0x3a2818 },
+        { shape: 'sphere', size: [58, 26, 52], anchor: 'ankleL', pos: [0, 4, -18], color: 0x4a3324 }, // hobbit foot hair L
+        { shape: 'sphere', size: [58, 26, 52], anchor: 'ankleR', pos: [0, 4, -18], color: 0x4a3324 }, // hobbit foot hair R
       ],
       personality: { bobMul: 1.0, swayMul: 1.1, cadenceMul: 1.15, ampMul: 0.85 },
-      // approx: hairy-hobbit-foot detail unsupported (no foot anchor) — enlarged
-      // bare feet via footMul + skin-toned shoe only.
       bubbles: ['💍', '🌿', '😰', '🍞'] },
 
     // Sam — gardener hobbit: stouter, sandy hair, grey (not green) cloak, pack.
@@ -108,14 +108,13 @@ const pack: AvatarPackDef = {
     // Gollum — corrupted creature: gaunt, hunched, pale green-grey, big feet.
     { id: 'movies-lotr/corrupted', label: 'Corrupted creature (crouched, hunted)', rig: 'humanoid',
       humanoid: { sk: 0.5, headR: 100, headShape: 'oval', skin: 0x8a9c7a, body: 0x8a9c7a, shoe: 0x8a9c7a,
-        eyes: 'dots', limbR: 0.6, armL: 1.1, legL: 0.8, footMul: [1.5, 0.6, 1.6], legColor: 0x8a9c7a },
+        eyes: 'luminous', eyeColor: 0xd8f0c0, limbR: 0.6, armL: 1.1, legL: 0.8, footMul: [1.5, 0.6, 1.6], legColor: 0x8a9c7a },
       accessories: [
         { shape: 'cone', size: [12, 30, 12], anchor: 'head', pos: [-92, 24, 6], rot: [0, 0, -0.6], color: 0x8a9c7a },
         { shape: 'cone', size: [12, 30, 12], anchor: 'head', pos: [92, 24, 6], rot: [0, 0, 0.6], color: 0x8a9c7a },
         { shape: 'box', size: [150, 60, 130], anchor: 'hip', pos: [0, -10, 0], color: 0x4a4238 },
       ],
-      // approx: no bulbous/luminous large-eye style (parked) — generic 'dots' eyes;
-      // gaunt skull approximated by headShape:'oval'. Permanent hunch via posture.
+      // Gaunt skull approximated by headShape:'oval'. Permanent hunch via posture.
       posture: { pitch: 0.5 },
       personality: { bobMul: 0.6, swayMul: 1.4, cadenceMul: 1.3, ampMul: 0.7 },
       bubbles: ['🐟', '💍', '😖', '🤫'] },
@@ -147,9 +146,10 @@ const pack: AvatarPackDef = {
         { shape: 'cylinder', size: [18, 18, 6], anchor: 'neck', pos: [0, 4, -84], rot: [1.57, 0, 0], color: 0xc8ccd0 },
         { shape: 'cape', size: [150, 345, 225], anchor: 'back', pos: [0, -160, 14], rot: [0.12, 0, 0], color: 0x5c6b7a, animate: { kind: 'sway', speed: 0.6, amp: 0.15 } },
         { shape: 'box', size: [180, 20, 150], anchor: 'hip', pos: [0, 0, 0], color: 0x3a2818 },
+        { shape: 'sphere', size: [58, 26, 52], anchor: 'ankleL', pos: [0, 4, -18], color: 0x4a3320 }, // hobbit foot hair L
+        { shape: 'sphere', size: [58, 26, 52], anchor: 'ankleR', pos: [0, 4, -18], color: 0x4a3320 }, // hobbit foot hair R
       ],
       personality: { bobMul: 1.05, swayMul: 1.15, cadenceMul: 1.1, ampMul: 0.9 },
-      // approx: hairy-hobbit-foot detail unsupported (no foot anchor) — enlarged bare feet via footMul + skin-toned shoe only.
       bubbles: ['🍄', '🍺', '🌿', '😄'] },
 
     // Pippin — Took hobbit: sandy-blond curls, tan/fawn cloak, bare feet. Same hobbit idiom.
@@ -161,9 +161,10 @@ const pack: AvatarPackDef = {
         { shape: 'cylinder', size: [18, 18, 6], anchor: 'neck', pos: [0, 4, -84], rot: [1.57, 0, 0], color: 0xc8ccd0 },
         { shape: 'cape', size: [150, 345, 225], anchor: 'back', pos: [0, -160, 14], rot: [0.12, 0, 0], color: 0xbfa77e, animate: { kind: 'sway', speed: 0.6, amp: 0.15 } },
         { shape: 'box', size: [180, 20, 150], anchor: 'hip', pos: [0, 0, 0], color: 0x3a2818 },
+        { shape: 'sphere', size: [58, 26, 52], anchor: 'ankleL', pos: [0, 4, -18], color: 0xc8a35a }, // hobbit foot hair L
+        { shape: 'sphere', size: [58, 26, 52], anchor: 'ankleR', pos: [0, 4, -18], color: 0xc8a35a }, // hobbit foot hair R
       ],
       personality: { bobMul: 1.1, swayMul: 1.2, cadenceMul: 1.15, ampMul: 0.9 },
-      // approx: hairy-hobbit-foot detail unsupported (no foot anchor) — enlarged bare feet via footMul + skin-toned shoe only.
       bubbles: ['🍄', '🍎', '🌿', '😅'] },
   ],
 };

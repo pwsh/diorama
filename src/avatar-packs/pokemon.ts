@@ -5,7 +5,7 @@
 import type { AvatarPackDef } from '../avatars.js';
 
 const pack: AvatarPackDef = {
-  id: 'pokemon', version: 2, label: 'Pokémon',
+  id: 'pokemon', version: 3, label: 'Pokémon',
   path: ['Video Games', 'Pokémon'], builtin: true, franchise: true,
   avatars: [
     // Pikachu — biped, tailbone zigzag tail
@@ -94,7 +94,7 @@ const pack: AvatarPackDef = {
       pet: true, personality: { bobMul: 1.5, swayMul: 1.3, cadenceMul: 0.85, ampMul: 0.55 }, bubbles: ['🎤', '🎵', '😴', '💗'] },
     // Meowth — quadruped, forehead coin
     { id: 'pokemon/pkmn-coin-cat', label: 'Coin Cat (cream, gold coin)', rig: 'quadruped', pet: true,
-      quadruped: { sk: 0.52, bodyLen: 600, bodyW: 195, bodyH: 215, legLen: 0.95, neckLen: 40, headR: 100, headScale: [1.05, 1.0, 1.0], ears: 'pointy', tail: 'curl', tailLen: 1.15, snout: 0.45, coat: 0xf2ecd0, belly: 0xf7f2e2, earColor: 0x1c1c1c, snoutColor: 0xf2ecd0 }, // approx: black-exterior/brown-interior ear → single tone; brown paws unsupported
+      quadruped: { sk: 0.52, bodyLen: 600, bodyW: 195, bodyH: 215, legLen: 0.95, neckLen: 40, headR: 100, headScale: [1.05, 1.0, 1.0], ears: 'pointy', tail: 'curl', tailLen: 1.15, snout: 0.45, coat: 0xf2ecd0, belly: 0xf7f2e2, earColor: 0x1c1c1c, snoutColor: 0xf2ecd0, pawColor: 0x6b4a2a }, // approx: black-exterior/brown-interior ear → single tone
       accessories: [
         { shape: 'cylinder', size: [35, 35, 14], anchor: 'qhead', pos: [0, 55, -70], rot: [1.4, 0, 0], color: 0xd4af17, emissive: 0xd4af17, emissiveIntensity: 0.15 },
         { shape: 'box', size: [14, 14, 6], anchor: 'qhead', pos: [0, 78, -70], color: 0x8a6a10 },

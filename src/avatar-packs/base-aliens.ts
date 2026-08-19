@@ -5,7 +5,7 @@ import type { AvatarPackDef } from '../avatars.js';
 const GREEN = 0x86d46a;
 
 const pack: AvatarPackDef = {
-  id: 'base-aliens', version: 2, label: 'Aliens', path: ['Base', 'Aliens'], builtin: true,
+  id: 'base-aliens', version: 3, label: 'Aliens', path: ['Base', 'Aliens'], builtin: true,
   avatars: [
     // Zero-accessory kind (wave-2B port): the legacy switch built nothing for
     // 'alien' — the bare big-head rig is the whole look. Nothing to port.
@@ -45,13 +45,9 @@ const pack: AvatarPackDef = {
       personality: { bobMul: 0.9, swayMul: 1.3, cadenceMul: 0.8, ampMul: 0.9 }, bubbles: ['🐙', '🌌', '👁️', '🫧'] },
 
     // Insectoid — angular box head, clawed box hands, side-bulging compound eyes.
-    // approx: no 'compound' eye style (PARKED) — modeled as head-side dome accessory
-    // pair over tiny 'dots'; wing cases + mandibles reinforce the insect read.
     { id: 'insectoid', label: 'Insectoid (mantis)', rig: 'humanoid',
-      humanoid: { headR: 118, headShape: 'box', limbR: 0.6, skin: 0x5a7a3a, body: 0x44602c, shoe: 0x2a2f22, emI: 0.15, hands: 'box', eyes: 'dots', earSkip: true },
+      humanoid: { headR: 118, headShape: 'box', limbR: 0.6, skin: 0x5a7a3a, body: 0x44602c, shoe: 0x2a2f22, emI: 0.15, hands: 'box', eyes: 'compound', eyeColor: 0x6a1418, earSkip: true },
       accessories: [
-        { shape: 'sphere', size: [54, 40, 54], anchor: 'head', pos: [-62, 22, -36], rot: [0, -0.5, 0], color: 0x3a0f14, emissive: 0x8a1f1f, emissiveIntensity: 0.2 }, // compound eye L
-        { shape: 'sphere', size: [54, 40, 54], anchor: 'head', pos: [62, 22, -36], rot: [0, 0.5, 0], color: 0x3a0f14, emissive: 0x8a1f1f, emissiveIntensity: 0.2 }, // compound eye R
         { shape: 'cone', size: [12, 52], anchor: 'face', pos: [-20, -44, -18], rot: [2.6, 0, 0.3], color: 0x2a2f22 }, // mandible L
         { shape: 'cone', size: [12, 52], anchor: 'face', pos: [20, -44, -18], rot: [2.6, 0, -0.3], color: 0x2a2f22 }, // mandible R
         { shape: 'cone', size: [30, 180], anchor: 'back', pos: [-40, 20, 20], rot: [0.3, 0, 0.2], color: 0x44602c }, // wing case L
