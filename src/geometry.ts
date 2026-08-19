@@ -9,7 +9,7 @@ import { formatEntityValue, formatClock, evalRules, ruleMatches, relTimeText,
   type HassStateLike, type ClockMode, type ValueRule } from './value-rules.js';
 // Vehicle model packs (pure, three-free). vehicles.ts imports NOTHING at runtime
 // — in particular it must never import geometry.ts back (that would be a cycle).
-import { vehicleRecipe } from './vehicles.js';
+import { vehicleRecipe, vehicleRegistryRev } from './vehicles.js';
 
 export const MM_PER_IN = 25.4;
 export const IN_PER_FT = 12;
@@ -3373,6 +3373,85 @@ export function sanitizeBgScenery(v: unknown): BgSceneryCounts | null {
   return any ? out : null;
 }
 
+// ── Background-text ROAD CARS (BgTextEntry.roadAreaId / roadCars) ──────────
+// The road a message car drives is NOT a new drawing tool: it is a path-backed
+// GroundArea (the `path` tool — a centreline polyline that bufferPolyline turns
+// into a ribbon). The cars drive the CENTRELINE, which is an OPEN polyline, so
+// an end is a U-turn, never a wrap.
+//
+// This is the only validation the road geometry gets. Planner.bgTextsResolved
+// reads the area off the CURRENT floor and hands the result to the renderer
+// already sanitized (the resolveBgRegion posture: geometry + a camera far-plane
+// requirement are derived from it, so a NaN must never get through), and an
+// IMPORTED store never went near the path editor. Pure + total: anything that
+// cannot make a drivable centreline → null, and the entry builds nothing.
+//
+// Width is the AUTHORED ribbon width — never widened to fit the car. A 100 mm
+// path with a sedan on it overhangs, exactly as BgTextEntry.scale > 1
+// "deliberately spills"; the road is the user's drawing, not ours.
+// = PATH_MIN_WIDTH (declared further down; duplicated as a literal rather
+// than reordering the file — asserted equal in the road tests).
+export const BG_ROAD_MIN_WIDTH_MM = 100;
+export const BG_ROAD_MAX_WIDTH_MM = 60000;
+export const BG_ROAD_MAX_POINTS = 200;
+export const BG_ROAD_MIN_LENGTH_MM = 1000;
+export const BG_ROAD_CARS_MIN = 1;
+export const BG_ROAD_CARS_MAX = 6;
+export const BG_ROAD_CARS_DEFAULT = 2;
+
+export type BgRoadPath = { centerline: Vec2[]; width: number };
+
+export function sanitizeBgRoadPath(v: unknown): BgRoadPath | null {
+  if (!v || typeof v !== 'object') return null;
+  const r = v as { centerline?: unknown; width?: unknown };
+  if (!Array.isArray(r.centerline)) return null;
+  const w = typeof r.width === 'number' && isFinite(r.width) ? r.width : NaN;
+  if (!isFinite(w)) return null;
+  const pts: Vec2[] = [];
+  for (const raw of r.centerline) {
+    if (!raw || typeof raw !== 'object') continue;
+    const q = raw as { x?: unknown; y?: unknown };
+    if (typeof q.x !== 'number' || typeof q.y !== 'number') continue;
+    if (!isFinite(q.x) || !isFinite(q.y)) continue;
+    // Drop a repeated vertex: a zero-length segment has no tangent, and the
+    // arc-length walker would divide by it.
+    const last = pts[pts.length - 1];
+    if (last && Math.hypot(q.x - last.x, q.y - last.y) < 1) continue;
+    pts.push({ x: q.x, y: q.y });
+    if (pts.length >= BG_ROAD_MAX_POINTS) break;
+  }
+  if (pts.length < 2) return null;
+  // A road shorter than a car is not drivable; treat it as unusable rather than
+  // spinning a vehicle on the spot.
+  let len = 0;
+  for (let i = 1; i < pts.length; i++) len += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+  if (!(len >= BG_ROAD_MIN_LENGTH_MM)) return null;
+  return {
+    centerline: pts,
+    width: Math.max(BG_ROAD_MIN_WIDTH_MM, Math.min(BG_ROAD_MAX_WIDTH_MM, w)),
+  };
+}
+
+// How many cars share the road. Pure + total; absent/garbage → the default.
+export function bgRoadCars(v: unknown): number {
+  const n = typeof v === 'number' && isFinite(v) ? Math.round(v) : NaN;
+  if (!isFinite(n)) return BG_ROAD_CARS_DEFAULT;
+  return Math.max(BG_ROAD_CARS_MIN, Math.min(BG_ROAD_CARS_MAX, n));
+}
+
+// How far from `originX/Y` the road's content reaches (mm) — the ROAD twin of
+// bgRegionReachMm, feeding the SAME camera far-plane requirement. Includes the
+// half-width (a car drives a lane offset, not the centreline itself) so a road
+// running off toward the property line cannot clip its own traffic away.
+export function bgRoadReachMm(road: BgRoadPath, originX = 0, originY = 0): number {
+  let far = 0;
+  for (const p of road.centerline) {
+    const d = Math.hypot(p.x - originX, p.y - originY);
+    if (d > far) far = d;
+  }
+  return far + road.width / 2;
+}
+
 // ── _keyBgText EXTENSION TERM ──────────────────────────────────────────────
 // three-view's _keyBgText hashes each resolved entry field-by-field and
 // deliberately carries NO configRev, so anything new a bg-text rig CONSUMES has
@@ -3385,17 +3464,38 @@ export function sanitizeBgScenery(v: unknown): BgSceneryCounts | null {
 // empty string, so an untouched entry's key term is exactly what it was before
 // the region shipped. Rounded to 10 mm / whole degrees — sub-centimetre drift in
 // a hand-edited config must not thrash a rebuild.
-export function bgTextExtraKey(e: { region?: BgTextRegion; scenery?: BgTrainScenery }): string {
+export function bgTextExtraKey(e: {
+  region?: BgTextRegion; scenery?: BgTrainScenery;
+  // Road cars: the RESOLVED path (planner-sanitized), the model id and the car
+  // count are all BUILD-time inputs — a centreline vertex drag, a width edit, a
+  // different vehicle or another car must all rebuild the rig.
+  roadPath?: BgRoadPath; roadVehicle?: string; roadCars?: number;
+}): string {
   const reg = resolveBgRegion(e.region);
   const sc = sanitizeBgScenery(e.scenery);
-  if (!reg && !sc) return '';
+  const rd = sanitizeBgRoadPath(e.roadPath);
+  const hasRoad = !!rd || e.roadVehicle != null || e.roadCars != null;
+  if (!reg && !sc && !hasRoad) return '';
   const q = (v: number | undefined) => (v == null ? '' : Math.round(v / 10));
   const rk = reg
     ? `${reg.shape},${q(reg.cx)},${q(reg.cy)},${q(reg.r)},${q(reg.w)},${q(reg.h)},`
       + `${Math.round(reg.rotationDeg ?? 0)}`
     : '';
   const sk = sc ? `${sc.crossings},${sc.signals},${sc.tunnels},${sc.trees},${sc.station ? 1 : 0}` : '';
-  return `${rk};${sk}`;
+  // ABSENT-IS-BYTE-IDENTICAL: an entry with no road fields at all stops here,
+  // so a region-only / scenery-only entry's term is exactly the string it was
+  // before road cars shipped (golden-pinned).
+  if (!hasRoad) return `${rk};${sk}`;
+  const pk = rd
+    ? `${q(rd.width)}:` + rd.centerline.map(p => `${q(p.x)},${q(p.y)}`).join(' ')
+    : '';
+  // A pack model's GEOMETRY lives behind the loaded/active pack config, which
+  // no other term can see — the same reason three-view folds vehicleRegistryRev
+  // into the key for a banner tow craft. Read ONLY when a model is actually
+  // named, so this stays a pure string for every other entry and the key still
+  // carries no configRev.
+  const vr = e.roadVehicle ? vehicleRegistryRev() : 0;
+  return `${rk};${sk};${e.roadVehicle ?? ''},${e.roadCars ?? ''},${vr},${pk}`;
 }
 
 export function groundKindLabel(k: GroundKind): string { return GROUND_KINDS[k]?.label ?? k; }

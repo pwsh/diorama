@@ -1100,6 +1100,42 @@ under a dirty key); gate blends use the `grassYaw` idiom (`undefined` = snap) se
 `place(s, lat)` (yaw to tangent, +X = outward from the loop centroid) is the general trackside-prop
 primitive. 2D `drawBgTextRegions` (canvas-render) draws a dashed footprint + centre tick, EDIT MODE
 ONLY, riding the `bgText` layer.
+**ROAD CARS (2026-08-19, user-requested "cars operating on the road carrying messages and entity
+displays … Road areas can be drawn using the same method as other ground areas. Cars can do u turns
+and multiple can operate on the same area")**: mode `'road'` + `roadAreaId?` / `roadVehicle?` /
+`roadCars?` (1–6, default 2). **NO new drawing tool — a road IS a path-backed `GroundArea`**
+(`path.centerline` + width, the existing `path` tool); `roadAreaId` follows the `grassAreaId`
+precedent so a stale/off-floor id FAILS SOFT. **`'road'` had to join `_migrateBgTexts`'s MODE
+FILTER** — without it every road row was silently dropped on load (mutation-pinned; the migration
+is still a whole-entry `{...e}` passthrough, never a field whitelist). Cars drive the CENTERLINE,
+not the buffered polygon, with lanes from the SAME `bufferPolyline` mitred offset that drew the
+ribbon (offsetting a sampled point by a segment normal would jump sideways at every vertex).
+**The four legs — out lane → U-turn → back lane → U-turn — concatenate into ONE closed drive
+cycle**, so a car is a single scalar `sigma` and position, heading AND speed are continuous by
+construction (pinned: ≤5.02 mm jump per 5 mm of cycle, Δyaw ≤ dσ/lane). The U-turn is a real
+half-circle of radius `lane` (= width/4) centred on the centreline end; its normal is DERIVED from
+the lane endpoints, never a rotated tangent — `_w` mirrors X and flips handedness, so a hand-picked
+rot90 sign is a coin flip. Spacing is a constant gap IN CYCLE SPACE, so it is exactly as stable
+mid-turn as on the straight (two cars turning at the same end are two points on one arc —
+test-pinned as genuinely co-occurring, not vacuously skipped); count is capped at
+`floor(cycle / (carLen × 1.6))` so cars can never overlap. **Message chunking across cars was
+REJECTED as wrong here**: road cars pass each other in OPPOSITE directions, so chunked text
+scrambles on sight — each car carries the WHOLE message, which means there is no chunk order to
+mirror and that half of the train technique is a no-op. The load-bearing half IS reused: two
+FrontSide ±X planes, never one DoubleSide (whose far face shows mirrored glyphs). No roof sign — it
+would carry the same ±X normals as the flanks, pure duplication at the same camera angle. Models
+come from the vehicle registry via a renderer-local 4-line `roadVehicleDef` ('ground'-surface
+filter, the `bannerVehicleDef` shape); `_buildVehicleCraft` gained a TRAILING `ground = false` flag
+flipping exactly three things (material fog, outline-clone fog, `spin:'wheel'` collection) — every
+banner call site byte-identical. **Shipped packs don't tag their wheels** (`spin:'wheel'` was
+declared but animated by nothing), so a pack car's wheels are STATIC and only the hand-authored toy
+car's roll — deliberate: animate what the model declares, never geometry guessed by heuristic.
+Grade is sampled PER FRAME PER CAR via `_itemGroundY` (scene→plan inlined; `_w` allocates) —
+NOT baked at build, because terrace edits don't bump `_keyBgText` (no configRev) so a baked height
+would go stale. Road reach rides the SAME derived gate + single `_recordFrustumReq('bgtext', …)`
+the region uses. 2D `drawBgTextRegions` gained a road branch — dashes the CENTRELINE and ticks both
+U-turn ends. NB `updateBgTexts` deliberately TRUSTS `roadPath` to be planner-sanitized, exactly as
+it already trusts `region` (consistency with that documented posture over an asymmetric guard).
 Settings ▸ Display "Background text" is a 6-entry list editor (mode/static/entity/maxCars/
 delete + "+ Add"). Test pages: `bgtext-test.html` (29/29, legacy wrapper) +
 `bgtext-multi-test.html` (`BGTEXTMULTI PASS 373/373`).

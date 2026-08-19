@@ -17,6 +17,7 @@ import { slugToName, normMac, localToWorld, segCrossesSolidWall, mowerSweepWaypo
          furnitureLocalToWorld, furnitureDef, resolveFurnitureDef, resolveItemGroundMm, STAIRS_MIN_RISE_MM,
          IDENTIFY_TTL_MS, sirenTurnOnData, doorOpenFraction,
          resolveBgRegion, sanitizeBgScenery, type BgSceneryCounts,
+         sanitizeBgRoadPath, type BgRoadPath,
          type LockGlyphState, type RoomTemp, type TempSample,
          type BicycleState } from './geometry.js';
 import { solveHomography, applyHomography } from './homography.js';
@@ -532,6 +533,15 @@ export type BgTextResolved = {
   // Trackside scenery counts (train only) — already clamped by
   // sanitizeBgScenery; absent = nothing built.
   scenery?: BgSceneryCounts;
+  // ── Road cars (mode 'road') ────────────────────────────────────────────
+  // The chosen path-backed GroundArea's CENTRELINE + ribbon width, in world/plan
+  // mm, ALREADY SANITIZED by sanitizeBgRoadPath (the region posture — this drives
+  // geometry and the camera far plane). Absent = the id did not resolve to a
+  // drivable road on THIS floor, and the renderer builds nothing. `roadVehicle` /
+  // `roadCars` pass through as authored; the renderer owns the model fallback and
+  // the overlap-safe car-count cap.
+  roadAreaId?: string; roadPath?: BgRoadPath;
+  roadVehicle?: string; roadCars?: number;
 };
 
 // Single-source-of-truth Planner. Lit components subscribe via addEventListener.
@@ -2224,7 +2234,7 @@ export class Planner extends EventTarget {
   // list at 6 entries and drops malformed rows.
   private _migrateBgTexts(remote: Store): BgTextEntry[] | undefined {
     if (Array.isArray(remote.bgTexts)) {
-      const modes: BgTextEntryMode[] = ['sky', 'banner', 'grass', 'train', 'chopper'];
+      const modes: BgTextEntryMode[] = ['sky', 'banner', 'grass', 'train', 'chopper', 'road'];
       // WHOLE-ENTRY passthrough (shallow copy so we never alias the caller's
       // objects). This used to rebuild each row FIELD-BY-FIELD from a hard-coded
       // whitelist — every per-entry field added after that list was written
@@ -2780,6 +2790,20 @@ export class Planner extends EventTarget {
     };
   }
 
+  // The road a `road` entry drives: the chosen GroundArea's PATH CENTRELINE +
+  // ribbon width (world mm), sanitized. Returns null when the id isn't a
+  // path-backed area ON THE CURRENT FLOOR — bgTexts are store-level and ground
+  // areas are per-floor, so a road chosen on another floor (or deleted, or
+  // "Detach shape"-d into a plain polygon) fails soft and the entry simply
+  // builds nothing. Points are COPIED: the renderer must never alias store data.
+  private _roadAreaPath(areaId: string): BgRoadPath | null {
+    const ga = (this.floor().groundAreas ?? []).find(a => a.id === areaId);
+    if (!ga || !ga.path) return null;
+    // sanitizeBgRoadPath REBUILDS every vertex object, so the returned path
+    // never aliases store data — the copy lives there, not here.
+    return sanitizeBgRoadPath({ centerline: ga.path.centerline, width: ga.path.width });
+  }
+
   // Resolved background-text entries for the renderer/settings preview: one row
   // per configured entry that currently has content (empty/no-reading entries are
   // skipped). Order follows the stored list. Read by three-view (3D). Ground-
@@ -2812,7 +2836,8 @@ export class Planner extends EventTarget {
       // Colour customization travels for the three VEHICLE styles only. sky is
       // an additive glow and grass reads its ink off the surface below, so both
       // carry nothing — their hash + build stay byte-identical to pre-feature.
-      if (e.mode === 'banner' || e.mode === 'train' || e.mode === 'chopper') {
+      if (e.mode === 'banner' || e.mode === 'train' || e.mode === 'chopper'
+          || e.mode === 'road') {
         if (e.colorMain)   row.colorMain = e.colorMain;
         if (e.colorDetail) row.colorDetail = e.colorDetail;
         if (e.bannerBg)    row.bannerBg = e.bannerBg;
@@ -2834,6 +2859,20 @@ export class Planner extends EventTarget {
       if (e.mode === 'train') {
         const sc = sanitizeBgScenery(e.scenery);
         if (sc) row.scenery = sc;
+      }
+      // Road cars. The path is resolved + sanitized HERE for the same reason the
+      // region is: it is the one path every store (loaded, imported, undone,
+      // hand-edited) travels before the renderer sees it, and the numbers drive
+      // geometry and the camera far plane. An unresolvable road emits NOTHING —
+      // not even roadAreaId — so a stale id is indistinguishable from "no road
+      // chosen" downstream, and the renderer's single `roadPath` check covers
+      // both. `roadVehicle`/`roadCars` pass through raw (the aircraft/scale
+      // precedent — the renderer owns the model fallback and the count cap).
+      if (e.mode === 'road') {
+        const rp = e.roadAreaId ? this._roadAreaPath(e.roadAreaId) : null;
+        if (rp) { row.roadAreaId = e.roadAreaId; row.roadPath = rp; }
+        if (e.roadVehicle) row.roadVehicle = e.roadVehicle;
+        if (e.roadCars != null) row.roadCars = e.roadCars;
       }
       if (e.mode === 'grass' && e.faceCamera === false) {
         row.faceCamera = false;

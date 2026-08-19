@@ -1908,7 +1908,8 @@ export interface BgTextConfig {
 // member stays in the union only so a store written before the migration still
 // type-checks; nothing ever WRITES it again and the Settings mode dropdown no
 // longer offers it.
-export type BgTextEntryMode = 'sky' | 'banner' | 'grass' | 'train' | 'chopper';
+export type BgTextEntryMode =
+  'sky' | 'banner' | 'grass' | 'train' | 'chopper' | 'road';
 export interface BgTextEntry {
   id: string;                    // stable per-entry id (rig key + list identity)
   mode: BgTextEntryMode;
@@ -1962,7 +1963,7 @@ export interface BgTextEntry {
   // aimed when one floor's plan is re-oriented.
   faceCamera?: boolean;
   rotationDeg?: number;
-  // ── Per-entry COLOR customization (modes 'banner' | 'train' | 'chopper') ──
+  // ── Per-entry COLOR customization (modes 'banner' | 'train' | 'chopper' | 'road') ──
   // Hex strings ('#rgb' / '#rrggbb'). EVERY field is optional and ABSENT
   // reproduces the shipped palette byte-for-byte (the renderer owns the format
   // validation, exactly like `aircraft`). Deliberately IGNORED by the other two
@@ -1992,11 +1993,35 @@ export interface BgTextEntry {
   // Placed by ARC LENGTH along the loop exactly like the cars, so the dressing
   // follows a region change for free. Sanitized by sanitizeBgScenery().
   scenery?: BgTrainScenery;
-  colorMain?: string;    // vehicle primary — tow-plane fuselage, train engine + car bodies, chopper cabin
-  colorDetail?: string;  // vehicle accent  — plane wing/tail, train trim + darker last car, chopper stripes + boom
-  bannerBg?: string;     // towed banner cloth background; ALSO the train flank text-plate background
-  bannerText?: string;   // banner lettering colour;       ALSO the train flank plate text
-  bannerFrame?: string;  // banner edge trim stripes;      ALSO the train flank plate border stripes
+  // ── ROAD CARS (mode 'road') ──────────────────────────────────────────────
+  // Message cars driving a road the user already DREW: a path-backed
+  // `Floor.groundAreas` entry (the `path` tool — a centreline polyline buffered
+  // into a ribbon). `roadAreaId` names it; the cars drive the CENTRELINE, which
+  // is an OPEN polyline, so a car reaching either end U-turns and drives back.
+  //
+  // Store-level bgTexts + per-floor ground areas ⇒ a stale id (the area is on
+  // another floor, was deleted, or lost its `path` when "Detach shape" was
+  // clicked) FAILS SOFT exactly like `grassAreaId`: the entry simply builds
+  // nothing. There is deliberately no fallback road — unlike ground writing,
+  // which has a sensible auto placement, a car with no road has nowhere to be.
+  roadAreaId?: string;
+  // Which model drives. A vehicle-pack model id that declares the 'ground'
+  // surface (src/vehicles.ts — `base-ground-civil` ships 20 civilian vehicles);
+  // absent, unknown, unloaded/deactivated, or a sky-only model all fall back to
+  // the built-in toy car, exactly as an unknown `aircraft` falls back to the
+  // classic tow plane. Validated renderer-side; this can never throw.
+  roadVehicle?: string;
+  // How many cars share the road (1..6, default 2). They are spread evenly
+  // around one closed DRIVE CYCLE (out along one side, U-turn, back along the
+  // other, U-turn), so the spacing between them is constant — including while
+  // one or two of them are mid-U-turn. The renderer additionally caps the count
+  // so cars can never overlap on a short road.
+  roadCars?: number;
+  colorMain?: string;    // vehicle primary — tow-plane fuselage, train engine + car bodies, chopper cabin, ROAD car body
+  colorDetail?: string;  // vehicle accent  — plane wing/tail, train trim + darker last car, chopper stripes + boom, ROAD car accent
+  bannerBg?: string;     // towed banner cloth background; ALSO the train + ROAD flank text-plate background
+  bannerText?: string;   // banner lettering colour;       ALSO the train + ROAD flank plate text
+  bannerFrame?: string;  // banner edge trim stripes;      ALSO the train + ROAD flank plate border stripes
 }
 
 // Operating region for a background-text vehicle (BgTextEntry.region). WORLD/plan

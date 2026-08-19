@@ -46,12 +46,13 @@ import {
   logicLightState, actionButtonHeight, actionButtonSize, actionButtonColor, ACTION_BUTTON_DEFAULTS,
   STORY_H_MM, resolveGroundLevelMm,
   bgRegionInscribedR, bgRegionReachMm, BG_REGION_MIN_MM, type BgSceneryCounts,
+  bgRoadCars, bgRoadReachMm, PATH_MIN_WIDTH, type BgRoadPath,
 } from './geometry.js';
 import { ALERT_BEACON_DEFAULTS, alertBeaconState, alertBeaconColor, alertBeaconAlarming, isAlertDomain } from './alerts.js';
 import { northMarkerPos } from './compass.js';
 import {
   vehicleRecipe, registerVehiclePack, unregisterVehiclePack, setVehiclePacksConfig,
-  bannerVehicleDef, bannerCraftScale, bannerCraftHullZMm,
+  bannerVehicleDef, resolveVehicleDef, bannerCraftScale, bannerCraftHullZMm,
   VEHICLE_GLASS, VEHICLE_DARK,
   type VehiclePackDef, type VehiclePacksConfig,
   type VehicleModelDef, type VehiclePrimitive,
@@ -734,6 +735,44 @@ interface BgSignal { s: number; red: THREE.Mesh; green: THREE.Mesh; blend?: numb
 // the two ANIMATED families are tracked here, so _advanceTrainScenery iterates
 // nothing when a train asked for none of them.
 interface BgScenery { crossings: BgCrossing[]; signals: BgSignal[]; }
+// ── Road cars (BgTextEntry mode 'road') ─────────────────────────────────────
+// One message car driving a user-drawn road. `sigma` is its position on the
+// road's closed DRIVE CYCLE (see BgRoad) — one scalar, which is what makes
+// multi-car spacing survive a U-turn without any special case.
+interface BgRoadCar { obj: THREE.Group; wheels: THREE.Object3D[]; }
+// A road entry's driving state. The road itself is a path-backed GroundArea, so
+// the drivable line is an OPEN polyline: the cars run out along one lane, swing
+// through a half-circle at the end, come back along the other lane, and swing
+// again at the start. Those four legs are concatenated into ONE closed cycle of
+// arc length `cycle`, so a car is a single scalar `sigma` and the gap between
+// cars is a CONSTANT in that scalar — including while a car (or two) is mid-turn.
+//
+// Both lanes come from the SAME mitered offset (geometry.ts bufferPolyline) the
+// road ribbon itself is drawn with, so a car is always on the drawn asphalt and
+// never cuts the corner of a bend (offsetting a sampled centreline point by a
+// segment normal would jump laterally at every vertex).
+interface BgRoad {
+  laneOut: { x: number; z: number }[];   // SCENE polyline driven on the way out
+  cumOut: number[]; lenOut: number;
+  laneBack: { x: number; z: number }[];  // SCENE polyline driven on the way back
+  cumBack: number[]; lenBack: number;    //   (walked from its LAST vertex to its first)
+  // U-turn frames, SCENE space: the centreline end point + the unit travel
+  // tangent AT that end (pointing off the road), for the far end and the start.
+  // …plus the arriving lane's outward NORMAL at that end, DERIVED from the lane
+  // endpoints (never rotated out of the tangent: `_w` mirrors X, which flips
+  // handedness, so a hand-picked rot90 sign would be a coin flip).
+  endX: number; endZ: number; endTx: number; endTz: number; endNx: number; endNz: number;
+  begX: number; begZ: number; begTx: number; begTz: number; begNx: number; begNz: number;
+  lane: number;        // lateral offset from the centreline = the U-turn radius (mm)
+  turnLen: number;     // π·lane — arc length of one U-turn, so SPEED is continuous
+  cycle: number;       // lenOut + turnLen + lenBack + turnLen
+  cars: BgRoadCar[];
+  gap: number;         // constant cycle-space gap between consecutive cars
+  sigma: number;       // lead car's cycle position (mm)
+  speed: number;       // mm/s
+  wheelR: number;      // wheel radius (mm) → spin rate = speed / wheelR
+}
+
 // PERSISTENT per-entry animation phase (the _fanSpin / _applianceDoorBlend
 // idiom). A rebuild of _bgTextGroup — a text edit, a storm flip, a floor
 // switch — must not teleport a plane back to its build angle or restart the
@@ -748,6 +787,8 @@ interface BgPhase {
   skyPhase?: number;   // skywriting drift + twinkle clock (s)
   trainS?: number;     // train engine arc position (mm along the loop)
   wheelRot?: number;   // train wheel spin (rad) — cosmetic continuity
+  roadS?: number;      // road lead-car position on the drive cycle (mm)
+  roadWheel?: number;  // road wheel spin (rad) — cosmetic continuity
 }
 interface BgRig {
   mode: BgTextEntryMode;
@@ -789,6 +830,8 @@ interface BgRig {
                                               // the camera formula. undefined = follow the camera
   // train
   train?: BgTrain;
+  // road cars
+  road?: BgRoad;
 }
 
 // Ground-writing "fit to area" payload (Planner.bgTextsResolved → updateBgTexts).
@@ -825,6 +868,23 @@ const BG_GATE_TAIL_MM = 2600;      // …and lift this far after the last car cl
 const BG_GATE_TAU_S = 0.45;        // boom raise/lower ease (both directions, one k)
 const BG_GATE_FLASH_HZ = 1.1;      // crossing-lamp alternation
 const BG_SIGNAL_BLOCK_MM = 16000;  // a signal shows red this far before the train
+// ── Road cars ───────────────────────────────────────────────────────────────
+// Deliberately a TOY pace, like the train's 1100 mm/s: a real car at real speed
+// crosses a 20 m driveway in under two seconds and reads as a glitch. 2600 mm/s
+// (~9 km/h) is a slow cruise you can actually read a message off.
+const BG_ROAD_SPEED_MM_S = 2600;
+// Lane offset from the centreline, as a fraction of the ribbon width: the two
+// lanes sit in the middle of each half, so opposing cars pass on their own side
+// and the U-turn (radius = the lane offset) swings inside the road's own width.
+const BG_ROAD_LANE_FRAC = 0.25;
+// Minimum clear cycle-space gap between cars, as a multiple of car length. The
+// requested count is capped so this always holds — cars can NEVER overlap, on
+// any road, including two of them mid-U-turn at the same end.
+const BG_ROAD_GAP_FACTOR = 1.6;
+// The built-in toy car — the road twin of the classic toy tow plane, used when
+// no vehicle model is named or the named one does not resolve (unknown id,
+// unloaded/deactivated pack, or a sky-only model). W × D × H, mm.
+const BG_ROAD_TOY_DIMS: [number, number, number] = [1800, 4300, 1480];
 function bgModelScale(v: unknown): number {
   const n = typeof v === 'number' ? v : NaN;
   if (!isFinite(n) || n <= 0) return 1;
@@ -933,6 +993,18 @@ const BG_CRAFTS: Readonly<Record<BgCraftId, BgCraftSpec>> = {
 function bgCraft(v: unknown): BgCraftId | null {
   return typeof v === 'string' && Object.prototype.hasOwnProperty.call(BG_CRAFTS, v)
     ? v as BgCraftId : null;
+}
+
+// Resolve a road car's model id: an ACTIVE vehicle-pack model that declares the
+// 'ground' surface. The `bannerVehicleDef` twin, kept here rather than in
+// vehicles.ts because it is a renderer-side resolution concern and the surface
+// filter is one line. Null for an unknown id, an unloaded/deactivated pack, a
+// members-subset exclusion, or a sky-only model — every one of which falls back
+// to the built-in toy car instead of erroring (the unknown-`aircraft` posture).
+function roadVehicleDef(id: unknown): VehicleModelDef | null {
+  if (typeof id !== 'string' || !id) return null;
+  const def = resolveVehicleDef(id);
+  return def && def.surfaces.includes('ground') ? def : null;
 }
 
 // ── Background-text colour customization (BgTextEntry.colorMain / colorDetail /
@@ -15774,13 +15846,13 @@ export class ThreeDRenderer {
     });
   }
 
-  // ── Playful background text (sky / banner / grass / train) ────────────────
+  // ── Playful background text (sky / banner / grass / train / road) ────────
   // Multi-instance: one BgRig per resolved entry (cap 6). Rebuilt wholesale
   // under three-view's _keyBgText; per-frame motion loops over _bgRigs in
   // _advanceBgText (zero allocation). sky + banner (skywriting and every tow
   // craft, the news helicopter included) are HIDDEN during storm conditions
-  // (pouring/lightning) — they read wrong in a downpour; grass + train are
-  // ground-level and stay. The retired `chopper` MODE is still accepted here for
+  // (pouring/lightning) — they read wrong in a downpour; grass, train + road
+  // cars are ground-level and stay. The retired `chopper` MODE is still accepted here for
   // stale stores and builds the news helicopter (see the dispatch below). Renders in every UI
   // mode (a display prop). Entries are staggered so instances of the same style
   // never overlap. Legacy single-rig mirror fields point at the first rig of
@@ -15806,6 +15878,15 @@ export class ThreeDRenderer {
                   // stale planner simply sends neither and every rig builds
                   // exactly as it always did.
                   region?: BgTextRegion; scenery?: BgSceneryCounts;
+                  // Road cars (mode 'road'). `roadPath` is the chosen
+                  // path-backed GroundArea's CENTRELINE + ribbon width, already
+                  // sanitized by the planner (sanitizeBgRoadPath) — absent means
+                  // the id did not resolve to a drivable road on this floor and
+                  // the entry builds NOTHING (no fallback placement: a car with
+                  // no road has nowhere to be). `roadVehicle` / `roadCars` pass
+                  // through raw; this file owns the model fallback + the cap.
+                  roadAreaId?: string; roadPath?: BgRoadPath;
+                  roadVehicle?: string; roadCars?: number;
                 }[],
                 storm: boolean, windRad = 0, windKmh = 0,
                 // Ground context for AUTO-placed ground writing: the surface
@@ -15839,8 +15920,14 @@ export class ThreeDRenderer {
     // 45000) restored EXACTLY, and only a genuinely distant one widens it.
     let bgReach: number | null = null;
     for (const e of (entries ?? [])) {
-      if (!e.region) continue;
-      const reach = bgRegionReachMm(e.region, this._fw / 2, this._fd / 2);
+      // A ROAD is drawn on the plan, so it normally sits well inside the stock
+      // frustum and records nothing — but a road laid out on a very large site
+      // is the same hazard a distant region is, and it goes through the same
+      // DERIVED gate, so the load-bearing stock triple still restores exactly.
+      const reach = e.region ? bgRegionReachMm(e.region, this._fw / 2, this._fd / 2)
+        : e.roadPath ? bgRoadReachMm(e.roadPath, this._fw / 2, this._fd / 2)
+        : null;
+      if (reach == null) continue;
       if (CAM_MAXDIST_DEFAULT + CAM_FAR_REACH_FACTOR * reach + CAM_FAR_MARGIN <= CAM_FAR_DEFAULT) continue;
       if (bgReach == null || reach > bgReach) bgReach = reach;
     }
@@ -15890,6 +15977,10 @@ export class ThreeDRenderer {
                                                               bgGroundFixedYaw(e.faceCamera, e.rotationDeg));
       else if (e.mode === 'train')   rig = this._buildBgTrain(text, i, e.maxCars, sc, col,
                                                               e.region ?? null, e.scenery ?? null, e.id);
+      // Road cars. Returns null (nothing built) for a stale / absent / undrivable
+      // road — the deliberate no-fallback branch.
+      else if (e.mode === 'road')    rig = this._buildBgRoad(text, i, e.roadPath ?? null,
+                                                             e.roadVehicle, e.roadCars, sc, col);
       if (rig) {
         // Resume where this entry left off (a FRESH id starts at its build
         // stagger, exactly as before).
@@ -16733,12 +16824,23 @@ export class ThreeDRenderer {
   // `rotorY` decides the axis for ALL of them, which is why a model may not mix
   // the two — asserted below by taking rotorY from whether any 'rotor' exists),
   // and a 'tail' group becomes the tail-rotor slot the advance spins about X.
-  private _buildVehicleCraft(def: VehicleModelDef, col: BgColors): {
+  //
+  // GROUND FLAG (road cars). The same interpreter, with the three things that
+  // are true of a SKY object and false of one standing in the yard flipped:
+  // materials FOG (a car is inside the FogExp2 falloff, and a fog-free car in a
+  // foggy scene reads as a cut-out), the outline clone fogs with them, and
+  // `spin:'wheel'` prims — declared by vehicles.ts but until now animated by
+  // nothing — are collected so a road car's wheels can turn. Default false, so
+  // every banner call site is byte-identical (golden-pinned): the wheel branch
+  // is GATED on the flag rather than on the prim kind alone, so even a model
+  // that tags its wheels builds exactly as it did on the banner orbit.
+  private _buildVehicleCraft(def: VehicleModelDef, col: BgColors, ground = false): {
     asm: THREE.Group; props: THREE.Object3D[]; tailRotor: THREE.Object3D | null;
-    rotorY: boolean;
+    rotorY: boolean; wheels: THREE.Object3D[];
   } {
     const asm = new THREE.Group();
     const props: THREE.Object3D[] = [];
+    const wheels: THREE.Object3D[] = [];
     let tailRotor: THREE.Object3D | null = null;
     // The two named livery slots. With no tint these are EXACTLY the model's own
     // authored hues, so a tint-free craft renders identically across edits.
@@ -16752,13 +16854,17 @@ export class ThreeDRenderer {
       const key = `${color}|${emissive ? 'e' : ''}${glassy ? 'g' : ''}`;
       let m = matCache.get(key);
       if (!m) {
+        // A GROUND car fogs with the rest of the yard; the sky path keeps its
+        // fog: false. Spread rather than `fog: undefined` — three's setValues
+        // warns on an undefined parameter instead of ignoring it.
+        const fogP = ground ? {} : { fog: false };
         m = emissive
           // Self-lit engine / drive glow: emissive rather than transparent, the
           // BG_CRAFTS spacecraft precedent. STATIC — no per-frame system.
-          ? this._mat({ color, emissive: color, emissiveIntensity: 0.9, fog: false })
+          ? this._mat({ color, emissive: color, emissiveIntensity: 0.9, ...fogP })
           : glassy
-            ? this._mat({ color, fog: false, transparent: true, opacity: 0.85 })
-            : this._mat({ color, fog: false });
+            ? this._mat({ color, ...fogP, transparent: true, opacity: 0.85 })
+            : this._mat({ color, ...fogP });
         matCache.set(key, m);
       }
       return m;
@@ -16794,7 +16900,18 @@ export class ThreeDRenderer {
       // A glow or a spinning blade never wears an inverted-hull shell (the
       // roster's engine bells and rotor discs do the same).
       if (p.emissive) mesh.userData.outlineSkip = true;
-      if (p.spin === 'prop' || p.spin === 'rotor' || p.spin === 'tail') {
+      if (ground && p.spin === 'wheel') {
+        // A road wheel: the prim already carries the roll orientation
+        // (prims.ts `wheel()` bakes rot [0,0,90], so the cylinder axis is
+        // local X); wrap it in a group at its own position so the advance can
+        // spin it about X without disturbing the authored rotation.
+        const g = new THREE.Group();
+        g.position.set(p.pos[0], p.pos[1], p.pos[2]);
+        g.userData.outlineSkip = true;
+        mesh.position.set(0, 0, 0);
+        mesh.userData.outlineSkip = true;
+        g.add(mesh); asm.add(g); wheels.push(g);
+      } else if (p.spin === 'prop' || p.spin === 'rotor' || p.spin === 'tail') {
         const key = `${p.spin}|${p.pos[0]},${p.pos[1]},${p.pos[2]}`;
         let g = spinGroups.get(key);
         if (!g) {
@@ -16821,10 +16938,13 @@ export class ThreeDRenderer {
 
     // Inverted-hull outlines with a fog-free CLONE (see _buildBannerCraft).
     this._addOutlines(new THREE.Group(), 10, 320);      // ensure _outlineMaterial exists
+    // A CLONE either way — never the shared instance, which _disposeSubtree
+    // would free out from under every furniture outline on the next rebuild.
+    // Only the SKY variant turns fog off.
     const outlineMat = this._outlineMaterial!.clone();
-    outlineMat.fog = false;
+    if (!ground) outlineMat.fog = false;
     this._addOutlines(asm, 10, 320, outlineMat);
-    return { asm, props, tailRotor, rotorY };
+    return { asm, props, tailRotor, rotorY, wheels };
   }
 
   // Flat ground-writing decal. Two placements:
@@ -17677,6 +17797,315 @@ export class ThreeDRenderer {
     }
   }
 
+  // ── Road cars (BgTextEntry mode 'road') ───────────────────────────────────
+  // Message cars driving a road the user already DREW — a path-backed
+  // GroundArea (the `path` tool: a centreline polyline that bufferPolyline
+  // turns into a ribbon). Nothing new is drawn here; the road is the user's
+  // area and this only consumes its centreline.
+  //
+  // THE DRIVE CYCLE, which is the whole design:
+  //   out-lane run (lenOut) → U-turn at the far end (π·lane)
+  //   → back-lane run (lenBack) → U-turn at the start (π·lane)
+  // concatenated into ONE closed cycle. A car is therefore a single scalar
+  // `sigma` on that cycle, and:
+  //   • the U-turn is a real half-circle of radius `lane` bulging `lane` past
+  //     the road end, walked at the SAME speed as the straights (its arc length
+  //     is in the cycle), so the manoeuvre is continuous in position, heading
+  //     AND speed — never a teleport, never an instant 180;
+  //   • MULTI-CAR spacing is a constant gap in `sigma`, so it is exactly as
+  //     stable mid-U-turn as it is on the straight. Two cars turning at the same
+  //     end at the same time are simply at two different points on the same arc,
+  //     nose-to-tail, which is what the gap cap below guarantees.
+  //
+  // Both lanes come from the SAME mitered offset (bufferPolyline) that drew the
+  // ribbon, so a car stays on the drawn asphalt through every bend. Offsetting a
+  // sampled centreline point by its segment normal instead would make the car
+  // jump sideways at each vertex.
+  //
+  // Returns null when there is nothing drivable — a stale/absent road id, a
+  // degenerate polyline, or a car that will not fit. There is deliberately NO
+  // fallback placement: a car with no road has nowhere to be.
+  private _buildBgRoad(text: string, i: number, road: BgRoadPath | null,
+                       vehicleId: string | undefined, cars: number | undefined,
+                       sc: number, col: BgColors): BgRig | null {
+    if (!road || road.centerline.length < 2) return null;
+    const n = road.centerline.length;
+    // Lane offset = a quarter of the ribbon width, i.e. each lane is centred in
+    // its own half. bufferPolyline applies its own PATH_MIN_WIDTH floor, so read
+    // the width it will actually use rather than assuming.
+    const laneW = Math.max(PATH_MIN_WIDTH, road.width / 2);
+    const lane = laneW / 2;
+    const buf = bufferPolyline(road.centerline, laneW);
+    if (buf.length !== n * 2) return null;
+    // bufferPolyline returns LEFT side forward (0..n−1) then RIGHT side BACKWARD
+    // (n..2n−1). The out lane is the right-hand side in forward order; the back
+    // lane is the left-hand side, which the sampler walks from its last vertex.
+    const sceneOf = (p: { x: number; y: number }) => {
+      const w = this._w(p.x, p.y, 0);
+      return { x: w.x, z: w.z };
+    };
+    const laneOut: { x: number; z: number }[] = [];
+    for (let k = n * 2 - 1; k >= n; k--) laneOut.push(sceneOf(buf[k]));
+    const laneBack = buf.slice(0, n).map(sceneOf);
+    const cumOf = (pts: { x: number; z: number }[]) => {
+      const c = [0];
+      for (let k = 1; k < pts.length; k++) {
+        c.push(c[k - 1] + Math.hypot(pts[k].x - pts[k - 1].x, pts[k].z - pts[k - 1].z));
+      }
+      return c;
+    };
+    const cumOut = cumOf(laneOut), cumBack = cumOf(laneBack);
+    const lenOut = cumOut[cumOut.length - 1], lenBack = cumBack[cumBack.length - 1];
+    if (!(lenOut > 1) || !(lenBack > 1)) return null;
+    // U-turn frames. The NORMAL is DERIVED from the lane endpoints rather than
+    // rotated out of the tangent: `_w` mirrors X, which flips handedness, so any
+    // hand-picked rot90 sign would be a coin flip. base − lane·N is the arriving
+    // lane's end by construction, which is exactly what the arc formula needs.
+    const cEnd = sceneOf(road.centerline[n - 1]);
+    const cBeg = sceneOf(road.centerline[0]);
+    const unit = (dx: number, dz: number) => {
+      const L = Math.hypot(dx, dz) || 1;
+      return { x: dx / L, z: dz / L };
+    };
+    const eN = unit(cEnd.x - laneOut[n - 1].x, cEnd.z - laneOut[n - 1].z);
+    const eT = unit(cEnd.x - sceneOf(road.centerline[n - 2]).x,
+                    cEnd.z - sceneOf(road.centerline[n - 2]).z);
+    const bN = unit(cBeg.x - laneBack[0].x, cBeg.z - laneBack[0].z);
+    const bT = unit(cBeg.x - sceneOf(road.centerline[1]).x,
+                    cBeg.z - sceneOf(road.centerline[1]).z);
+    const turnLen = Math.PI * lane;
+    const cycle = lenOut + lenBack + turnLen * 2;
+    // Build ONE car first: its length decides how many fit without overlapping.
+    const def = roadVehicleDef(vehicleId);
+    const first = this._buildRoadCar(def, col, sc, text);
+    const minGap = Math.max(1, first.lenMm * BG_ROAD_GAP_FACTOR);
+    const nEff = Math.max(1, Math.min(bgRoadCars(cars), Math.floor(cycle / minGap)));
+    const built: BgRoadCar[] = [{ obj: first.obj, wheels: first.wheels }];
+    for (let k = 1; k < nEff; k++) {
+      const c = this._buildRoadCar(def, col, sc, text);
+      built.push({ obj: c.obj, wheels: c.wheels });
+    }
+    for (const c of built) this._bgTextGroup.add(c.obj);
+    const rd: BgRoad = {
+      laneOut, cumOut, lenOut, laneBack, cumBack, lenBack,
+      endX: cEnd.x, endZ: cEnd.z, endTx: eT.x, endTz: eT.z, endNx: eN.x, endNz: eN.z,
+      begX: cBeg.x, begZ: cBeg.z, begTx: bT.x, begTz: bT.z, begNx: bN.x, begNz: bN.z,
+      lane, turnLen, cycle,
+      cars: built, gap: cycle / built.length, sigma: 0,
+      speed: BG_ROAD_SPEED_MM_S, wheelR: Math.max(1, first.wheelR),
+    };
+    this._positionRoad(rd);            // settle initial poses before the first frame
+    return { mode: 'road', index: i, road: rd };
+  }
+
+  // One message car: the model (a vehicle-pack GROUND member, else the built-in
+  // toy car) + a text plate on each flank + a blob shadow.
+  //
+  // BOTH FLANKS CARRY THE WHOLE MESSAGE. The train chunks its text across the
+  // consist and mirrors the chunk ORDER per side so a viewer on either flank
+  // reads engine→tail; road cars are independent vehicles that pass each other
+  // going opposite ways, so chunking across them would scramble the message on
+  // sight. With the whole text on one plate there is no order to mirror — the
+  // two FrontSide ±X planes (never one DoubleSide plane, whose far face shows
+  // mirrored glyphs) each read left-to-right for the viewer on their own side.
+  //
+  // REAL SCALE, unlike the banner craft: the road is drawn on the plan at real
+  // size, so a 4.8 m SUV on a 3 m ribbon is exactly right. `sc` is the entry's
+  // own "Model size ×" knob on top.
+  private _buildRoadCar(def: VehicleModelDef | null, col: BgColors, sc: number, text: string): {
+    obj: THREE.Group; wheels: THREE.Object3D[]; lenMm: number; wheelR: number;
+  } {
+    const g = new THREE.Group();
+    let dims: [number, number, number];
+    let wheels: THREE.Object3D[] = [];
+    let wheelR: number;
+    if (def) {
+      const built = this._buildVehicleCraft(def, col, true);
+      g.add(built.asm);
+      dims = def.dims;
+      wheels = built.wheels;
+      // Shipped packs do not tag their road wheels (`spin:'wheel'` is declared
+      // by vehicles.ts but nothing animated it until now), so `wheels` is
+      // normally empty and a pack car's wheels are static — honest: we animate
+      // exactly what the model declares, never geometry we guessed at.
+      const w0 = wheels[0]?.children[0] as THREE.Mesh | undefined;
+      const gp = (w0?.geometry as THREE.CylinderGeometry | undefined)?.parameters;
+      wheelR = gp?.radiusTop ?? dims[2] * 0.19;
+    } else {
+      dims = BG_ROAD_TOY_DIMS;
+      wheelR = 280;
+      wheels = this._buildToyCar(g, dims, wheelR, col);
+      // Cartoon outlines, so the toy car reads like the pack models beside it
+      // (which get theirs inside _buildVehicleCraft). A CLONE, never the shared
+      // instance — _disposeSubtree frees whatever is here on the next rebuild —
+      // and it FOGS, because a car stands in the yard. Applied before the flank
+      // planes / blob decal are added; both are outlineSkip anyway.
+      this._addOutlines(new THREE.Group(), 10, 320);      // ensure _outlineMaterial exists
+      this._addOutlines(g, 10, 320, this._outlineMaterial!.clone());
+    }
+    const [W, D, H] = dims;
+    // One CanvasTexture per car, shared by its two flanks (_disposeSpriteMaps
+    // dedupes, so the shared-map contract is explicit rather than incidental).
+    const tex = this._makeTrainChunkTexture(text, col);
+    const cv = tex.image as HTMLCanvasElement;
+    const aspect = cv.width / cv.height;
+    let ph = Math.min(640, Math.max(220, H * 0.30));
+    let pw = ph * aspect;
+    const maxW = D * 0.72;
+    if (pw > maxW) { ph *= maxW / pw; pw = maxW; }
+    for (const sign of [1, -1]) {
+      const plane = new THREE.Mesh(new THREE.PlaneGeometry(pw, ph),
+        new THREE.MeshBasicMaterial({ map: tex, side: THREE.FrontSide }));
+      plane.rotation.y = sign > 0 ? Math.PI / 2 : -Math.PI / 2;
+      plane.position.set(sign * (W / 2 + 25), H * 0.52, 0);
+      plane.userData.textPlane = true;
+      plane.userData.outlineSkip = true;
+      plane.userData.flank = sign > 0 ? 'plusX' : 'minusX';
+      plane.userData.roadText = text;
+      g.add(plane);
+    }
+    // A car stands on the ground, so it casts the standard blob decal (the tow
+    // craft deliberately does not — there is nothing under it).
+    g.add(this._blobShadow(W * 0.52, D * 0.52));
+    g.scale.setScalar(sc);
+    return { obj: g, wheels, lenMm: D * sc, wheelR: wheelR * sc };
+  }
+
+  // The built-in toy car — the road twin of the classic toy tow plane, used
+  // whenever no pack model resolves. Deliberately generic (three-box saloon),
+  // tintable through the same two livery slots, and the ONE road model whose
+  // wheels are authored here and therefore genuinely spin.
+  private _buildToyCar(g: THREE.Group, dims: [number, number, number],
+                       wheelR: number, col: BgColors): THREE.Object3D[] {
+    const [W, D, H] = dims;
+    const body = this._mat({ color: col.main ?? 0x2f6fb0 });
+    const accent = this._mat({ color: col.detail ?? 0xd7dde3 });
+    const dark = this._mat({ color: 0x22262b });
+    const glass = this._mat({ color: 0x2b3138 });
+    // Lower body, cabin, glass band: each inset from the one below so no two
+    // sibling faces are coplanar (the flat-toon hatching gotcha).
+    const lower = new THREE.Mesh(new THREE.BoxGeometry(W, H * 0.40, D * 0.96), body);
+    lower.position.y = H * 0.44; g.add(lower);
+    const cabin = new THREE.Mesh(new THREE.BoxGeometry(W * 0.86, H * 0.34, D * 0.50), body);
+    cabin.position.set(0, H * 0.78, D * 0.04); g.add(cabin);
+    const band = new THREE.Mesh(new THREE.BoxGeometry(W * 0.90, H * 0.18, D * 0.46), glass);
+    band.position.set(0, H * 0.80, D * 0.04); g.add(band);
+    // Bumper accents, proud of the body so they never share its end planes.
+    for (const sz of [-1, 1]) {
+      const bump = new THREE.Mesh(new THREE.BoxGeometry(W * 0.92, H * 0.12, D * 0.05), accent);
+      bump.position.set(0, H * 0.34, sz * D * 0.49); g.add(bump);
+    }
+    // Headlamps on the nose (local −Z is the front, the repo-wide convention).
+    for (const sx of [-1, 1]) {
+      const lamp = new THREE.Mesh(new THREE.BoxGeometry(W * 0.18, H * 0.08, D * 0.03), accent);
+      lamp.position.set(sx * W * 0.32, H * 0.46, -D * 0.485);
+      lamp.userData.outlineSkip = true; g.add(lamp);
+    }
+    // Four wheels, geometry pre-rotated so the axle is local X — spinning is a
+    // clean rotation.x increment (the train-wheel idiom).
+    const out: THREE.Object3D[] = [];
+    for (const dz of [-D * 0.30, D * 0.30]) for (const sx of [-1, 1]) {
+      const geo = new THREE.CylinderGeometry(wheelR, wheelR, W * 0.11, 14);
+      geo.rotateZ(Math.PI / 2);
+      const wh = new THREE.Mesh(geo, dark);
+      wh.position.set(sx * (W / 2 - W * 0.06), wheelR, dz);
+      wh.userData.outlineSkip = true;
+      g.add(wh); out.push(wh);
+    }
+    return out;
+  }
+
+  // Reused pose scratch — the road sampler runs once per car per frame and must
+  // never allocate.
+  private _roadPose = { x: 0, z: 0, yaw: 0 };
+
+  // Sample the drive cycle at `sigma` → scene position + yaw. Local −Z is the
+  // car's nose (the vehicle-prim + train convention), so yaw = atan2(−tx, −tz).
+  private _sampleRoad(rd: BgRoad, sigma: number): { x: number; z: number; yaw: number } {
+    const C = rd.cycle || 1;
+    const u = ((sigma % C) + C) % C;
+    const A = rd.turnLen;
+    if (u < rd.lenOut) this._sampleRoadLane(rd.laneOut, rd.cumOut, u, 1);
+    else if (u < rd.lenOut + A) this._sampleRoadTurn(rd, u - rd.lenOut, true);
+    else if (u < rd.lenOut + A + rd.lenBack) {
+      // The back lane is stored start→end but DRIVEN end→start.
+      this._sampleRoadLane(rd.laneBack, rd.cumBack,
+                           rd.lenBack - (u - rd.lenOut - A), -1);
+    } else this._sampleRoadTurn(rd, u - rd.lenOut - A - rd.lenBack, false);
+    return this._roadPose;
+  }
+
+  // Straight leg: walk one lane polyline by arc length. `dir` +1 drives the
+  // stored direction, −1 drives it backwards (the tangent flips with it).
+  private _sampleRoadLane(pts: { x: number; z: number }[], cum: number[],
+                          s: number, dir: number): void {
+    const total = cum[cum.length - 1] || 1;
+    const d = Math.max(0, Math.min(total, s));
+    let j = 0;
+    while (j < cum.length - 2 && cum[j + 1] <= d) j++;
+    const segLen = Math.max(1e-6, cum[j + 1] - cum[j]);
+    const f = (d - cum[j]) / segLen;
+    const a = pts[j], b = pts[j + 1];
+    const dx = b.x - a.x, dz = b.z - a.z, L = Math.hypot(dx, dz) || 1;
+    const tx = (dx / L) * dir, tz = (dz / L) * dir;
+    const o = this._roadPose;
+    o.x = a.x + dx * f; o.z = a.z + dz * f;
+    o.yaw = Math.atan2(-tx, -tz);
+  }
+
+  // U-turn leg: a half-circle of radius `lane` centred on the centreline's end
+  // point, bulging `lane` PAST the road so the swing uses the road's own width.
+  //
+  //   rel(φ) = lane·(−cos φ·N + sin φ·T),  heading = sin φ·N + cos φ·T
+  //
+  // φ = 0 lands exactly on the arriving lane's end (base − lane·N, which is how
+  // N was derived) heading T = straight on; φ = π lands on the departing lane's
+  // end heading −T. Both ends are therefore continuous in position AND heading
+  // with the straights they join, and because the arc length is in the cycle the
+  // car never changes speed.
+  private _sampleRoadTurn(rd: BgRoad, arc: number, atEnd: boolean): void {
+    const phi = Math.max(0, Math.min(Math.PI, arc / Math.max(1e-6, rd.lane)));
+    const cs = Math.cos(phi), sn = Math.sin(phi);
+    const bx = atEnd ? rd.endX : rd.begX, bz = atEnd ? rd.endZ : rd.begZ;
+    const tx = atEnd ? rd.endTx : rd.begTx, tz = atEnd ? rd.endTz : rd.begTz;
+    const nx = atEnd ? rd.endNx : rd.begNx, nz = atEnd ? rd.endNz : rd.begNz;
+    const o = this._roadPose;
+    o.x = bx + rd.lane * (-cs * nx + sn * tx);
+    o.z = bz + rd.lane * (-cs * nz + sn * tz);
+    const hx = sn * nx + cs * tx, hz = sn * nz + cs * tz;
+    o.yaw = Math.atan2(-hx, -hz);
+  }
+
+  // Place every car from the lead car's cycle position, each a constant `gap`
+  // behind. Height follows the GRADE under the car (_itemGroundY, the one rule
+  // every ground-standing builder uses) so a road crossing a terrace carries its
+  // traffic up onto it instead of leaving it floating at the yard level. Scene →
+  // plan is inlined arithmetic (`_w` allocates a Vector3, and this runs per car
+  // per frame).
+  private _positionRoad(rd: BgRoad): void {
+    for (let k = 0; k < rd.cars.length; k++) {
+      const p = this._sampleRoad(rd, rd.sigma - k * rd.gap);
+      const gy = this._itemGroundY(this._fw / 2 - p.x, p.z + this._fd / 2);
+      const obj = rd.cars[k].obj;
+      obj.position.set(p.x, gy, p.z);
+      obj.rotation.y = p.yaw;
+    }
+  }
+
+  // Road cars: advance the shared cycle position, re-pose every car, spin any
+  // wheels the model declared. Zero allocation.
+  private _advanceBgRoad(rig: BgRig, dt: number): void {
+    const rd = rig.road!;
+    rd.sigma = (rd.sigma + rd.speed * dt) % (rd.cycle || 1);
+    this._positionRoad(rd);
+    const spin = (rd.speed * dt) / rd.wheelR;
+    for (const c of rd.cars) for (const wh of c.wheels) wh.rotation.x -= spin;
+    if (rig.ph) {
+      rig.ph.roadS = rd.sigma;
+      rig.ph.roadWheel = rd.cars[0]?.wheels[0]?.rotation.x ?? 0;
+    }
+  }
+
   // Bake a message into a CanvasTexture styled per mode. DETERMINISTIC (no
   // Math.random — sky per-letter wobble is hash-based) so a given text always
   // paints identically. Freed on rebuild via _disposeSpriteMaps + _clearGroup.
@@ -17794,6 +18223,12 @@ export class ThreeDRenderer {
       if (ph.skyPhase != null) { rig.skyPhase = ph.skyPhase; this._advanceBgSky(rig, 0); }
     } else if (rig.mode === 'banner' || rig.mode === 'chopper') {
       if (ph.angle != null) { rig.angle = ph.angle; this._advanceBgAircraft(rig, 0, nowS); }
+    } else if (rig.mode === 'road' && rig.road) {
+      const rd = rig.road;
+      // Cycle-relative, so a road edit that changed its length resumes at the
+      // proportional-ish spot instead of running off the end.
+      if (ph.roadS != null && rd.cycle > 0) { rd.sigma = ph.roadS % rd.cycle; this._positionRoad(rd); }
+      if (ph.roadWheel != null) for (const c of rd.cars) for (const wh of c.wheels) wh.rotation.x = ph.roadWheel;
     } else if (rig.mode === 'train' && rig.train) {
       const t = rig.train;
       // Arc length is loop-relative: wrap it in case the loop changed size
@@ -17815,6 +18250,7 @@ export class ThreeDRenderer {
       if (rig.mode === 'sky') this._advanceBgSky(rig, dt);
       else if (rig.mode === 'banner' || rig.mode === 'chopper') this._advanceBgAircraft(rig, dt, nowS);
       else if (rig.mode === 'train') this._advanceBgTrain(rig, dt, nowS);
+      else if (rig.mode === 'road') this._advanceBgRoad(rig, dt);
       else if (rig.mode === 'grass') this._advanceBgGrass(rig, dt);
     }
   }

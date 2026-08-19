@@ -33,7 +33,10 @@
        (cd "$H" && python3 -m http.server 8931 &)
        google-chrome --headless=new --disable-gpu --use-angle=swiftshader \
          --enable-unsafe-swiftshader --window-size=1300,1000 --run-all-compositor-stages-before-draw \
-         --virtual-time-budget=40000 --dump-dom \
+         --virtual-time-budget=150000 --dump-dom \
+     NB the budget was 40000 and DUMPED BEFORE FINISHING (title reads
+     "LAYERS2D …" with no count) — raised 2026-08-19. If it flakes again,
+     raise further; 120000–200000 completed on four consecutive runs.\
          "http://localhost:8931/layers2d-test.html" | grep -o "<title>[^<]*"  -->
 <script type="module">
   const V = '?v=' + Date.now();
@@ -666,6 +669,181 @@
       ok('8Q moving ONE vertex re-traces immediately',
          dominant(ctx, ...inB).color === hexRGB('#8a7860'), dominant(ctx, ...inB).color);
     }
+
+    // ═══ 9. Background-text overlays (regions + road-car centrelines) ═══════
+    // Both are EDIT-MODE authoring aids on the `bgText` layer: the region is a
+    // number-only setting, and the road is a ground area chosen by name, so the
+    // plan is the only place either can be checked against what was meant.
+    sec('9. bg-text region + road-car overlay');
+    {
+      const { ctx } = mkCanvas();
+      const p = await mkPlanner([baseFloor()]);
+      const base = (() => { paint(ctx, p); return snap(ctx); })();
+      // Bounding box of the pixels that changed against the empty baseline.
+      const changedBox = () => {
+        const now = snap(ctx);
+        let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9, n = 0;
+        for (let yy = 0; yy < CH; yy++) for (let xx = 0; xx < CW; xx++) {
+          const i = (yy * CW + xx) * 4;
+          if (now[i] !== base[i] || now[i+1] !== base[i+1] || now[i+2] !== base[i+2]) {
+            n++; if (xx < x0) x0 = xx; if (xx > x1) x1 = xx;
+            if (yy < y0) y0 = yy; if (yy > y1) y1 = yy;
+          }
+        }
+        return { n, x0, y0, x1, y1, w: x1 - x0, h: y1 - y0 };
+      };
+      // Mean canvas-y of changed pixels inside a horizontal slice — the probe
+      // that pins WHICH WAY a rotated rectangle leans.
+      const meanY = (fx0, fx1) => {
+        const now = snap(ctx);
+        let sum = 0, n = 0;
+        const a = Math.round(fx0), b = Math.round(fx1);
+        for (let yy = 0; yy < CH; yy++) for (let xx = a; xx < b; xx++) {
+          const i = (yy * CW + xx) * 4;
+          if (now[i] !== base[i] || now[i+1] !== base[i+1] || now[i+2] !== base[i+2]) { sum += yy; n++; }
+        }
+        return n ? sum / n : NaN;
+      };
+
+      // ── Operating region ────────────────────────────────────────────────
+      p.store.bgTexts = [{ id: 'b1', mode: 'train', text: 'HI',
+                           region: { shape: 'circle', cx: 4000, cy: 3000, r: 2000 } }];
+      paint(ctx, p);
+      const circ = changedBox();
+      ok('9A a region draws its dashed footprint in edit mode', circ.n > 200, `${circ.n} px`);
+      ok('9A …roughly square, centred on the plan (a circle, not a stray stroke)',
+         Math.abs(circ.w - circ.h) < 12 && circ.w > 100, `${circ.w}×${circ.h}`);
+
+      // Kiosk/view drop the floor-edit handles too, so the honest control is a
+      // kiosk frame with NO bg-texts, not the edit-mode baseline.
+      {
+        const held = p.store.bgTexts;
+        p.setUiMode('kiosk');
+        p.store.bgTexts = [];
+        paint(ctx, p);
+        const kioskBase = snap(ctx);
+        p.store.bgTexts = held;
+        paint(ctx, p);
+        ok('9B the overlay is EDIT-ONLY (kiosk shows the vehicles, not the scaffolding)',
+           diffPixels(kioskBase, snap(ctx)) === 0, `${diffPixels(kioskBase, snap(ctx))} px`);
+        p.setUiMode('view');
+        p.store.bgTexts = [];
+        paint(ctx, p);
+        const viewBase = snap(ctx);
+        p.store.bgTexts = held;
+        paint(ctx, p);
+        ok('9B …and view mode too', diffPixels(viewBase, snap(ctx)) === 0,
+           `${diffPixels(viewBase, snap(ctx))} px`);
+        p.setUiMode('edit');
+      }
+
+      setLayers(p, { bgText: false });
+      paint(ctx, p);
+      ok('9C hiding the Background text layer hides its footprints',
+         diffPixels(base, snap(ctx)) === 0, `${diffPixels(base, snap(ctx))} px`);
+      setLayers(p, {});
+      paint(ctx, p);
+      ok('9C …and turning it back on restores them', diffPixels(base, snap(ctx)) > 200);
+
+      // ── Rect region: size AND rotation reach the plan ────────────────────
+      p.store.bgTexts = [{ id: 'b1', mode: 'train', text: 'HI',
+                           region: { shape: 'rect', cx: 4000, cy: 3000, w: 6000, h: 2000 } }];
+      paint(ctx, p);
+      const flat = changedBox();
+      ok('9D an axis-aligned rect region draws WIDE', flat.w > flat.h * 2, `${flat.w}×${flat.h}`);
+      p.store.bgTexts[0].region.rotationDeg = 90;
+      paint(ctx, p);
+      const turned = changedBox();
+      ok('9D rotating it 90° swaps the footprint to TALL',
+         turned.h > turned.w * 2 && Math.abs(turned.h - flat.w) < 14,
+         `${turned.w}×${turned.h} vs ${flat.w}×${flat.h}`);
+      p.store.bgTexts[0].region.rotationDeg = 30;
+      paint(ctx, p);
+      const tilt = changedBox();
+      const leftY = meanY(tilt.x0, tilt.x0 + tilt.w / 3);
+      const rightY = meanY(tilt.x1 - tilt.w / 3, tilt.x1);
+      ok('9D …and a positive rotation leans it CLOCKWISE on screen (repo convention)',
+         rightY > leftY + 8, `left ${leftY.toFixed(1)} vs right ${rightY.toFixed(1)}`);
+      // A rotated rectangle's AABB is w·cos30 + h·sin30 by w·sin30 + h·cos30 —
+      // both bigger than the axis-aligned one, in KNOWN ratios (6196/6000 and
+      // 4732/2000), which pins the size AND the angle, not just the lean.
+      ok('9D the tilted footprint matches the exact rotated AABB',
+         Math.abs(tilt.w / flat.w - 6196 / 6000) < 0.04
+         && Math.abs(tilt.h / flat.h - 4732 / 2000) < 0.06,
+         `${tilt.w}×${tilt.h} vs ${flat.w}×${flat.h}`);
+
+      // ── Road cars: the overlay traces the DRAWN centreline ───────────────
+      const roadArea = {
+        id: 'ga_road', kind: 'concrete',
+        path: { centerline: [{ x: 1000, y: 1200 }, { x: 7000, y: 1200 }], width: 2000 },
+        points: [{ x: 1000, y: 200 }, { x: 7000, y: 200 }, { x: 7000, y: 2200 }, { x: 1000, y: 2200 }],
+      };
+      const plainArea = {
+        id: 'ga_plain', kind: 'grass',
+        points: [{ x: 1000, y: 4000 }, { x: 3000, y: 4000 }, { x: 3000, y: 5000 }],
+      };
+      p.floor().groundAreas = [roadArea, plainArea];
+      p.store.bgTexts = [];
+      paint(ctx, p);
+      const withAreas = snap(ctx);          // the areas themselves paint — new baseline
+      const changedVs = (b) => { const now = snap(ctx); return diffPixels(b, now); };
+
+      p.store.bgTexts = [{ id: 'r1', mode: 'road', text: 'GO', roadAreaId: 'ga_road' }];
+      paint(ctx, p);
+      ok('9E a road entry traces its chosen centreline', changedVs(withAreas) > 100,
+         `${changedVs(withAreas)} px`);
+      // …and it really is the CENTRELINE, not the ribbon outline: the stroke sits
+      // on y = 1200 mm, mid-ribbon, not on the 200 / 2200 mm edges.
+      {
+        const v = computeView(ctx.canvas, p.floor().w, p.floor().d, null, 1);
+        const mid = mmToPx(v, 4000, 1200), edge = mmToPx(v, 4000, 2200);
+        const now = snap(ctx);
+        const inkAt = (px, py) => {
+          let n = 0;
+          for (let dy = -3; dy <= 3; dy++) for (let dx = -6; dx <= 6; dx++) {
+            const xx = Math.round(px + dx), yy = Math.round(py + dy);
+            if (xx < 0 || yy < 0 || xx >= CW || yy >= CH) continue;
+            const i = (yy * CW + xx) * 4;
+            if (now[i] !== withAreas[i] || now[i+1] !== withAreas[i+1] || now[i+2] !== withAreas[i+2]) n++;
+          }
+          return n;
+        };
+        ok('9E …drawn ON the centreline, not on the ribbon edge',
+           inkAt(mid.x, mid.y) > 6 && inkAt(edge.x, edge.y) === 0,
+           `mid ${inkAt(mid.x, mid.y)} / edge ${inkAt(edge.x, edge.y)}`);
+      }
+
+      {
+        const held = p.store.bgTexts;
+        p.setUiMode('kiosk');
+        p.store.bgTexts = [];
+        paint(ctx, p);
+        const kb = snap(ctx);
+        p.store.bgTexts = held;
+        paint(ctx, p);
+        ok('9F the road overlay is edit-only too', diffPixels(kb, snap(ctx)) === 0,
+           `${diffPixels(kb, snap(ctx))} px`);
+        p.setUiMode('edit');
+      }
+      setLayers(p, { bgText: false });
+      paint(ctx, p);
+      ok('9F …and rides the bgText layer', changedVs(withAreas) === 0);
+      setLayers(p, {});
+
+      p.store.bgTexts = [{ id: 'r1', mode: 'road', text: 'GO', roadAreaId: 'not_here' }];
+      paint(ctx, p);
+      ok('9G a road id that is not on this floor draws NOTHING (soft fail)',
+         changedVs(withAreas) === 0, `${changedVs(withAreas)} px`);
+      p.store.bgTexts = [{ id: 'r1', mode: 'road', text: 'GO', roadAreaId: 'ga_plain' }];
+      paint(ctx, p);
+      ok('9G a plain (non-path) ground area is not a road either',
+         changedVs(withAreas) === 0, `${changedVs(withAreas)} px`);
+      p.store.bgTexts = [{ id: 'r1', mode: 'road', text: 'GO' }];
+      paint(ctx, p);
+      ok('9G …and neither is an entry with no road chosen at all',
+         changedVs(withAreas) === 0, `${changedVs(withAreas)} px`);
+    }
+
   } catch (err) {
     ok('harness threw', false, (err && err.stack) || String(err));
   }

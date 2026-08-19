@@ -2840,6 +2840,7 @@ export class SettingsDrawer extends LitElement {
     const modes: Array<[BgTextEntryMode, string]> = [
       ['sky', 'Skywriting (sky)'], ['banner', 'Banner plane'],
       ['grass', 'Ground writing'], ['train', 'Message train'],
+      ['road', 'Road cars'],
     ];
     // Which craft tows the banner, grouped into four families. Listed here as
     // plain strings: aircraft-types.ts exports the archetype union TYPE (not a
@@ -2919,7 +2920,10 @@ export class SettingsDrawer extends LitElement {
           : html`<span style="font-size:10px;color:var(--text-dim)">default</span>`}
       </div>`;
     // Shipped defaults per style, so the swatch shows what is actually on screen.
-    const COLOR_DEFAULTS: Record<'banner' | 'train' | 'chopper', Record<ColorKey, string>> = {
+    const COLOR_DEFAULTS: Record<'banner' | 'train' | 'chopper' | 'road', Record<ColorKey, string>> = {
+      // Road cars share the train's cream/slate plate — it is the same painter.
+      road:    { colorMain: '#2f6fb0', colorDetail: '#d7dde3',
+                 bannerBg: '#f5efe0', bannerText: '#22303a', bannerFrame: '#8a2b2b' },
       banner:  { colorMain: '#dad7cf', colorDetail: '#c94f3d',
                  bannerBg: '#c0281f', bannerText: '#fff7e6', bannerFrame: '#f5c400' },
       chopper: { colorMain: '#2f6fb0', colorDetail: '#e6291a',
@@ -2928,7 +2932,8 @@ export class SettingsDrawer extends LitElement {
                  bannerBg: '#f5efe0', bannerText: '#22303a', bannerFrame: '#8a2b2b' },
     };
     const colorRows = (e: BgTextEntry) => {
-      if (e.mode !== 'banner' && e.mode !== 'train' && e.mode !== 'chopper') return nothing;
+      if (e.mode !== 'banner' && e.mode !== 'train' && e.mode !== 'chopper'
+          && e.mode !== 'road') return nothing;
       // A migrated news helicopter is a BANNER row towing 'news_chopper', so the
       // swatches must still open on the chopper's shipped blue/red rather than
       // the tow plane's cream/red — the swatch is only ever a starting value
@@ -2937,22 +2942,26 @@ export class SettingsDrawer extends LitElement {
       const base = COLOR_DEFAULTS[isChopper ? 'chopper' : e.mode];
       // A vehicle-pack craft carries its OWN livery, so the swatches must open
       // on that rather than the toy plane's cream/red.
-      const veh = e.mode === 'banner' && e.aircraft ? resolveVehicleDef(e.aircraft) : null;
+      const veh = e.mode === 'banner' && e.aircraft ? resolveVehicleDef(e.aircraft)
+        : e.mode === 'road' && e.roadVehicle ? resolveVehicleDef(e.roadVehicle) : null;
       const d = veh
         ? { ...base, colorMain: veh.body ?? base.colorMain,
                      colorDetail: veh.accent ?? base.colorDetail }
         : base;
       const isTrain = e.mode === 'train';
-      const surface = isTrain ? 'car-side sign' : 'towed banner';
+      const isRoad = e.mode === 'road';
+      const surface = isTrain || isRoad ? 'car-side sign' : 'towed banner';
       return html`
         ${colorRow(e, 'colorMain', 'Vehicle color', d.colorMain,
-          isTrain ? 'Body colour of the engine and the message cars.'
-                  : isChopper ? 'Cabin colour of the news helicopter.'
-                  : 'Fuselage colour of the tow plane (also applies to a chosen aircraft silhouette).')}
+          isRoad ? 'Body colour of the cars driving the road.'
+                 : isTrain ? 'Body colour of the engine and the message cars.'
+                 : isChopper ? 'Cabin colour of the news helicopter.'
+                 : 'Fuselage colour of the tow plane (also applies to a chosen aircraft silhouette).')}
         ${colorRow(e, 'colorDetail', 'Accent color', d.colorDetail,
-          isTrain ? 'Trim colour — roof, chimney, cowcatcher, wheels — and the darker last car.'
-                  : isChopper ? 'NEWS stripes and the tail boom.'
-                  : 'Wing and tailplane colour (also the accent on a chosen aircraft silhouette).')}
+          isRoad ? 'Bumper and lamp accents on the cars (also the accent on a chosen vehicle model).'
+                 : isTrain ? 'Trim colour — roof, chimney, cowcatcher, wheels — and the darker last car.'
+                 : isChopper ? 'NEWS stripes and the tail boom.'
+                 : 'Wing and tailplane colour (also the accent on a chosen aircraft silhouette).')}
         ${colorRow(e, 'bannerBg', 'Banner background', d.bannerBg,
           `Background of the ${surface} the message is painted on.`)}
         ${colorRow(e, 'bannerText', 'Banner text color', d.bannerText,
@@ -3078,6 +3087,65 @@ export class SettingsDrawer extends LitElement {
           </div>
         </div>`;
     };
+    // ── Road cars (mode 'road') ──────────────────────────────────────────
+    // The road is NOT drawn here: it is one of the floor's path-backed ground
+    // areas (draw one with the `path` tool, then pick it). Store-level bgTexts +
+    // per-floor ground areas mean a road picked on another floor simply shows
+    // nothing here and builds nothing there — the grassAreaId contract.
+    const roadBlock = (e: BgTextEntry) => {
+      if (e.mode !== 'road') return nothing;
+      const roads = (p.floor().groundAreas ?? []).filter(
+        a => a.path && Array.isArray(a.path.centerline) && a.path.centerline.length >= 2);
+      // Ground models from every LOADED + ACTIVE vehicle pack, registry-driven
+      // exactly like the banner craft list: a new pack appears with no edit
+      // here, and switching one off falls the entry back to the toy car.
+      const groups: Array<[string, Array<[string, string]>]> = [];
+      for (const { def, models } of listActiveVehiclePacks()) {
+        const ground = models.filter(m => m.surfaces.includes('ground'));
+        if (ground.length) groups.push([def.path.join(' ▸ '),
+                                        ground.map(m => [m.id, m.label] as [string, string])]);
+      }
+      return html`
+        <div class="row" style="margin-top:4px">
+          <label title="Which drawn road the cars drive. Draw one with the Path tool (a centreline you can bend and widen); the cars drive that centreline and U-turn at each end. Roads are per-floor — one chosen on another floor shows nothing here.">Road</label>
+          <select style="flex:1;min-width:0"
+                  @change=${(ev: Event) => upd(() => {
+                    const v = (ev.target as HTMLSelectElement).value;
+                    e.roadAreaId = v || undefined;
+                  })}>
+            <option value="" ?selected=${!e.roadAreaId}>— pick a road —</option>
+            ${roads.map(a => html`
+              <option value=${a.id} ?selected=${e.roadAreaId === a.id}>${a.name || a.kind} path</option>`)}
+          </select>
+        </div>
+        ${roads.length ? nothing : html`
+          <div style="font-size:10px;color:var(--text-dim);line-height:1.3;margin:2px 0 0">
+            No roads on this floor yet — draw one with the Path tool (Ground / Yard).</div>`}
+        <div class="row" style="margin-top:2px">
+          <label title="Which model drives. The vehicle packs are managed in Settings ▸ Vehicles; an unloaded or switched-off model falls back to the toy car.">Vehicle</label>
+          <select style="flex:1;min-width:0"
+                  @change=${(ev: Event) => upd(() => {
+                    const v = (ev.target as HTMLSelectElement).value;
+                    e.roadVehicle = v || undefined;
+                  })}>
+            <option value="" ?selected=${!e.roadVehicle}>Toy car</option>
+            ${groups.map(([grp, items]) => html`
+              <optgroup label=${grp}>
+                ${items.map(([v, l]) => html`
+                  <option value=${v} ?selected=${(e.roadVehicle ?? '') === v}>${l}</option>`)}
+              </optgroup>`)}
+          </select>
+        </div>
+        <div class="row" style="margin-top:2px">
+          <label title="How many cars share the road (1–6). They spread evenly around one out-and-back drive cycle, so the gap between them stays the same even while one is turning round. A short road fits fewer, and the count is capped so cars never overlap.">Cars</label>
+          <input type="number" min="1" max="6" step="1" style="width:64px"
+                 .value=${String(e.roadCars ?? 2)}
+                 @change=${(ev: Event) => upd(() => {
+                   const v = Math.round(Number((ev.target as HTMLInputElement).value));
+                   e.roadCars = isFinite(v) ? Math.min(6, Math.max(1, v)) : 2;
+                 })}>
+        </div>`;
+    };
     const row = (e: BgTextEntry, idx: number) => {
       const cur = resolved.get(e.id);
       return html`
@@ -3166,6 +3234,7 @@ export class SettingsDrawer extends LitElement {
           </div>
           ${regionBlock(e)}
           ${sceneryBlock(e)}
+          ${roadBlock(e)}
           ${colorRows(e)}
           ${e.mode === 'grass' ? html`
             <div class="row" style="margin-top:2px">
@@ -3220,12 +3289,12 @@ export class SettingsDrawer extends LitElement {
                                 style="font-weight:600">Background text</label></div>
         ${list.length ? list.map((e, i) => row(e, i))
           : html`<div style="font-size:10px;color:var(--text-dim);margin:0 0 6px">
-                   None. Add a skywriter, banner plane, ground message, or message train.</div>`}
+                   None. Add a skywriter, banner plane, ground message, message train, or road cars.</div>`}
         <button class="btn" style="font-size:11px;padding:3px 8px" ?disabled=${list.length >= 6}
                 @click=${() => upd(() => { p.store.bgTexts!.push({ id: newId(), mode: 'sky' }); })}>
           + Add${list.length >= 6 ? ' (max 6)' : ''}</button>
         <div style="font-size:10px;color:var(--text-dim);line-height:1.3;margin:4px 0 0">
-          Up to 6. Skywriting and anything flying a banner hide during storms; ground writing + train stay.</div>
+          Up to 6. Skywriting and anything flying a banner hide during storms; ground writing, train + road cars stay.</div>
       </div>`;
   }
 

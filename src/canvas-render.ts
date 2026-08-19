@@ -40,7 +40,7 @@ import {
   peekFloors,
   midpointHandles, POLY_VERTEX_CAP_GROUND, POLY_VERTEX_CAP_POOL, POLY_VERTEX_CAP_VOID,
   POLY_VERTEX_CAP_PATH, POLY_VERTEX_CAP_PZONE,
-  validHexColor, resolveBgRegion,
+  validHexColor, resolveBgRegion, sanitizeBgRoadPath,
 } from './geometry.js';
 import { compass8, fmtDistanceM, fmtAccuracyM } from './geo.js';
 import { resolveNorth, northMarkerPos, markerScaleOf } from './compass.js';
@@ -908,7 +908,8 @@ function drawFloorEditHandles(ctx: CanvasRenderingContext2D, p: Planner, view: V
 // `ALIGN_DRAG_KINDS` (geometry.ts) — the snapper and this painter used to keep
 // two hand-maintained copies and this one was the smaller, so safety / alert /
 // robot / camera / projector drags snapped with no visible line.
-// Dashed footprint of every background-text operating region on this store.
+// Dashed footprint of every background-text operating region on this store —
+// plus, for a ROAD CARS entry, the road centreline its cars actually drive.
 // Authoring aid: the region is defined in numbers in Settings, so the plan is
 // where the user checks it actually lands where they meant. Edit mode only —
 // kiosk / view surfaces show the vehicles, never the scaffolding — and drawn
@@ -924,7 +925,43 @@ function drawBgTextRegions(ctx: CanvasRenderingContext2D, p: Planner, view: View
   ctx.save();
   ctx.lineWidth = 1.5;
   ctx.setLineDash([9, 7]);
+  const areas = p.floor().groundAreas ?? [];
   for (const e of list) {
+    // ROAD CARS: the footprint is a road the user already drew, so there is no
+    // region to outline — instead trace the CENTRELINE the cars actually drive,
+    // which is the thing the numbers in Settings cannot show. Drawn only when
+    // the chosen area resolves ON THIS FLOOR (bgTexts are store-level, ground
+    // areas per-floor), which is the same soft-fail the renderer takes.
+    if (e.mode === 'road') {
+      const ga = e.roadAreaId ? areas.find(a => a.id === e.roadAreaId) : null;
+      const road = ga?.path ? sanitizeBgRoadPath(ga.path) : null;
+      if (!road) continue;
+      ctx.strokeStyle = 'rgba(174,213,129,0.8)';
+      ctx.beginPath();
+      road.centerline.forEach((q, k) => {
+        const s = mmToCanvas(q.x, q.y, view.ox, view.oy, view.scale);
+        if (k === 0) ctx.moveTo(s.x, s.y); else ctx.lineTo(s.x, s.y);
+      });
+      ctx.stroke();
+      // Both ENDS get a tick — they are the U-turn points, which is where a
+      // surprising layout usually shows up.
+      ctx.setLineDash([]);
+      for (const q of [road.centerline[0], road.centerline[road.centerline.length - 1]]) {
+        const s = mmToCanvas(q.x, q.y, view.ox, view.oy, view.scale);
+        ctx.beginPath();
+        ctx.moveTo(s.x - 5, s.y); ctx.lineTo(s.x + 5, s.y);
+        ctx.moveTo(s.x, s.y - 5); ctx.lineTo(s.x, s.y + 5);
+        ctx.stroke();
+      }
+      ctx.setLineDash([9, 7]);
+      const mid = road.centerline[Math.floor(road.centerline.length / 2)];
+      const ms = mmToCanvas(mid.x, mid.y, view.ox, view.oy, view.scale);
+      ctx.fillStyle = ctx.strokeStyle;
+      ctx.font = '10px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('road cars', ms.x, ms.y - 9);
+      continue;
+    }
     if (e.mode !== 'train' && e.mode !== 'banner' && e.mode !== 'chopper') continue;
     const reg = resolveBgRegion(e.region);
     if (!reg) continue;

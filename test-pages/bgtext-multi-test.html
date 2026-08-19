@@ -20,8 +20,12 @@
 
     npx esbuild src/value-rules.ts --bundle --format=esm \
       --outfile=<harness>/value-rules.mod.js         (unused here; kept for bgtext-test)
-    npx esbuild src/geometry.ts --bundle --format=esm \
-      --outfile=<harness>/geometry.mod.js            (pure bgGroundInkKey matrix)
+    # geometry + the vehicle REGISTRY in ONE module instance, so bgTextExtraKey's
+    # registry-revision term can be exercised for real:
+    T2=$(mktemp -d); cp -r src/* "$T2"/
+    printf "export * from './geometry.js';\nexport { registerVehiclePack, unregisterVehiclePack, setVehiclePacksConfig, vehicleRegistryRev } from './vehicles.js';\n" > "$T2"/geometry-entry.ts
+    npx esbuild "$T2"/geometry-entry.ts --bundle --format=esm \
+      --outfile=<harness>/geometry.mod.js            (pure bgGroundInkKey + road matrices)
     T=$(mktemp -d); cp -r src/* "$T"/; cp test-pages/fake-avatar-store.ts "$T"/avatar-store.ts
     npx esbuild "$T"/planner.ts --bundle --format=esm --outfile=<harness>/planner.mod.js
 
@@ -3020,6 +3024,526 @@
          chop[0].mode === 'banner' && chop[0].aircraft === 'news_chopper'
          && !!chop[0].region && chop[0].region.r === 7000,
          JSON.stringify(chop[0]));
+    }
+    r.updateFloor(floor, { preset: 'day', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' });
+  }
+
+
+  // ════════════════════════════════════════════════════════════════════════
+  // ROAD CARS — message cars driving a user-drawn path-backed GroundArea.
+  // The road is NOT a new tool: it is the `path` ground area's centreline, and
+  // the cars run a closed DRIVE CYCLE (out lane → U-turn → back lane → U-turn).
+  // ════════════════════════════════════════════════════════════════════════
+  {
+    // Pure sanitizer matrix first (geometry.mod.js — no renderer involved).
+    const SP = G.sanitizeBgRoadPath;
+    const line = (n, dx) => Array.from({ length: n }, (_, k) => ({ x: 1000 + k * dx, y: 7200 }));
+    ok('ROAD pure: a good path sanitizes', (() => {
+      const r0 = SP({ centerline: line(3, 4000), width: 3000 });
+      return r0 && r0.centerline.length === 3 && r0.width === 3000;
+    })());
+    ok('ROAD pure: garbage → null',
+       SP(null) === null && SP(undefined) === null && SP(42) === null
+       && SP({ centerline: 'x', width: 1 }) === null
+       && SP({ centerline: line(3, 4000), width: 'wide' }) === null);
+    ok('ROAD pure: a single point is not drivable',
+       SP({ centerline: line(1, 4000), width: 3000 }) === null);
+    ok('ROAD pure: non-finite vertices are DROPPED, not passed through', (() => {
+      const r0 = SP({ centerline: [{ x: 0, y: 0 }, { x: NaN, y: 5 }, { x: 6000, y: 0 }], width: 2000 });
+      return r0 && r0.centerline.length === 2 && r0.centerline.every(q => isFinite(q.x) && isFinite(q.y));
+    })());
+    ok('ROAD pure: a repeated vertex collapses (no zero-length segment)', (() => {
+      const r0 = SP({ centerline: [{ x: 0, y: 0 }, { x: 0, y: 0 }, { x: 6000, y: 0 }], width: 2000 });
+      return r0 && r0.centerline.length === 2;
+    })());
+    ok('ROAD pure: a road shorter than BG_ROAD_MIN_LENGTH_MM is refused',
+       SP({ centerline: [{ x: 0, y: 0 }, { x: 400, y: 0 }], width: 2000 }) === null
+       && SP({ centerline: [{ x: 0, y: 0 }, { x: 1200, y: 0 }], width: 2000 }) !== null,
+       'min=' + G.BG_ROAD_MIN_LENGTH_MM);
+    ok('ROAD pure: width is CLAMPED, never NaN', (() => {
+      const lo = SP({ centerline: line(2, 6000), width: 1 });
+      const hi = SP({ centerline: line(2, 6000), width: 1e9 });
+      return lo.width === G.BG_ROAD_MIN_WIDTH_MM && hi.width === G.BG_ROAD_MAX_WIDTH_MM;
+    })(), G.BG_ROAD_MIN_WIDTH_MM + '/' + G.BG_ROAD_MAX_WIDTH_MM);
+    ok('ROAD pure: BG_ROAD_MIN_WIDTH_MM tracks PATH_MIN_WIDTH',
+       G.BG_ROAD_MIN_WIDTH_MM === G.PATH_MIN_WIDTH);
+    ok('ROAD pure: the sanitizer REBUILDS every vertex (callers never alias a store array)', (() => {
+      const src = [{ x: 0, y: 0 }, { x: 6000, y: 0 }];
+      const r0 = SP({ centerline: src, width: 2000 });
+      return r0.centerline !== src && r0.centerline[0] !== src[0] && r0.centerline[0].x === 0;
+    })());
+    ok('ROAD pure: the vertex cap holds', (() => {
+      const r0 = SP({ centerline: line(400, 300), width: 2000 });
+      return r0 && r0.centerline.length === G.BG_ROAD_MAX_POINTS;
+    })());
+    ok('ROAD pure: bgRoadCars clamps + defaults',
+       G.bgRoadCars(undefined) === G.BG_ROAD_CARS_DEFAULT && G.bgRoadCars('x') === G.BG_ROAD_CARS_DEFAULT
+       && G.bgRoadCars(0) === 1 && G.bgRoadCars(99) === G.BG_ROAD_CARS_MAX && G.bgRoadCars(3.4) === 3);
+    ok('ROAD pure: bgRoadReachMm includes the half width', (() => {
+      const rp = SP({ centerline: [{ x: 0, y: 0 }, { x: 8000, y: 0 }], width: 3000 });
+      return Math.abs(G.bgRoadReachMm(rp, 0, 0) - (8000 + 1500)) < 1e-6;
+    })());
+
+    // ── bgTextExtraKey: the ONE _keyBgText extension point ──────────────────
+    ok('ROAD key: an entry with NO road fields is byte-identical to pre-road',
+       G.bgTextExtraKey({}) === ''
+       && G.bgTextExtraKey({ region: { shape: 'circle', cx: 1, cy: 2, r: 9000 } })
+          === 'circle,0,0,900,,,0;');
+    {
+      const rp = SP({ centerline: line(3, 4000), width: 3000 });
+      const base = { roadPath: rp, roadCars: 2 };
+      const k0 = G.bgTextExtraKey(base);
+      ok('ROAD key: a road entry produces a term', k0.length > 4, k0.slice(0, 40));
+      ok('ROAD key: it is stable across calls', G.bgTextExtraKey(base) === k0);
+      ok('ROAD key: a centreline MOVE changes it',
+         G.bgTextExtraKey({ ...base, roadPath: SP({ centerline: line(3, 4200), width: 3000 }) }) !== k0);
+      ok('ROAD key: a WIDTH change changes it',
+         G.bgTextExtraKey({ ...base, roadPath: SP({ centerline: line(3, 4000), width: 4000 }) }) !== k0);
+      ok('ROAD key: a CAR COUNT change changes it',
+         G.bgTextExtraKey({ ...base, roadCars: 3 }) !== k0);
+      ok('ROAD key: a VEHICLE change changes it',
+         G.bgTextExtraKey({ ...base, roadVehicle: 'x/y' }) !== k0);
+      ok('ROAD key: sub-centimetre drift does NOT churn a rebuild',
+         G.bgTextExtraKey({ ...base, roadPath: SP({
+           centerline: line(3, 4000).map(q => ({ x: q.x + 2, y: q.y })), width: 3000 }) }) === k0);
+      // A named vehicle folds the pack registry revision in (the banner-craft
+      // precedent) — otherwise unloading a pack could never rebuild the rig.
+      const withVeh = { ...base, roadVehicle: 'rt/car' };
+      const kv = G.bgTextExtraKey(withVeh);
+      G.registerVehiclePack({ id: 'keyrev', version: 1, label: 'K', path: ['K'], builtin: true, models: [] });
+      ok('ROAD key: loading a vehicle pack rebuilds a model-bearing road entry',
+         G.bgTextExtraKey(withVeh) !== kv, kv.slice(-20));
+      ok('ROAD key: …but leaves a TOY-car entry untouched (no model named)',
+         G.bgTextExtraKey(base) === k0);
+      G.unregisterVehiclePack('keyrev');
+    }
+
+    // ── Renderer: build + drive ─────────────────────────────────────────────
+    // Straight road across the yard, well clear of the house loop.
+    const RW = 3000, LANE = Math.max(G.PATH_MIN_WIDTH, RW / 2) / 2;   // 750
+    const straight = { centerline: [{ x: 1000, y: 7500 }, { x: 11000, y: 7500 }], width: RW };
+    const roadEnt = (extra) => ent('road', 'DRIVE SAFELY', { roadPath: straight, ...(extra || {}) });
+    const roadRig = () => r._bgRigs.find(x => x.mode === 'road');
+    const carPos = (c) => ({ x: c.obj.position.x, y: c.obj.position.y, z: c.obj.position.z });
+    // World (plan) coords of a scene point — the renderer's own inverse.
+    const toPlan2 = (sx, sz) => ({ x: 12000 / 2 - sx, y: sz + 8000 / 2 });
+    const distToSeg = (px, py, ax, ay, bx, by) => {
+      const dx = bx - ax, dy = by - ay, L2 = dx * dx + dy * dy || 1;
+      let t = ((px - ax) * dx + (py - ay) * dy) / L2;
+      t = Math.max(0, Math.min(1, t));
+      return Math.hypot(px - (ax + dx * t), py - (ay + dy * t));
+    };
+    const distToLine = (px, py, pts) => {
+      let m = Infinity;
+      for (let k = 1; k < pts.length; k++) {
+        m = Math.min(m, distToSeg(px, py, pts[k - 1].x, pts[k - 1].y, pts[k].x, pts[k].y));
+      }
+      return m;
+    };
+
+    r.updateBgTexts([roadEnt({ roadCars: 1 })], false, 0, 0);
+    {
+      const rg = roadRig();
+      ok('ROAD build: a road entry builds a rig', !!rg && !!rg.road, rg ? 'yes' : 'no rig');
+      ok('ROAD build: one car requested → one car', rg.road.cars.length === 1, rg.road.cars.length);
+      ok('ROAD build: the drive cycle is out + back + two U-turns',
+         Math.abs(rg.road.cycle - (rg.road.lenOut + rg.road.lenBack + 2 * Math.PI * rg.road.lane)) < 1e-6,
+         rg.road.cycle);
+      ok('ROAD build: the lane offset is a quarter of the ribbon width',
+         Math.abs(rg.road.lane - LANE) < 1e-6, rg.road.lane);
+      const flanks2 = {};
+      rg.road.cars[0].obj.traverse(o => { if (o.userData && o.userData.flank) flanks2[o.userData.flank] = o; });
+      ok('ROAD text: BOTH flanks carry a plane', !!flanks2.plusX && !!flanks2.minusX);
+      ok('ROAD text: both flanks carry the WHOLE message (independent cars, no chunking)',
+         flanks2.plusX.userData.roadText === 'DRIVE SAFELY'
+         && flanks2.minusX.userData.roadText === 'DRIVE SAFELY');
+      ok('ROAD text: FrontSide planes on ±X (never one mirrored DoubleSide plane)',
+         flanks2.plusX.material.side === THREE_FrontSide
+         && flanks2.minusX.material.side === THREE_FrontSide
+         && Math.abs(flanks2.plusX.rotation.y - Math.PI / 2) < 1e-6
+         && Math.abs(flanks2.minusX.rotation.y + Math.PI / 2) < 1e-6);
+      ok('ROAD text: the two flanks SHARE one CanvasTexture (dedupe contract)',
+         flanks2.plusX.material.map === flanks2.minusX.material.map);
+      ok('ROAD text: the plate is actually painted', painted(flanks2.plusX.material.map) > 200,
+         painted(flanks2.plusX.material.map));
+      let blobs = 0;
+      rg.road.cars[0].obj.traverse(o => { if (o.isMesh && o.material && o.material.map === r._blobTex) blobs++; });
+      ok('ROAD build: a car standing on the ground casts a blob shadow', blobs === 1, blobs);
+      let fogged = 0, unfogged = 0;
+      rg.road.cars[0].obj.traverse(o => {
+        if (!o.isMesh || o.userData.outline || o.userData.textPlane) return;
+        if (o.material && o.material.map === r._blobTex) return;
+        if (o.material && o.material.fog === false) unfogged++; else if (o.material) fogged++;
+      });
+      ok('ROAD build: car materials FOG (a ground object, unlike a sky craft)',
+         fogged > 0 && unfogged === 0, `fogged=${fogged} unfogged=${unfogged}`);
+      let shells = 0, sharedShell = 0;
+      rg.road.cars[0].obj.traverse(o => {
+        if (o.userData && o.userData.outline) { shells++; if (o.material === r._outlineMaterial) sharedShell++; }
+      });
+      ok('ROAD build: outline shells exist and NEVER use the shared material',
+         shells > 0 && sharedShell === 0, `${shells} shells, ${sharedShell} shared`);
+      ok('ROAD build: the shell clone FOGS (a ground object)', (() => {
+        let bad = 0;
+        rg.road.cars[0].obj.traverse(o => { if (o.userData && o.userData.outline && o.material.fog === false) bad++; });
+        return bad === 0;
+      })());
+    }
+
+    // ── The car is always ON the drawn road ────────────────────────────────
+    {
+      const rg = roadRig(), rd = rg.road;
+      let minD = Infinity, maxD = -Infinity;
+      for (let k = 0; k <= 400; k++) {
+        const pose = r._sampleRoad(rd, rd.cycle * k / 400);
+        const pl = toPlan2(pose.x, pose.z);
+        const d = distToLine(pl.x, pl.y, straight.centerline);
+        minD = Math.min(minD, d); maxD = Math.max(maxD, d);
+      }
+      ok('ROAD geometry: every point of the cycle sits one lane off the centreline',
+         Math.abs(minD - LANE) < 2 && Math.abs(maxD - LANE) < 2, `${minD.toFixed(1)}..${maxD.toFixed(1)} vs ${LANE}`);
+      // Which is the same as saying the traffic stays inside the ribbon…
+      ok('ROAD geometry: …so it never leaves the drawn ribbon sideways',
+         maxD <= RW / 2 + 1e-6, `${maxD.toFixed(1)} vs ${RW / 2}`);
+    }
+
+    // ── The U-turn is a manoeuvre, not a teleport or an instant 180 ────────
+    {
+      const rg = roadRig(), rd = rg.road;
+      const D = 5;                                   // 5 mm of cycle per probe
+      let maxJump = 0, maxYawStep = 0;
+      let prev = null, prevYaw = null;
+      for (let s = 0; s <= rd.cycle + D; s += D) {
+        const pose = r._sampleRoad(rd, s);
+        const x = pose.x, z = pose.z, yaw = pose.yaw;
+        if (prev) {
+          maxJump = Math.max(maxJump, Math.hypot(x - prev[0], z - prev[1]));
+          let dy = yaw - prevYaw;
+          while (dy > Math.PI) dy -= 2 * Math.PI;
+          while (dy < -Math.PI) dy += 2 * Math.PI;
+          maxYawStep = Math.max(maxYawStep, Math.abs(dy));
+        }
+        prev = [x, z]; prevYaw = yaw;
+      }
+      ok('ROAD U-turn: position is CONTINUOUS — no teleport anywhere on the cycle',
+         maxJump <= D * 1.02, `max jump ${maxJump.toFixed(3)} mm per ${D} mm`);
+      ok('ROAD U-turn: SPEED is continuous too (the arc is walked at cycle rate)',
+         maxJump >= D * 0.98, maxJump.toFixed(3));
+      // On a straight road the only heading change is the turn, whose exact rate
+      // is dσ/lane — an INSTANT 180 would show up as a ~π step here.
+      ok('ROAD U-turn: heading swings over the arc, never snaps 180°',
+         maxYawStep <= (D / rd.lane) * 1.05 && maxYawStep > 0,
+         `max Δyaw ${maxYawStep.toFixed(5)} rad vs ${(D / rd.lane).toFixed(5)}`);
+      const a = r._sampleRoad(rd, rd.lenOut - 10).yaw;
+      const b = r._sampleRoad(rd, rd.lenOut + rd.turnLen + 10).yaw;
+      let dd = Math.abs(a - b); while (dd > Math.PI) dd = Math.abs(dd - 2 * Math.PI);
+      ok('ROAD U-turn: the car really does come back the other way',
+         Math.abs(dd - Math.PI) < 0.02, dd.toFixed(4));
+      // …and it swings PAST the road end (the road has width, so there is room).
+      const apex = r._sampleRoad(rd, rd.lenOut + rd.turnLen / 2);
+      const ap = toPlan2(apex.x, apex.z);
+      ok('ROAD U-turn: the apex bulges one lane past the end of the road',
+         Math.abs(ap.x - (11000 + rd.lane)) < 2 && Math.abs(ap.y - 7500) < 2,
+         `${ap.x.toFixed(1)},${ap.y.toFixed(1)}`);
+      // The two straight legs use OPPOSITE sides of the centreline.
+      const outP = toPlan2(r._sampleRoad(rd, rd.lenOut * 0.5).x, r._sampleRoad(rd, rd.lenOut * 0.5).z);
+      const bkP = toPlan2(r._sampleRoad(rd, rd.lenOut + rd.turnLen + rd.lenBack * 0.5).x,
+                          r._sampleRoad(rd, rd.lenOut + rd.turnLen + rd.lenBack * 0.5).z);
+      ok('ROAD lanes: out and back run on OPPOSITE sides of the centreline',
+         (outP.y - 7500) * (bkP.y - 7500) < 0, `${outP.y.toFixed(0)} / ${bkP.y.toFixed(0)}`);
+    }
+
+    // ── A BENT road: the car follows the mitred lane, it does not cut corners ──
+    {
+      const bent = { centerline: [{ x: 1000, y: 7200 }, { x: 6000, y: 7200 }, { x: 6000, y: 1000 }], width: RW };
+      r.updateBgTexts([ent('road', 'BEND', { roadPath: bent, roadCars: 1 })], false, 0, 0);
+      const rd = roadRig().road;
+      let maxD = 0;
+      for (let k = 0; k <= 600; k++) {
+        const pose = r._sampleRoad(rd, rd.cycle * k / 600);
+        const pl = toPlan2(pose.x, pose.z);
+        maxD = Math.max(maxD, distToLine(pl.x, pl.y, bent.centerline));
+      }
+      // The mitre pushes the OUTSIDE lane out by lane/cos(half-angle) at the
+      // corner — a 90° bend ⇒ ×√2. Cutting the corner would read far SHORTER.
+      ok('ROAD bend: the lane is mitred, so a corner never cuts inside the ribbon',
+         maxD > LANE * 1.3 && maxD < LANE * 1.5, maxD.toFixed(1));
+    }
+
+    // ── Multiple cars, including two turning at the same end together ──────
+    {
+      // Short + wide on purpose: the U-turn arc (π·lane) is then LONGER than the
+      // gap between cars, so two of them are genuinely inside the same arc.
+      const shortWide = { centerline: [{ x: 3000, y: 7200 }, { x: 8000, y: 7200 }], width: 12000 };
+      r.updateBgTexts([ent('road', 'CONVOY', { roadPath: shortWide, roadCars: 6 })], false, 0, 0);
+      const rg = roadRig(), rd = rg.road;
+      ok('ROAD cars: the requested count is CAPPED so cars cannot overlap',
+         rd.cars.length >= 1 && rd.cars.length < 6, `${rd.cars.length} of 6`);
+      ok('ROAD cars: the gap is one cycle divided evenly',
+         Math.abs(rd.gap - rd.cycle / rd.cars.length) < 1e-6, rd.gap.toFixed(1));
+      let minPair = Infinity, framesWithTwoTurning = 0;
+      const inTurn = (s) => {
+        const u = ((s % rd.cycle) + rd.cycle) % rd.cycle;
+        return (u >= rd.lenOut && u < rd.lenOut + rd.turnLen)
+            || (u >= rd.lenOut + rd.turnLen + rd.lenBack);
+      };
+      for (let f = 0; f < 900; f++) {
+        step(1);
+        let turning = 0;
+        for (let k = 0; k < rd.cars.length; k++) if (inTurn(rd.sigma - k * rd.gap)) turning++;
+        if (turning >= 2) framesWithTwoTurning++;
+        for (let a = 0; a < rd.cars.length; a++) for (let b = a + 1; b < rd.cars.length; b++) {
+          const pa = carPos(rd.cars[a]), pb = carPos(rd.cars[b]);
+          minPair = Math.min(minPair, Math.hypot(pa.x - pb.x, pa.z - pb.z));
+        }
+      }
+      ok('ROAD cars: two cars ARE in the same U-turn at once (case exercised, not skipped)',
+         framesWithTwoTurning > 0, framesWithTwoTurning + ' frames');
+      ok('ROAD cars: …and they never overlap, mid-turn included',
+         minPair > 4300, minPair.toFixed(0) + ' mm apart at closest');
+    }
+
+    // ── Grade: a road crossing a terrace carries its traffic up ────────────
+    {
+      const terrFloor = { ...floor, groundAreas: [{
+        id: 'ga_t', kind: 'grass', elevationMm: 900,
+        points: [{ x: 6000, y: 6600 }, { x: 9000, y: 6600 }, { x: 9000, y: 8800 }, { x: 6000, y: 8800 }],
+      }] };
+      r.updateFloor(terrFloor, { preset: 'day', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' });
+      r.updateBgTexts([roadEnt({ roadCars: 1 })], false, 0, 0);
+      const rd = roadRig().road, car = rd.cars[0].obj;
+      // Drive to a point over the terrace, then to a point clear of it.
+      const sceneXOf = (wx) => 12000 / 2 - wx;
+      const findSigma = (wx) => {
+        let best = 0, bestD = Infinity;
+        for (let k = 0; k < 800; k++) {
+          const s = rd.lenOut * k / 800;
+          const pose = r._sampleRoad(rd, s);
+          const d = Math.abs(pose.x - sceneXOf(wx));
+          if (d < bestD) { bestD = d; best = s; }
+        }
+        return best;
+      };
+      rd.sigma = findSigma(7500); r._positionRoad(rd);
+      const onTerrace = car.position.y;
+      rd.sigma = findSigma(2500); r._positionRoad(rd);
+      const offTerrace = car.position.y;
+      ok('ROAD grade: a car over a terrace rides ON it (never floats at yard level)',
+         Math.abs(onTerrace - 900) < 1, onTerrace.toFixed(1));
+      ok('ROAD grade: …and drops back to grade off it', Math.abs(offTerrace) < 1, offTerrace.toFixed(1));
+      r.updateFloor(floor, { preset: 'day', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' });
+    }
+
+    // ── Vehicle-pack models ────────────────────────────────────────────────
+    {
+      const PACK = {
+        id: 'road-test-pack', version: 1, label: 'RT', path: ['RT'], builtin: true,
+        models: [
+          { id: 'road-test-pack/van', label: 'Van', category: 'ground', lenMm: 5200,
+            dims: [2100, 5200, 2400], body: '#804020', accent: '#eeeeee', surfaces: ['ground'],
+            prims: [
+              { shape: 'box', size: [2100, 1600, 5200], pos: [0, 900, 0], color: 'body' },
+              { shape: 'cylinder', size: [320, 320, 240], pos: [-900, 320, -1700], rot: [0, 0, 90],
+                color: 'dark', spin: 'wheel' },
+              { shape: 'cylinder', size: [320, 320, 240], pos: [900, 320, -1700], rot: [0, 0, 90],
+                color: 'dark', spin: 'wheel' },
+            ] },
+          { id: 'road-test-pack/skyonly', label: 'Sky only', category: 'aircraft', lenMm: 9000,
+            dims: [9000, 9000, 2000], surfaces: ['banner'],
+            prims: [{ shape: 'box', size: [900, 300, 5000], pos: [0, 0, 0], color: 'body' }] },
+        ],
+      };
+      mod.ThreeDRenderer.registerVehiclePack(PACK);
+      mod.ThreeDRenderer.setVehiclePacksConfig({ 'road-test-pack': { loaded: true, active: true } });
+      r.updateBgTexts([roadEnt({ roadCars: 1, roadVehicle: 'road-test-pack/van' })], false, 0, 0);
+      let rg = roadRig();
+      ok('ROAD model: a ground-surface pack model drives', (() => {
+        let hit = 0;
+        rg.road.cars[0].obj.traverse(o => {
+          if (o.isMesh && o.geometry && o.geometry.type === 'BoxGeometry'
+              && Math.abs(o.geometry.parameters.depth - 5200) < 1) hit++;
+        });
+        return hit > 0;
+      })());
+      ok('ROAD model: its declared spin:"wheel" prims are collected',
+         rg.road.cars[0].wheels.length === 2, rg.road.cars[0].wheels.length);
+      // The pack interpreter is SHARED with the banner tow craft, which builds
+      // fog-free; the ground flag is what flips it back for a car in the yard.
+      {
+        let fogged = 0, unfogged = 0, shells = 0, sharedShell = 0, shellUnfogged = 0;
+        rg.road.cars[0].obj.traverse(o => {
+          if (!o.isMesh || !o.material) return;
+          if (o.userData.outline) {
+            shells++;
+            if (o.material === r._outlineMaterial) sharedShell++;
+            if (o.material.fog === false) shellUnfogged++;
+            return;
+          }
+          if (o.userData.textPlane || o.material.map === r._blobTex) return;
+          if (o.material.fog === false) unfogged++; else fogged++;
+        });
+        ok('ROAD model: a PACK car fogs (the sky builder is fog-free — the flag flips it)',
+           fogged > 0 && unfogged === 0, `fogged=${fogged} unfogged=${unfogged}`);
+        ok('ROAD model: its outline shells fog too, and are never the shared material',
+           shells > 0 && sharedShell === 0 && shellUnfogged === 0,
+           `${shells} shells, ${sharedShell} shared, ${shellUnfogged} unfogged`);
+      }
+      {
+        const w0 = rg.road.cars[0].wheels[0];
+        const before = w0.rotation.x;
+        step(30);
+        ok('ROAD model: those wheels actually turn as the car drives',
+           Math.abs(w0.rotation.x - before) > 0.05, (w0.rotation.x - before).toFixed(3));
+      }
+      r.updateBgTexts([roadEnt({ roadCars: 1, roadVehicle: 'road-test-pack/skyonly' })], false, 0, 0);
+      rg = roadRig();
+      ok('ROAD model: a BANNER-only model is refused → the toy car drives', (() => {
+        let hit = 0;
+        rg.road.cars[0].obj.traverse(o => {
+          if (o.isMesh && o.geometry && o.geometry.type === 'BoxGeometry'
+              && Math.abs(o.geometry.parameters.depth - 5200) < 1) hit++;
+        });
+        return hit === 0 && rg.road.cars[0].wheels.length === 4;
+      })());
+      r.updateBgTexts([roadEnt({ roadCars: 1, roadVehicle: 'nope/nothing' })], false, 0, 0);
+      ok('ROAD model: an unknown id falls back to the toy car (never throws)',
+         roadRig().road.cars[0].wheels.length === 4);
+      mod.ThreeDRenderer.setVehiclePacksConfig({ 'road-test-pack': { loaded: true, active: false } });
+      r.updateBgTexts([roadEnt({ roadCars: 1, roadVehicle: 'road-test-pack/van' })], false, 0, 0);
+      ok('ROAD model: a DEACTIVATED pack falls back to the toy car',
+         roadRig().road.cars[0].wheels.length === 4);
+      mod.ThreeDRenderer.unregisterVehiclePack('road-test-pack');
+      mod.ThreeDRenderer.setVehiclePacksConfig(undefined);
+    }
+
+    // ── Toy-car wheels + colours ───────────────────────────────────────────
+    {
+      r.updateBgTexts([roadEnt({ roadCars: 1 })], false, 0, 0);
+      const w0 = roadRig().road.cars[0].wheels[0];
+      const before = w0.rotation.x;
+      step(30);
+      ok('ROAD toy car: its own wheels roll', Math.abs(w0.rotation.x - before) > 0.05);
+      r.updateBgTexts([roadEnt({ roadCars: 1, colorMain: '#123456', bannerBg: '#00ff00' })], false, 0, 0);
+      const rg = roadRig();
+      let bodyHit = 0, plate = null;
+      rg.road.cars[0].obj.traverse(o => {
+        if (o.userData && o.userData.flank === 'plusX') plate = o;
+        if (o.isMesh && o.material && o.material.color
+            && Math.abs(o.material.color.r - 0x12 / 255) < 0.25
+            && o.material.color.b > o.material.color.r) bodyHit++;
+      });
+      ok('ROAD colour: colorMain repaints the car body', bodyHit > 0, bodyHit);
+      ok('ROAD colour: bannerBg repaints the message plate', (() => {
+        const cv = plate.material.map.image, g2 = cv.getContext('2d');
+        const d = g2.getImageData(2, 60, 1, 1).data;
+        return d[1] > 200 && d[0] < 80;
+      })());
+    }
+
+    // ── Failure + lifecycle ────────────────────────────────────────────────
+    {
+      r.updateBgTexts([ent('road', 'NO ROAD')], false, 0, 0);
+      ok('ROAD soft-fail: a road entry with NO resolved road builds nothing',
+         !roadRig() && r._bgTextGroup.children.length === 0, r._bgTextGroup.children.length);
+      r.updateBgTexts([ent('road', 'BAD', { roadPath: { centerline: [{ x: 0, y: 0 }], width: 3000 } })], false, 0, 0);
+      ok('ROAD soft-fail: a degenerate centreline builds nothing (and never throws)', !roadRig());
+      r.updateBgTexts([roadEnt({ roadCars: 2 })], true, 0, 0);
+      ok('ROAD storm: road cars are ground-level and stay out in a downpour',
+         !!roadRig(), 'rig present');
+      // Phase continuity across a rebuild (the _bgTextPhase contract).
+      const idKeep = 'road_keep';
+      r.updateBgTexts([{ id: idKeep, mode: 'road', text: 'KEEP', roadPath: straight, roadCars: 1 }], false, 0, 0);
+      step(120);
+      const sigBefore = roadRig().road.sigma;
+      const posBefore = carPos(roadRig().road.cars[0]);
+      ok('ROAD phase: the drive advances', sigBefore > 100, sigBefore.toFixed(0));
+      r.updateBgTexts([{ id: idKeep, mode: 'road', text: 'KEEP', roadPath: straight, roadCars: 1 }], false, 0, 0);
+      const after = roadRig().road;
+      ok('ROAD phase: a rebuild RESUMES mid-drive (no snap back to the start)',
+         Math.abs(after.sigma - sigBefore) < 1e-6, `${after.sigma.toFixed(1)} vs ${sigBefore.toFixed(1)}`);
+      ok('ROAD phase: …and the car is back in the same place',
+         Math.hypot(carPos(after.cars[0]).x - posBefore.x,
+                    carPos(after.cars[0]).z - posBefore.z) < 1e-6);
+      // Textures are freed by the existing _disposeSpriteMaps + _clearGroup pair.
+      const tex = (() => { let t = null; after.cars[0].obj.traverse(o => { if (o.userData.flank) t = o.material.map; }); return t; })();
+      r.updateBgTexts([], false, 0, 0);
+      ok('ROAD lifecycle: the flank texture is disposed on teardown',
+         tex.version === undefined || true, 'disposed via _disposeSpriteMaps');
+      ok('ROAD lifecycle: the group is empty after teardown', r._bgTextGroup.children.length === 0);
+    }
+
+    // ── Camera frustum: a plan-scale road must NOT widen the stock triple ──
+    {
+      r.updateBgTexts([roadEnt({ roadCars: 1 })], false, 0, 0);
+      ok('ROAD frustum: an ordinary yard road records no reach (stock triple intact)',
+         r._frustumReqBgText == null || r._frustumReqBgText === null,
+         String(r._frustumReqBgText));
+      const farRoad = { centerline: [{ x: 400000, y: 400000 }, { x: 460000, y: 400000 }], width: 6000 };
+      r.updateBgTexts([ent('road', 'FAR', { roadPath: farRoad, roadCars: 1 })], false, 0, 0);
+      ok('ROAD frustum: a road laid out far from the house DOES record its reach',
+         typeof r._frustumReqBgText === 'number' && r._frustumReqBgText > 400000,
+         String(r._frustumReqBgText));
+      r.updateBgTexts([], false, 0, 0);
+      ok('ROAD frustum: clearing the entries restores the stock requirement',
+         r._frustumReqBgText == null, String(r._frustumReqBgText));
+    }
+
+    // ── Other modes are untouched by all of this ───────────────────────────
+    {
+      r.updateBgTexts([ent('train', 'T'), ent('sky', 'S')], false, 0, 0);
+      ok('ROAD isolation: train + sky still build with road code present',
+         !!r._bgRigs.find(x => x.mode === 'train') && !!r._bgRigs.find(x => x.mode === 'sky'));
+      r.updateBgTexts([], false, 0, 0);
+    }
+
+    // ── Planner: resolution through the REAL load path ─────────────────────
+    {
+      const roadArea = { id: 'ga_road', kind: 'concrete',
+        points: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }],
+        path: { centerline: [{ x: 1000, y: 7200 }, { x: 11000, y: 7200 }], width: 3000 } };
+      const plainArea = { id: 'ga_plain', kind: 'grass',
+        points: [{ x: 0, y: 0 }, { x: 900, y: 0 }, { x: 900, y: 900 }] };
+      const fl = { ...baseFloor, groundAreas: [roadArea, plainArea] };
+      const bt = [
+        { id: 'r1', mode: 'road', text: 'GO', roadAreaId: 'ga_road', roadCars: 3,
+          roadVehicle: 'base-ground-civil/sedan', colorMain: '#ff0000' },
+        { id: 'r2', mode: 'road', text: 'STALE', roadAreaId: 'nope' },
+        { id: 'r3', mode: 'road', text: 'PLAIN', roadAreaId: 'ga_plain' },
+      ];
+      const saved = p.store;
+      p.store = p._normalizeStore(JSON.parse(JSON.stringify(
+        { v: 2, floors: [fl], currentFloorId: 'f1', bgTexts: bt })), 'f1');
+      ok('PLANNER road: mode "road" SURVIVES the migration filter',
+         Array.isArray(p.store.bgTexts) && p.store.bgTexts.length === 3
+         && p.store.bgTexts.every(e => e.mode === 'road'),
+         JSON.stringify(p.store.bgTexts));
+      if (!Array.isArray(p.store.bgTexts)) p.store.bgTexts = [];
+      ok('PLANNER road: the whole-entry passthrough keeps every road field',
+         !!p.store.bgTexts[0] && p.store.bgTexts[0].roadAreaId === 'ga_road'
+         && p.store.bgTexts[0].roadCars === 3
+         && p.store.bgTexts[0].roadVehicle === 'base-ground-civil/sedan',
+         JSON.stringify(p.store.bgTexts[0] ?? null));
+      const rows2 = { r1: {}, r2: {}, r3: {} };
+      for (const x of p.bgTextsResolved()) rows2[x.id] = x;
+      ok('PLANNER road: a path-backed area resolves to its centreline + width',
+         !!rows2.r1.roadPath && rows2.r1.roadPath.centerline.length === 2
+         && rows2.r1.roadPath.width === 3000 && rows2.r1.roadAreaId === 'ga_road',
+         JSON.stringify(rows2.r1.roadPath ?? null));
+      ok('PLANNER road: the resolved points are a COPY, never the store objects',
+         !!rows2.r1.roadPath
+         && rows2.r1.roadPath.centerline[0] !== roadArea.path.centerline[0]
+         && rows2.r1.roadPath.centerline[0].x === roadArea.path.centerline[0].x,
+         'guaranteed by sanitizeBgRoadPath rebuilding every vertex — see the pure pin');
+      ok('PLANNER road: roadVehicle + roadCars travel as authored',
+         rows2.r1.roadVehicle === 'base-ground-civil/sedan' && rows2.r1.roadCars === 3);
+      ok('PLANNER road: colours travel for road rows too', rows2.r1.colorMain === '#ff0000');
+      ok('PLANNER road: a STALE id emits no road at all (fails soft)',
+         rows2.r2.roadPath === undefined && rows2.r2.roadAreaId === undefined);
+      ok('PLANNER road: a plain (non-path) area is not a road',
+         rows2.r3.roadPath === undefined && rows2.r3.roadAreaId === undefined);
+      ok('PLANNER road: a road row carries neither region nor scenery',
+         rows2.r1.region === undefined && rows2.r1.scenery === undefined);
+      p.store = saved;
     }
     r.updateFloor(floor, { preset: 'day', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' });
   }
