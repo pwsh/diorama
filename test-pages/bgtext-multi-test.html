@@ -2474,6 +2474,556 @@
     r.updateBgTexts([], false, 0, 0);
   }
 
+  // ════════════ R. OPERATING REGION (BgTextEntry.region) ════════════
+  // The user-definable circle / rectangle a message train drives and a banner
+  // aircraft orbits. R1 is the PRIMARY guard for the whole feature: with NO
+  // region, every number updateBgTexts produces must still be BIT-identical to
+  // the build from before the field existed.
+  {
+    const GOLD = await (await fetch('./fixtures/bgtext-preregion-golden.json')).json();
+    // Same floors + entries the fixture was captured with (see its __note).
+    const mkFloor = (w, d) => ({
+      id: 'f1', name: 'T', w, d,
+      walls: [{ id: 'w', points: [
+        { x: w * 0.25, y: d * 0.25 }, { x: w * 0.75, y: d * 0.25 },
+        { x: w * 0.75, y: d * 0.75 }, { x: w * 0.25, y: d * 0.75 },
+        { x: w * 0.25, y: d * 0.25 } ] }],
+      furniture: [], lights: [], switches: [], sensors: [], motionSensors: [],
+      envSensors: [], doors: [], windows: [], bg: null, model3d: null, look3d: null,
+    });
+    const SC3 = { preset: 'day', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' };
+    const GOLD_ENTRIES = () => ([
+      { id: 't1', mode: 'train', text: 'HELLO TRAIN MESSAGE' },
+      { id: 'b1', mode: 'banner', text: 'BANNER ONE' },
+      { id: 'b2', mode: 'banner', text: 'BANNER TWO' },
+      { id: 'b3', mode: 'banner', text: 'BANNER THREE', aircraft: 'news_chopper' },
+    ]);
+    const meshCount = () => { let n = 0; r._bgTextGroup.traverse(o => { if (o.isMesh) n++; }); return n; };
+    // Snapshot in EXACTLY the fixture's shape, so a mismatch names its own field.
+    const snapshot = () => {
+      const tr = r._bgRigs.find(x => x.mode === 'train').train;
+      return {
+        loopWorld: tr.loopWorld.map(q => [q.x, q.y]),
+        loopScene: tr.loopScene.map(q => [q.x, q.z]),
+        cum: tr.cum, total: tr.total, spacing: tr.spacing, wheelR: tr.wheelR, baseY: tr.baseY,
+        vehiclePos: tr.vehicles.map(v => [v.obj.position.x, v.obj.position.y, v.obj.position.z, v.obj.rotation.y]),
+        meshCount: meshCount(),
+        banners: r._bgRigs.filter(x => x.mode === 'banner').map(x => ({
+          index: x.index, radius: x.radius, alt: x.alt, dir: x.dir, angle: x.angle, bobAmp: x.bobAmp,
+          pos: [x.asm.position.x, x.asm.position.y, x.asm.position.z] })),
+        cam: { near: r._camera.near, far: r._camera.far,
+               maxDistance: r._controls ? r._controls.maxDistance : null },
+      };
+    };
+    // Bit comparison: JSON.stringify emits the shortest round-tripping decimal
+    // for a double, so equal strings imply equal bits. Names the first mismatch.
+    const bitDiff = (a, b) => {
+      for (const k of Object.keys(b)) {
+        if (k === '__note') continue;
+        if (JSON.stringify(a[k]) !== JSON.stringify(b[k])) {
+          return k + ': ' + JSON.stringify(a[k]).slice(0, 90) + ' != ' + JSON.stringify(b[k]).slice(0, 90);
+        }
+      }
+      return null;
+    };
+    const live = {};
+    for (const [tag, w, d] of [['big', 12000, 8000], ['tiny', 2500, 2000], ['wide', 20000, 6000]]) {
+      r.updateFloor(mkFloor(w, d), SC3);
+      r.updateBgTexts(GOLD_ENTRIES(), false, 0, 0);
+      live[tag] = snapshot();
+      const diff = bitDiff(live[tag], GOLD[tag]);
+      ok('REGION-ABSENT ' + tag + ': every train-loop + orbit number is bit-identical to the pre-region build',
+         diff === null, diff ?? (GOLD[tag].loopWorld.length + ' pts, total ' + GOLD[tag].total));
+    }
+    // NEGATIVE CONTROLS for the comparator itself — a bit-comparison that cannot
+    // fail proves nothing.
+    {
+      const poisoned = JSON.parse(JSON.stringify(live.big));
+      poisoned.loopWorld[3][0] += 1e-9;
+      ok('REGION-ABSENT negative control: the bit comparator rejects a 1e-9 loop perturbation',
+         bitDiff(poisoned, GOLD.big) !== null);
+      const poisoned2 = JSON.parse(JSON.stringify(live.big));
+      poisoned2.banners[1].radius *= 1.0000001;
+      ok('REGION-ABSENT negative control: the bit comparator rejects a 1e-7 orbit-radius drift',
+         bitDiff(poisoned2, GOLD.big) !== null);
+    }
+    // The fixture must really contain what we think — a fixture of empty objects
+    // would make every assertion above vacuous.
+    ok('REGION-ABSENT the golden fixture is substantive (42-pt loop, 3 banner rigs, stock camera)',
+       GOLD.big.loopWorld.length === 42 && GOLD.big.banners.length === 3
+       && GOLD.big.cam.far === 150000 && GOLD.big.total > 40000,
+       GOLD.big.loopWorld.length + ' pts / ' + GOLD.big.banners.length + ' banners / far ' + GOLD.big.cam.far);
+
+    // ── R2. CIRCLE region ────────────────────────────────────────────────────
+    r.updateFloor(mkFloor(12000, 8000), SC3);
+    const CIRC = { shape: 'circle', cx: 30000, cy: -12000, r: 9000 };
+    // scene → world for this floor: _w(wx,wy) = (fw/2 − wx, y, wy − fd/2)
+    const toWorld = (sx, sz) => ({ x: 12000 / 2 - sx, y: sz + 8000 / 2 });
+    r.updateBgTexts([{ id: 'rc', mode: 'train', text: 'CIRCLE TRACK', region: CIRC }], false, 0, 0);
+    {
+      const tr = r._bgRigs.find(x => x.mode === 'train').train;
+      let worst = 0;
+      for (const q of tr.loopWorld) worst = Math.max(worst, Math.abs(Math.hypot(q.x - CIRC.cx, q.y - CIRC.cy) - CIRC.r));
+      ok('REGION circle: every train-loop vertex sits on the region circle',
+         worst < 1e-6, 'worst |d-r| = ' + worst);
+      ok('REGION circle: loop perimeter is 2*pi*r within 0.2 % (64-gon)',
+         Math.abs(tr.total - 2 * Math.PI * CIRC.r) / (2 * Math.PI * CIRC.r) < 0.002,
+         'total ' + tr.total.toFixed(1) + ' vs ' + (2 * Math.PI * CIRC.r).toFixed(1));
+      ok('REGION circle: the loop is NOT the property-anchored one',
+         Math.abs(tr.total - GOLD.big.total) > 1000,
+         tr.total.toFixed(0) + ' vs ' + GOLD.big.total.toFixed(0));
+      const onLoop = tr.vehicles.every(v => {
+        const w = toWorld(v.obj.position.x, v.obj.position.z);
+        return Math.abs(Math.hypot(w.x - CIRC.cx, w.y - CIRC.cy) - CIRC.r) < 60;
+      });
+      ok('REGION circle: every vehicle is posed on the region circle', onLoop);
+    }
+    r.updateBgTexts([
+      { id: 'ra', mode: 'banner', text: 'ORBIT A', region: CIRC },
+      { id: 'rb', mode: 'banner', text: 'ORBIT B', region: CIRC },
+      { id: 'rc2', mode: 'banner', text: 'ORBIT C', region: CIRC },
+    ], false, 0, 0);
+    {
+      const rigs = r._bgRigs.filter(x => x.mode === 'banner');
+      const wc = { x: 12000 / 2 - CIRC.cx, z: CIRC.cy - 8000 / 2 };
+      ok('REGION circle: the orbit centre is the region centre in scene coords',
+         rigs.every(g => Math.abs(g.orbitCx - wc.x) < 1e-9 && Math.abs(g.orbitCz - wc.z) < 1e-9),
+         JSON.stringify(rigs.map(g => [g.orbitCx, g.orbitCz])) + ' want ' + JSON.stringify(wc));
+      const rad = rigs.map(g => g.radius);
+      ok('REGION circle: the widest orbit ring is exactly the region radius',
+         Math.abs(Math.max.apply(null, rad) - CIRC.r) < 1e-9, JSON.stringify(rad));
+      ok('REGION circle: every orbit ring stays inside the region',
+         rad.every(x => x <= CIRC.r + 1e-9), JSON.stringify(rad));
+      ok('REGION circle: the 0.85 / 1.0 / 1.15 spread ratio is preserved',
+         Math.abs(rad[1] / rad[0] - 1 / 0.85) < 1e-9 && Math.abs(rad[2] / rad[0] - 1.15 / 0.85) < 1e-9,
+         JSON.stringify(rad.map(x => x / rad[0])));
+      step(30);
+      const g0 = rigs[0];
+      const dx = g0.asm.position.x - wc.x, dz = g0.asm.position.z - wc.z;
+      ok('REGION circle: after advancing, the aircraft is on its ring about the region centre',
+         Math.abs(Math.hypot(dx, dz) - g0.radius) < 1e-6, Math.hypot(dx, dz) + ' vs ' + g0.radius);
+    }
+    r.updateBgTexts([{ id: 'rch', mode: 'banner', text: 'CHOP', aircraft: 'news_chopper', region: CIRC }],
+                    false, 0, 0);
+    {
+      const c = chopRig();
+      ok('REGION circle: the news chopper keeps its distinct profile (dir -1, tighter, higher, bigger bob)',
+         !!c && c.dir === -1 && c.bobAmp === 150 && c.alt >= 7500
+         && Math.abs(c.radius - (CIRC.r / 1.15) * 0.6 * 0.85) < 1e-9,
+         'r=' + (c && c.radius) + ' alt=' + (c && c.alt));
+      ok('REGION circle: the chopper orbits the REGION centre, not the plan centre',
+         Math.abs(c.orbitCx - (12000 / 2 - CIRC.cx)) < 1e-9 && c.orbitCx !== 0);
+    }
+
+    // ── R3. RECT region ──────────────────────────────────────────────────────
+    const RECT = { shape: 'rect', cx: 4000, cy: 20000, w: 16000, h: 9000 };
+    const bbox = (pts) => {
+      let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+      for (const q of pts) { x0 = Math.min(x0, q.x); x1 = Math.max(x1, q.x); y0 = Math.min(y0, q.y); y1 = Math.max(y1, q.y); }
+      return { w: x1 - x0, h: y1 - y0, cx: (x0 + x1) / 2, cy: (y0 + y1) / 2 };
+    };
+    r.updateBgTexts([{ id: 'rr', mode: 'train', text: 'RECT TRACK', region: RECT }], false, 0, 0);
+    {
+      const tr = r._bgRigs.find(x => x.mode === 'train').train, b = bbox(tr.loopWorld);
+      ok('REGION rect: the loop bbox is the region rect',
+         Math.abs(b.w - RECT.w) < 1e-6 && Math.abs(b.h - RECT.h) < 1e-6
+         && Math.abs(b.cx - RECT.cx) < 1e-6 && Math.abs(b.cy - RECT.cy) < 1e-6,
+         b.w.toFixed(1) + 'x' + b.h.toFixed(1) + ' @ ' + b.cx.toFixed(1) + ',' + b.cy.toFixed(1));
+      ok('REGION rect: the loop is closed (last vertex == first)',
+         tr.loopWorld[0].x === tr.loopWorld[tr.loopWorld.length - 1].x
+         && tr.loopWorld[0].y === tr.loopWorld[tr.loopWorld.length - 1].y);
+      ok('REGION rect: corners are rounded (perimeter under the sharp-cornered 2(w+h))',
+         tr.total < 2 * (RECT.w + RECT.h) && tr.total > 1.9 * (RECT.w + RECT.h),
+         tr.total.toFixed(0) + ' vs sharp ' + 2 * (RECT.w + RECT.h));
+    }
+    r.updateBgTexts([{ id: 'rr2', mode: 'train', text: 'ROT', region: { ...RECT, rotationDeg: 90 } }],
+                    false, 0, 0);
+    {
+      const b = bbox(r._bgRigs[0].train.loopWorld);
+      ok('REGION rect: a 90 deg rotation swaps the loop bbox extents',
+         Math.abs(b.w - RECT.h) < 1e-6 && Math.abs(b.h - RECT.w) < 1e-6,
+         b.w.toFixed(1) + 'x' + b.h.toFixed(1));
+      ok('REGION rect: a rotation leaves the centre put',
+         Math.abs(b.cx - RECT.cx) < 1e-6 && Math.abs(b.cy - RECT.cy) < 1e-6);
+    }
+    r.updateBgTexts([{ id: 'rb2', mode: 'banner', text: 'RECTORBIT', region: RECT }], false, 0, 0);
+    ok('REGION rect: the banner orbit is derived from the rect inscribed radius',
+       Math.abs(r._bgRigs[0].radius - (Math.min(RECT.w, RECT.h) / 2 / 1.15) * 0.85) < 1e-9,
+       String(r._bgRigs[0].radius));
+
+    // ── R4. FAR OFFSET + camera frustum ──────────────────────────────────────
+    // A region hundreds of metres out is the explicit point of the feature. The
+    // stock far plane is 150,000 mm measured FROM THE CAMERA, so with no
+    // recorded reach the train is clipped away and vanishes with no diagnostic.
+    const STOCK = { near: 10, far: 150000, maxDistance: 45000 };
+    const atStock = () => r._camera.near === STOCK.near && r._camera.far === STOCK.far
+      && (!r._controls || r._controls.maxDistance === STOCK.maxDistance);
+    r.updateBgTexts([], false, 0, 0);
+    ok('REGION frustum: no regions gives the stock camera triple, strict ===',
+       atStock(), r._camera.near + '/' + r._camera.far);
+    r.updateBgTexts([{ id: 'near', mode: 'train', text: 'NEAR',
+                       region: { shape: 'circle', cx: 20000, cy: 9000, r: 9000 } }], false, 0, 0);
+    ok('REGION frustum: a back-garden region does NOT disturb the stock triple',
+       atStock(), r._camera.near + '/' + r._camera.far + '/' + (r._controls && r._controls.maxDistance));
+    const FAR = { shape: 'circle', cx: 400000, cy: 250000, r: 40000 };
+    r.updateBgTexts([{ id: 'far', mode: 'train', text: 'DISTANT', region: FAR }], false, 0, 0);
+    {
+      const reach = Math.hypot(FAR.cx - 6000, FAR.cy - 4000) + FAR.r;
+      const camDist = r._controls ? r._camera.position.distanceTo(r._controls.target) : 0;
+      ok('REGION frustum: a distant region pushes the far plane out past stock',
+         r._camera.far > STOCK.far, 'far ' + r._camera.far + ' (reach ' + reach.toFixed(0) + ')');
+      ok('REGION frustum: far satisfies camDist + 1.25*reach + 30000',
+         r._camera.far >= camDist + 1.25 * reach + 30000 - 1,
+         'far ' + r._camera.far + ' need ' + (camDist + 1.25 * reach + 30000).toFixed(0));
+      ok('REGION frustum: the 15000:1 near/far ratio is preserved',
+         Math.abs(r._camera.near - Math.max(10, r._camera.far / 15000)) < 1e-6,
+         r._camera.near + ' / ' + r._camera.far);
+      ok('REGION frustum: the whole loop is inside the widened far plane',
+         (function () {
+           const tr = r._bgRigs.find(x => x.mode === 'train').train, cam = r._camera.position;
+           return tr.loopScene.every(q => Math.hypot(q.x - cam.x, q.z - cam.z) < r._camera.far);
+         })());
+      // NEGATIVE CONTROL: the same loop would NOT fit the stock far plane, which
+      // is exactly why the reach has to be recorded at all.
+      ok('REGION frustum negative control: that loop does NOT fit the stock 150000 far plane',
+         (function () {
+           const tr = r._bgRigs.find(x => x.mode === 'train').train, cam = r._camera.position;
+           return tr.loopScene.some(q => Math.hypot(q.x - cam.x, q.z - cam.z) >= STOCK.far);
+         })());
+      // ASYMMETRY (deliberate, matching flights): a decorative prop must not
+      // permanently change how far the user can zoom out.
+      ok('REGION frustum: a distant region does NOT widen controls.maxDistance',
+         !r._controls || r._controls.maxDistance === STOCK.maxDistance,
+         String(r._controls && r._controls.maxDistance));
+    }
+    r.updateBgTexts([], false, 0, 0);
+    ok('REGION frustum: dropping the region restores the stock triple exactly',
+       atStock(), r._camera.near + '/' + r._camera.far);
+
+    // ── R5. GARBAGE falls back to the property anchor, never NaN ─────────────
+    const BAD = [
+      ['null', null], ['string', 'over there'], ['no centre', { r: 5000 }],
+      ['NaN centre', { cx: NaN, cy: 0, r: 5000 }],
+      ['Infinity radius', { cx: 0, cy: 0, r: Infinity }],
+      ['no size', { cx: 1000, cy: 1000 }],
+      ['negative radius', { cx: 1000, cy: 1000, r: -4000 }],
+      ['rect with no w/h/r', { shape: 'rect', cx: 1000, cy: 1000 }],
+    ];
+    for (const pair of BAD) {
+      ok('REGION garbage (' + pair[0] + ') resolves to null',
+         G.resolveBgRegion(pair[1]) === null, JSON.stringify(G.resolveBgRegion(pair[1])));
+    }
+    r.updateFloor(mkFloor(12000, 8000), SC3);
+    r.updateBgTexts(GOLD_ENTRIES(), false, 0, 0);
+    ok('REGION garbage: a renderer fed no region reproduces the golden loop exactly',
+       bitDiff(snapshot(), GOLD.big) === null);
+    ok('REGION clamp: a sub-2 m radius clamps up to BG_REGION_MIN_MM',
+       G.resolveBgRegion({ cx: 0, cy: 0, r: 5 }).r === G.BG_REGION_MIN_MM);
+    ok('REGION clamp: a 10 km radius clamps down to BG_REGION_MAX_MM',
+       G.resolveBgRegion({ cx: 0, cy: 0, r: 10000000 }).r === G.BG_REGION_MAX_MM);
+    ok('REGION clamp: a wild centre clamps to BG_REGION_MAX_CENTRE_MM',
+       G.resolveBgRegion({ cx: 9e9, cy: -9e9, r: 5000 }).cx === G.BG_REGION_MAX_CENTRE_MM
+       && G.resolveBgRegion({ cx: 9e9, cy: -9e9, r: 5000 }).cy === -G.BG_REGION_MAX_CENTRE_MM);
+    ok('REGION clamp: every clamped field is finite (never NaN)',
+       (function () { const q = G.resolveBgRegion({ cx: 1e12, cy: 1e12, shape: 'rect', w: 1e12, h: 5 });
+                      return [q.cx, q.cy, q.w, q.h].every(v => isFinite(v)); })());
+    ok('REGION shape fallback: a rect carrying only a radius squares up on it',
+       (function () { const q = G.resolveBgRegion({ shape: 'rect', cx: 0, cy: 0, r: 6000 });
+                      return q.w === 12000 && q.h === 12000; })());
+    ok('REGION shape fallback: an unknown shape string resolves as a circle',
+       G.resolveBgRegion({ shape: 'blob', cx: 0, cy: 0, r: 6000 }).shape === 'circle');
+    ok('REGION inscribed radius: rect gives half the SHORT side; circle gives r',
+       G.bgRegionInscribedR({ shape: 'rect', cx: 0, cy: 0, w: 8000, h: 5000 }) === 2500
+       && G.bgRegionInscribedR({ shape: 'circle', cx: 0, cy: 0, r: 7000 }) === 7000);
+    ok('REGION reach: measured from the passed origin, plus the circumscribed extent',
+       G.bgRegionReachMm({ shape: 'circle', cx: 3000, cy: 4000, r: 1000 }) === 6000
+       && G.bgRegionReachMm({ shape: 'circle', cx: 3000, cy: 4000, r: 1000 }, 3000, 4000) === 1000);
+    ok('REGION reach: a rotated rect is covered at any angle (half-diagonal)',
+       Math.abs(G.bgRegionReachMm({ shape: 'rect', cx: 0, cy: 0, w: 6000, h: 8000 }) - 5000) < 1e-9);
+
+    // ── R6. The _keyBgText extension term ────────────────────────────────────
+    // three-view's key deliberately carries NO configRev, so anything a rig
+    // CONSUMES has to be in the per-entry hash or it never rebuilds.
+    ok('REGION key: an entry with neither region nor scenery contributes the empty string',
+       G.bgTextExtraKey({}) === '' && G.bgTextExtraKey({ region: undefined, scenery: undefined }) === '',
+       JSON.stringify(G.bgTextExtraKey({})));
+    ok('REGION key: garbage that resolves to nothing also contributes the empty string',
+       G.bgTextExtraKey({ region: { cx: NaN, cy: 0, r: 1 }, scenery: { crossings: 0 } }) === '');
+    ok('REGION key: a region changes the term, and two different regions differ',
+       G.bgTextExtraKey({ region: CIRC }) !== ''
+       && G.bgTextExtraKey({ region: CIRC }) !== G.bgTextExtraKey({ region: RECT }));
+    ok('REGION key: moving the region 1 m changes the term',
+       G.bgTextExtraKey({ region: CIRC }) !== G.bgTextExtraKey({ region: { ...CIRC, cx: CIRC.cx + 1000 } }));
+    ok('REGION key: sub-centimetre jitter does NOT change the term',
+       G.bgTextExtraKey({ region: CIRC }) === G.bgTextExtraKey({ region: { ...CIRC, cx: CIRC.cx + 4 } }));
+    ok('REGION key: a scenery count change changes the term',
+       G.bgTextExtraKey({ scenery: { crossings: 1 } }) !== G.bgTextExtraKey({ scenery: { crossings: 2 } }));
+    ok('REGION key: rect rotation is in the term',
+       G.bgTextExtraKey({ region: RECT }) !== G.bgTextExtraKey({ region: { ...RECT, rotationDeg: 30 } }));
+
+    // ── R7. Phase continuity across a region edit ────────────────────────────
+    // _bgTextPhase survives a rebuild by design; a region edit changes the loop
+    // LENGTH, so the resumed arc position must wrap into the new loop rather than
+    // reset to 0 or run off the end.
+    r.updateBgTexts([{ id: 'ph1', mode: 'train', text: 'PHASE' }], false, 0, 0);
+    step(240);
+    const sBefore = r._bgTextPhase['ph1'].trainS;
+    r.updateBgTexts([{ id: 'ph1', mode: 'train', text: 'PHASE', region: CIRC }], false, 0, 0);
+    {
+      const tr = r._bgRigs[0].train;
+      ok('REGION phase: the train resumes its lap after a region edit (never restarts at 0)',
+         sBefore > 0 && tr.s > 0 && Math.abs(tr.s - (sBefore % tr.total)) < 1e-9,
+         sBefore + ' -> ' + tr.s + ' (total ' + tr.total + ')');
+      ok('REGION phase: the resumed arc position is inside the NEW loop', tr.s < tr.total);
+    }
+    r.updateBgTexts([], false, 0, 0);
+
+    // ════════════ S. TRACKSIDE SCENERY (BgTextEntry.scenery) ════════════
+    const REG = { shape: 'circle', cx: 6000, cy: 4000, r: 14000 };
+    const trainRig = () => r._bgRigs.find(x => x.mode === 'train');
+    const sceneryOf = () => trainRig().train.scenery;
+
+    r.updateBgTexts([{ id: 's0', mode: 'train', text: 'PLAIN' }], false, 0, 0);
+    const plainMeshes = meshCount();
+    ok('SCENERY absent: no scenery struct is attached', sceneryOf() === undefined);
+    for (const empty of [undefined, {}, { crossings: 0, signals: 0, tunnels: 0, trees: 0, station: false }]) {
+      ok('SCENERY sanitize: ' + JSON.stringify(empty) + ' resolves to null (nothing requested)',
+         G.sanitizeBgScenery(empty) === null);
+    }
+    r.updateBgTexts([{ id: 's0', mode: 'train', text: 'PLAIN', scenery: { crossings: 0 } }], false, 0, 0);
+    ok('SCENERY an all-zero request builds nothing and adds no meshes',
+       sceneryOf() === undefined && meshCount() === plainMeshes,
+       meshCount() + ' vs ' + plainMeshes);
+    ok('SCENERY sanitize: garbage resolves to null',
+       G.sanitizeBgScenery('lots') === null && G.sanitizeBgScenery(null) === null
+       && G.sanitizeBgScenery(7) === null);
+    ok('SCENERY sanitize: counts clamp to their caps and never go negative',
+       (function () { const q = G.sanitizeBgScenery({ crossings: 99, signals: -4, tunnels: 1.6, trees: 1e9 });
+                      return q.crossings === G.BG_SCENERY_CAPS.crossings && q.signals === 0
+                             && q.tunnels === 2 && q.trees === G.BG_SCENERY_CAPS.trees; })(),
+       JSON.stringify(G.sanitizeBgScenery({ crossings: 99, signals: -4, tunnels: 1.6, trees: 1e9 })));
+    ok('SCENERY sanitize: a NaN count reads as 0, never NaN',
+       G.sanitizeBgScenery({ crossings: NaN, station: true }).crossings === 0);
+
+    const FULL = { crossings: 3, signals: 4, tunnels: 1, trees: 8, station: true };
+    const sceneryEntry = (id) => ({ id, mode: 'train', text: 'SCENERY TRAIN',
+                                    region: REG, scenery: FULL });
+    r.updateBgTexts([sceneryEntry('sc1')], false, 0, 0);
+    {
+      const sc = sceneryOf(), tr = trainRig().train;
+      ok('SCENERY builds the requested number of crossings + signals',
+         sc.crossings.length === FULL.crossings && sc.signals.length === FULL.signals,
+         sc.crossings.length + ' crossings / ' + sc.signals.length + ' signals');
+      ok('SCENERY every crossing carries two boom pivots and four lamps',
+         sc.crossings.every(c => c.arms.length === 2 && c.lamps.length === 4));
+      ok('SCENERY adds real geometry to _bgTextGroup', meshCount() > plainMeshes + 40,
+         meshCount() + ' vs plain ' + plainMeshes);
+      ok('SCENERY every prop is placed at a valid arc position on the loop',
+         sc.crossings.concat(sc.signals).every(x => x.s >= 0 && x.s < tr.total));
+      // Tolerance is the 64-gon CHORD SAG, not slop: the loop is a polyline, so a
+      // point sampled mid-segment sits r(1−cos(pi/64)) ≈ 17 mm inside the true
+      // circle at r = 14 m. Anything beyond that is a real placement error — the
+      // property-anchored loop would be ~20 m out, so this still discriminates.
+      const sag = REG.r * (1 - Math.cos(Math.PI / 64));
+      const cw = sc.crossings.map(c => {
+        const sp = r._sampleTrainLoop(tr, c.s), w = toWorld(sp.x, sp.z);
+        return Math.abs(Math.hypot(w.x - REG.cx, w.y - REG.cy) - REG.r);
+      });
+      ok('SCENERY rides the REGION: every crossing lies on the region circle (within the chord sag)',
+         cw.every(d => d <= sag + 1e-6), JSON.stringify(cw) + ' sag ' + sag.toFixed(2));
+      // NEGATIVE CONTROL: the same measurement against the PROPERTY-anchored loop
+      // must fail, proving the assertion is really reading the region.
+      ok('SCENERY rides the REGION negative control: the property loop is NOT on that circle',
+         (function () {
+           r.updateBgTexts([{ id: 'nc', mode: 'train', text: 'NC', scenery: { crossings: 3 } }], false, 0, 0);
+           const t2 = trainRig().train;
+           const bad = sceneryOf().crossings.map(c => {
+             const sp = r._sampleTrainLoop(t2, c.s), w = toWorld(sp.x, sp.z);
+             return Math.abs(Math.hypot(w.x - REG.cx, w.y - REG.cy) - REG.r);
+           });
+           r.updateBgTexts([sceneryEntry('sc1')], false, 0, 0);   // restore
+           return bad.every(d => d > sag * 10);
+         })());
+      ok('SCENERY crossings are spread around the loop, not stacked',
+         new Set(sc.crossings.map(c => Math.round(c.s))).size === FULL.crossings,
+         JSON.stringify(sc.crossings.map(c => Math.round(c.s))));
+    }
+    // Determinism: the builder re-runs under _keyBgText, so a rebuild must lay
+    // the IDENTICAL scene (no Math.random anywhere in it).
+    const layout = () => {
+      const out = [];
+      r._bgTextGroup.traverse(o => out.push([
+        +o.position.x.toFixed(6), +o.position.y.toFixed(6), +o.position.z.toFixed(6),
+        +o.rotation.y.toFixed(6)]));
+      return JSON.stringify(out);
+    };
+    const layoutA = layout();
+    r.updateBgTexts([sceneryEntry('sc1')], false, 0, 0);
+    ok('SCENERY determinism: a rebuild lays the identical scene (no Math.random in the builder)',
+       layout() === layoutA, layout().length + ' vs ' + layoutA.length + ' chars');
+    r.updateBgTexts([sceneryEntry('sc2-different-id')], false, 0, 0);
+    ok('SCENERY determinism negative control: a DIFFERENT entry id lays a different scene',
+       layout() !== layoutA);
+
+    // ── Gate animation, driven by the train's own arc position ───────────────
+    r.updateBgTexts([{ id: 'g1', mode: 'train', text: 'GATE', region: REG,
+                       scenery: { crossings: 1 } }], false, 0, 0);
+    {
+      const tr = trainRig().train, c = sceneryOf().crossings[0];
+      const armAngles = () => c.arms.map(a => a.rotation.z);
+      const lampGlow = () => c.lamps.reduce((m, l) => Math.max(m, l.material.emissiveIntensity || 0), 0);
+      // Park the consist on the FAR side of the loop from the crossing.
+      tr.s = (c.s + tr.total / 2) % tr.total;
+      r._positionTrain(tr);
+      c.blend = undefined;                     // first advance SNAPS (the grassYaw idiom)
+      r._advanceTrainScenery(tr, 0, 100);
+      const upAngles = armAngles();
+      ok('SCENERY gate: with the train on the far side the booms are UP (blend 0)',
+         c.blend === 0 && upAngles.every(a => Math.abs(Math.abs(a) - Math.PI / 2) < 1e-9),
+         'blend ' + c.blend + ' angles ' + JSON.stringify(upAngles));
+      ok('SCENERY gate: the two booms are mirrored (opposite sign)',
+         upAngles[0] === -upAngles[1] && upAngles[0] !== 0, JSON.stringify(upAngles));
+      ok('SCENERY gate: lamps are dark while the gates are up', lampGlow() === 0);
+      // Now bring the engine right up to the crossing.
+      tr.s = c.s - 3000;
+      r._positionTrain(tr);
+      c.blend = undefined;
+      r._advanceTrainScenery(tr, 0, 100);
+      ok('SCENERY gate: with the engine arriving the booms are DOWN (blend 1)',
+         c.blend === 1 && armAngles().every(a => Math.abs(a) < 1e-9),
+         'blend ' + c.blend + ' angles ' + JSON.stringify(armAngles()));
+      ok('SCENERY gate: lamps flash once the gates are down', lampGlow() > 0);
+      const glows = c.lamps.map(l => l.material.emissiveIntensity);
+      ok('SCENERY gate: lamps alternate - some lit, some dark, on any one frame',
+         glows.some(v => v > 0) && glows.some(v => v === 0), JSON.stringify(glows));
+      // Easing, both directions, from a known state.
+      c.blend = 0;
+      r._advanceTrainScenery(tr, 0.1, 100);
+      ok('SCENERY gate: the boom EASES down rather than snapping (0 < blend < 1)',
+         c.blend > 0 && c.blend < 1, String(c.blend));
+      const mid = c.blend;
+      r._advanceTrainScenery(tr, 0.1, 100);
+      ok('SCENERY gate: successive frames keep closing the gate', c.blend > mid);
+      // Negative control on the trigger: park the train away and confirm the SAME
+      // machinery lifts the boom back up.
+      tr.s = (c.s + tr.total / 2) % tr.total;
+      for (let k = 0; k < 200; k++) r._advanceTrainScenery(tr, 1 / 60, 100);
+      ok('SCENERY gate: the boom lifts again once the consist has gone (negative control)',
+         c.blend < 0.01, String(c.blend));
+      // The trigger is a real WINDOW: sweeping a whole lap must close the gate for
+      // part of it and leave it open for the rest.
+      let closed = 0, open = 0;
+      for (let k = 0; k < 120; k++) {
+        tr.s = tr.total * k / 120;
+        c.blend = undefined;
+        r._advanceTrainScenery(tr, 0, 100);
+        if (c.blend === 1) closed++; else if (c.blend === 0) open++;
+      }
+      ok('SCENERY gate: a whole lap closes the gate for part of it and opens it for the rest',
+         closed > 0 && open > 0 && closed < 120, 'closed ' + closed + ' / open ' + open + ' of 120');
+      // Lamps flash over TIME, not just with the blend.
+      tr.s = c.s - 3000; c.blend = undefined;
+      r._advanceTrainScenery(tr, 0, 0.0);
+      const l0 = c.lamps.map(l => l.material.emissiveIntensity);
+      r._advanceTrainScenery(tr, 0, 0.5);            // ~half a 1.1 Hz cycle later
+      ok('SCENERY gate: the lamp pattern alternates over time',
+         JSON.stringify(l0) !== JSON.stringify(c.lamps.map(l => l.material.emissiveIntensity)),
+         JSON.stringify(l0));
+    }
+    // Signals: red near, green clear.
+    r.updateBgTexts([{ id: 'sg1', mode: 'train', text: 'SIGNAL', region: REG,
+                       scenery: { signals: 1 } }], false, 0, 0);
+    {
+      const tr = trainRig().train, g = sceneryOf().signals[0];
+      const rd = () => g.red.material.emissiveIntensity, gn = () => g.green.material.emissiveIntensity;
+      tr.s = (g.s + tr.total / 2) % tr.total; g.blend = undefined;
+      r._advanceTrainScenery(tr, 0, 5);
+      const clearR = rd(), clearG = gn();
+      ok('SCENERY signal: shows GREEN when the block is clear', clearG > clearR,
+         'red ' + clearR + ' green ' + clearG);
+      tr.s = g.s - 3000; g.blend = undefined;
+      r._advanceTrainScenery(tr, 0, 5);
+      ok('SCENERY signal: shows RED once the train is in the block', rd() > gn(),
+         'red ' + rd() + ' green ' + gn());
+      ok('SCENERY signal: both lamps genuinely swapped (negative control)',
+         rd() > clearR && gn() < clearG);
+    }
+    // Scenery scales with the entry's "Model size x", like the consist does.
+    r.updateBgTexts([{ id: 'sz', mode: 'train', text: 'SZ', region: REG, scenery: { crossings: 1 } }], false, 0, 0);
+    const smallY = sceneryOf().crossings[0].arms[0].position.y;
+    r.updateBgTexts([{ id: 'sz', mode: 'train', text: 'SZ', region: REG, scale: 2, scenery: { crossings: 1 } }], false, 0, 0);
+    ok('SCENERY scales with the per-entry "Model size x"',
+       Math.abs(sceneryOf().crossings[0].arms[0].position.y - smallY * 2) < 1e-6,
+       smallY + ' -> ' + sceneryOf().crossings[0].arms[0].position.y);
+    // Scenery works on the PROPERTY-anchored loop too (a region is not required).
+    r.updateBgTexts([{ id: 'sp', mode: 'train', text: 'NOREGION', scenery: { crossings: 2, station: true } }],
+                    false, 0, 0);
+    ok('SCENERY works on the property-anchored loop with no region at all',
+       !!sceneryOf() && sceneryOf().crossings.length === 2);
+    // …and the consist itself is UNCHANGED by adding scenery.
+    r.updateBgTexts([{ id: 'sq', mode: 'train', text: 'HELLO TRAIN MESSAGE' }], false, 0, 0);
+    const bare = JSON.stringify(trainRig().train.vehicles.map(v =>
+      [v.obj.position.x, v.obj.position.z, v.obj.rotation.y]));
+    r.updateBgTexts([{ id: 'sq', mode: 'train', text: 'HELLO TRAIN MESSAGE', scenery: FULL }], false, 0, 0);
+    ok('SCENERY leaves the consist itself bit-identical',
+       JSON.stringify(trainRig().train.vehicles.map(v =>
+         [v.obj.position.x, v.obj.position.z, v.obj.rotation.y])) === bare);
+    // Torn down with the group — no leak across rebuilds.
+    r.updateBgTexts([], false, 0, 0);
+    ok('SCENERY is torn down with the bg-text group',
+       r._bgTextGroup.children.length === 0 && r._bgRigs.length === 0);
+    r.updateBgTexts([{ id: 'z', mode: 'train', text: 'Z' }], false, 0, 0);
+    ok('SCENERY after teardown a plain train rebuilds to its bare mesh count',
+       meshCount() === plainMeshes, meshCount() + ' vs ' + plainMeshes);
+    r.updateBgTexts([], false, 0, 0);
+
+    // ── Planner-side sanitation, through the REAL load path ─────────────────
+    {
+      const rows = (function () {
+        const bt = [
+          { id: 'p1', mode: 'train', text: 'OK', region: { shape: 'circle', cx: 1000, cy: 2000, r: 8000 },
+            scenery: { crossings: 2, trees: 500 } },
+          { id: 'p2', mode: 'train', text: 'BAD', region: { cx: 'x', cy: null, r: 'big' }, scenery: 'lots' },
+          { id: 'p3', mode: 'sky', text: 'SKY', region: { shape: 'circle', cx: 1, cy: 2, r: 9000 },
+            scenery: { crossings: 3 } },
+          { id: 'p4', mode: 'banner', text: 'BAN', region: { shape: 'rect', cx: 0, cy: 0, w: 9000, h: 4000 },
+            scenery: { crossings: 3 } },
+        ];
+        p.store = p._normalizeStore(JSON.parse(JSON.stringify(mkStore({ bgTexts: bt }))), 'f1');
+        return p.bgTextsResolved();
+      })();
+      const by = {};
+      for (const x of rows) by[x.id] = x;
+      ok('PLANNER region: a valid region survives normalize + resolve',
+         !!by.p1.region && by.p1.region.shape === 'circle' && by.p1.region.r === 8000
+         && by.p1.region.cx === 1000,
+         JSON.stringify(by.p1.region));
+      ok('PLANNER region: scenery is clamped at resolution (trees 500 hits the cap)',
+         !!by.p1.scenery && by.p1.scenery.trees === G.BG_SCENERY_CAPS.trees
+         && by.p1.scenery.crossings === 2,
+         JSON.stringify(by.p1.scenery));
+      ok('PLANNER region: garbage is dropped, not passed through',
+         by.p2.region === undefined && by.p2.scenery === undefined, JSON.stringify(by.p2));
+      ok('PLANNER region: a SKY row carries neither field (its key term stays pristine)',
+         by.p3.region === undefined && by.p3.scenery === undefined && G.bgTextExtraKey(by.p3) === '');
+      ok('PLANNER region: a BANNER row keeps its region but never scenery',
+         !!by.p4.region && by.p4.region.shape === 'rect' && by.p4.scenery === undefined);
+      // The whole-entry migration passthrough must not eat the new fields — this
+      // is exactly the defect _migrateBgTexts was rebuilt to prevent.
+      ok('PLANNER region: _normalizeStore passes region + scenery through untouched',
+         JSON.stringify(p.store.bgTexts[0].region) === JSON.stringify({ shape: 'circle', cx: 1000, cy: 2000, r: 8000 })
+         && JSON.stringify(p.store.bgTexts[0].scenery) === JSON.stringify({ crossings: 2, trees: 500 }),
+         JSON.stringify(p.store.bgTexts[0]));
+      const chop = p._normalizeStore(JSON.parse(JSON.stringify(mkStore({ bgTexts: [
+        { id: 'c1', mode: 'chopper', text: 'C', region: { shape: 'circle', cx: 5, cy: 6, r: 7000 } }] }))), 'f1').bgTexts;
+      ok('PLANNER region: the chopper->banner migration keeps the region',
+         chop[0].mode === 'banner' && chop[0].aircraft === 'news_chopper'
+         && !!chop[0].region && chop[0].region.r === 7000,
+         JSON.stringify(chop[0]));
+    }
+    r.updateFloor(floor, { preset: 'day', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' });
+  }
+
   // ════════════ report ════════════
   const pass = tests.filter(t => t.ok).length, total = tests.length;
   const allPass = pass === total;

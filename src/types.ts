@@ -1969,11 +1969,69 @@ export interface BgTextEntry {
   // styles: 'sky' is an additive white glow (a tint would read as a bug) and
   // 'grass' takes its ink from the surface painted underneath it (groundTextInk),
   // which is the whole point of the ground-writing contrast system.
+  // ── Operating REGION (modes 'train' | 'banner' | 'chopper') ──────────────
+  // Where the vehicle lives, in WORLD/plan mm. ABSENT = the shipped
+  // property-anchored behaviour byte-for-byte (train loop ~1800 mm outside the
+  // floor rect, banner orbit about the plan centre at ~diag·0.75) — that is the
+  // primary regression guard and is golden-pinned, so never make this field
+  // required or defaulted at the store level.
+  //
+  // Present, it decouples the vehicle from the house: a circle or rectangle
+  // placed ANYWHERE on the plan (the backyard, past the property line, or far
+  // off in the distance) becomes the train's track and the aircraft's orbit.
+  // Deliberately ignored by 'sky' (a camera-relative billboard) and 'grass'
+  // (already placed by grassAreaId / the auto margin strip).
+  //
+  // Sanitized by the pure resolveBgRegion() in geometry.ts — garbage, a
+  // non-finite coordinate or an out-of-clamp size falls back to null, i.e. the
+  // property-anchored default. Never NaN.
+  region?: BgTextRegion;
+  // ── Trackside SCENERY (mode 'train' only) ────────────────────────────────
+  // OPT-IN props dressing the loop. ABSENT (or an all-zero object) = nothing is
+  // built, so a train entry that never touched this renders byte-identically.
+  // Placed by ARC LENGTH along the loop exactly like the cars, so the dressing
+  // follows a region change for free. Sanitized by sanitizeBgScenery().
+  scenery?: BgTrainScenery;
   colorMain?: string;    // vehicle primary — tow-plane fuselage, train engine + car bodies, chopper cabin
   colorDetail?: string;  // vehicle accent  — plane wing/tail, train trim + darker last car, chopper stripes + boom
   bannerBg?: string;     // towed banner cloth background; ALSO the train flank text-plate background
   bannerText?: string;   // banner lettering colour;       ALSO the train flank plate text
   bannerFrame?: string;  // banner edge trim stripes;      ALSO the train flank plate border stripes
+}
+
+// Operating region for a background-text vehicle (BgTextEntry.region). WORLD/plan
+// mm, store-level like the entry itself — so it is NOT rotated by
+// Planner.rotateFloorContent (same reasoning as BgTextEntry.rotationDeg: a track
+// the user laid along the real railway line stays there when one floor's plan is
+// re-oriented).
+//
+// `shape` picks which size fields are read; anything missing for the chosen
+// shape falls back to the other one's, and a region that resolves to no usable
+// size at all is dropped entirely (→ property-anchored default). See
+// resolveBgRegion() in geometry.ts, which owns every clamp.
+export type BgRegionShape = 'circle' | 'rect';
+export interface BgTextRegion {
+  shape?: BgRegionShape;   // default 'circle'
+  cx: number;              // centre, world/plan mm
+  cy: number;
+  r?: number;              // circle radius (mm) — read when shape !== 'rect'
+  w?: number;              // rect size (mm) — read when shape === 'rect'
+  h?: number;
+  rotationDeg?: number;    // rect rotation, repo convention (0 = axis-aligned,
+                           // increasing = screen-CLOCKWISE, like Furniture.rotation)
+}
+
+// Trackside scenery counts for a message train (BgTextEntry.scenery). Every
+// field is OPTIONAL and 0/absent builds nothing. Counts are clamped by
+// sanitizeBgScenery() in geometry.ts; placement is deterministic (arc-length
+// spacing + a mulberry32 stream seeded from the entry id — never Math.random,
+// because the builder re-runs under the _keyBgText dirty key).
+export interface BgTrainScenery {
+  crossings?: number;   // level crossings — booms drop + lamps flash as the consist nears
+  signals?: number;     // trackside signal masts — red near the train, green when clear
+  tunnels?: number;     // tunnel mounds with a portal arch at each end (train vanishes inside)
+  station?: boolean;    // one platform + canopy + cargo crates alongside the track
+  trees?: number;       // lineside trees (purely static dressing)
 }
 
 // ── Multiple-configuration registry (Batch B) ─────────────────────────────

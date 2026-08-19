@@ -16,6 +16,7 @@ import { slugToName, normMac, localToWorld, segCrossesSolidWall, mowerSweepWaypo
          rotPointDeg, floorContentBbox, GRID_MM, rulerSetLength,
          furnitureLocalToWorld, furnitureDef, resolveFurnitureDef, resolveItemGroundMm, STAIRS_MIN_RISE_MM,
          IDENTIFY_TTL_MS, sirenTurnOnData, doorOpenFraction,
+         resolveBgRegion, sanitizeBgScenery, type BgSceneryCounts,
          type LockGlyphState, type RoomTemp, type TempSample,
          type BicycleState } from './geometry.js';
 import { solveHomography, applyHomography } from './homography.js';
@@ -29,7 +30,7 @@ import { buildAlertFeed, alertCenterEnabled, isAlertDomain,
 import { fitGeoTransform, latLonToPlan, clampToBoundary, planBearingDeg, compass8, medianLatLon,
          fmtDistanceM, fmtAccuracyM, projectRecordedPins, parseLatLon, parseLandmarkCsv,
          type GeoTransform, type GeoPair, type LatLonSample, type ProjectedRecordedPin } from './geo.js';
-import type { GeoConfig, GeoLandmark, RecordedPin, GroundKind, DioramaPerson, RobotFixture, ActionButton, Light, ValveFixture, BgTextEntry, BgTextEntryMode } from './types.js';
+import type { GeoConfig, GeoLandmark, RecordedPin, GroundKind, DioramaPerson, RobotFixture, ActionButton, Light, ValveFixture, BgTextEntry, BgTextEntryMode, BgTextRegion } from './types.js';
 import { formatEntityValue } from './value-rules.js';
 
 // ── Bermuda BLE discovery (runtime-only) ──────────────────────────────────
@@ -524,6 +525,13 @@ export type BgTextResolved = {
   // validation, so these pass straight through as authored.
   colorMain?: string; colorDetail?: string;
   bannerBg?: string; bannerText?: string; bannerFrame?: string;
+  // Operating region (train / banner / chopper) — ALREADY SANITIZED by
+  // resolveBgRegion, so the renderer can trust every number. Absent = the
+  // shipped property-anchored path, byte-for-byte.
+  region?: BgTextRegion;
+  // Trackside scenery counts (train only) — already clamped by
+  // sanitizeBgScenery; absent = nothing built.
+  scenery?: BgSceneryCounts;
 };
 
 // Single-source-of-truth Planner. Lit components subscribe via addEventListener.
@@ -2810,6 +2818,22 @@ export class Planner extends EventTarget {
         if (e.bannerBg)    row.bannerBg = e.bannerBg;
         if (e.bannerText)  row.bannerText = e.bannerText;
         if (e.bannerFrame) row.bannerFrame = e.bannerFrame;
+      }
+      // ── Operating region + trackside scenery ────────────────────────────
+      // UNLIKE colours/aircraft (which pass through raw for the renderer to
+      // validate), these are SANITIZED HERE: this is the one path every store —
+      // loaded, imported, undone, or hand-edited — travels before the renderer
+      // sees it, and the region drives geometry (loop radii, orbit centres,
+      // camera far-plane reach) where a NaN would poison the whole scene rather
+      // than falling back to a default silhouette. Garbage → the field is simply
+      // not emitted, i.e. the property-anchored default.
+      if (e.mode === 'train' || e.mode === 'banner' || e.mode === 'chopper') {
+        const reg = resolveBgRegion(e.region);
+        if (reg) row.region = reg;
+      }
+      if (e.mode === 'train') {
+        const sc = sanitizeBgScenery(e.scenery);
+        if (sc) row.scenery = sc;
       }
       if (e.mode === 'grass' && e.faceCamera === false) {
         row.faceCamera = false;

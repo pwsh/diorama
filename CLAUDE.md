@@ -1061,6 +1061,45 @@ Settings ▸ Display. **`Layers2D.bgText`** (absent = ON, label "Background text
   rotor spun fast about Y + tail rotor about X per frame; tows the double-sided banner
   BELOW-and-behind on a tow-line cylinder with trailing sway; orbits OPPOSITE the banner
   plane's direction, higher (~7500 mm), tighter (radius ·0.6), with ±150 mm hover bob.
+**Operating REGION (2026-08-19, user-requested "a user definable circle or square that the
+train can operate in … so the plane can be defined to operate in a specific visual space. Still
+allow for the current method of anchoring off the center of the property")**: `BgTextEntry.region?:
+BgTextRegion` (`{shape 'circle'|'rect', cx, cy, r?, w?, h?, rotationDeg?}`, WORLD/plan mm; modes
+train/banner/chopper only) lifts both vehicles off the floor rect — a track in the backyard, past
+the property line, or far off in the distance. **ABSENT = byte-identical to the property-anchored
+build**, and that is proven the honest way: the golden fixture
+`test-pages/fixtures/bgtext-preregion-golden.json` was captured from the REAL renderer at HEAD via
+`git stash` (loop world+scene+cum+total, consist spacing/wheelR/baseY/per-vehicle poses, 3 banner
+rigs' radius/alt/dir/angle/bob/position, camera triple, across 3 floor rects incl. the <3 m ellipse
+fallback), compared by `JSON.stringify`, negative-controlled at 1e-9 loop and 1e-7 radius drift.
+Pure layer in geometry.ts: `resolveBgRegion` (THE only validation — garbage/NaN → `null` = default;
+clamps size 2 m–2 km, centre ±5 km), `bgRegionInscribedR`, `bgRegionReachMm`, `sanitizeBgScenery`,
+and **`bgTextExtraKey(e)` — the ONE extension point for `_keyBgText`** (three-view calls it; that
+key deliberately carries NO configRev, so a new build input not in the hash never rebuilds).
+Sanitization lives in `Planner.bgTextsResolved()`, NOT the UI — there is no `setBgTexts`; modals
+mutate `store.bgTexts` directly, so the resolver is the choke point every renderer read, import and
+undo passes through. Orbit radius normalizes by `BG_ORBIT_FACTOR_MAX` so the 0.85/1.0/1.15 spread
+survives as a RATIO with the widest ring landing ON the boundary (face-value factors would push
+1.15 outside a rect region). **Altitude deliberately does NOT follow the region** — it stays AGL off
+`_yardGroundY()`; a region is a plan footprint and there is no terrain past the property, so the
+surroundings grade is the only honest datum. **FRUSTUM (real bug found here)**: bg-text recorded no
+reach, so at stock `far` 150000 (measured FROM THE CAMERA) a ~400 m region's track fell outside the
+frustum and the train silently VANISHED. `_recordFrustumReq` gained a third source `'bgtext'`,
+recorded ONLY when it exceeds stock via a DERIVED condition (`CAM_MAXDIST_DEFAULT + 1.25·reach +
+30000 > CAM_FAR_DEFAULT`, never a tuned number) so a back-garden region leaves the load-bearing
+stock triple restored strict `===`; widens far/near only, NEVER `controls.maxDistance` (the flights
+asymmetry — a decorative prop must not change zoom feel).
+**Train SCENERY** (`BgTextEntry.scenery?: BgTrainScenery` = `{crossings?, signals?, tunnels?,
+trees?, station?}`, train only, caps 4/6/2/24, all-zero → null): crossings (road slab + masts +
+boom pivots + 4 antiphase lamps), signal masts (red-in-block/green-clear), segmented tunnels with
+stone portals (the consist genuinely disappears inside), station (platform/canopy/crates/buffer),
+lineside trees. Placed by ARC LENGTH on the loop so they follow a region change for free;
+deterministic (mulberry32 over `_hashStr(entryId)` — no `Math.random` in a builder that reruns
+under a dirty key); gate blends use the `grassYaw` idiom (`undefined` = snap) seeded in
+`_seedBgPhase` so a rebuild lands in the pose the RESUMED lap demands. `_buildTrainScenery`'s
+`place(s, lat)` (yaw to tangent, +X = outward from the loop centroid) is the general trackside-prop
+primitive. 2D `drawBgTextRegions` (canvas-render) draws a dashed footprint + centre tick, EDIT MODE
+ONLY, riding the `bgText` layer.
 Settings ▸ Display "Background text" is a 6-entry list editor (mode/static/entity/maxCars/
 delete + "+ Add"). Test pages: `bgtext-test.html` (29/29, legacy wrapper) +
 `bgtext-multi-test.html` (`BGTEXTMULTI PASS 373/373`).

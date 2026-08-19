@@ -13,7 +13,8 @@ import { parseNowPlaying, isMediaPlayerId } from '../geometry.js';
 import { robotProgress } from '../geometry.js';
 import { poolWaterColor } from '../geometry.js';
 import { floorsUnionCenter, resolvePivotMode } from '../geometry.js';
-import { floorElevationMm, voidDepthBelowMm, resolveGroundLevelMm, bgGroundInkKey } from '../geometry.js';
+import { floorElevationMm, voidDepthBelowMm, resolveGroundLevelMm, bgGroundInkKey,
+         bgTextExtraKey } from '../geometry.js';
 import { resolveScreenContent } from '../surfaces.js';
 import { resolveScenePreset, resolveTimeBucket } from '../time-of-day.js';
 import {
@@ -2044,7 +2045,13 @@ export class ThreeView extends LitElement {
               + `:${e.faceCamera === false ? 'f' : ''}:${e.rotationDeg ?? ''}`
               + `:${e.colorMain ?? ''}:${e.colorDetail ?? ''}`
               + `:${e.bannerBg ?? ''}:${e.bannerText ?? ''}:${e.bannerFrame ?? ''}`
-              + (e.mode === 'grass' ? `:${bgGroundKey}` : '');
+              + (e.mode === 'grass' ? `:${bgGroundKey}` : '')
+              // ONE extension point for every LATER bg-text build input (the
+              // operating region + trackside scenery today, road vehicles next),
+              // so this template stops having to grow. Returns '' for an entry
+              // that uses none of them, which keeps its key term byte-identical
+              // to the pre-region build — and the key still carries NO configRev.
+              + bgTextExtraKey(e);
           }).join('|');
       if (keyBgText !== this._keyBgText) {
         this._keyBgText = keyBgText;

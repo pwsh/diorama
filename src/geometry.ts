@@ -3,7 +3,8 @@
 import type { Vec2, Sensor, BgImage, LightIconKind, FurnitureKind, EnvKind, WallKind,
   ActivityKind, ObjectRecipe, Furniture, Room, Floor, SafetyKind, GroundKind, GroundArea,
   InfoCard, InfoCardMount, ActionKind, SprinklerHeadKind, Pool,
-  Wall, Ruler, RulerEnd, DoorKind, WindowKind, FloorTexKind, OutdoorArea } from './types.js';
+  Wall, Ruler, RulerEnd, DoorKind, WindowKind, FloorTexKind, OutdoorArea,
+  BgTextRegion, BgRegionShape, BgTrainScenery } from './types.js';
 import { formatEntityValue, formatClock, evalRules, ruleMatches, relTimeText,
   type HassStateLike, type ClockMode, type ValueRule } from './value-rules.js';
 // Vehicle model packs (pure, three-free). vehicles.ts imports NOTHING at runtime
@@ -3269,6 +3270,134 @@ export function bgGroundInkKey(
   }
   return `${floor.yardFill ?? '-'};${parts.join(',')}`;
 }
+
+// ── Background-text OPERATING REGION (BgTextEntry.region) ──────────────────
+// The user-definable circle / rectangle a message TRAIN drives and a BANNER
+// aircraft orbits inside (world/plan mm). ABSENT is the whole contract: a null
+// region means "anchor off the property", which is the shipped behaviour, so
+// every consumer must branch on null and leave its old code path untouched.
+//
+// These clamps are the ONLY validation — the settings UI writes through the
+// store like everything else, and an IMPORTED store never went near the UI, so
+// resolveBgRegion() is where an authored value becomes trustworthy. It is
+// pure/total: any non-finite number, any missing size, any shape string it does
+// not know → null (the property-anchored fallback), never NaN.
+//
+// Sizes: 2 m is the smallest track a 1.8×-scaled toy consist can meaningfully
+// occupy; 2 km is a generous "off in the distance" ceiling that still sits well
+// inside the camera far-plane ceiling once the renderer records its reach
+// (see _recordFrustumReq('bgtext', …) — a region past the stock 150 m far plane
+// WOULD otherwise be silently clipped away). The centre clamp is deliberately
+// larger than the size clamp so a small track can still be placed far out.
+export const BG_REGION_MIN_MM = 2000;
+export const BG_REGION_MAX_MM = 2_000_000;
+export const BG_REGION_MAX_CENTRE_MM = 5_000_000;
+
+export function resolveBgRegion(v: unknown): BgTextRegion | null {
+  if (!v || typeof v !== 'object') return null;
+  const r = v as Record<string, unknown>;
+  const num = (x: unknown): number | null =>
+    typeof x === 'number' && isFinite(x) ? x : null;
+  const cx = num(r.cx), cy = num(r.cy);
+  if (cx == null || cy == null) return null;
+  const clampC = (x: number) =>
+    Math.max(-BG_REGION_MAX_CENTRE_MM, Math.min(BG_REGION_MAX_CENTRE_MM, x));
+  const size = (x: number) => Math.max(BG_REGION_MIN_MM, Math.min(BG_REGION_MAX_MM, x));
+  const shape: BgRegionShape = r.shape === 'rect' ? 'rect' : 'circle';
+  const rr = num(r.r), rw = num(r.w), rh = num(r.h);
+  if (shape === 'rect') {
+    // A rect wants w/h; a row that only carries a radius (a shape flip in the
+    // UI, a hand-edited config) squares up on it rather than being dropped.
+    const w = rw != null && rw > 0 ? rw : rr != null && rr > 0 ? rr * 2 : null;
+    const h = rh != null && rh > 0 ? rh : rr != null && rr > 0 ? rr * 2 : null;
+    if (w == null || h == null) return null;
+    const rot = num(r.rotationDeg);
+    return {
+      shape: 'rect', cx: clampC(cx), cy: clampC(cy), w: size(w), h: size(h),
+      ...(rot != null && rot !== 0 ? { rotationDeg: rot } : {}),
+    };
+  }
+  const rad = rr != null && rr > 0 ? rr
+    : rw != null && rw > 0 && rh != null && rh > 0 ? Math.min(rw, rh) / 2 : null;
+  if (rad == null) return null;
+  return { shape: 'circle', cx: clampC(cx), cy: clampC(cy), r: size(rad) };
+}
+
+// The region's INSCRIBED radius (mm) — the largest circle that fits inside it,
+// which is what the banner orbit is sized from ("radius from the circle radius
+// or derived from the rect"). Rect rotation is irrelevant to an inscribed
+// circle, so it is deliberately not read here.
+export function bgRegionInscribedR(reg: BgTextRegion): number {
+  return reg.shape === 'rect'
+    ? Math.min(reg.w ?? BG_REGION_MIN_MM, reg.h ?? BG_REGION_MIN_MM) / 2
+    : (reg.r ?? BG_REGION_MIN_MM);
+}
+
+// How far from the PLAN ORIGIN the region's content reaches (mm). Feeds the
+// renderer's camera far-plane requirement — without it a region placed a few
+// hundred metres out is drawn beyond the stock 150,000 mm far plane and the
+// train just silently vanishes. Uses the circumscribed extent (half-diagonal
+// for a rect) so a rotated rect is covered at any angle. `originX/Y` default to
+// the plan origin; the renderer passes the FLOOR CENTRE, because that is what
+// `_w` maps to the scene origin the frustum requirement is measured from.
+export function bgRegionReachMm(reg: BgTextRegion, originX = 0, originY = 0): number {
+  const half = reg.shape === 'rect'
+    ? Math.hypot(reg.w ?? 0, reg.h ?? 0) / 2
+    : (reg.r ?? 0);
+  return Math.hypot(reg.cx - originX, reg.cy - originY) + half;
+}
+
+// ── Trackside scenery (BgTextEntry.scenery) ────────────────────────────────
+// Sanitized counts. Returns null when NOTHING is requested, so the renderer's
+// "no scenery" branch is the same object-identity check as "field absent" and a
+// train that never used this builds byte-identically.
+export const BG_SCENERY_CAPS = { crossings: 4, signals: 6, tunnels: 2, trees: 24 } as const;
+export type BgSceneryCounts =
+  { crossings: number; signals: number; tunnels: number; trees: number; station: boolean };
+
+export function sanitizeBgScenery(v: unknown): BgSceneryCounts | null {
+  if (!v || typeof v !== 'object') return null;
+  const s = v as Record<string, unknown>;
+  const cnt = (x: unknown, cap: number) => {
+    const n = typeof x === 'number' && isFinite(x) ? Math.round(x) : 0;
+    return Math.max(0, Math.min(cap, n));
+  };
+  const out: BgSceneryCounts = {
+    crossings: cnt(s.crossings, BG_SCENERY_CAPS.crossings),
+    signals:   cnt(s.signals,   BG_SCENERY_CAPS.signals),
+    tunnels:   cnt(s.tunnels,   BG_SCENERY_CAPS.tunnels),
+    trees:     cnt(s.trees,     BG_SCENERY_CAPS.trees),
+    station:   s.station === true,
+  };
+  const any = out.crossings || out.signals || out.tunnels || out.trees || out.station;
+  return any ? out : null;
+}
+
+// ── _keyBgText EXTENSION TERM ──────────────────────────────────────────────
+// three-view's _keyBgText hashes each resolved entry field-by-field and
+// deliberately carries NO configRev, so anything new a bg-text rig CONSUMES has
+// to be folded into that string explicitly or the rig never rebuilds when it
+// changes. Rather than growing that inline template every time, three-view
+// appends ONE call to this function; new bg-text build inputs (the road-vehicle
+// work that follows this one included) extend it HERE.
+//
+// ABSENT-IS-BYTE-IDENTICAL: with neither region nor scenery this returns the
+// empty string, so an untouched entry's key term is exactly what it was before
+// the region shipped. Rounded to 10 mm / whole degrees — sub-centimetre drift in
+// a hand-edited config must not thrash a rebuild.
+export function bgTextExtraKey(e: { region?: BgTextRegion; scenery?: BgTrainScenery }): string {
+  const reg = resolveBgRegion(e.region);
+  const sc = sanitizeBgScenery(e.scenery);
+  if (!reg && !sc) return '';
+  const q = (v: number | undefined) => (v == null ? '' : Math.round(v / 10));
+  const rk = reg
+    ? `${reg.shape},${q(reg.cx)},${q(reg.cy)},${q(reg.r)},${q(reg.w)},${q(reg.h)},`
+      + `${Math.round(reg.rotationDeg ?? 0)}`
+    : '';
+  const sk = sc ? `${sc.crossings},${sc.signals},${sc.tunnels},${sc.trees},${sc.station ? 1 : 0}` : '';
+  return `${rk};${sk}`;
+}
+
 export function groundKindLabel(k: GroundKind): string { return GROUND_KINDS[k]?.label ?? k; }
 export function groundAreaColor(g: { kind: GroundKind }): string { return GROUND_KINDS[g.kind]?.color ?? '#4c7a34'; }
 

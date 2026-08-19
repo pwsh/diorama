@@ -2960,6 +2960,124 @@ export class SettingsDrawer extends LitElement {
         ${colorRow(e, 'bannerFrame', 'Banner frame', d.bannerFrame,
           `Edge trim stripes framing the ${surface}.`)}`;
     };
+    // ── Operating region (train / banner) ────────────────────────────────
+    // Numeric shape + centre + size, in world/plan mm — the same frame the
+    // floor rect and every placeable use. Deliberately NOT a canvas draw latch:
+    // arming one would mean owning a placement branch in canvas-interact, and
+    // the pieces that make a numeric editor workable are cheap here — a "Use
+    // view centre" button that drops the region where the user is already
+    // looking, and the dashed edit-mode outline the 2D plan draws for it.
+    //
+    // "Property (default)" writes `undefined`, so an entry that never chose a
+    // region serializes exactly like a pre-feature one and the renderer keeps
+    // its shipped property-anchored path.
+    const regionNum = (e: BgTextEntry, label: string, title: string,
+                       get: () => number | undefined, set: (v: number | undefined) => void,
+                       step = 500) => html`
+      <div class="row" style="margin-top:2px">
+        <label title=${title}>${label}</label>
+        <input type="number" step=${step} style="width:84px"
+               .value=${get() == null ? '' : String(Math.round(get()!))}
+               @change=${(ev: Event) => upd(() => {
+                 const raw = (ev.target as HTMLInputElement).value.trim();
+                 const v = Number(raw);
+                 set(raw === '' || !isFinite(v) ? undefined : v);
+               })}>
+      </div>`;
+    const regionBlock = (e: BgTextEntry) => {
+      if (e.mode !== 'train' && e.mode !== 'banner' && e.mode !== 'chopper') return nothing;
+      const reg = e.region;
+      const kind = !reg ? '' : (reg.shape === 'rect' ? 'rect' : 'circle');
+      // Sensible starting geometry when a shape is first picked: a ring big
+      // enough to hold the shipped consist, centred on the plan.
+      const f = p.floor();
+      const seedR = Math.max(6000, Math.round(Math.hypot(f.w, f.d) * 0.6));
+      const mut = (fn: (r: NonNullable<BgTextEntry['region']>) => void) => upd(() => {
+        if (!e.region) return;
+        fn(e.region);
+      });
+      return html`
+        <div class="row" style="margin-top:4px">
+          <label title="Where this vehicle operates. 'Property' keeps the shipped behaviour — the train circles just outside the floor rect and the aircraft orbits the plan centre. A circle or rectangle instead pins it to any spot on the plan: a backyard loop, a track past the property line, or a message running far off in the distance.">Operating area</label>
+          <select style="flex:1;min-width:0"
+                  @change=${(ev: Event) => upd(() => {
+                    const v = (ev.target as HTMLSelectElement).value;
+                    if (!v) { e.region = undefined; return; }
+                    const cx = Math.round(e.region?.cx ?? f.w / 2);
+                    const cy = Math.round(e.region?.cy ?? f.d / 2);
+                    e.region = v === 'rect'
+                      ? { shape: 'rect', cx, cy, w: e.region?.w ?? seedR * 2, h: e.region?.h ?? seedR * 2,
+                          ...(e.region?.rotationDeg ? { rotationDeg: e.region.rotationDeg } : {}) }
+                      : { shape: 'circle', cx, cy, r: e.region?.r ?? seedR };
+                  })}>
+            <option value="" ?selected=${!kind}>Property (default)</option>
+            <option value="circle" ?selected=${kind === 'circle'}>Circle</option>
+            <option value="rect" ?selected=${kind === 'rect'}>Rectangle</option>
+          </select>
+        </div>
+        ${!reg ? nothing : html`
+          ${regionNum(e, 'Centre X (mm)', 'Region centre, world/plan millimetres — the same frame the floor rect uses.',
+            () => reg.cx, v => mut(r => { r.cx = v ?? 0; }))}
+          ${regionNum(e, 'Centre Y (mm)', 'Region centre, world/plan millimetres. Larger Y is up in the 2D plan.',
+            () => reg.cy, v => mut(r => { r.cy = v ?? 0; }))}
+          ${reg.shape === 'rect' ? html`
+            ${regionNum(e, 'Width (mm)', 'Rectangle width before rotation (2 m – 2 km).',
+              () => reg.w, v => mut(r => { r.w = v ?? seedR * 2; }))}
+            ${regionNum(e, 'Depth (mm)', 'Rectangle depth before rotation (2 m – 2 km).',
+              () => reg.h, v => mut(r => { r.h = v ?? seedR * 2; }))}
+            ${regionNum(e, 'Rotation (°)', 'Rectangle rotation. 0° is axis-aligned; increasing values turn it clockwise on screen.',
+              () => reg.rotationDeg ?? 0, v => mut(r => { r.rotationDeg = v || undefined; }), 5)}`
+            : regionNum(e, 'Radius (mm)', 'Circle radius (2 m – 2 km). The train runs on this circle; a banner aircraft orbits inside it.',
+              () => reg.r, v => mut(r => { r.r = v ?? seedR; }))}
+          <div class="row" style="margin-top:2px">
+            <button class="btn" style="font-size:10px;padding:2px 6px"
+                    title="Move the region to whatever the 2D plan is currently centred on — pan to the spot you want, then click."
+                    @click=${() => mut(r => {
+                      const c = p.viewCenter ?? { x: f.w / 2, y: f.d / 2 };
+                      r.cx = Math.round(c.x); r.cy = Math.round(c.y);
+                    })}>Use view centre</button>
+            <span style="font-size:10px;color:var(--text-dim);margin-left:6px">Shown dashed on the 2D plan while editing.</span>
+          </div>`}`;
+    };
+    // ── Trackside scenery (train only) ───────────────────────────────────
+    // Counts, not placements: the renderer spreads each family evenly along the
+    // loop by arc length, so the dressing follows an operating-region change
+    // with nothing to re-author. All-zero = nothing built.
+    const sceneryBlock = (e: BgTextEntry) => {
+      if (e.mode !== 'train') return nothing;
+      const sc = e.scenery;
+      const count = (label: string, key: 'crossings' | 'signals' | 'tunnels' | 'trees',
+                     max: number, title: string) => html`
+        <div class="row" style="margin-top:2px">
+          <label title=${title}>${label}</label>
+          <input type="number" min="0" max=${max} step="1" style="width:64px"
+                 .value=${String(sc?.[key] ?? 0)}
+                 @change=${(ev: Event) => upd(() => {
+                   const v = Math.round(Number((ev.target as HTMLInputElement).value));
+                   const n = isFinite(v) ? Math.max(0, Math.min(max, v)) : 0;
+                   const next = { ...(e.scenery ?? {}), [key]: n || undefined };
+                   e.scenery = Object.values(next).some(x => x) ? next : undefined;
+                 })}>
+        </div>`;
+      return html`
+        <div style="border-top:1px dashed var(--border);margin-top:5px;padding-top:4px">
+          <div class="row"><label style="font-weight:600"
+            title="Optional props dressing the track. Placed evenly along the loop, so they follow the operating area automatically.">Trackside scenery</label></div>
+          ${count('Level crossings', 'crossings', 4, 'Road crossings whose booms drop and lamps flash as the train approaches, then lift once it has passed.')}
+          ${count('Signal masts', 'signals', 6, 'Trackside signals — red while the train is in the block ahead, green once it is clear.')}
+          ${count('Tunnels', 'tunnels', 2, 'Grassy mounds with a stone portal at each end. The train disappears inside and comes out the far side.')}
+          ${count('Lineside trees', 'trees', 24, 'Static trees scattered along both sides of the track.')}
+          <div class="row" style="margin-top:2px">
+            <label title="A platform with a canopy and a few cargo crates, alongside the outside of the loop.">Station</label>
+            <input type="checkbox" .checked=${e.scenery?.station === true}
+                   @change=${(ev: Event) => upd(() => {
+                     const on = (ev.target as HTMLInputElement).checked;
+                     const next = { ...(e.scenery ?? {}), station: on || undefined };
+                     e.scenery = Object.values(next).some(x => x) ? next : undefined;
+                   })}>
+          </div>
+        </div>`;
+    };
     const row = (e: BgTextEntry, idx: number) => {
       const cur = resolved.get(e.id);
       return html`
@@ -3046,6 +3164,8 @@ export class SettingsDrawer extends LitElement {
                      e.scale = n === 1 ? undefined : n;
                    })}>
           </div>
+          ${regionBlock(e)}
+          ${sceneryBlock(e)}
           ${colorRows(e)}
           ${e.mode === 'grass' ? html`
             <div class="row" style="margin-top:2px">

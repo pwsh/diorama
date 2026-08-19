@@ -4,7 +4,7 @@ import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import { MTLLoader } from 'three/examples/jsm/loaders/MTLLoader.js';
 import type {
   Floor, Sensor, Light, SwitchFixture, MotionSensor, Vec2, HassState, Wall,
-  Scene3D, ScenePreset, FloorTexKind, GroundKind, GroundArea, Model3D, Furniture, AvatarKind, WeatherEffectKey, BgTextMode, BgTextEntryMode,
+  Scene3D, ScenePreset, FloorTexKind, GroundKind, GroundArea, Model3D, Furniture, AvatarKind, WeatherEffectKey, BgTextMode, BgTextEntryMode, BgTextRegion,
   Room,
 } from './types.js';
 import {
@@ -45,6 +45,7 @@ import {
   infoCardW, infoCardH,
   logicLightState, actionButtonHeight, actionButtonSize, actionButtonColor, ACTION_BUTTON_DEFAULTS,
   STORY_H_MM, resolveGroundLevelMm,
+  bgRegionInscribedR, bgRegionReachMm, BG_REGION_MIN_MM, type BgSceneryCounts,
 } from './geometry.js';
 import { ALERT_BEACON_DEFAULTS, alertBeaconState, alertBeaconColor, alertBeaconAlarming, isAlertDomain } from './alerts.js';
 import { northMarkerPos } from './compass.js';
@@ -712,7 +713,27 @@ interface BgTrain {
   s: number;                                // engine arc position (mm, wraps at total)
   chunks: string[];                         // per-car message chunks (test hook)
   baseY: number;                            // rail height = the surroundings grade (Scene3D.groundLevelMm)
+  scenery?: BgScenery;                      // opt-in trackside dressing (absent = none built)
 }
+// One animated level crossing: the boom arms drop and the lamps flash as the
+// consist nears, then lift once it has passed. `blend` is the eased 0..1 state
+// (undefined = "first advance snaps", the grassYaw idiom) and lives ON the rig,
+// so a _keyBgText rebuild re-acquires the correct pose from the RESUMED train
+// arc position instead of animating in from wherever it was.
+interface BgCrossing {
+  s: number;                       // arc position on the loop (mm)
+  arms: THREE.Object3D[];          // boom pivots (rotate about their own local Z)
+  lamps: THREE.Mesh[];             // the two flashing lamps (alternating emissive)
+  blend?: number;
+}
+// One trackside signal mast: red while the consist is inside its block, green
+// when clear. Same eased-blend machinery as a crossing, no moving parts.
+interface BgSignal { s: number; red: THREE.Mesh; green: THREE.Mesh; blend?: number; }
+// Everything a train entry's `scenery` counts built. Static props (tunnels,
+// station, trees) live in _bgTextGroup and need no per-frame state at all — only
+// the two ANIMATED families are tracked here, so _advanceTrainScenery iterates
+// nothing when a train asked for none of them.
+interface BgScenery { crossings: BgCrossing[]; signals: BgSignal[]; }
 // PERSISTENT per-entry animation phase (the _fanSpin / _applianceDoorBlend
 // idiom). A rebuild of _bgTextGroup — a text edit, a storm flip, a floor
 // switch — must not teleport a plane back to its build angle or restart the
@@ -750,6 +771,11 @@ interface BgRig {
   banner?: THREE.Object3D;                  // trailing/hanging text plane (Group: 2 FrontSide planes)
   angle?: number; radius?: number; alt?: number; dir?: number;
   bobAmp?: number; propRate?: number;
+  // Orbit CENTRE in SCENE coords. 0/0 (the plan centre — `_w` maps it to the
+  // scene origin) is the shipped property-anchored orbit; a non-zero pair means
+  // the entry named an operating region and the whole circle moved there. Read
+  // additively in _advanceBgAircraft, so absent/0 is byte-identical.
+  orbitCx?: number; orbitCz?: number;
   // grass (ground writing)
   grass?: { cx: number; cy: number; w: number; h: number };
   grassMesh?: THREE.Mesh;                    // the decal mesh (test hook + texture read)
@@ -787,6 +813,18 @@ type BgGrassArea = {
 // the hinge corner, not on the leaf) has no such constraint and always shows.
 const GARAGE_LOCK_MAX_FRAC = 0.6;
 const BG_SCALE_MIN = 0.5, BG_SCALE_MAX = 5;
+// The largest of the three per-entry banner-orbit radius factors (0.85 / 1.0 /
+// 1.15). Used ONLY on the region path, to normalize the spread so the widest
+// ring touches the region boundary rather than spilling past it.
+const BG_ORBIT_FACTOR_MAX = 1.15;
+// Trackside-scenery trigger windows, in ARC LENGTH along the loop (mm) — the
+// train runs at 1100 mm/s, so 9000 mm of lead ≈ 8 s of warning, which reads as a
+// crossing doing its job rather than snapping shut under the engine.
+const BG_GATE_LEAD_MM = 9000;      // booms start dropping this far ahead of the engine
+const BG_GATE_TAIL_MM = 2600;      // …and lift this far after the last car clears
+const BG_GATE_TAU_S = 0.45;        // boom raise/lower ease (both directions, one k)
+const BG_GATE_FLASH_HZ = 1.1;      // crossing-lamp alternation
+const BG_SIGNAL_BLOCK_MM = 16000;  // a signal shows red this far before the train
 function bgModelScale(v: unknown): number {
   const n = typeof v === 'number' ? v : NaN;
   if (!isFinite(n) || n <= 0) return 1;
@@ -4458,13 +4496,27 @@ export class ThreeDRenderer {
   // house and reads fine from the normal orbit range, and stretching the zoom
   // range whenever a plane flies over would change the feel of the scene for a
   // transient. Flights therefore widen far/near ONLY.
+  //
+  // THIRD SOURCE, 'bgtext': a background-text OPERATING REGION. Placing a train
+  // track or a banner orbit "off in the distance" is the explicit point of that
+  // feature, and content past the stock 150,000 mm far plane is simply CLIPPED
+  // AWAY — the train would vanish with no diagnostic at all. So the region's
+  // reach is recorded here too. Like flights (and unlike the neighborhood) it
+  // widens far/near ONLY: a decorative prop must not permanently change how far
+  // the user can zoom out. Also like flights, it is recorded only when it
+  // actually EXCEEDS what the stock frustum already covers, so a region placed
+  // in the back garden leaves the stock triple in place (see updateBgTexts).
   private _frustumReqNbhd: number | null = null;
   private _frustumReqFlights: number | null = null;
-  private _recordFrustumReq(src: 'nbhd' | 'flights', requiredMm: number | null): void {
+  private _frustumReqBgText: number | null = null;
+  private _recordFrustumReq(src: 'nbhd' | 'flights' | 'bgtext', requiredMm: number | null): void {
     const v = requiredMm != null && isFinite(requiredMm) && requiredMm > 0 ? requiredMm : null;
-    if (src === 'nbhd') this._frustumReqNbhd = v; else this._frustumReqFlights = v;
-    const n = this._frustumReqNbhd, f = this._frustumReqFlights;
-    const eff = n == null ? f : f == null ? n : Math.max(n, f);
+    if (src === 'nbhd') this._frustumReqNbhd = v;
+    else if (src === 'flights') this._frustumReqFlights = v;
+    else this._frustumReqBgText = v;
+    const n = this._frustumReqNbhd, f = this._frustumReqFlights, b = this._frustumReqBgText;
+    let eff: number | null = null;
+    for (const x of [n, f, b]) if (x != null) eff = eff == null ? x : Math.max(eff, x);
     this._applyFrustumForRange(eff, n);
   }
 
@@ -15746,6 +15798,14 @@ export class ThreeDRenderer {
                   // as authored, so a stale planner simply sends none.
                   colorMain?: string; colorDetail?: string;
                   bannerBg?: string; bannerText?: string; bannerFrame?: string;
+                  // Operating region (train / banner / chopper) + trackside
+                  // scenery counts (train). Both OPTIONAL and both ALREADY
+                  // SANITIZED by the planner (resolveBgRegion / sanitizeBgScenery)
+                  // — unlike the colour + craft fields, these drive geometry and
+                  // the camera far plane, so a NaN must never get this far. A
+                  // stale planner simply sends neither and every rig builds
+                  // exactly as it always did.
+                  region?: BgTextRegion; scenery?: BgSceneryCounts;
                 }[],
                 storm: boolean, windRad = 0, windKmh = 0,
                 // Ground context for AUTO-placed ground writing: the surface
@@ -15766,6 +15826,25 @@ export class ThreeDRenderer {
     this._bgBannerRadius = 0; this._bgGrassInfo = null;
     this._bgWindRad = isFinite(windRad) ? windRad : 0;
     this._bgWindKmh = isFinite(windKmh) ? windKmh : 0;
+    // ── Camera reach for OPERATING REGIONS ───────────────────────────────────
+    // A region can be placed hundreds of metres out; the stock far plane is
+    // 150,000 mm measured FROM THE CAMERA, so distant content is clipped and the
+    // train "silently vanishes". Record the worst-case reach from the SCENE
+    // origin (= the plan centre, per `_w`) so _updateDynamicFrustum can track it.
+    //
+    // Recorded ONLY when it exceeds what the stock frustum already reaches — the
+    // condition is DERIVED from the same formula _updateDynamicFrustum uses at
+    // the furthest stock orbit distance, not tuned — so a back-garden region
+    // leaves the load-bearing stock triple (near 10 / far 150000 / maxDistance
+    // 45000) restored EXACTLY, and only a genuinely distant one widens it.
+    let bgReach: number | null = null;
+    for (const e of (entries ?? [])) {
+      if (!e.region) continue;
+      const reach = bgRegionReachMm(e.region, this._fw / 2, this._fd / 2);
+      if (CAM_MAXDIST_DEFAULT + CAM_FAR_REACH_FACTOR * reach + CAM_FAR_MARGIN <= CAM_FAR_DEFAULT) continue;
+      if (bgReach == null || reach > bgReach) bgReach = reach;
+    }
+    this._recordFrustumReq('bgtext', bgReach);
     if (!entries || entries.length === 0) return;
     const list = entries.slice(0, 6);
     const n = list.length;
@@ -15796,7 +15875,7 @@ export class ThreeDRenderer {
       // so every one of those degrades to the toy plane instead of erroring.
       else if (e.mode === 'banner')  rig = this._buildBgAircraft(text, i, n, diag, sc,
                                                                  bgArchetype(e.aircraft), bgCraft(e.aircraft), col,
-                                                                 bannerVehicleDef(e.aircraft));
+                                                                 bannerVehicleDef(e.aircraft), e.region ?? null);
       // STALE-STORE TOLERANCE: `chopper` stopped being a mode when the craft
       // roster landed (_migrateBgTexts rewrites it to banner + news_chopper on
       // every load / import / undo). A raw row that reaches the renderer before
@@ -15806,10 +15885,11 @@ export class ThreeDRenderer {
       // carries came from the old archetype-only dropdown and would silently
       // change a news chopper into an airliner).
       else if (e.mode === 'chopper') rig = this._buildBgAircraft(text, i, n, diag, sc,
-                                                                 null, 'news_chopper', col);
+                                                                 null, 'news_chopper', col, null, e.region ?? null);
       else if (e.mode === 'grass')   rig = this._buildBgGrass(text, i, grassSlot++, e.grassArea, sc,
                                                               bgGroundFixedYaw(e.faceCamera, e.rotationDeg));
-      else if (e.mode === 'train')   rig = this._buildBgTrain(text, i, e.maxCars, sc, col);
+      else if (e.mode === 'train')   rig = this._buildBgTrain(text, i, e.maxCars, sc, col,
+                                                              e.region ?? null, e.scenery ?? null, e.id);
       if (rig) {
         // Resume where this entry left off (a FRESH id starts at its build
         // stagger, exactly as before).
@@ -15906,7 +15986,8 @@ export class ThreeDRenderer {
                            archetype: AircraftArchetype | null = null,
                            craft: BgCraftId | null = null,
                            col: BgColors = {},
-                           vehicle: VehicleModelDef | null = null): BgRig {
+                           vehicle: VehicleModelDef | null = null,
+                           region: BgTextRegion | null = null): BgRig {
     // An entry names at most ONE family; an archetype wins if several somehow
     // resolve (they cannot — archetype ids, BG_CRAFTS keys and namespaced
     // '<pack>/<member>' vehicle ids are three disjoint id spaces).
@@ -15915,8 +15996,22 @@ export class ThreeDRenderer {
     const useVehicle = !archetype && !craft ? vehicle : null;
     const isChopper = spec?.chopper === true;
     let asm = new THREE.Group();
-    const baseR = Math.max(6000, diag * 0.75);
     const factor = 1 + 0.15 * ((i % 3) - 1);            // 0.85 / 1.0 / 1.15
+    // ── Orbit SIZE + CENTRE (the region contract) ────────────────────────────
+    // region == null (default, byte-for-byte the shipped orbit): radius base is
+    // the floor diagonal, centred on the plan centre — which `_w` maps to the
+    // scene ORIGIN, hence the 0/0 centre the advance adds.
+    //
+    // region present: the orbit moves wholesale into the region. Its base is the
+    // region's INSCRIBED radius divided by BG_ORBIT_FACTOR_MAX, so the per-entry
+    // 0.85 / 1.0 / 1.15 spread is preserved EXACTLY as a ratio while the widest
+    // ring lands on the region boundary instead of overflowing it — the point of
+    // naming an operating space is that the aircraft stays inside it.
+    const baseR = region
+      ? bgRegionInscribedR(region) / BG_ORBIT_FACTOR_MAX
+      : Math.max(6000, diag * 0.75);
+    const oc = region ? this._w(region.cx, region.cy, 0) : null;
+    const orbitCx = oc ? oc.x : 0, orbitCz = oc ? oc.z : 0;
     const angle = i * (Math.PI * 2 / Math.max(1, n));   // spread evenly
     // Shared trailing banner (broadside: base normal = local ±X via the Group's
     // rotation.y=π/2). Two FrontSide planes back-to-back so the text reads
@@ -16071,6 +16166,7 @@ export class ThreeDRenderer {
     return {
       mode: 'banner', index: i, asm, prop, props, rotorY, newsChopper: isChopper,
       tailRotor, towWire, banner, angle, radius, alt, dir, bobAmp, propRate,
+      orbitCx, orbitCz,
     };
   }
 
@@ -17052,7 +17148,10 @@ export class ThreeDRenderer {
   // `detail` = the dark trim (roof / chimney / cowcatcher / wheels) AND the
   // darker last car, bg/text/frame = the flank text plates. Absent = shipped.
   private _buildBgTrain(text: string, i: number, maxCars?: number, sc = 1,
-                        col: BgColors = {}): BgRig {
+                        col: BgColors = {},
+                        region: BgTextRegion | null = null,
+                        scenery: BgSceneryCounts | null = null,
+                        entryId = ''): BgRig {
     const CHARS_PER_CAR = 6;
     const mc = Math.min(12, Math.max(2, Math.round(maxCars ?? 8)));
     const N = Math.min(mc, Math.max(1, Math.ceil(text.length / CHARS_PER_CAR)));
@@ -17061,7 +17160,7 @@ export class ThreeDRenderer {
     for (let k = 0; k < N; k++) {
       chunks.push(text.slice(k * chunkLen, (k + 1) * chunkLen).padEnd(chunkLen, ' '));
     }
-    const loop = this._buildTrainLoop();
+    const loop = this._buildTrainLoop(region);
     const vehicles: BgTrainVehicle[] = [];
     vehicles.push(this._buildTrainEngine(col));
     for (let k = 0; k < N; k++) {
@@ -17081,13 +17180,281 @@ export class ThreeDRenderer {
     const train: BgTrain = {
       loopScene: loop.loopScene, loopWorld: loop.loopWorld, cum: loop.cum, total: loop.total,
       vehicles, spacing: 1480 * sc, wheelR: 162 * sc, s: 0, chunks,
-      // The loop runs ~1800 mm OUTSIDE the floor rect — always in the yard — so
-      // the whole consist rides the surroundings grade. Per-frame car posing
+      // The DEFAULT loop runs ~1800 mm OUTSIDE the floor rect — always in the
+      // yard — so the whole consist rides the surroundings grade. A REGION loop
+      // rides the same grade: the region is a plan-space footprint, and the
+      // surroundings grade is the one honest ground datum outside the slab
+      // (there is no terrain sampling past the property). Per-frame car posing
       // (_positionTrain) composes on top of this base.
       baseY: this._yardGroundY(),
     };
+    // Trackside dressing (opt-in). Placed by ARC LENGTH on the loop just built,
+    // so it follows a region change for free. Skipped entirely when the entry
+    // asked for none — an untouched train builds exactly what it always did.
+    // The "any of it requested" test mirrors sanitizeBgScenery's own — the
+    // planner already collapses an all-zero object to null, but the renderer must
+    // never trust that (a stale planner, a hand-fed harness, an imported store
+    // read by a newer chunk), and attaching an EMPTY scenery struct would leave
+    // an untouched train measurably different from the shipped build.
+    const wantScenery = !!scenery && !!(scenery.crossings || scenery.signals
+      || scenery.tunnels || scenery.trees || scenery.station);
+    if (wantScenery) train.scenery = this._buildTrainScenery(train, scenery!, entryId || `bt${i}`, 1.8 * sc, col);
     this._positionTrain(train);       // settle initial poses before the first frame
     return { mode: 'train', index: i, train };
+  }
+
+  // ── Trackside scenery (BgTextEntry.scenery) ───────────────────────────────
+  // Level crossings, signal masts, tunnel mounds, a station and lineside trees,
+  // all dressing the loop the train was just given. Contract, every clause of it
+  // load-bearing:
+  //
+  //  • Placed by ARC LENGTH, exactly like the cars — so the whole set follows an
+  //    operating-region change with no extra plumbing, and a prop always sits ON
+  //    the track rather than at some remembered world point.
+  //  • DETERMINISTIC. This runs inside a builder that re-runs under _keyBgText,
+  //    so `Math.random` is banned outright (the house rule): families are spread
+  //    on an even arc-length grid and the only variation comes from a mulberry32
+  //    stream seeded off the ENTRY ID, which means a rebuild re-lays the identical
+  //    scene and a second entry lays a different one.
+  //  • Scaled by the SAME 1.8·scale the consist uses, so a gate arm reads right
+  //    against the cars it stops for at any "Model size ×".
+  //  • Only the two ANIMATED families are handed back for the advance; static
+  //    props are pure scene children and cost nothing per frame.
+  //
+  // Everything lands in _bgTextGroup, so the existing _disposeSpriteMaps +
+  // _clearGroup pairing frees it on the next rebuild — no new lifecycle.
+  private _buildTrainScenery(t: BgTrain, counts: BgSceneryCounts, seedKey: string,
+                             vs: number, col: BgColors): BgScenery {
+    const out: BgScenery = { crossings: [], signals: [] };
+    if (!(t.total > 0)) return out;
+    // Deterministic stream (mulberry32 over a djb2 seed — the _cloudState idiom,
+    // minus the persistence: a bg-text rebuild WANTS the same layout back).
+    const rs = { rng: (this._hashStr(seedKey) ^ 0x5bf03635) >>> 0 };
+    const rnd = () => this._rndFrom(rs);
+    // Loop CENTROID (scene) — the reference that decides which side of the track
+    // is "outside". Sign-picking this way is what lets the same code dress a
+    // property-anchored loop, a circle region and a rotated rect region.
+    let ccx = 0, ccz = 0;
+    for (const p of t.loopScene) { ccx += p.x; ccz += p.z; }
+    ccx /= t.loopScene.length; ccz /= t.loopScene.length;
+    // Place a group at arc `s`, yawed so local −Z runs with the track and local
+    // +X points AWAY from the loop centre (the outside of the ring). `lat` is a
+    // lateral offset applied in that outward direction.
+    const place = (s: number, lat = 0): THREE.Group => {
+      const sp = this._sampleTrainLoop(t, s);
+      // Right-hand normal of the travel direction; flipped when it points inward.
+      let nx = -sp.tz, nz = sp.tx;
+      if (nx * (sp.x - ccx) + nz * (sp.z - ccz) < 0) { nx = -nx; nz = -nz; }
+      const g = new THREE.Group();
+      g.position.set(sp.x + nx * lat, t.baseY, sp.z + nz * lat);
+      // Same yaw law as _positionTrain (local −Z = travel), then local +X is the
+      // OUTWARD normal iff that flip above chose the right-hand side; when it
+      // chose the left, mirror the group so props authored "outward = +X" still
+      // face out. (A uniform −1 on X would flip winding; a π yaw would reverse
+      // the track direction, so the honest fix is to offset the yaw by π and
+      // negate nothing — the props are all left/right symmetric about the rail.)
+      const yaw = Math.atan2(-sp.tx, -sp.tz);
+      const rightX = -Math.cos(yaw), rightZ = Math.sin(yaw);   // local +X in scene
+      g.rotation.y = (rightX * nx + rightZ * nz) >= 0 ? yaw : yaw + Math.PI;
+      this._bgTextGroup.add(g);
+      return g;
+    };
+    // Even arc-length grid for one family, phase-shifted so families never stack.
+    const slots = (count: number, phase: number): number[] => {
+      const o: number[] = [];
+      for (let k = 0; k < count; k++) o.push(t.total * ((k + phase) / count));
+      return o;
+    };
+    const rail = this._mat({ color: 0x6b7076 });
+    const dark = this._mat({ color: col.detail ?? 0x24272b });
+
+    // ── Level crossings ──────────────────────────────────────────────────────
+    // A road slab across the rails plus a boom-and-lamp mast either side. The
+    // arms hang from pivots whose UP rotation is stored on the object, so the
+    // advance is a single multiply (`rotation.z = up · (1 − blend)`), zero alloc.
+    for (const s of slots(counts.crossings, 0.12)) {
+      const g = place(s);
+      const road = new THREE.Mesh(new THREE.BoxGeometry(2600 * vs, 26 * vs, 620 * vs),
+                                  this._mat({ color: 0x4a4f55 }));
+      road.position.y = 13 * vs; g.add(road);
+      const arms: THREE.Object3D[] = [], lamps: THREE.Mesh[] = [];
+      for (const side of [-1, 1]) {
+        const post = new THREE.Mesh(new THREE.CylinderGeometry(26 * vs, 30 * vs, 660 * vs, 8), dark);
+        post.position.set(side * 560 * vs, 330 * vs, 0); g.add(post);
+        // Two lamps on a crossbuck head. They are given their own material each
+        // (one per lamp) so the advance can flash them in ANTIPHASE.
+        for (const dz of [-1, 1]) {
+          const lm = new THREE.Mesh(new THREE.SphereGeometry(42 * vs, 10, 8),
+                                    this._mat({ color: 0xe53935, emissive: 0x000000 }));
+          lm.position.set(side * 560 * vs, 700 * vs, dz * 90 * vs);
+          lm.userData.outlineSkip = true;
+          g.add(lm); lamps.push(lm);
+        }
+        // Boom pivot at the mast top; the arm body extends INWARD (toward the
+        // track) so lowering it closes the road.
+        const pivot = new THREE.Group();
+        pivot.position.set(side * 560 * vs, 560 * vs, 0);
+        const armLen = 900 * vs;
+        const arm = new THREE.Mesh(new THREE.BoxGeometry(armLen, 34 * vs, 34 * vs),
+                                   this._mat({ color: 0xf5f5f5 }));
+        arm.position.x = -side * armLen / 2;
+        pivot.add(arm);
+        // Red warning band near the free end (a real boom is striped).
+        const band = new THREE.Mesh(new THREE.BoxGeometry(armLen * 0.3, 38 * vs, 38 * vs),
+                                    this._mat({ color: 0xd32f2f }));
+        band.position.x = -side * armLen * 0.78; pivot.add(band);
+        // Rz(φ) maps a point at (−L,0) to (−L·cosφ, −L·sinφ): φ = −π/2 raises the
+        // −X arm to +Y. Mirrored for the +X arm. `blend` 0 = up, 1 = down.
+        pivot.userData.gateUp = side * Math.PI / 2;
+        pivot.rotation.z = pivot.userData.gateUp as number;
+        g.add(pivot); arms.push(pivot);
+      }
+      out.crossings.push({ s, arms, lamps });
+    }
+
+    // ── Signal masts ─────────────────────────────────────────────────────────
+    // Red while the consist is in the block, green when clear. Static geometry;
+    // only the two emissive intensities move.
+    for (const s of slots(counts.signals, 0.47)) {
+      const g = place(s, 620 * vs);
+      const mast = new THREE.Mesh(new THREE.CylinderGeometry(24 * vs, 28 * vs, 900 * vs, 8), dark);
+      mast.position.y = 450 * vs; g.add(mast);
+      const head = new THREE.Mesh(new THREE.BoxGeometry(120 * vs, 300 * vs, 90 * vs), dark);
+      head.position.y = 1000 * vs; g.add(head);
+      const lamp = (color: number, y: number) => {
+        const m = new THREE.Mesh(new THREE.SphereGeometry(44 * vs, 10, 8),
+                                 this._mat({ color, emissive: color, emissiveIntensity: 0 }));
+        m.position.set(0, y, -52 * vs);          // faces oncoming traffic (−Z = travel)
+        m.userData.outlineSkip = true; g.add(m); return m;
+      };
+      const red = lamp(0xe53935, 1080 * vs), green = lamp(0x43a047, 940 * vs);
+      out.signals.push({ s, red, green });
+    }
+
+    // ── Tunnels ──────────────────────────────────────────────────────────────
+    // A half-buried barrel mound following the loop (so it curves correctly)
+    // with a stone portal arch at each mouth. Nothing animates: the train simply
+    // vanishes inside, which IS the effect.
+    const stone = this._mat({ color: 0x6d6a63 });
+    for (const s of slots(counts.tunnels, 0.71)) {
+      const len = 3600 * vs, segs = 8, step = len / segs, r = 900 * vs;
+      for (let k = 0; k < segs; k++) {
+        const g = place(s - len / 2 + (k + 0.5) * step);
+        const barrel = new THREE.Mesh(
+          new THREE.CylinderGeometry(r, r, step * 1.08, 14, 1, false), this._mat({ color: 0x4d6b3a }));
+        barrel.rotation.x = Math.PI / 2;         // axis +Y → local +Z = along the track
+        g.add(barrel);
+      }
+      for (const end of [-1, 1]) {
+        const g = place(s + end * len / 2);
+        for (const side of [-1, 1]) {
+          const pier = new THREE.Mesh(new THREE.BoxGeometry(150 * vs, 620 * vs, 160 * vs), stone);
+          pier.position.set(side * 430 * vs, 310 * vs, 0); g.add(pier);
+        }
+        const lintel = new THREE.Mesh(new THREE.BoxGeometry(1010 * vs, 170 * vs, 190 * vs), stone);
+        lintel.position.y = 705 * vs; g.add(lintel);
+      }
+    }
+
+    // ── Station ──────────────────────────────────────────────────────────────
+    // One platform slab alongside the rails, a canopy on posts, and a couple of
+    // cargo crates. Placed on the OUTSIDE of the loop so it never sits over the
+    // house on a property-anchored ring.
+    if (counts.station) {
+      const g = place(t.total * 0.31, 560 * vs);
+      const plat = new THREE.Mesh(new THREE.BoxGeometry(620 * vs, 130 * vs, 2400 * vs),
+                                  this._mat({ color: 0xb9b2a4 }));
+      plat.position.y = 65 * vs; g.add(plat);
+      for (const dz of [-1, 1]) {
+        const post = new THREE.Mesh(new THREE.CylinderGeometry(26 * vs, 26 * vs, 620 * vs, 8), dark);
+        post.position.set(180 * vs, 440 * vs, dz * 780 * vs); g.add(post);
+      }
+      const roof = new THREE.Mesh(new THREE.BoxGeometry(700 * vs, 60 * vs, 1900 * vs),
+                                  this._mat({ color: col.main ?? 0x8a2b2b }));
+      roof.position.set(150 * vs, 780 * vs, 0); g.add(roof);
+      for (let k = 0; k < 3; k++) {
+        const sz = (110 + rnd() * 70) * vs;
+        const crate = new THREE.Mesh(new THREE.BoxGeometry(sz, sz, sz),
+                                     this._mat({ color: 0x7a5a2a }));
+        crate.position.set((330 + rnd() * 180) * vs, 130 * vs + sz / 2, (rnd() * 2 - 1) * 900 * vs);
+        crate.rotation.y = rnd() * Math.PI;
+        g.add(crate);
+      }
+      // Rail buffer stop at the platform end — a bit of lineside detail.
+      const buf = new THREE.Mesh(new THREE.BoxGeometry(60 * vs, 90 * vs, 60 * vs), rail);
+      buf.position.set(-520 * vs, 45 * vs, 1150 * vs); g.add(buf);
+    }
+
+    // ── Lineside trees ───────────────────────────────────────────────────────
+    // Alternating sides, jittered along and across the track. Purely static.
+    for (let k = 0; k < counts.trees; k++) {
+      const s = t.total * ((k + 0.5) / counts.trees) + (rnd() - 0.5) * (t.total / counts.trees) * 0.6;
+      const g = place(s, (900 + rnd() * 900) * vs);
+      const h = (420 + rnd() * 300) * vs;
+      const trunk = new THREE.Mesh(new THREE.CylinderGeometry(28 * vs, 36 * vs, h * 0.5, 7),
+                                   this._mat({ color: 0x5b4128 }));
+      trunk.position.y = h * 0.25; g.add(trunk);
+      const crown = new THREE.Mesh(new THREE.ConeGeometry(h * 0.42, h * 0.9, 9),
+                                   this._mat({ color: 0x2f6b32 }));
+      crown.position.y = h * 0.72; g.add(crown);
+    }
+    return out;
+  }
+
+  // Per-frame scenery animation: gates + signals react to the consist's ARC
+  // POSITION (t.s, the very value _bgTextPhase persists across rebuilds), so the
+  // dressing is always in step with where the train actually is.
+  //
+  // `blend` is the eased 0..1 "train is here" state, undefined = SNAP on the
+  // first advance (the grassYaw idiom) — which is what makes a rebuild land the
+  // gates in the pose the resumed lap demands instead of swinging them down from
+  // wherever the last generation left them. Zero allocation: arithmetic plus
+  // transform / emissive writes on objects that already exist.
+  private _advanceTrainScenery(t: BgTrain, dt: number, nowS: number): void {
+    const sc = t.scenery;
+    if (!sc) return;
+    const total = t.total || 1;
+    // The consist occupies [s − consistLen, s] in arc length.
+    const consistLen = Math.max(0, (t.vehicles.length - 1) * t.spacing);
+    // Wrapped "how far AHEAD of the engine" — the natural trigger for a crossing,
+    // and it stays correct across the loop seam.
+    const ahead = (target: number) => {
+      const d = (target - t.s) % total;
+      return d < 0 ? d + total : d;
+    };
+    const near = (target: number, lead: number, tail: number) => {
+      const a = ahead(target);
+      return a < lead || a > total - (consistLen + tail);
+    };
+    const ease = (cur: number | undefined, want: number, tau: number) =>
+      cur == null ? want : cur + (want - cur) * (1 - Math.exp(-dt / tau));
+    for (const c of sc.crossings) {
+      // Booms start dropping BG_GATE_LEAD_MM before the engine arrives and lift
+      // BG_GATE_TAIL_MM after the last car has cleared.
+      const want = near(c.s, BG_GATE_LEAD_MM, BG_GATE_TAIL_MM) ? 1 : 0;
+      c.blend = ease(c.blend, want, BG_GATE_TAU_S);
+      const b = c.blend;
+      for (const arm of c.arms) {
+        arm.rotation.z = (arm.userData.gateUp as number) * (1 - b);
+      }
+      // Alternating flash while the gates are anything but fully up. Lamps were
+      // built in (side, ±z) order, so index parity is the antiphase pair.
+      const phase = Math.sin(nowS * BG_GATE_FLASH_HZ * Math.PI * 2) >= 0 ? 0 : 1;
+      for (let k = 0; k < c.lamps.length; k++) {
+        const m = c.lamps[k].material as THREE.MeshToonMaterial;
+        const on = (k % 2) === phase ? 1 : 0;
+        m.emissive.setHex(0xe53935);
+        m.emissiveIntensity = b * on * 1.2;
+      }
+    }
+    for (const g of sc.signals) {
+      // A signal protects the block BEHIND it: red once the train is within
+      // BG_SIGNAL_BLOCK_MM of arriving and until it has fully passed.
+      const want = near(g.s, BG_SIGNAL_BLOCK_MM, BG_GATE_TAIL_MM) ? 1 : 0;
+      g.blend = ease(g.blend, want, BG_GATE_TAU_S);
+      (g.red.material as THREE.MeshToonMaterial).emissiveIntensity = 0.15 + g.blend * 1.05;
+      (g.green.material as THREE.MeshToonMaterial).emissiveIntensity = 0.15 + (1 - g.blend) * 1.05;
+    }
   }
 
   // Steam engine (boiler + cab + chimney + cowcatcher + 4 wheels). Origin at
@@ -17189,16 +17556,68 @@ export class ThreeDRenderer {
     return tex;
   }
 
-  // Build the train's driving loop: a rounded rectangle ~1800 mm OUTSIDE the
-  // floor rect (so it stays in the yard/void, never over the house), corner
-  // radius ~1200. Tiny floors (<3 m) fall back to an ellipse of diag·0.75. Loop
-  // is returned in WORLD/plan mm (loopWorld — the test asserts it lies outside
-  // the floor rect) and SCENE mm (loopScene — the train drives it), with
-  // cumulative arc length for arc-length walking.
-  private _buildTrainLoop(): { loopWorld: { x: number; y: number }[]; loopScene: { x: number; z: number }[]; cum: number[]; total: number } {
+  // Build the train's driving loop. TWO sources, and which one runs is the whole
+  // region contract:
+  //
+  //   region == null (the DEFAULT, and byte-for-byte the shipped build): a
+  //     rounded rectangle ~1800 mm OUTSIDE the floor rect (so it stays in the
+  //     yard/void, never over the house), corner radius ~1200. Tiny floors
+  //     (<3 m) fall back to an ellipse of diag·0.75.
+  //   region present: the loop follows the REGION's outline instead — a circle
+  //     becomes a 64-segment ring, a rect the same rounded-rectangle treatment
+  //     (corner radius shrunk to fit a small region) rotated about its centre.
+  //     Everything downstream — arc-length walking, per-car tangent posing,
+  //     wheel spin, scenery placement — is unchanged; only where the polyline
+  //     comes from moved.
+  //
+  // Loop is returned in WORLD/plan mm (loopWorld — the test asserts the default
+  // one lies outside the floor rect) and SCENE mm (loopScene — the train drives
+  // it), with cumulative arc length for arc-length walking.
+  private _buildTrainLoop(region: BgTextRegion | null = null): { loopWorld: { x: number; y: number }[]; loopScene: { x: number; z: number }[]; cum: number[]; total: number } {
     const fw = this._fw, fd = this._fd;
     const worldPts: { x: number; y: number }[] = [];
-    if (Math.min(fw, fd) < 3000) {
+    if (region) {
+      if (region.shape === 'rect') {
+        // Same rounded-rect corner treatment as the property loop, expressed
+        // about the region's own centre and then rotated. R is capped at a
+        // quarter of the short side so a small region cannot produce
+        // self-crossing arcs (the property loop's fixed 1200 is always safe
+        // there — the rect is the floor plus 2×1800 of margin).
+        const hw = (region.w ?? BG_REGION_MIN_MM) / 2, hh = (region.h ?? BG_REGION_MIN_MM) / 2;
+        const R = Math.min(1200, Math.min(hw, hh) / 2);
+        // Repo angle convention (0 = axis-aligned, increasing = screen-CW), the
+        // same mapping rotPointDeg uses: (x,y) → (x·c + y·s, −x·s + y·c).
+        const th = (region.rotationDeg ?? 0) * Math.PI / 180;
+        const cs = Math.cos(th), sn = Math.sin(th);
+        const push = (lx: number, ly: number) => worldPts.push({
+          x: region.cx + lx * cs + ly * sn,
+          y: region.cy - lx * sn + ly * cs,
+        });
+        const arcSeg = 8;
+        const pushArc = (ccx: number, ccy: number, a0: number, a1: number) => {
+          for (let k = 0; k <= arcSeg; k++) {
+            const a = a0 + (a1 - a0) * k / arcSeg;
+            push(ccx + Math.cos(a) * R, ccy + Math.sin(a) * R);
+          }
+        };
+        push(-hw + R, -hh);
+        push(hw - R, -hh);
+        pushArc(hw - R, -hh + R, -Math.PI / 2, 0);
+        push(hw, hh - R);
+        pushArc(hw - R, hh - R, 0, Math.PI / 2);
+        push(-hw + R, hh);
+        pushArc(-hw + R, hh - R, Math.PI / 2, Math.PI);
+        push(-hw, -hh + R);
+        pushArc(-hw + R, -hh + R, Math.PI, Math.PI * 1.5);
+        push(-hw + R, -hh);                                  // close
+      } else {
+        const R = region.r ?? BG_REGION_MIN_MM, seg = 64;
+        for (let k = 0; k <= seg; k++) {
+          const a = k / seg * Math.PI * 2;
+          worldPts.push({ x: region.cx + Math.cos(a) * R, y: region.cy + Math.sin(a) * R });
+        }
+      }
+    } else if (Math.min(fw, fd) < 3000) {
       const cx = fw / 2, cy = fd / 2, R = Math.hypot(fw, fd) * 0.75, seg = 64;
       for (let k = 0; k <= seg; k++) {
         const a = k / seg * Math.PI * 2;
@@ -17381,6 +17800,10 @@ export class ThreeDRenderer {
       // (a floor switch / floor resize).
       if (ph.trainS != null && t.total > 0) { t.s = ph.trainS % t.total; this._positionTrain(t); }
       if (ph.wheelRot != null) for (const v of t.vehicles) for (const wh of v.wheels) wh.rotation.x = ph.wheelRot;
+      // Settle the trackside dressing into the pose the RESUMED lap demands, so
+      // the very first rendered frame after a rebuild already has the right
+      // gates down (blends are undefined here, so this dt=0 pass SNAPS).
+      if (t.scenery) this._advanceTrainScenery(t, 0, nowS);
     }
   }
 
@@ -17391,7 +17814,7 @@ export class ThreeDRenderer {
     for (const rig of this._bgRigs) {
       if (rig.mode === 'sky') this._advanceBgSky(rig, dt);
       else if (rig.mode === 'banner' || rig.mode === 'chopper') this._advanceBgAircraft(rig, dt, nowS);
-      else if (rig.mode === 'train') this._advanceBgTrain(rig, dt);
+      else if (rig.mode === 'train') this._advanceBgTrain(rig, dt, nowS);
       else if (rig.mode === 'grass') this._advanceBgGrass(rig, dt);
     }
   }
@@ -17486,7 +17909,11 @@ export class ThreeDRenderer {
     rig.angle = (((rig.angle ?? 0) + 0.12 * dt * dir) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2);
     const a = rig.angle;
     const bob = Math.sin(nowS * 0.6 + rig.index) * (rig.bobAmp ?? 120);
-    rig.asm!.position.set(Math.cos(a) * R, (rig.alt ?? 6000) + bob, Math.sin(a) * R);
+    // Orbit centre: 0/0 = the plan centre (the shipped property-anchored orbit),
+    // non-zero = the entry's operating region, resolved to scene coords at build.
+    rig.asm!.position.set((rig.orbitCx ?? 0) + Math.cos(a) * R,
+                          (rig.alt ?? 6000) + bob,
+                          (rig.orbitCz ?? 0) + Math.sin(a) * R);
     const tx = -Math.sin(a) * dir, tz = Math.cos(a) * dir;   // tangent (direction of travel)
     rig.asm!.rotation.y = Math.atan2(tx, tz) + Math.PI;      // nose (−Z) → tangent
     // Prop / rotor spin. A twin-engine archetype carries TWO discs, a jet none;
@@ -17511,13 +17938,14 @@ export class ThreeDRenderer {
 
   // Message train: walk the loop by arc length (~1.1 m/s), reposition + yaw
   // every vehicle to its own tangent, spin wheels ∝ speed. Zero allocation.
-  private _advanceBgTrain(rig: BgRig, dt: number): void {
+  private _advanceBgTrain(rig: BgRig, dt: number, nowS: number): void {
     const t = rig.train!;
     const speed = 1100;                                       // mm/s
     t.s = (t.s + speed * dt) % (t.total || 1);
     this._positionTrain(t);
     const spin = (speed * dt) / t.wheelR;
     for (const v of t.vehicles) for (const wh of v.wheels) wh.rotation.x -= spin;
+    if (t.scenery) this._advanceTrainScenery(t, dt, nowS);
     if (rig.ph) {
       rig.ph.trainS = t.s;
       rig.ph.wheelRot = t.vehicles[0]?.wheels[0]?.rotation.x ?? 0;

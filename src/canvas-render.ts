@@ -40,7 +40,7 @@ import {
   peekFloors,
   midpointHandles, POLY_VERTEX_CAP_GROUND, POLY_VERTEX_CAP_POOL, POLY_VERTEX_CAP_VOID,
   POLY_VERTEX_CAP_PATH, POLY_VERTEX_CAP_PZONE,
-  validHexColor,
+  validHexColor, resolveBgRegion,
 } from './geometry.js';
 import { compass8, fmtDistanceM, fmtAccuracyM } from './geo.js';
 import { resolveNorth, northMarkerPos, markerScaleOf } from './compass.js';
@@ -492,6 +492,11 @@ export function drawAll(ctx: CanvasRenderingContext2D, p: Planner, view: View,
   // Dimensions overlay (rulers + wall/structure dimension lines) — drawn LATE so
   // it sits above everything. Default ON (absent = on).
   if (on(L.dimensions)) { drawWallDimensions(ctx, p, view); drawRulers(ctx, p, view); }
+  // Background-text OPERATING REGIONS — the circle / rectangle a message train
+  // drives and a banner aircraft orbits. EDIT MODE ONLY (an authoring aid, like
+  // the floor-edge handles right below), and it rides the `bgText` layer so
+  // hiding background text hides its footprints too.
+  if (on(L.bgText)) drawBgTextRegions(ctx, p, view);
   drawAlignGuides(ctx, p, view);
   drawFloorEditHandles(ctx, p, view);
   // Live dimension readouts for the in-flight drag / draw latch — LAST, over
@@ -903,6 +908,63 @@ function drawFloorEditHandles(ctx: CanvasRenderingContext2D, p: Planner, view: V
 // `ALIGN_DRAG_KINDS` (geometry.ts) — the snapper and this painter used to keep
 // two hand-maintained copies and this one was the smaller, so safety / alert /
 // robot / camera / projector drags snapped with no visible line.
+// Dashed footprint of every background-text operating region on this store.
+// Authoring aid: the region is defined in numbers in Settings, so the plan is
+// where the user checks it actually lands where they meant. Edit mode only —
+// kiosk / view surfaces show the vehicles, never the scaffolding — and drawn
+// before the align guides so an in-flight drag's lines stay on top.
+//
+// bgTexts are STORE-level (not per-floor), so every configured region draws on
+// whichever floor is open; that is the same reasoning that keeps
+// rotateFloorContent from rotating them.
+function drawBgTextRegions(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
+  if (p.uiMode !== 'edit') return;
+  const list = p.store.bgTexts ?? [];
+  if (!list.length) return;
+  ctx.save();
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([9, 7]);
+  for (const e of list) {
+    if (e.mode !== 'train' && e.mode !== 'banner' && e.mode !== 'chopper') continue;
+    const reg = resolveBgRegion(e.region);
+    if (!reg) continue;
+    // Train tracks read warm, aircraft orbits cool — two regions overlapping in
+    // the same yard stay tellable apart.
+    ctx.strokeStyle = e.mode === 'train' ? 'rgba(255,183,77,0.75)' : 'rgba(129,212,250,0.75)';
+    const c = mmToCanvas(reg.cx, reg.cy, view.ox, view.oy, view.scale);
+    ctx.beginPath();
+    if (reg.shape === 'rect') {
+      const th = (reg.rotationDeg ?? 0) * Math.PI / 180;
+      const hw = (reg.w ?? 0) / 2, hh = (reg.h ?? 0) / 2;
+      // Same screen-CW mapping the renderer's loop builder uses, then through
+      // mmToCanvas (which flips Y) so the outline matches the drawn track.
+      const cs = Math.cos(th), sn = Math.sin(th);
+      const corners: [number, number][] = [[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]];
+      corners.forEach(([lx, ly], i) => {
+        const q = mmToCanvas(reg.cx + lx * cs + ly * sn, reg.cy - lx * sn + ly * cs,
+                             view.ox, view.oy, view.scale);
+        if (i === 0) ctx.moveTo(q.x, q.y); else ctx.lineTo(q.x, q.y);
+      });
+      ctx.closePath();
+    } else {
+      ctx.arc(c.x, c.y, Math.max(2, (reg.r ?? 0) * view.scale), 0, Math.PI * 2);
+    }
+    ctx.stroke();
+    // Centre tick + label, so a tiny or off-screen-edge region is still findable.
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.moveTo(c.x - 5, c.y); ctx.lineTo(c.x + 5, c.y);
+    ctx.moveTo(c.x, c.y - 5); ctx.lineTo(c.x, c.y + 5);
+    ctx.stroke();
+    ctx.setLineDash([9, 7]);
+    ctx.fillStyle = ctx.strokeStyle;
+    ctx.font = '10px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(e.mode === 'train' ? 'train area' : 'flight area', c.x, c.y - 9);
+  }
+  ctx.restore();
+}
+
 function drawAlignGuides(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
   if (p.uiMode !== 'edit' || !p.drag || !ALIGN_DRAG_KINDS.has(p.drag.kind)) return;
   if (!p.alignGuides.length) return;
