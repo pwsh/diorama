@@ -319,6 +319,15 @@ design doc pinned before the first line of code, per the house pattern.
   CORS header, OpenSky is CORS-locked + ToS-forbidden), local receivers need
   a user-added CORS header, satellites = ISS-only via wheretheiss.at (no
   SGP4/no npm dep; pass PREDICTION deferred to a v2 propagator decision).
+  **The source landscape above is SUPERSEDED (2026-08-15, v0.66.0) — see
+  `flight-tracking.md` §2.9–§2.11b.** airplanes.live now 403s everyone and
+  requires being a FEEDER; there is no keyless CORS-open ADS-B API left, so
+  opensky/adsb.lol are fetched SERVER-SIDE by HA via a `rest_command`
+  (OpenSky is the default, and its ToS covers personal non-commercial use —
+  the old "never add it" note was wrong). A local receiver may use that same
+  proxy, which removes its CORS + mixed-content constraints entirely, though
+  a direct fetch stays lighter and is preferred. A synthetic `demo` source
+  needs neither network nor HA.
   Original brief (M–L/4): Aircraft (and satellite
   passes) overhead, rendered in the existing sky dome. Sources: **local
   ADS-B** (dump1090/readsb/tar1090 on the LAN, or HA's ADS-B integrations)
