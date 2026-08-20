@@ -1,0 +1,820 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>avatar fluidity</title>
+<!--
+  AVATAR MOTION FLUIDITY MEASUREMENT HARNESS
+  ==========================================
+  Measures WHERE jerk enters the synthetic-avatar motion chain. Read-only:
+  it drives the REAL renderer and reads renderer internals; it changes nothing.
+
+  Chain under test (src/three-renderer.ts):
+    _walkAlongPath  raw virtual pos walks the A* polyline at constant speed,
+                    corners consumed at <=150 mm  -> INSTANT direction change
+    updateTargets   rawVx/rawVz  = low-pass(raw displacement), al = min(1, dt*4)
+    _steerNav/_seek carrot walks the route, seek = clamp(1.15*rawSpeed,300,2200)
+                    (+ catch-up when far > 1200), waypoints consumed at <=120 mm
+    _springNav      critically damped spring w=9 -> navX/navZ  (ONLY real smoothing)
+    updateTargets   vx/vz = low-pass(nav displacement), al = min(1, dt*4)
+    facing          FIRST-ORDER ease: facing += d*min(1, dt*K), K=8 walking
+    gait            walking = speedMs > 0.08 (hard boolean); cadence -> 0 instantly
+
+  Build recipe (see report / CLAUDE.md harness discipline):
+    npm run build
+    mkdir -p /tmp/fluid && cp test-pages/avatar-fluidity-test.html /tmp/fluid/
+    cp -r dist/assets /tmp/fluid/assets
+    (cd /tmp/fluid && python3 -m http.server 8899) &
+    google-chrome --headless --disable-gpu=false --use-angle=swiftshader \
+      --enable-unsafe-swiftshader --window-size=1400,1000 \
+      --virtual-time-budget=240000 --dump-dom \
+      'http://localhost:8899/avatar-fluidity-test.html'
+  Results land in <pre id="j"> as JSON and a summary in <title>.
+-->
+<style>html,body{margin:0;background:#111;color:#ccc;font:12px monospace}#c{width:1280px;height:820px}#j{white-space:pre-wrap}</style>
+<div id="c"></div>
+<pre id="j">running…</pre>
+<script type="module">
+const OUT = { sections: {}, errors: [] };
+const el = document.getElementById('c');
+const mod = await import('./assets/three-renderer.js');
+
+// ── math helpers ─────────────────────────────────────────────────────────────
+const TAU = Math.PI * 2;
+const wrapPi = (a) => { a -= Math.round(a / TAU) * TAU; return a; };
+const R2D = 180 / Math.PI;
+const r2 = (x) => Math.round(x * 100) / 100;
+const r3 = (x) => Math.round(x * 1000) / 1000;
+const pct = (arr, p) => { if (!arr.length) return null; const s = arr.slice().sort((a,b)=>a-b);
+  return s[Math.min(s.length - 1, Math.max(0, Math.round((s.length - 1) * p)))]; };
+const stats = (arr) => arr.length ? {
+  n: arr.length, max: r2(Math.max(...arr)), p99: r2(pct(arr,0.99)),
+  p90: r2(pct(arr,0.90)), med: r2(pct(arr,0.50)), mean: r2(arr.reduce((a,b)=>a+b,0)/arr.length),
+} : { n: 0 };
+// seeded PRNG so the AI controller's goal picks are reproducible
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
+
+// Interpolate a {t, v} series at time tq (v may be a number).
+function sampleAt(series, key, tq) {
+  if (tq <= series[0].t) return series[0][key];
+  if (tq >= series[series.length-1].t) return series[series.length-1][key];
+  let lo = 0, hi = series.length - 1;
+  while (hi - lo > 1) { const m = (lo + hi) >> 1; if (series[m].t <= tq) lo = m; else hi = m; }
+  const a = series[lo], b = series[hi], f = (tq - a.t) / (b.t - a.t);
+  return a[key] + (b[key] - a[key]) * f;
+}
+
+// Derivative series from a sampled position/angle series.
+// jerk of a 2-vector via 3rd backward difference.
+function jerkSeries(S, kx, kz, dt) {
+  const out = [];
+  for (let i = 3; i < S.length; i++) {
+    const jx = (S[i][kx] - 3*S[i-1][kx] + 3*S[i-2][kx] - S[i-3][kx]) / (dt*dt*dt);
+    const jz = (S[i][kz] - 3*S[i-1][kz] + 3*S[i-2][kz] - S[i-3][kz]) / (dt*dt*dt);
+    out.push({ t: S[i].t, j: Math.hypot(jx, jz) });
+  }
+  return out;
+}
+// per-frame direction change of a position series, deg (only when moving)
+function dirChange(S, kx, kz, minStepMm) {
+  const out = [];
+  for (let i = 2; i < S.length; i++) {
+    const ax = S[i-1][kx]-S[i-2][kx], az = S[i-1][kz]-S[i-2][kz];
+    const bx = S[i][kx]-S[i-1][kx],   bz = S[i][kz]-S[i-1][kz];
+    const la = Math.hypot(ax,az), lb = Math.hypot(bx,bz);
+    if (la < minStepMm || lb < minStepMm) { out.push({ t:S[i].t, d:0, moving:false }); continue; }
+    const d = Math.abs(wrapPi(Math.atan2(bz,bx) - Math.atan2(az,ax))) * R2D;
+    out.push({ t: S[i].t, d, moving: true });
+  }
+  return out;
+}
+
+// ── renderer factory ─────────────────────────────────────────────────────────
+const SC3 = { preset: 'day', floorColor: '#8a7860', floorTex: 'none', wallColor: '#cfd2d6' };
+const CTX = { entityOn: {}, roomNames: {}, timeBucket: 'day' };
+const baseFloor = (over) => Object.assign({
+  id: 'f1', name: 'T', w: 14000, d: 14000,
+  walls: [], lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [],
+  doors: [], windows: [], furniture: [], rooms: [], bg: null, model3d: null, look3d: null,
+}, over || {});
+
+async function withRenderer(floor, fn) {
+  const r = new mod.ThreeDRenderer(el);
+  await r.load();
+  r.updateFloor(floor, SC3);
+  r.applyViewPreset('top');
+  const realNow = performance.now.bind(performance);
+  let fakeNow = realNow();
+  performance.now = () => fakeNow;
+  const clock = {
+    advance: (ms) => { fakeNow += ms; },
+    now: () => fakeNow,
+  };
+  try { return await fn(r, clock); }
+  finally { performance.now = realNow; try { r.destroy(); } catch (e) {} }
+}
+
+// Drive one scripted RAW target. pathFn(t) -> {x,y} in world mm.
+// Returns the per-frame series.
+async function scriptedRun(floor, pathFn, { fps = 60, dur = 8, key = 't1', extra } = {}) {
+  return withRenderer(floor, async (r, clock) => {
+    const dtMs = 1000 / fps, dt = 1 / fps;
+    const frames = Math.round(dur * fps);
+    const S = [];
+    for (let i = 0; i < frames; i++) {
+      const t = i * dt;
+      const p = pathFn(t);
+      clock.advance(dtMs);
+      r.updateTargets([{ key, x: p.x, y: p.y, color: 0x4fc3f7 }], CTX);
+      const h = r._humanoids[key];
+      if (!h) continue;
+      const row = {
+        t: r3(t), rx: p.x, ry: p.y,
+        cx: h.carrotX, cz: h.carrotZ, nx: h.navX, nz: h.navZ,
+        vx: h.vx, vz: h.vz, rvx: h.rawVx, rvz: h.rawVz,
+        f: h.facing, ph: h.phase, amp: h.amp,
+        hip: h.leftHip ? h.leftHip.rotation.x : 0,
+        sit: h.sit, act: h.act,
+      };
+      if (extra) extra(row, r, h, i);
+      S.push(row);
+    }
+    return S;
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// S1 / H1 — facing is first-order: angular-velocity discontinuity at a corner
+// ─────────────────────────────────────────────────────────────────────────────
+const CORNER_T = 4.5, PRE = 0.5, V = 1200;   // mm/s = 1.2 m/s human walk
+const cornerPath = (t) => {
+  if (t < PRE) return { x: 3000, y: 7000 };
+  if (t < CORNER_T) return { x: 3000 + V * (t - PRE), y: 7000 };
+  return { x: 3000 + V * (CORNER_T - PRE), y: 7000 + V * (t - CORNER_T) };
+};
+
+async function S1() {
+  const S = await scriptedRun(baseFloor(), cornerPath, { fps: 60, dur: 8 });
+  const dt = 1/60;
+  // angular velocity / acceleration of the RENDERED body yaw
+  const w = [], al = [];
+  for (let i = 1; i < S.length; i++) w.push({ t: S[i].t, w: wrapPi(S[i].f - S[i-1].f) / dt });
+  for (let i = 1; i < w.length; i++) al.push({ t: w[i].t, a: (w[i].w - w[i-1].w) / dt });
+  // the "want" heading the ease chases (atan2 of low-passed nav velocity)
+  const want = S.map(s => ({ t: s.t, q: Math.atan2(-s.vx, -s.vz) }));
+  const wantW = [];
+  for (let i = 1; i < want.length; i++) wantW.push({ t: want[i].t, w: wrapPi(want[i].q - want[i-1].q) / dt });
+
+  const inWin = (x, a, b) => x.t >= a && x.t <= b;
+  const straight = (x) => inWin(x, 2.0, 4.2);
+  const corner   = (x) => inWin(x, 4.4, 6.2);
+
+  const absW = a => Math.abs(a.w), absA = a => Math.abs(a.a);
+  // biggest single-frame STEP in angular velocity (rad/s per frame) -> the jerk cue
+  const dW = [];
+  for (let i = 1; i < w.length; i++) dW.push({ t: w[i].t, d: Math.abs(w[i].w - w[i-1].w) });
+
+  // facing turn progress: how long to 63% / 95% of the 90 deg turn
+  const f0 = S.find(s => s.t >= 4.4).f;
+  const fEnd = S[S.length-1].f;
+  const total = wrapPi(fEnd - f0);
+  const prog = (frac) => { const tgt = f0 + total*frac;
+    const hit = S.find(s => s.t > 4.4 && Math.abs(wrapPi(s.f - f0)) >= Math.abs(total*frac));
+    return hit ? r3(hit.t - CORNER_T) : null; };
+
+  return {
+    note: 'scripted 90-deg raw corner at t=4.5 s, 1.2 m/s, 60 fps, no obstacles',
+    facing_peak_angAccel_rad_s2: {
+      corner: stats(al.filter(corner).map(absA)),
+      straight: stats(al.filter(straight).map(absA)),
+    },
+    facing_peak_angVel_rad_s: {
+      corner: stats(w.filter(corner).map(absW)),
+      straight: stats(w.filter(straight).map(absW)),
+    },
+    facing_max_frame_step_in_angVel_rad_s: {
+      corner: r3(Math.max(...dW.filter(corner).map(d => d.d))),
+      straight: r3(Math.max(...dW.filter(straight).map(d => d.d))),
+    },
+    want_heading_angVel_rad_s: {
+      corner: stats(wantW.filter(corner).map(absW)),
+    },
+    turn_total_deg: r2(total * R2D),
+    time_to_63pct_s: prog(0.63), time_to_95pct_s: prog(0.95),
+    // does omega STEP or RAMP? sample omega every 3 frames through the corner
+    omega_series_deg_s: w.filter(x => x.t >= 4.40 && x.t <= 5.60)
+      .filter((_, i) => i % 3 === 0).map(x => ({ t: x.t, w: r2(x.w * R2D) })),
+    angAccel_series_deg_s2: al.filter(x => x.t >= 4.40 && x.t <= 5.20)
+      .filter((_, i) => i % 2 === 0).map(x => ({ t: x.t, a: Math.round(x.a * R2D) })),
+    _S: S,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// S2 / H2 — Euler ease min(1,dt*k) vs exact 1-exp(-k*dt): frame-rate dependence
+// ─────────────────────────────────────────────────────────────────────────────
+async function S2() {
+  const rates = [120, 60, 30, 15, 10, 6];
+  const runs = {};
+  for (const fps of rates) runs[fps] = await scriptedRun(baseFloor(), cornerPath, { fps, dur: 8 });
+  const ref = runs[120];
+  const cmp = {};
+  const STEP = 0.05;
+  const diverge = (S, T0, T1) => {
+    let mF = 0, mFt = 0, mN = 0, mNt = 0, mA = 0;
+    for (let tq = T0; tq <= T1; tq += STEP) {
+      const df = Math.abs(wrapPi(sampleAt(S,'f',tq) - sampleAt(ref,'f',tq))) * R2D;
+      const dn = Math.hypot(sampleAt(S,'nx',tq)-sampleAt(ref,'nx',tq),
+                            sampleAt(S,'nz',tq)-sampleAt(ref,'nz',tq));
+      const da = Math.abs(sampleAt(S,'amp',tq) - sampleAt(ref,'amp',tq));
+      if (df > mF) { mF = df; mFt = tq; }
+      if (dn > mN) { mN = dn; mNt = tq; }
+      if (da > mA) mA = da;
+    }
+    return { facing_deg: r2(mF), facing_t: r3(mFt), nav_mm: r2(mN), nav_t: r3(mNt), amp_rad: r3(mA) };
+  };
+  for (const fps of rates) {
+    if (fps === 120) continue;
+    const S = runs[fps];
+    const whole = diverge(S, 0.6, 7.9);          // includes the spawn transient
+    const settled = diverge(S, 3.0, 7.9);        // post-startup; contains the 90-deg corner
+    const mF = whole.facing_deg, mFt = whole.facing_t, mN = whole.nav_mm, mNt = whole.nav_t, mA = whole.amp_rad;
+    // ease coefficients actually used at this rate (facing K=8, lowpass k=4, amp k=6)
+    const dt = Math.min(0.1, 1/fps);
+    cmp[fps] = {
+      dt_used_s: r3(dt), dt_real_s: r3(1/fps),
+      divergence_whole_run: whole,
+      divergence_after_startup_incl_corner: settled,
+      settled_amp_at_t4: r3(sampleAt(runs[fps],'amp',4.0)),
+      // Euler vs exact for each ease constant
+      ease_K8_euler: r3(Math.min(1, dt*8)), ease_K8_exact: r3(1-Math.exp(-8*dt)),
+      ease_K4_euler: r3(Math.min(1, dt*4)), ease_K4_exact: r3(1-Math.exp(-4*dt)),
+      ease_K6_euler: r3(Math.min(1, dt*6)), ease_K6_exact: r3(1-Math.exp(-6*dt)),
+      spring_substeps: Math.max(1, Math.ceil(dt/0.04)),
+      // effective time constant implied by the Euler coefficient at this rate
+      eff_tau_K8_s: r3(-dt/Math.log(Math.max(1e-9, 1-Math.min(1,dt*8)))),
+    };
+  }
+  cmp[120] = { dt_used_s: r3(1/120), reference: true,
+    ease_K8_euler: r3(8/120), ease_K8_exact: r3(1-Math.exp(-8/120)),
+    settled_amp_at_t4: r3(sampleAt(ref,'amp',4.0)),
+    eff_tau_K8_s: r3(-(1/120)/Math.log(1-8/120)) };
+  return { note: 'identical scripted walk (position = f(wall time)) at 6 frame rates; ' +
+    'divergence measured against the 120 fps run at matched wall-clock times', rates: cmp };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// S3 / H3 — polyline-walker corner discontinuity and what the spring absorbs
+// ─────────────────────────────────────────────────────────────────────────────
+async function S3(s1) {
+  const S = s1._S, dt = 1/60;
+  const rawD = dirChange(S, 'rx', 'ry', 1);
+  const carD = dirChange(S, 'cx', 'cz', 1);
+  const navD = dirChange(S, 'nx', 'nz', 1);
+  const navJ = jerkSeries(S, 'nx', 'nz', dt);
+  const carJ = jerkSeries(S, 'cx', 'cz', dt);
+  const win = (x,a,b) => x.t >= a && x.t <= b;
+  const straight = x => win(x, 2.0, 4.2), corner = x => win(x, 4.4, 5.6);
+
+  // Part B: a REAL A* polyline. The raw target teleports to the far side of a
+  // barrier (exactly the production case _steerNav documents: "radar sees through
+  // walls"), so h.path is non-null and the CARROT walks a string-pulled polyline.
+  const wallFloor = baseFloor({
+    w: 14000, d: 14000,
+    walls: [{ id: 'bar', kind: 'full', points: [{ x: 7000, y: 1000 }, { x: 7000, y: 10000 }] }],
+  });
+  const Lpath = (t) => (t < 1.0 ? { x: 4000, y: 3000 } : { x: 10000, y: 3000 });
+  const SB = await scriptedRun(wallFloor, Lpath, { fps: 60, dur: 14,
+    extra: (row, r, h) => { row.wp = h.path ? h.path.length : 0; } });
+  const carDB = dirChange(SB, 'cx', 'cz', 1);
+  const navDB = dirChange(SB, 'nx', 'nz', 1);
+  const navJB = jerkSeries(SB, 'nx', 'nz', dt);
+  const carJB = jerkSeries(SB, 'cx', 'cz', dt);
+  const movingB = carDB.filter(x => x.moving && x.t > 1.2);
+  const pathFrames = SB.filter(x => (x.wp || 0) > 0).length;
+
+  return {
+    note: 'A: scripted 90-deg raw corner, open floor. B: raw walks an L around a ' +
+          'full-height barrier so the CARROT follows a real A* string-pulled polyline.',
+    A_open_floor: {
+      raw_dir_change_deg_per_frame:    { corner_max: r2(Math.max(...rawD.filter(corner).map(x=>x.d))),
+                                         straight_max: r2(Math.max(...rawD.filter(straight).map(x=>x.d))) },
+      carrot_dir_change_deg_per_frame: { corner_max: r2(Math.max(...carD.filter(corner).map(x=>x.d))),
+                                         straight_max: r2(Math.max(...carD.filter(straight).map(x=>x.d))) },
+      nav_dir_change_deg_per_frame:    { corner_max: r2(Math.max(...navD.filter(corner).map(x=>x.d))),
+                                         straight_max: r2(Math.max(...navD.filter(straight).map(x=>x.d))) },
+      carrot_jerk_mm_s3: { corner_max: Math.round(Math.max(...carJ.filter(corner).map(x=>x.j))),
+                           straight_med: Math.round(pct(carJ.filter(straight).map(x=>x.j),0.5)) },
+      nav_jerk_mm_s3:    { corner_max: Math.round(Math.max(...navJ.filter(corner).map(x=>x.j))),
+                           straight_med: Math.round(pct(navJ.filter(straight).map(x=>x.j),0.5)) },
+      spring_absorption_ratio_carrotJerk_over_navJerk:
+        r2(Math.max(...carJ.filter(corner).map(x=>x.j)) / Math.max(1e-9, Math.max(...navJ.filter(corner).map(x=>x.j)))),
+    },
+    B_astar_polyline: {
+      waypoints_seen_max: Math.max(...SB.map(s => s.wp || 0)),
+      frames_with_astar_path: pathFrames,
+      carrot_dir_change_deg_per_frame: stats(movingB.map(x=>x.d)),
+      carrot_dir_change_over_5deg_frames: movingB.filter(x=>x.d>5).length,
+      nav_dir_change_deg_per_frame: stats(navDB.filter(x=>x.moving && x.t>1.0).map(x=>x.d)),
+      carrot_jerk_mm_s3: stats(carJB.filter(x=>x.t>1.0).map(x=>x.j)),
+      nav_jerk_mm_s3: stats(navJB.filter(x=>x.t>1.0).map(x=>x.j)),
+      spring_absorption_ratio: r2(Math.max(...carJB.filter(x=>x.t>1.0).map(x=>x.j)) /
+                                  Math.max(1e-9, Math.max(...navJB.filter(x=>x.t>1.0).map(x=>x.j)))),
+      top_carrot_corners: movingB.slice().sort((a,b)=>b.d-a.d).slice(0,6).map(x=>({t:x.t,deg:r2(x.d)})),
+    },
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// S4 / H4 — gait phase freeze at stop
+// ─────────────────────────────────────────────────────────────────────────────
+async function S4() {
+  const speeds = [1400, 1000, 600, 300];   // mm/s approach speeds
+  const events = [];
+  for (const v of speeds) {
+    const stopT = 4.0;
+    const p = (t) => t < 0.5 ? { x: 3000, y: 7000 }
+      : (t < stopT ? { x: 3000 + v*(t-0.5), y: 7000 } : { x: 3000 + v*(stopT-0.5), y: 7000 });
+    const S = await scriptedRun(baseFloor(), p, { fps: 60, dur: 10 });
+    const dt = 1/60;
+    // find the frame `walking` first goes false after the stop
+    let iStop = -1;
+    for (let i = 1; i < S.length; i++) {
+      if (S[i].t < stopT) continue;
+      const sp = Math.hypot(S[i].vx, S[i].vz) / 1000;
+      const spPrev = Math.hypot(S[i-1].vx, S[i-1].vz) / 1000;
+      if (spPrev > 0.08 && sp <= 0.08) { iStop = i; break; }
+    }
+    if (iStop < 0) { events.push({ approach_mm_s: v, note: 'never dropped below 0.08 m/s' }); continue; }
+    const hipRate = (i) => (S[i].hip - S[i-1].hip) / dt;
+    const rates = [];
+    for (let i = Math.max(1, iStop-30); i < Math.min(S.length, iStop+60); i++)
+      rates.push({ t: S[i].t, r: hipRate(i) });
+    // largest single-frame change in hip angular RATE around the stop
+    let maxJump = 0, maxJumpT = 0;
+    for (let i = 1; i < rates.length; i++) {
+      const d = Math.abs(rates[i].r - rates[i-1].r);
+      if (d > maxJump) { maxJump = d; maxJumpT = rates[i].t; }
+    }
+    const at = (tt) => S.find(s => s.t >= tt) || S[S.length-1];
+    events.push({
+      approach_mm_s: v,
+      stop_frame_t: S[iStop].t,
+      phase_at_freeze_rad: r3(S[iStop].ph),
+      phase_at_freeze_deg: r2(S[iStop].ph * R2D),
+      sinPhase_at_freeze: r3(Math.sin(S[iStop].ph)),
+      amp_at_freeze_rad: r3(S[iStop].amp),
+      hip_angle_at_freeze_rad: r3(S[iStop].hip),
+      phase_frozen_after_1s: r3(at(S[iStop].t + 1).ph),
+      phase_advanced_after_stop_rad: r3(wrapPi(at(S[iStop].t + 1).ph - S[iStop].ph)),
+      amp_after_0p5s: r3(at(S[iStop].t + 0.5).amp),
+      amp_after_1s: r3(at(S[iStop].t + 1).amp),
+      amp_after_2s: r3(at(S[iStop].t + 2).amp),
+      hip_after_1s_rad: r3(at(S[iStop].t + 1).hip),
+      hip_after_2s_rad: r3(at(S[iStop].t + 2).hip),
+      hip_after_4s_rad: r3(at(S[iStop].t + 4).hip),
+      hip_rate_jump_rad_s_at_stop: r3(maxJump), jump_t: r3(maxJumpT),
+      hip_rate_before_stop_rad_s: r3(rates.find(x=>x.t>=S[iStop-1].t)?.r ?? 0),
+      hip_rate_after_stop_rad_s: r3(rates.find(x=>x.t>=S[Math.min(S.length-1,iStop+1)].t)?.r ?? 0),
+    });
+  }
+  return { note: 'walk then freeze the raw target; phase stops advancing the frame ' +
+    '`walking` (speed > 0.08 m/s) goes false. Leg angle = amp * sin(phase) chain, ' +
+    'so amp easing (k=6) is what actually returns the legs to neutral.', events };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// S5 / H5 — carrot seek speed: kink + clamps
+// ─────────────────────────────────────────────────────────────────────────────
+function S5(s1) {
+  const S = s1._S, dt = 1/60;
+  const rows = [];
+  for (let i = 1; i < S.length; i++) {
+    const cs = Math.hypot(S[i].cx-S[i-1].cx, S[i].cz-S[i-1].cz) / dt;   // realised carrot speed
+    const rawSp = Math.hypot(S[i].rvx, S[i].rvz);
+    // goal in scene coords: same mapping the renderer uses (fw/2 - wx, wy - fd/2)
+    const gx = 14000/2 - S[i].rx, gz = S[i].ry - 14000/2;
+    const far = Math.hypot(S[i].cx - gx, S[i].cz - gz);
+    let seek = Math.max(300, Math.min(2200, 1.15 * rawSp));
+    if (far > 1200) seek += Math.min(800, far - 1200);
+    rows.push({ t: S[i].t, cs, rawSp, far, seek,
+      clampedLo: 1.15*rawSp < 300, clampedHi: 1.15*rawSp > 2200, catchUp: far > 1200 });
+  }
+  const walk = rows.filter(x => x.t >= 1.0 && x.t <= 7.9);
+  const dSeek = [];
+  for (let i = 1; i < walk.length; i++) dSeek.push({ t: walk[i].t, d: Math.abs(walk[i].seek - walk[i-1].seek) });
+  const dCs = [];
+  for (let i = 1; i < walk.length; i++) dCs.push({ t: walk[i].t, d: Math.abs(walk[i].cs - walk[i-1].cs) });
+  const cornerW = x => x.t >= 4.4 && x.t <= 5.4;
+  return {
+    note: 'seek = clamp(1.15*rawSpeed, 300, 2200) (+ min(800, far-1200) when far>1200). ' +
+      'Realised carrot speed measured from the carrot displacement per frame.',
+    frames_clamped_low_pct: r2(100 * walk.filter(x=>x.clampedLo).length / walk.length),
+    frames_clamped_high_pct: r2(100 * walk.filter(x=>x.clampedHi).length / walk.length),
+    frames_catchup_active_pct: r2(100 * walk.filter(x=>x.catchUp).length / walk.length),
+    max_far_mm: Math.round(Math.max(...walk.map(x=>x.far))),
+    seek_step_mm_s_per_frame: { straight_max: r2(Math.max(...dSeek.filter(x=>x.t>=2&&x.t<=4.2).map(x=>x.d))),
+                                corner_max: r2(Math.max(...dSeek.filter(cornerW).map(x=>x.d))),
+                                overall: stats(dSeek.map(x=>x.d)) },
+    carrot_speed_step_mm_s_per_frame: { straight_max: r2(Math.max(...dCs.filter(x=>x.t>=2&&x.t<=4.2).map(x=>x.d))),
+                                        corner_max: r2(Math.max(...dCs.filter(cornerW).map(x=>x.d))),
+                                        overall: stats(dCs.map(x=>x.d)) },
+    carrot_speed_range_mm_s: { min: Math.round(Math.min(...walk.map(x=>x.cs))), max: Math.round(Math.max(...walk.map(x=>x.cs))) },
+    seek_series: walk.filter((_,i)=>i%20===0).map(x=>({t:x.t, seek:Math.round(x.seek), cs:Math.round(x.cs), far:Math.round(x.far)})),
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// S6 — the REAL production chain: a synthetic AI rig walking A* paths
+// ─────────────────────────────────────────────────────────────────────────────
+async function S6() {
+  const FW = 12000, FD = 10000;
+  const floor = baseFloor({
+    w: FW, d: FD,
+    walls: [
+      { id: 'perim', kind: 'full', points: [{x:200,y:200},{x:11800,y:200},{x:11800,y:9800},{x:200,y:9800},{x:200,y:200}] },
+      { id: 'div1', kind: 'full', points: [{ x: 5000, y: 200 }, { x: 5000, y: 6500 }] },
+      { id: 'div2', kind: 'full', points: [{ x: 8500, y: 9800 }, { x: 8500, y: 3500 }] },
+    ],
+    furniture: [
+      { id: 'chair', x: 1500, y: 1500, w: 500, h: 500, kind: 'chair', rotation: 0 },
+      { id: 'table', x: 2600, y: 8200, w: 1500, h: 900, kind: 'table', rotation: 0 },
+      { id: 'sofa',  x: 10200, y: 6000, w: 2000, h: 900, kind: 'sofa', rotation: 90 },
+      { id: 'shelf', x: 6800, y: 1200, w: 800, h: 350, kind: 'bookshelf', rotation: 180 },
+    ],
+    motionSensors: [
+      { id: 'm1', x: 3000, y: 4000, heading: 0, fov: 360, range: 9000, label: 'Hall',
+        entity_id: 'binary_sensor.hall', color: '#4fc3f7', intensity: 1, avatar: true },
+    ],
+    rooms: [{ id: 'rm1', name: 'Hall', anchor: { x: 3000, y: 4000 } }],
+  });
+  const realRandom = Math.random;
+  Math.random = mulberry32(20260819);
+  let S;
+  try {
+    S = await withRenderer(floor, async (r, clock) => {
+      const KEY = 'ai_m1', dtMs = 1000/60, dt = 1/60;
+      const frames = Math.round(300 * 60);   // 300 s
+      const out = [];
+      // Spy: _blockedWorld is called from _losClearWorld too, so only count the
+      // call whose argument IS the carrot position carried in from last frame —
+      // that is uniquely the snap probe at three-renderer.ts ~L24155.
+      const origBW = r._blockedWorld.bind(r);
+      let prevC = null, snapProbe = false;
+      r._blockedWorld = (wx, wy) => {
+        const v = origBW(wx, wy);
+        if (v && prevC && Math.abs(wx - (r._fw/2 - prevC.x)) < 1e-6 &&
+            Math.abs(wy - (prevC.z + r._fd/2)) < 1e-6) snapProbe = true;
+        return v;
+      };
+      for (let i = 0; i < frames; i++) {
+        snapProbe = false;
+        clock.advance(dtMs);
+        r.updateTargets([{ key: KEY, x: 3000, y: 4000, color: 0x4fc3f7, ai: true }], CTX);
+        const h = r._humanoids[KEY], ai = r._aiState[KEY];
+        if (!h || !ai) { prevC = null; continue; }
+        out.push({ i, t: r3(i*dt), snapProbe, rx: ai.x, ry: ai.y, cx: h.carrotX, cz: h.carrotZ,
+          nx: h.navX, nz: h.navZ, f: h.facing, vx: h.vx, vz: h.vz, amp: h.amp, ph: h.phase,
+          sit: h.sit, act: h.act, lie: h.lie, st: ai.state, wp: ai.path ? ai.path.length : 0,
+          hp: h.path ? h.path.length : 0, spd: ai.speed, rvx: h.rawVx, rvz: h.rawVz,
+          hip: h.leftHip ? h.leftHip.rotation.x : 0, legM: h.legM, pc: h.persCadence, pa: h.persAmp,
+          fe: !!h.faceEngaged, fdl: Math.hypot(h.faceDirX ?? 0, h.faceDirZ ?? 0), fv: h.fvel ?? 0,
+          lead: Math.hypot(h.carrotX - h.navX, h.carrotZ - h.navZ) });
+        prevC = { x: h.carrotX, z: h.carrotZ };
+      }
+      r._blockedWorld = origBW;
+      return out;
+    });
+  } finally { Math.random = realRandom; }
+
+  const dt = 1/60;
+  const anchored = (s) => s.sit > 0.1 || s.act > 0.1 || s.lie > 0.1;
+  const byIdx = new Map(S.map((s, k) => [s.i, k]));
+  const at = (i) => { const k = byIdx.get(i); return k === undefined ? null : S[k]; };
+  // walking, non-anchored frames with 3 consecutive predecessors (so 3rd differences are valid)
+  const walk = [];
+  for (const s of S) {
+    const a = at(s.i-1), b = at(s.i-2), c = at(s.i-3);
+    if (!a || !b || !c) continue;
+    if (Math.hypot(s.vx, s.vz)/1000 <= 0.2) continue;
+    if (anchored(s) || anchored(a) || anchored(b) || anchored(c)) continue;
+    walk.push(s);
+  }
+
+  const dch = (kx, kz, minStep) => {
+    const out = [];
+    for (const s of walk) {
+      const a = at(s.i-1), b = at(s.i-2);
+      const ax = a[kx]-b[kx], az = a[kz]-b[kz], bx = s[kx]-a[kx], bz = s[kz]-a[kz];
+      const la = Math.hypot(ax,az), lb = Math.hypot(bx,bz);
+      if (la < minStep || lb < minStep) continue;
+      out.push({ t: s.t, i: s.i, d: Math.abs(wrapPi(Math.atan2(bz,bx)-Math.atan2(az,ax))) * R2D });
+    }
+    return out;
+  };
+  const rawD = dch('rx','ry',1), carD = dch('cx','cz',1), navD = dch('nx','nz',1);
+
+  const wOf = (s) => { const a = at(s.i-1); return a ? wrapPi(s.f - a.f)/dt : null; };
+  const wS = [], aS = [], lag = [], jS = [], cJ = [], jump = [], curv = [], skate = [];
+  for (const s of walk) {
+    const a = at(s.i-1), b = at(s.i-2), c = at(s.i-3);
+    const w = wOf(s), wPrev = wOf(a);
+    if (w !== null) wS.push({ t: s.t, i: s.i, w });
+    if (w !== null && wPrev !== null) aS.push({ t: s.t, i: s.i, a: (w - wPrev)/dt });
+    // facing lag behind the rendered path tangent
+    const tangent = Math.atan2(-s.vx, -s.vz);
+    lag.push({ t: s.t, i: s.i, d: Math.abs(wrapPi(tangent - s.f)) * R2D });
+    // 3rd differences
+    const jx = (s.nx - 3*a.nx + 3*b.nx - c.nx)/(dt**3), jz = (s.nz - 3*a.nz + 3*b.nz - c.nz)/(dt**3);
+    jS.push({ t: s.t, i: s.i, j: Math.hypot(jx,jz) });
+    const kx = (s.cx - 3*a.cx + 3*b.cx - c.cx)/(dt**3), kz = (s.cz - 3*a.cz + 3*b.cz - c.cz)/(dt**3);
+    cJ.push({ t: s.t, i: s.i, j: Math.hypot(kx,kz) });
+    // Carrot step vs the ONLY bound _seek can produce this frame:
+    //   seek = clamp(1.15*rawSpeed, 300, 2200) (+ min(800, far-1200)) times dt.
+    // Anything above that bound is a DIRECT ASSIGNMENT to h.carrot* elsewhere in
+    // updateTargets (the blocked-cell snap at ~L24162 / _pinCarrot) — a step
+    // input to the spring, not a walk.
+    const rsp = Math.hypot(s.rvx ?? 0, s.rvz ?? 0);
+    // _seek can walk the carrot at most this far; the un-block correction (item 1)
+    // adds at most CARROT_FIX_MMS on top. Anything beyond is a direct assignment.
+    const CARROT_FIX_MMS = 1800;
+    const seekBound = (Math.max(300, Math.min(2200, 1.15*rsp)) + 800
+                       + Math.max(CARROT_FIX_MMS, 1.15*rsp)) * dt * 1.05 + 1;
+    const step = Math.hypot(s.cx-a.cx, s.cz-a.cz);
+    jump.push({ t: s.t, i: s.i, m: step, snap: step > seekBound, bound: seekBound });
+    // rendered path curvature -> turn radius (mm) of the drawn trajectory
+    const sp = Math.hypot(s.vx, s.vz);
+    const nd = navD.find(x => x.i === s.i);
+    if (nd && nd.d > 0.2 && sp > 200) curv.push({ t: s.t, r: sp / ((nd.d/R2D)/dt) });
+    // foot skate: stride matching gives step travel = 4*L*amp*cadence; compare to real speed
+    const spMs = sp/1000, walking = spMs > 0.08;
+    if (walking) {
+      const cadNom = Math.max(spMs/1.2, 0.7) * s.pc;
+      const want = spMs / (4*s.legM*cadNom);
+      const clamped = Math.min(0.55, Math.max(0.05, want)) * s.pa;
+      const modelled = 4*s.legM*cadNom*(clamped/Math.max(1e-9, s.pa));
+      // Cadence measured from the REAL phase advance (implementation-independent):
+      // pre-fix the renderer advanced phase by exactly cadNom*2pi*dt, so this metric
+      // reproduces the old formula-derived one on the old build.
+      const cadReal = Math.abs(wrapPi(s.ph - a.ph)) / (TAU * dt);
+      const footSpeed = 4 * s.legM * cadReal * (s.amp / Math.max(1e-9, s.pa));
+      skate.push({ t: s.t, ratio: modelled/Math.max(1e-9, spMs), lo: want < 0.05, hi: want > 0.55,
+                   real: footSpeed/Math.max(1e-9, spMs), cadReal, cadNom });
+    }
+  }
+
+  // consecutive-frame runs where _blockedWorld said the carrot was in a blocked cell
+  const blockedStreaks = [];
+  { let run = 0;
+    for (const s2 of S) { if (s2.snapProbe) run++; else { if (run) blockedStreaks.push(run); run = 0; } }
+    if (run) blockedStreaks.push(run); }
+  const bigJump = jump.filter(x => x.snap);             // carrot moved further than _seek could walk it
+  const jumpIdx = new Set(bigJump.map(x => x.i));
+  const jerkFromJump = jS.filter(x => jumpIdx.has(x.i) || jumpIdx.has(x.i-1) || jumpIdx.has(x.i-2) || jumpIdx.has(x.i-3));
+  const jerkNoJump = jS.filter(x => !(jumpIdx.has(x.i) || jumpIdx.has(x.i-1) || jumpIdx.has(x.i-2) || jumpIdx.has(x.i-3)));
+  const cornerIdx = new Set(rawD.filter(x => x.d > 20).map(x => x.i));
+  const jerkAtRawCorner = jS.filter(x => [0,1,2,3,4,5].some(k => cornerIdx.has(x.i-k)));
+
+  // stop/start of the gait boolean, and the "glide band" (facing eases but no steps)
+  let flips = 0, wasWalking = false, glide = 0, notAnch = 0;
+  const flipTimes = [];
+  for (const s of S) {
+    const sp = Math.hypot(s.vx, s.vz);
+    const wk = sp/1000 > 0.08;
+    if (wk !== wasWalking) { flips++; if (flipTimes.length < 40) flipTimes.push(r3(s.t)); wasWalking = wk; }
+    if (!anchored(s)) { notAnch++; if (sp > 50 && sp <= 80) glide++; }
+  }
+  let facingFreeze = 0;
+  for (const s of S) if (!anchored(s) && Math.hypot(s.vx, s.vz) <= 50) facingFreeze++;
+
+  const worstA = aS.slice().sort((a,b)=>Math.abs(b.a)-Math.abs(a.a)).slice(0,8).map(x => ({
+    t: x.t, angAccel_rad_s2: r2(x.a), angAccel_deg_s2: Math.round(x.a*R2D),
+    raw_dir_change_deg: r2(rawD.find(rr=>rr.i===x.i)?.d ?? 0),
+    nav_speed_mm_s: Math.round(Math.hypot(at(x.i).vx, at(x.i).vz)),
+    faceEngaged: at(x.i).fe, faceDirLen: r2(at(x.i).fdl), lead_mm: r2(at(x.i).lead),
+    fvel: r2(at(x.i).fv),
+    carrot_step_mm: r2(jump.find(rr=>rr.i===x.i)?.m ?? 0) }));
+  const worstJ = jS.slice().sort((a,b)=>b.j-a.j).slice(0,8).map(x => ({
+    t: x.t, nav_jerk: Math.round(x.j),
+    carrot_step_mm: r2(jump.find(rr=>rr.i===x.i)?.m ?? 0),
+    was_snap: !!(jump.find(rr=>rr.i===x.i)?.snap),
+    seek_bound_mm: r2(jump.find(rr=>rr.i===x.i)?.bound ?? 0),
+    raw_dir_change_deg: r2(rawD.find(rr=>rr.i===x.i)?.d ?? 0) }));
+
+  return {
+    note: '300 s of a real synthetic AI rig (motionSensors avatar) in a 3-region walled ' +
+      'plan, seeded Math.random, 60 fps. Aggregates over WALKING (>0.2 m/s), non-anchored frames.',
+    frames_total: S.length, frames_walking: walk.length, walking_pct: r2(100*walk.length/S.length),
+    frames_with_astar_path_pct: r2(100*S.filter(x=>x.hp>0).length/S.length),
+    raw_dir_change_deg_per_frame: stats(rawD.map(x=>x.d)),
+    carrot_dir_change_deg_per_frame: stats(carD.map(x=>x.d)),
+    nav_dir_change_deg_per_frame: stats(navD.map(x=>x.d)),
+    corner_events_over_20deg: rawD.filter(x=>x.d>20).length,
+    corner_events_over_60deg: rawD.filter(x=>x.d>60).length,
+    corner_events_per_walking_minute: r2(rawD.filter(x=>x.d>20).length / (walk.length*dt/60)),
+    body_yaw_angVel_rad_s: stats(wS.map(x=>Math.abs(x.w))),
+    body_yaw_angAccel_rad_s2: stats(aS.map(x=>Math.abs(x.a))),
+    body_yaw_angAccel_deg_s2: stats(aS.map(x=>Math.abs(x.a)*R2D)),
+    facing_lag_behind_path_tangent_deg: stats(lag.map(x=>x.d)),
+    carrot_jerk_mm_s3: stats(cJ.map(x=>x.j)),
+    nav_jerk_mm_s3: stats(jS.map(x=>x.j)),
+    spring_absorption_ratio_p99: r2((pct(cJ.map(x=>x.j),0.99)??0) / Math.max(1e-9, pct(jS.map(x=>x.j),0.99)??1)),
+    nav_jerk_p99_over_median: r2((pct(jS.map(x=>x.j),0.99)??0) / Math.max(1e-9, pct(jS.map(x=>x.j),0.50)??1)),
+    // attribution
+    carrot_jump_mm_per_frame: stats(jump.map(x=>x.m)),
+    carrot_snap_events: bigJump.length,
+    // ITEM-1 INVARIANT: consecutive frames the carrot spent inside a blocked cell.
+    // The snap exists so A* never starts blocked; rate-limiting the correction is
+    // only legitimate if the carrot still EXITS within a bounded number of frames.
+    blocked_streak_frames: stats(blockedStreaks),
+    blocked_streak_max_frames: blockedStreaks.length ? Math.max(...blockedStreaks) : 0,
+    blocked_streak_count: blockedStreaks.length,
+    carrot_snap_events_confirmed_by_blockedWorld_probe: bigJump.filter(x => at(x.i)?.snapProbe).length,
+    blockedWorld_snap_probe_frames_total: S.filter(x => x.snapProbe).length,
+    carrot_snap_magnitudes_mm: stats(bigJump.map(x=>x.m)),
+    carrot_snap_pct_of_walking_frames: r2(100*bigJump.length/Math.max(1,walk.length)),
+    nav_jerk_on_carrot_snap_frames: stats(jerkFromJump.map(x=>x.j)),
+    nav_jerk_without_carrot_snap: stats(jerkNoJump.map(x=>x.j)),
+    nav_jerk_at_raw_corners: stats(jerkAtRawCorner.map(x=>x.j)),
+    rendered_turn_radius_mm: stats(curv.map(x=>x.r)),
+    tightest_turn_radius_mm: curv.length ? Math.round(Math.min(...curv.map(x=>x.r))) : null,
+    stride_match_ratio_ideal: stats(skate.map(x=>x.ratio)),
+    stride_foot_vs_ground_speed_ratio_realised: stats(skate.map(x=>x.real)),
+    stride_skate_over_25pct_frames_pct: r2(100*skate.filter(x=>Math.abs(x.real-1)>0.25).length/Math.max(1,skate.length)),
+    stride_amp_clamped_low_pct: r2(100*skate.filter(x=>x.lo).length/Math.max(1,skate.length)),
+    stride_amp_clamped_high_pct: r2(100*skate.filter(x=>x.hi).length/Math.max(1,skate.length)),
+    walking_boolean_flips: flips, walking_flips_per_minute: r2(flips/(S.length*dt/60)),
+    first_flip_times: flipTimes,
+    facing_ease_disengaged_frames_pct: r2(100*facingFreeze/S.length),
+    glide_band_50to80mm_s_pct_of_unanchored: r2(100*glide/Math.max(1,notAnch)),
+    worst_yaw_accel_moments: worstA,
+    worst_nav_jerk_moments: worstJ,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// S7 — extra: mutual separation is a raw POSITION push (no velocity state)
+// ─────────────────────────────────────────────────────────────────────────────
+async function S7() {
+  const floor = baseFloor();
+  return withRenderer(floor, async (r, clock) => {
+    const dt = 1/60, dtMs = 1000/60;
+    const S = [];
+    for (let i = 0; i < 600; i++) {
+      const t = i*dt;
+      clock.advance(dtMs);
+      // two rigs walking straight at each other along y=7000, crossing at x=7000
+      const ax = 4000 + 1200*t, bx = 10000 - 1200*t;
+      r.updateTargets([
+        { key: 'a', x: ax, y: 7000, color: 0x4fc3f7 },
+        { key: 'b', x: bx, y: 7040, color: 0xff8888 },
+      ], CTX);
+      const ha = r._humanoids['a'], hb = r._humanoids['b'];
+      if (!ha || !hb) continue;
+      S.push({ t: r3(t), anx: ha.navX, anz: ha.navZ, bnx: hb.navX, bnz: hb.navZ,
+        gap: Math.hypot(ha.navX-hb.navX, ha.navZ-hb.navZ), f: ha.facing });
+    }
+    const jA = jerkSeries(S, 'anx', 'anz', dt);
+    const minGap = Math.min(...S.map(x=>x.gap));
+    const near = S.filter(x => x.gap < 500);
+    const nearT = near.length ? { from: near[0].t, to: near[near.length-1].t } : null;
+    const jNear = jA.filter(x => nearT && x.t >= nearT.from - 0.2 && x.t <= nearT.to + 0.2);
+    const jFar  = jA.filter(x => x.t > 0.8 && (!nearT || x.t < nearT.from - 0.5));
+    // per-frame nav step size (the push is capped at 60 mm/frame on top of the spring)
+    const step = [];
+    for (let i = 1; i < S.length; i++) step.push({ t: S[i].t, s: Math.hypot(S[i].anx-S[i-1].anx, S[i].anz-S[i-1].anz) });
+    return {
+      note: 'two rigs crossing head-on. _separateRigs applies a positional push (<=60 mm/frame) ' +
+        'to BOTH nav and carrot AFTER the spring — a position edit with no velocity state.',
+      min_gap_mm: Math.round(minGap),
+      separation_active_window_s: nearT,
+      nav_jerk_mm_s3_near_pass: stats(jNear.map(x=>x.j)),
+      nav_jerk_mm_s3_free_walk: stats(jFar.map(x=>x.j)),
+      jerk_ratio_near_over_free: r2((pct(jNear.map(x=>x.j),0.99)??0) / Math.max(1e-9, pct(jFar.map(x=>x.j),0.99)??1)),
+      nav_step_mm_per_frame: { near_max: r2(Math.max(...step.filter(x=>nearT&&x.t>=nearT.from&&x.t<=nearT.to).map(x=>x.s), 0)),
+                               free_max: r2(Math.max(...step.filter(x=>x.t>1&&(!nearT||x.t<nearT.from-0.5)).map(x=>x.s), 0)) },
+    };
+  });
+}
+
+// ── run everything ───────────────────────────────────────────────────────────
+const _realRandom = Math.random;
+Math.random = mulberry32(20260819);   // whole page deterministic (regression pin)
+try {
+  const s1 = await S1();
+  OUT.sections.H1_facing_first_order = (({_S, ...rest}) => rest)(s1);
+  OUT.sections.H2_frame_rate_dependence = await S2();
+  OUT.sections.H3_corner_discontinuity = await S3(s1);
+  OUT.sections.H4_gait_phase_freeze = await S4();
+  OUT.sections.H5_seek_speed = S5(s1);
+  OUT.sections.PROD_ai_rig = await S6();
+  OUT.sections.X_rig_separation = await S7();
+} catch (e) {
+  OUT.errors.push(String(e && e.stack || e));
+} finally { Math.random = _realRandom; }
+// ── ASSERTIONS ───────────────────────────────────────────────────────────────
+// Every threshold is derived from a MEASURED post-fix value with stated margin,
+// and every one is negative-controlled by a real run of reverted code (the value
+// that run produced is quoted as `was:`). Nothing here is a round number chosen
+// because it looked safe.
+const A = [];
+const chk = (name, ok, got, want, note) =>
+  A.push({ name, ok: !!ok, got, want, note });
+const P = OUT.sections.PROD_ai_rig || {};
+const SEP = OUT.sections.X_rig_separation || {};
+const H1 = OUT.sections.H1_facing_first_order || {};
+const H2 = (OUT.sections.H2_frame_rate_dependence || {}).rates || {};
+const H3 = OUT.sections.H3_corner_discontinuity || {};
+const H4 = OUT.sections.H4_gait_phase_freeze || {};
+const g = (o, ...k) => k.reduce((x, kk) => (x == null ? x : x[kk]), o);
+
+// ── item 1: the carrot setpoint must never step ──────────────────────────────
+chk('1a carrot never assigned mid-walk', P.carrot_snap_events === 0,
+  P.carrot_snap_events, '=== 0',
+  'a frame whose carrot moved further than _seek + the un-block correction could ' +
+  'walk it is a direct h.carrot* assignment. was: 22 (pre-fix)');
+chk('1b carrot step bounded', g(P,'carrot_jump_mm_per_frame','max') <= 60,
+  g(P,'carrot_jump_mm_per_frame','max'), '<= 60 mm',
+  'measured 48.79 (= CARROT_FIX 30 + seek ~19); 23 % margin. was: 232.33');
+chk('1c carrot still exits blocked cells', P.blocked_streak_max_frames <= 12,
+  P.blocked_streak_max_frames, '<= 12 frames',
+  'THE invariant the snap exists for — a correction so slow the carrot lingers ' +
+  'where A* cannot start is a regression, not a fix. measured 8 (0.13 s)');
+chk('1d nav jerk not spiky', P.nav_jerk_p99_over_median <= 800,
+  P.nav_jerk_p99_over_median, '<= 800',
+  'p99/median of rendered-position jerk. measured 417; 1.9x margin. was: 3269');
+chk('1e nav jerk peak', g(P,'nav_jerk_mm_s3','max') <= 350000,
+  g(P,'nav_jerk_mm_s3','max'), '<= 350000 mm/s^3',
+  'measured 202 085; 1.7x margin. was: 1 064 394');
+
+// ── item 3: exact easing => frame-rate independence ──────────────────────────
+chk('3a 10 fps facing tracks 120 fps', g(H2,'10','divergence_after_startup_incl_corner','facing_deg') <= 20,
+  g(H2,'10','divergence_after_startup_incl_corner','facing_deg'), '<= 20 deg',
+  'same scripted walk at 10 vs 120 fps, post-startup. measured 13.95. was: 29.72');
+chk('3b 30 fps facing tracks 120 fps', g(H2,'30','divergence_after_startup_incl_corner','facing_deg') <= 7.5,
+  g(H2,'30','divergence_after_startup_incl_corner','facing_deg'), '<= 7.5 deg',
+  'measured 5.96. was: 9.37');
+chk('3c steady state is rate-independent',
+  [6,10,15,30,60,120].every(r => Math.abs(g(H2,String(r),'settled_amp_at_t4') - 0.37) < 0.005),
+  [6,10,15,30,60,120].map(r => g(H2,String(r),'settled_amp_at_t4')).join(','), 'all 0.37',
+  'proves the ease change moved only the transient, never where a value lands');
+
+// ── item 4: stride matching under the amp ease ───────────────────────────────
+chk('4a feet track the ground', P.stride_skate_over_25pct_frames_pct <= 1.0,
+  P.stride_skate_over_25pct_frames_pct, '<= 1.0 %',
+  'walking frames whose foot speed is >25 % off body speed, cadence measured from ' +
+  'the REAL phase advance. measured 0.07. was: 11.11');
+chk('4b no foot skate at p99', g(P,'stride_foot_vs_ground_speed_ratio_realised','p99') <= 1.05,
+  g(P,'stride_foot_vs_ground_speed_ratio_realised','p99'), '<= 1.05',
+  'measured 1.00. was: 1.60');
+
+// ── item 5: separation is a force, not a teleport ────────────────────────────
+chk('5a passing jerk near free-walk', SEP.jerk_ratio_near_over_free <= 80,
+  SEP.jerk_ratio_near_over_free, '<= 80',
+  'p99 jerk during a head-on pass over p99 jerk free-walking. measured 35.4; ' +
+  '2.3x margin. was: 318.1');
+chk('5b separation still separates', SEP.min_gap_mm >= 200,
+  SEP.min_gap_mm, '>= 200 mm',
+  'guards the other direction — a softer repulsion must not let figures merge. ' +
+  'measured 251 (the old 380 was held only BY the teleport being removed)');
+
+// ── facing: the four richer designs that measured WORSE must stay out ────────
+chk('F1 body-yaw acceleration', g(P,'body_yaw_angAccel_rad_s2','p99') <= 26,
+  g(P,'body_yaw_angAccel_rad_s2','p99'), '<= 26 rad/s^2',
+  'measured 20.81. Rejected designs: lead+spring 52.2, lead+first-order 42.5, ' +
+  'confidence-scaled 27.3, 90/55 hysteresis 32.9 — every one trips this');
+chk('F2 facing tracks the path', g(P,'facing_lag_behind_path_tangent_deg','p99') <= 26,
+  g(P,'facing_lag_behind_path_tangent_deg','p99'), '<= 26 deg',
+  'measured 20.03. Rejected designs: 44.7 / 47.1 / 46.3 / 27.8');
+chk('F3 no per-frame yaw step at a corner',
+  g(H1,'facing_max_frame_step_in_angVel_rad_s','corner') <= 0.20,
+  g(H1,'facing_max_frame_step_in_angVel_rad_s','corner'), '<= 0.20 rad/s',
+  'clean 1.2 m/s 90-deg corner: yaw rate must RAMP, not step. measured 0.137');
+
+// ── invariants that must survive all of the above ────────────────────────────
+chk('I1 spring still absorbs polyline corners', P.spring_absorption_ratio_p99 >= 50,
+  P.spring_absorption_ratio_p99, '>= 50',
+  'carrot jerk / nav jerk at p99 — the whole point of the carrot-chaser. measured 132');
+chk('I2 rendered path never corners hard', g(P,'nav_dir_change_deg_per_frame','max') <= 25,
+  g(P,'nav_dir_change_deg_per_frame','max'), '<= 25 deg/frame',
+  'measured 9.51; the raw walker still turns 80 deg in one frame behind it');
+chk('I3 A* polyline stays smooth', g(H3,'B_astar_polyline','nav_jerk_mm_s3','p99') <= 150000,
+  g(H3,'B_astar_polyline','nav_jerk_mm_s3','p99'), '<= 150000 mm/s^3',
+  'carrot walking a real string-pulled path. measured 67 175');
+chk('I4 gait settles when walking stops',
+  (H4.events || []).every(e => e.amp_at_freeze_rad != null && e.amp_at_freeze_rad < 0.12 &&
+                               Math.abs(e.hip_after_1s_rad) < 0.05),
+  (H4.events || []).map(e => `${e.amp_at_freeze_rad}/${e.hip_after_1s_rad}`).join(' '),
+  'amp<0.12 at freeze, |hip|<0.05 after 1 s',
+  'the phase DOES freeze mid-stride; this pins that it stays visually harmless');
+chk('I5 no errors', OUT.errors.length === 0, OUT.errors.length, '=== 0', '');
+
+OUT.assertions = A;
+const pass = A.filter(x => x.ok).length, total = A.length;
+OUT.pass = pass; OUT.total = total;
+window.__RESULT__ = OUT;
+document.getElementById('j').textContent =
+  A.map(x => `${x.ok ? 'PASS' : 'FAIL'}  ${x.name}: got ${JSON.stringify(x.got)} want ${x.want}` +
+             (x.note ? `\n        ${x.note}` : '')).join('\n') +
+  '\n\n' + JSON.stringify(OUT, null, 1);
+document.title = `FLUIDITY ${pass === total ? 'PASS' : 'FAIL'} ${pass}/${total}` +
+  (pass === total ? '' : ' | ' + A.filter(x => !x.ok).map(x => `${x.name} got ${JSON.stringify(x.got)} want ${x.want}`).join(' ; '));
+</script>

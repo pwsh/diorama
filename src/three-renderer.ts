@@ -1563,6 +1563,62 @@ interface PropDef {
   poseHold: (h: Humanoid, t: number, propPhase: number, walking: boolean) => PropPoseDelta;
 }
 
+// ── Walk facing ──────────────────────────────────────────────────────────────
+// The turn itself is a FIRST-ORDER ease and deliberately stays one. Four richer
+// designs were built and measured against a 300 s AI-rig run, and every one of
+// them was WORSE than this (peak body-yaw acceleration, rad/s², lower is better):
+//   first-order + hard 50 mm/s gate  (this)            55.3 max / 21.2 p99
+//   + 60/30 hysteresis + nav→carrot lead + ω=16 spring 121.8 max / 52.2 p99
+//   + 60/30 hysteresis + nav→carrot lead, first-order  152.6 max / 42.5 p99
+//   + 60/30 hysteresis + confidence-scaled rate        67.7 max / 27.3 p99
+//   + 90/55 hysteresis, velocity source                79.0 max / 32.9 p99
+// Why each loses, because these are tempting and will be re-proposed:
+//  • A nav→CARROT lead vector is not a better heading source. It collapses through
+//    zero and REVERSES while a figure decelerates (the carrot stops first and the
+//    spring-trailed body coasts past it), injecting 180° flips in exactly the
+//    200–235 mm/s band the worst events live in.
+//  • A critically damped ANGULAR spring answers a heading error with α = ω²·e, so
+//    it AMPLIFIES the errors that actually occur; it also builds momentum and
+//    overshoots (measured body-yaw lag behind the path tangent went 32° → 130°).
+//    Second-order is right for POSITION (_springNav) because the carrot never
+//    steps; a heading target genuinely does.
+//  • Hysteresis loses in both directions: releasing below 50 mm/s extends tracking
+//    into data that is pure noise, and engaging above it lets error accumulate
+//    while facing is frozen, so re-engagement is a bigger correction.
+// `h.vx/h.vz` is already a 0.25 s low-pass of nav displacement, which is what makes
+// this branch smooth; the 50 mm/s gate is what keeps it out of the noise floor.
+const FACE_K_WALK = 8;
+const FACE_K_POSE = 6;
+const FACE_K_LIE = 5;
+const FACE_GATE_MMS = 50;
+
+// Rate the carrot is walked out of a blocked cell (see the graze branch in
+// updateTargets). 1800 mm/s crosses a whole 150 mm nav cell in 0.083 s and the
+// worst correction ever measured (232 mm) in 0.129 s ≈ 1.16 spring time constants
+// at ω = 9 — fast enough that the carrot never lingers where A* can't start, slow
+// enough that the ω = 9 position spring sees a moving target rather than a step.
+const CARROT_FIX_MMS = 1800;
+// Mutual separation speed. The old code moved 60 mm per FRAME, i.e. a frame-rate
+// dependent 3600 mm/s at 60 fps and 1800 mm/s at 30. As a rate it is identical at
+// 60 fps and no longer doubles on a 120 Hz display.
+const SEP_RATE_MMS = 3600;
+// Repulsion stiffness as a rad/s rate. Fed into the position spring's VELOCITY
+// state as an acceleration — not as a position write and not as an impulse:
+//   • the old position write was a teleport: 318× free-walk jerk, p99 3.4e6 mm/s³;
+//   • a velocity impulse still costs Δv/dt² of jerk and measured 2.8e6 — it also
+//     accumulates while two rigs stay overlapped;
+//   • an acceleration proportional to overlap depth ramps in continuously, so the
+//     rendered position stays C1.
+// A pair-damping term (−2·ω_r·closing speed) was tried and REJECTED: the closing
+// speed itself changes fast in a head-on pass, so damping it re-introduced the jerk
+// (417× — worse than the position write). The position spring's own −2ω·v already
+// damps this; it does not need a second damper.
+// ω_r = 15 is the measured knee of a monotone trade: stiffer holds a wider gap and
+// costs more jerk. At 15 two rigs on a deliberate head-on collision course pass at
+// 253 mm instead of the 380 mm the teleport enforced, for 8.8× less jerk — and the
+// old 380 mm was only ever held BY the teleport this replaces.
+const SEP_W = 15;
+
 interface Humanoid {
   group: THREE.Group;
   color: number;       // tint the rig was built with (rebuilt if it changes)
@@ -9147,6 +9203,27 @@ export class ThreeDRenderer {
       h.navX += h.nvx * hs;
       h.navZ += h.nvz * hs;
     }
+  }
+
+  // Exact first-order ease coefficient for rate k over dt: 1 − e^(−k·dt). The old
+  // `Math.min(1, dt·k)` is that expression's first Taylor term and is only right as
+  // dt → 0 — at the 0.1 s dt clamp `dt·8` is 0.8 against an exact 0.551, so the
+  // effective time constant nearly HALVED at low frame rates (measured: yaw τ
+  // 0.062 s at 10 fps vs 0.121 s at 120 fps, and a 60° facing divergence at 6 fps).
+  // Same lesson and same fix as the wall-cutaway fade. STEADY STATE IS UNTOUCHED:
+  // both forms are a convex blend toward the same target, so only the transient
+  // rate changes — never where the value lands.
+  private _ease(k: number, dt: number): number {
+    return 1 - Math.exp(-k * dt);
+  }
+
+  // First-order facing ease, EXACT (1 − e^(−k·dt)) rather than the old
+  // `min(1, dt·k)`. Shortest-arc, wrapped both on the error and on the result.
+  private _easeFacing(h: Humanoid, want: number, k: number, dt: number): void {
+    let e = want - h.facing;
+    e -= Math.round(e / (2 * Math.PI)) * 2 * Math.PI;   // shortest arc, seam-safe
+    h.facing += e * this._ease(k, dt);
+    h.facing -= Math.round(h.facing / (2 * Math.PI)) * 2 * Math.PI;
   }
 
   // Re-anchor the carrot onto nav and kill the spring velocity. Called whenever
@@ -23692,7 +23769,7 @@ export class ThreeDRenderer {
     const rawPos: Record<string, { x: number; y: number }> = {};
     // Walking (non-anchored, visible) rigs eligible for mutual separation this
     // frame, resolved after the main loop so they gently push apart.
-    const movers: { h: Humanoid; key: string }[] = [];
+    const movers: { h: Humanoid; key: string; dt: number }[] = [];
 
     // ── Activity-anchor OCCUPANCY claims (anchor id → owning rig key), the
     // standing twin of `seatClaims` below. Rebuilt here from LIVE rigs so a
@@ -23932,7 +24009,7 @@ export class ThreeDRenderer {
       // detour walking from feeding back into the dwell gates.
       {
         const rix = (p.x - h.rawLastX) / dtFull, riz = (p.z - h.rawLastZ) / dtFull;
-        const al = Math.min(1, dt * 4);
+        const al = this._ease(4, dt);
         h.rawVx = h.rawVx * (1 - al) + rix * al;
         h.rawVz = h.rawVz * (1 - al) + riz * al;
       }
@@ -24160,12 +24237,30 @@ export class ThreeDRenderer {
               ? this._confinedCell(ci, gr, cLoop)
               : this._nearestFreeCellInRegion(ci, gr));
             const gap = Math.hypot(sc.x - h.carrotX, sc.z - h.carrotZ);
-            h.carrotX = sc.x; h.carrotZ = sc.z;
-            // A genuine footprint DROP (radar teleported the person into a piece)
-            // is a big jump → hard-ground nav too. A mere corner graze mid-walk is
-            // small → leave nav to the spring so it doesn't teleport (that spike
-            // was the old jerk this smoothing exists to kill).
-            if (gap > 600) { h.navX = sc.x; h.navZ = sc.z; h.nvx = 0; h.nvz = 0; }
+            if (gap > 600) {
+              // A genuine footprint DROP (radar teleported the person into a
+              // piece). The rig is badly wrong, so re-seat it: carrot AND nav
+              // hard-set, spring velocity killed. DELIBERATELY UNCHANGED.
+              h.carrotX = sc.x; h.carrotZ = sc.z;
+              h.navX = sc.x; h.navZ = sc.z; h.nvx = 0; h.nvz = 0;
+            } else if (gap > 1e-3) {
+              // A corner graze mid-walk. The old code ASSIGNED the cell centre here
+              // and left nav to the spring — but that is a STEP in the spring's own
+              // SETPOINT, and no spring can absorb a step in its target. Measured
+              // over 300 s: 22 grazes moved the carrot 94–232 mm in a single frame
+              // against a seek budget of 26–32 mm, and they were 8 of the 8 worst
+              // jerk moments of the whole run (nav jerk median 174 417 mm/s³ against
+              // a 33 mm/s³ walking baseline), none of them at a corner.
+              // Same destination cell, same region / LOS / A* semantics — ONLY the
+              // speed of getting there changes: walk the carrot to it at a bounded
+              // rate so the setpoint stays continuous. Never slower than the
+              // figure's own seek pace, so a fast walker cannot outrun its own
+              // correction and stall inside the blocked cell.
+              const rate = Math.max(CARROT_FIX_MMS, 1.15 * rawSpeedMms);
+              const stepMm = Math.min(gap, rate * dt);
+              h.carrotX += ((sc.x - h.carrotX) / gap) * stepMm;
+              h.carrotZ += ((sc.z - h.carrotZ) / gap) * stepMm;
+            }
           }
         }
         this._steerNav(h, t, dt, rawSpeedMms);
@@ -24197,7 +24292,7 @@ export class ThreeDRenderer {
       // NAV velocity (drives gait + facing): low-passed nav displacement.
       {
         const nix = (h.navX - h.lastX) / dtFull, niz = (h.navZ - h.lastZ) / dtFull;
-        const al = Math.min(1, dt * 4);
+        const al = this._ease(4, dt);
         h.vx = h.vx * (1 - al) + nix * al;
         h.vz = h.vz * (1 - al) + niz * al;
       }
@@ -24211,29 +24306,18 @@ export class ThreeDRenderer {
       } else if (lieBed && lie > 0.3) {
         // Head toward the headboard (+local-Z of the bed = bedYaw), so the
         // pitched-back rig lies with its head on the pillows.
-        let d = bedYaw - h.facing;
-        d -= Math.round(d / (2 * Math.PI)) * 2 * Math.PI;
-        h.facing += d * Math.min(1, dt * 5);
+        this._easeFacing(h, bedYaw, FACE_K_LIE, dt);
       } else if (anchor && act > 0.3) {
         // Turn to face the appliance while engaging.
-        let d = anchor.facing - h.facing;
-        d -= Math.round(d / (2 * Math.PI)) * 2 * Math.PI;
-        h.facing += d * Math.min(1, dt * 6);
+        this._easeFacing(h, anchor.facing, FACE_K_POSE, dt);
       } else if (spot && sit > 0.3) {
         // Turn to the seat's facing while settling.
-        let d = spot.facing - h.facing;
-        d -= Math.round(d / (2 * Math.PI)) * 2 * Math.PI;
-        h.facing += d * Math.min(1, dt * 6);
+        this._easeFacing(h, spot.facing, FACE_K_POSE, dt);
       } else if (h.reachT >= 0) {
         // Turn to face the device being reached for during a device interaction.
-        let d = h.reachFacing - h.facing;
-        d -= Math.round(d / (2 * Math.PI)) * 2 * Math.PI;
-        h.facing += d * Math.min(1, dt * 6);
-      } else if (speedMms > 50) {
-        const want = Math.atan2(-h.vx, -h.vz);
-        let d = want - h.facing;
-        d -= Math.round(d / (2 * Math.PI)) * 2 * Math.PI;  // wrap to [-π, π]
-        h.facing += d * Math.min(1, dt * 8);
+        this._easeFacing(h, h.reachFacing, FACE_K_POSE, dt);
+      } else if (speedMms > FACE_GATE_MMS) {
+        this._easeFacing(h, Math.atan2(-h.vx, -h.vz), FACE_K_WALK, dt);
       }
       h.group.rotation.y = h.facing;
 
@@ -24249,8 +24333,7 @@ export class ThreeDRenderer {
       // Multiplicative on cadence / amp / bob / roll-sway only — pose/IK math
       // untouched. Since stride matching divides by cadence below, a slower
       // personality cadence automatically lengthens the stride to compensate.
-      const cadence = walking ? Math.max(speedMs / 1.2, 0.7) * h.persCadence : 0;  // cycles/s
-      h.phase = (h.phase + cadence * 2 * Math.PI * dt) % (2 * Math.PI);
+      const cadenceNom = walking ? Math.max(speedMs / 1.2, 0.7) * h.persCadence : 0;  // cycles/s
 
       // Swing amplitude from stride matching: step length ≈ 2·L·amp
       // (small-angle), two steps per cycle → v = 4·L·amp·cadence, so
@@ -24261,11 +24344,29 @@ export class ThreeDRenderer {
       const LEG_M = h.legM;  // per-rig hip height in m (adult 0.81; child scaled)
       const speedNorm = Math.min(1, speedMs / 1.4);
       const targetAmp = walking
-        ? Math.min(0.55, Math.max(0.05, speedMs / (4 * LEG_M * cadence))) * h.persAmp
+        ? Math.min(0.55, Math.max(0.05, speedMs / (4 * LEG_M * cadenceNom))) * h.persAmp
         : 0;
-      h.amp += (targetAmp - h.amp) * Math.min(1, dt * 6);
+      h.amp += (targetAmp - h.amp) * this._ease(6, dt);
       const amp = h.amp;
       const ampNorm = Math.min(1, amp / 0.55);
+
+      // Cadence comes from the amplitude actually being RENDERED, not from the
+      // target the ease is still travelling toward. Stride matching only holds when
+      // foot ground speed (≈ 4·L·amp·cadence) equals body speed, and `h.amp` lags
+      // `targetAmp` through every acceleration and deceleration — measured, 11.1 %
+      // of walking frames had the feet moving >25 % off ground speed, peaking at
+      // 1.78×, purely from that lag (the ideal matcher above never clamped once).
+      // `persAmp` is divided back out because it is a deliberate exaggeration of the
+      // LIMB SWING, not a claim about ground speed; leaving it in would cancel the
+      // walk personality. STEADY STATE IS PROVABLY UNCHANGED: once h.amp reaches
+      // targetAmp, amp/persAmp === speedMs/(4·L·cadenceNom) and this returns
+      // cadenceNom exactly. The envelope guards the amp → 0 singularity at walk
+      // start and spans the measured 0.6–1.78 mismatch range with margin.
+      const cadence = (walking && amp > 1e-4)
+        ? Math.min(cadenceNom * 2.5, Math.max(cadenceNom * 0.4,
+            speedMs / (4 * LEG_M * (amp / Math.max(1e-3, h.persAmp)))))
+        : cadenceNom;
+      h.phase = (h.phase + cadence * 2 * Math.PI * dt) % (2 * Math.PI);
 
       const sinP = Math.sin(h.phase);
       // Gentle fore/aft weight shift while idle, desynced between rigs.
@@ -24916,7 +25017,7 @@ export class ThreeDRenderer {
       // the NAV position (they climb along their detour path), eased so
       // climbing reads as a glide up the treads rather than pops.
       const gTarget = this._groundYAt(this._fw / 2 - h.navX, h.navZ + this._fd / 2);
-      h.groundY += (gTarget - h.groundY) * Math.min(1, dt * 8);
+      h.groundY += (gTarget - h.groundY) * this._ease(8, dt);
 
       // Subtle vertical bob — peaks twice per stride cycle. When seated the
       // root drops so the hip pivot (870 mm in the rig) rests on the seat,
@@ -25017,8 +25118,8 @@ export class ThreeDRenderer {
       // While anchored, ease nav toward the rendered position so there's no
       // jump when the blend releases and nav takes over walking again.
       if (anchored) {
-        h.navX += (px2 - h.navX) * Math.min(1, dt * 3);
-        h.navZ += (pz2 - h.navZ) * Math.min(1, dt * 3);
+        h.navX += (px2 - h.navX) * this._ease(3, dt);
+        h.navZ += (pz2 - h.navZ) * this._ease(3, dt);
         this._pinCarrot(h);   // keep the carrot on nav so walk-resume starts clean
       }
 
@@ -25157,14 +25258,15 @@ export class ThreeDRenderer {
       // Lying rigs are excluded — separation overwrites x/z from nav space and
       // would knock the side-by-side occupants off their lie positions.
       if (!h.sessile && sit < 0.3 && act < 0.3 && lie < 0.3 && !this._bedState.hiddenKeys.has(t.key)) {
-        movers.push({ h, key: t.key });
+        movers.push({ h, key: t.key, dt });
       }
     }
 
     // ── Mutual separation: keep crossing pedestrians from overlapping. For each
     // eligible pair closer than 380 mm in nav space, push both apart along the
-    // pair axis by half the overlap (capped 60 mm/frame each). Applied to the
-    // nav positions (so it persists) and re-committed to the rendered x/z.
+    // pair axis by half the overlap (capped at SEP_RATE_MMS each). Applied to the
+    // CARROT (so it persists) plus a velocity impulse into the position spring;
+    // the trailing loop re-commits nav to the rendered x/z.
     const SEP = 380;
     for (let i = 0; i < movers.length; i++) {
       for (let j = i + 1; j < movers.length; j++) {
@@ -25172,18 +25274,35 @@ export class ThreeDRenderer {
         let ddx = a.navX - b.navX, ddz = a.navZ - b.navZ;
         const d = Math.hypot(ddx, ddz);
         if (d >= SEP) continue;
-        const push = Math.min(60, (SEP - d) / 2);
+        const sdt = Math.max(1e-3, Math.min(movers[i].dt, movers[j].dt));
+        const overlap = SEP - d;
+        const push = Math.min(SEP_RATE_MMS * sdt, overlap / 2);
         // Unit pair axis. Coincident → arbitrary axis; otherwise normalize.
         // (Normalizing must NOT reuse a clamped d — dividing (1,0) by 1e-3 once
         // flung figures 60 000 mm apart when two targets exactly overlapped.)
         if (d < 1e-3) { ddx = 1; ddz = 0; } else { ddx /= d; ddz /= d; }
-        // Push nav (this frame's render) AND the carrot (the pathfinding walker)
-        // so the spring holds the gap instead of pulling the figures back
-        // together next frame.
-        a.navX += ddx * push; a.navZ += ddz * push;
-        b.navX -= ddx * push; b.navZ -= ddz * push;
+        // The CARROT (the pathfinding walker / spring setpoint) takes the
+        // displacement, so the spring holds the gap instead of pulling the figures
+        // back together next frame…
         a.carrotX += ddx * push; a.carrotZ += ddz * push;
         b.carrotX -= ddx * push; b.carrotZ -= ddz * push;
+        // …and the drawn body gets a matching VELOCITY rather than a position write.
+        // The old code moved navX/navZ directly, AFTER the spring had already run,
+        // which is a position step: measured, a head-on pass ran 318× the free-walk
+        // jerk (p99 3.4e6 mm/s³ — the largest figure measured anywhere in the rig).
+        // Injecting the same speed into the spring's own velocity state keeps the
+        // rendered position C0 and lets the spring's own −2ω·v term damp it, so the
+        // separation reads as an acceleration apart instead of a teleport apart.
+        // NB an accumulating velocity impulse was measured and REJECTED: adding
+        // push/dt every frame both accumulates and is a velocity STEP, and a
+        // velocity step still costs Δv/dt² of jerk (measured 2.8e6 mm/s³ — barely
+        // better than the position write it replaced). What ships is a critically
+        // damped repulsion: a restoring term proportional to overlap depth, minus
+        // its own damping on the pair's closing speed, so it ramps in continuously
+        // (position stays C1) and settles on the gap instead of ringing about it.
+        const aSep = SEP_W * SEP_W * overlap * sdt;
+        a.nvx += ddx * aSep; a.nvz += ddz * aSep;
+        b.nvx -= ddx * aSep; b.nvz -= ddz * aSep;
       }
     }
     for (const m of movers) {
