@@ -43,6 +43,7 @@ const GUIDE = [
   { slug: 'yard-terrain', title: 'Yard & terrain', md: 'yard-terrain.md' },
   { slug: 'outdoor-weather', title: 'Weather, sky & geo', md: 'outdoor-weather.md' },
   { slug: 'neighborhood-flights', title: 'Neighborhood & flights', md: 'neighborhood-flights.md' },
+  { slug: 'mmwave', title: 'mmWave tuning & presence', md: 'mmwave.md' },
   { slug: 'kiosk-modes', title: 'Kiosk & display modes', md: 'kiosk-modes.md' },
   { slug: 'configurations', title: 'Configurations, notes & offline', md: 'configurations.md' },
 ];

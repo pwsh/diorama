@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 470" width="880" height="470" role="img" aria-label="The mmWave technical editor has five panes: live targets, zones drawn on a sensor-local canvas, object halos, device settings including every entity the device exposes, and diagnostics.">
+<style>
+  .bg{fill:#0f1115}
+  .panel{fill:#171a1f;stroke:#262b33;stroke-width:1.5;rx:8}
+  .pane{fill:#1c2027;stroke:#262b33;stroke-width:1.2;rx:6}
+  .paneA{fill:#1c2027;stroke:#4da3ff;stroke-width:1.5;rx:6}
+  .t{fill:#e6e8eb;font-family:system-ui,-apple-system,Segoe UI,sans-serif;font-size:12.5px;font-weight:600}
+  .s{fill:#9aa3ad;font-family:system-ui,sans-serif;font-size:10.5px}
+  .n{fill:#4da3ff;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10.5px}
+  .hdr{fill:#e6e8eb;font-family:system-ui,sans-serif;font-size:14px;font-weight:700}
+  .tab{fill:#2b3a4d;rx:5}
+  .tabt{fill:#e6e8eb;font-family:system-ui,sans-serif;font-size:11px;font-weight:600}
+  .grid{stroke:#262b33;stroke-width:1;fill:none}
+  .wedge{fill:#4da3ff;opacity:.13}
+  .dotR{fill:none;stroke:#ffb74d;stroke-width:1.6}
+  .dotE{fill:#4da3ff}
+  .poly{fill:none;stroke:#7ec87e;stroke-width:1.6}
+  .polyF{fill:none;stroke:#ef5350;stroke-width:1.4;stroke-dasharray:4 3}
+  .vh{fill:#7ec87e}
+</style>
+<rect class="bg" width="880" height="470"/>
+<text class="hdr" x="24" y="30">The mmWave technical editor</text>
+<text class="s" x="24" y="48">Opens from a sensor in the sidebar. Tunes the device — separate from placing it on the plan.</text>
+
+<rect class="panel" x="24" y="62" width="832" height="386"/>
+
+<rect class="tab" x="40" y="76" width="96" height="24"/><text class="tabt" x="56" y="92">Targets</text>
+<rect class="tab" x="144" y="76" width="96" height="24" fill="#171a1f" stroke="#262b33"/><text class="tabt" x="166" y="92">Zones</text>
+<rect class="tab" x="248" y="76" width="96" height="24" fill="#171a1f" stroke="#262b33"/><text class="tabt" x="266" y="92">Objects</text>
+<rect class="tab" x="352" y="76" width="96" height="24" fill="#171a1f" stroke="#262b33"/><text class="tabt" x="372" y="92">Settings</text>
+<rect class="tab" x="456" y="76" width="112" height="24" fill="#171a1f" stroke="#262b33"/><text class="tabt" x="472" y="92">Diagnostics</text>
+
+<rect class="paneA" x="40" y="114" width="380" height="200"/>
+<text class="t" x="56" y="136">Sensor-local canvas</text>
+<text class="s" x="56" y="153">Its own zoom and pan — the floor plan's view does not move it</text>
+<path class="wedge" d="M230 290 L120 170 A 150 150 0 0 1 340 170 Z"/>
+<path class="grid" d="M230 290 L230 166 M150 290 L310 290"/>
+<circle cx="230" cy="290" r="5" fill="#4da3ff"/>
+<text class="s" x="240" y="303">sensor</text>
+<path class="poly" d="M160 200 L280 190 L300 250 L175 258 Z"/>
+<circle class="vh" cx="160" cy="200" r="3.5"/><circle class="vh" cx="280" cy="190" r="3.5"/>
+<circle class="vh" cx="300" cy="250" r="3.5"/><circle class="vh" cx="175" cy="258" r="3.5"/>
+<text class="s" x="164" y="186" fill="#7ec87e">inclusion zone</text>
+<path class="polyF" d="M312 196 L372 200 L368 244 L310 240 Z"/>
+<text class="s" x="306" y="192" fill="#ef5350">exclusion zone</text>
+<circle class="dotR" cx="252" cy="222" r="5"/>
+<circle class="dotE" cx="238" cy="262" r="4"/>
+<text class="s" x="262" y="226">raw report</text>
+<text class="s" x="186" y="272">smoothed</text>
+
+<rect class="pane" x="436" y="114" width="404" height="94"/>
+<text class="t" x="452" y="136">Live targets — raw and smoothed, side by side</text>
+<text class="s" x="452" y="155">x, y, speed, angle, resolution, world position, age</text>
+<text class="n" x="452" y="173">observed push rate</text>
+<text class="s" x="574" y="173">— the radar's real cadence, measured</text>
+<text class="s" x="452" y="192">Angle was reported by the device all along and shown nowhere.</text>
+
+<rect class="pane" x="436" y="220" width="404" height="94"/>
+<text class="t" x="452" y="242">Device settings — everything, not just the known five</text>
+<text class="s" x="452" y="261">Height, tilt, ghostbuster, multi-target, upside-down…</text>
+<text class="s" x="452" y="279">…plus every other entity this device exposes, by type:</text>
+<text class="n" x="452" y="298">number · switch · select · button</text>
+
+<rect class="pane" x="40" y="326" width="380" height="106"/>
+<text class="t" x="56" y="348">Objects</text>
+<text class="s" x="56" y="367">Halo position and radius, dragged on the same canvas.</text>
+<text class="s" x="56" y="385">Name the things that sit still so the radar stops</text>
+<text class="s" x="56" y="401">reporting them as people.</text>
+<text class="s" x="56" y="421">Zone and halo edits are written when you let go, not while dragging.</text>
+
+<rect class="pane" x="436" y="326" width="404" height="106"/>
+<text class="t" x="452" y="348">Diagnostics</text>
+<text class="s" x="452" y="367">Processing time, overload flag, presence, target count,</text>
+<text class="s" x="452" y="385">per-zone still and moving counts — all previously hidden.</text>
+<text class="s" x="452" y="405">Plan heading and mount angle are shown together because</text>
+<text class="s" x="452" y="421">nothing else shows both. They are not expected to match.</text>
+</svg>

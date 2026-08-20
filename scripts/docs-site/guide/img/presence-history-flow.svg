@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 430" width="880" height="430" role="img" aria-label="Presence history data flow: radar target positions are sampled once a second into 200 mm cells, accumulated in memory, flushed hourly to a local database, then summed over a time range and baked into one image for display.">
+<style>
+  .bg{fill:#0f1115}
+  .box{fill:#171a1f;stroke:#262b33;stroke-width:1.5;rx:8}
+  .boxa{fill:#1c2027;stroke:#4da3ff;stroke-width:1.5;rx:8}
+  .t{fill:#e6e8eb;font-family:system-ui,-apple-system,Segoe UI,sans-serif;font-size:13px;font-weight:600}
+  .s{fill:#9aa3ad;font-family:system-ui,-apple-system,Segoe UI,sans-serif;font-size:11px}
+  .n{fill:#4da3ff;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px}
+  .arw{stroke:#4da3ff;stroke-width:1.6;fill:none;marker-end:url(#a)}
+  .lbl{fill:#9aa3ad;font-family:system-ui,sans-serif;font-size:10.5px;font-style:italic}
+  .hdr{fill:#e6e8eb;font-family:system-ui,sans-serif;font-size:14px;font-weight:700}
+</style>
+<defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#4da3ff"/></marker></defs>
+<rect class="bg" width="880" height="430"/>
+<text class="hdr" x="24" y="30">How presence history is recorded</text>
+
+<rect class="box" x="24" y="52" width="180" height="76"/>
+<text class="t" x="38" y="76">mmWave sensor</text>
+<text class="s" x="38" y="95">Target x/y from Home</text>
+<text class="s" x="38" y="110">Assistant, a few Hz</text>
+
+<path class="arw" d="M210 90 L258 90"/>
+
+<rect class="boxa" x="264" y="52" width="196" height="76"/>
+<text class="t" x="278" y="76">Raw position</text>
+<text class="s" x="278" y="95">The un-smoothed report —</text>
+<text class="s" x="278" y="110">never the eased display dot</text>
+
+<path class="arw" d="M466 90 L514 90"/>
+
+<rect class="box" x="520" y="52" width="200" height="76"/>
+<text class="t" x="534" y="76">Sampler</text>
+<text class="n" x="534" y="95">once per second</text>
+<text class="s" x="534" y="110">credits elapsed dwell time</text>
+
+<path class="arw" d="M620 134 L620 168"/>
+<text class="lbl" x="632" y="156">adds seconds to one cell</text>
+
+<rect class="box" x="520" y="174" width="200" height="76"/>
+<text class="t" x="534" y="198">Grid accumulator</text>
+<text class="n" x="534" y="217">200 mm cells</text>
+<text class="s" x="534" y="232">in memory, per floor</text>
+
+<path class="arw" d="M514 212 L466 212"/>
+<text class="lbl" x="490" y="166" text-anchor="middle">every 60 s</text>
+
+<rect class="boxa" x="264" y="174" width="196" height="76"/>
+<text class="t" x="278" y="198">Hourly record</text>
+<text class="s" x="278" y="217">merged additively into</text>
+<text class="n" x="278" y="233">floor + hour</text>
+
+<path class="arw" d="M258 212 L210 212"/>
+
+<rect class="box" x="24" y="174" width="180" height="76"/>
+<text class="t" x="38" y="198">Local database</text>
+<text class="s" x="38" y="217">on this device only —</text>
+<text class="s" x="38" y="232">never sent anywhere</text>
+
+<path class="arw" d="M114 256 L114 300"/>
+<text class="lbl" x="126" y="282">pick a time range</text>
+
+<rect class="box" x="24" y="306" width="256" height="76"/>
+<text class="t" x="38" y="330">Sum the hours in range</text>
+<text class="s" x="38" y="349">last hour / today / 7 / 30 days</text>
+<text class="s" x="38" y="364">weighted by dwell time, not visits</text>
+
+<path class="arw" d="M286 344 L334 344"/>
+
+<rect class="box" x="340" y="306" width="220" height="76"/>
+<text class="t" x="354" y="330">Baked once per change</text>
+<text class="s" x="354" y="349">redrawn as one image, not</text>
+<text class="s" x="354" y="364">of shapes, only when it changes</text>
+
+<path class="arw" d="M566 344 L614 344"/>
+
+<rect class="boxa" x="620" y="306" width="236" height="76"/>
+<text class="t" x="634" y="330">Drawn in 2D and 3D</text>
+<text class="s" x="634" y="349">Presence history layer,</text>
+<text class="s" x="634" y="364">off until you turn it on</text>
+
+<rect class="box" x="756" y="174" width="100" height="76"/>
+<text class="t" x="770" y="198">Size</text>
+<text class="n" x="770" y="217">~1.7 KB/hr</text>
+<text class="n" x="770" y="233">&lt;1 MB/month</text>
+<path class="arw" d="M750 212 L726 212" style="marker-end:none"/>
+</svg>

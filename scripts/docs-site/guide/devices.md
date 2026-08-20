@@ -28,6 +28,7 @@ tracked objects load without extra clicks.
 - **Zones & objects** — the sensor's inclusion zones and tracked objects show in place; zones glow when someone's inside. You can edit zones directly on the canvas.
 - **Coverage** — the **Cov** topbar toggle draws each sensor's field-of-view wedge (from its range, field of view, and heading) in both 2D and 3D.
 - **Pose** — sensor height and mount angle come from the HA number entities, so the 3D body tilts and aims the way the real sensor does.
+- **Tuning** — for zone drawing on the sensor's own canvas, every setting the device exposes, live diagnostics, and the presence heat-map, see [mmWave tuning & presence](mmwave.html).
 - **Demo avatar** — check "Demo avatar" for an always-on figure that lives in the sensor's room, with or without a binding. It's the same display presence motion sensors offer (below), drawn from this sensor's own avatar pool, and it's happy to share: a bound sensor shows its real radar targets *and* the demo figure.
 
 Give each sensor a **color** to tell its targets apart, and optionally a
