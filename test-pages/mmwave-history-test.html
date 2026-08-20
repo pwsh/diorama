@@ -1,0 +1,844 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>mmwave history test</title>
+<style>html,body{margin:0;background:#111;color:#ddd;font:12px monospace;padding:10px}
+.m{color:#7fd1ff}</style>
+<pre id="out">running…</pre>
+<script type="module">
+  // Tests for the mmWave presence-history PURE data layer (design §E/§F):
+  //   src/mmwave-history.ts  — grid / bucketing / accumulator / encoding /
+  //                            summation / retention / colour ramp
+  //   src/history-store.ts   — the diorama-history IndexedDB store
+  //
+  // Build (the trilateration / value-rules recipe for the pure half, the
+  // avatar-store recipe for the IDB half — no dist/, nothing from the app build):
+  //   npx esbuild src/mmwave-history.ts --format=esm --outfile=<harness>/mmwave-history.mod.js
+  //   npx esbuild src/history-store.ts --bundle --format=esm --outfile=<harness>/history-store.mod.js
+  //   cd <harness> && python3 -m http.server 8947 &     # module imports are CORS-blocked on file://
+  //
+  // RUNNING — the usual `--dump-dom` recipe DOES NOT WORK for an IndexedDB page,
+  // and neither does `--virtual-time-budget`:
+  //   • --dump-dom fires at load and does not wait for a module's top-level
+  //     await, so it captures the page mid-run ("running…").
+  //   • --virtual-time-budget does not advance IndexedDB's own sequence, so the
+  //     open() promise never settles under it (reproduced against the existing,
+  //     known-good avatar-store-test.html — same hang, so it is the harness, not
+  //     this page).
+  // Drive it over CDP instead: launch a PERSISTENT headless Chrome, open the
+  // page, poll document.title until it starts with MMWAVEHISTORY, then read #out.
+  //   setsid google-chrome --headless=new --disk-cache-size=1 \
+  //     --use-angle=swiftshader --enable-unsafe-swiftshader \
+  //     --remote-debugging-port=9333 --user-data-dir=/tmp/mmhist-prof about:blank &
+  //   # then http://localhost:9333/json/new?<url> + Runtime.evaluate('document.title')
+  //
+  // EVERY assertion is NEGATIVE-CONTROLLED: `ok(name, cond, neg)` requires
+  // cond === true AND neg === false, where `neg` is the SAME predicate
+  // evaluated against a deliberately broken implementation or fixture. An
+  // assertion with no negative control is recorded as a FAILURE — this project
+  // has repeatedly shipped assertions that could not fail.
+  const H  = await import('./mmwave-history.mod.js?v=' + Date.now());
+  const ST = await import('./history-store.mod.js?v=' + Date.now());
+
+  const checks = [];
+  const notes  = [];
+  const ok = (name, cond, neg) => {
+    if (neg === undefined) { checks.push({ name, pass: false, extra: 'NO NEGATIVE CONTROL' }); return; }
+    const pass = cond === true && neg === false;
+    checks.push({ name, pass, extra: pass ? '' : `cond=${cond} neg=${neg}` });
+  };
+  const note = s => notes.push(s);
+
+  const HOUR = 3600000;
+  const taEq = (a, b) => a.length === b.length && [...a].every((v, i) => v === b[i]);
+  const mapEq = (a, b, tol = 1e-4) => a.size === b.size &&
+    [...a].every(([k, v]) => b.has(k) && Math.abs(b.get(k) - v) <= tol);
+  const luma = h => { const r = parseInt(h.slice(1,3),16), g = parseInt(h.slice(3,5),16), b = parseInt(h.slice(5,7),16);
+                      return 0.2126*r + 0.7152*g + 0.0722*b; };
+
+  // ════════════════════════════════════════════════════════════════════════
+  // Deliberately BROKEN reference implementations — the negative controls.
+  // ════════════════════════════════════════════════════════════════════════
+  const CELL = H.PRESENCE_CELL_MM;
+
+  // 150 mm nav-grid cell size instead of 200 mm.
+  const brokenCell150 = (x, y, w, d) => {
+    const cols = Math.max(1, Math.ceil(w / 150)), rows = Math.max(1, Math.ceil(d / 150));
+    if (x < 0 || y < 0 || x > w || y > d) return -1;
+    return Math.min(rows-1, Math.floor(y/150)) * cols + Math.min(cols-1, Math.floor(x/150));
+  };
+  // floor() instead of ceil() when sizing the grid.
+  const brokenColsFloor = w => Math.max(1, Math.floor(w / CELL));
+  // column-major index instead of row-major.
+  const brokenColMajor = (x, y, w, d) => {
+    const cols = Math.max(1, Math.ceil(w/CELL)), rows = Math.max(1, Math.ceil(d/CELL));
+    if (x < 0 || y < 0 || x > w || y > d) return -1;
+    return Math.min(cols-1, Math.floor(x/CELL)) * rows + Math.min(rows-1, Math.floor(y/CELL));
+  };
+  // clamps out-of-rect positions onto the grid instead of dropping them.
+  const brokenClamping = (x, y, w, d) => {
+    const cols = Math.max(1, Math.ceil(w/CELL)), rows = Math.max(1, Math.ceil(d/CELL));
+    const col = Math.min(cols-1, Math.max(0, Math.floor(x/CELL)));
+    const row = Math.min(rows-1, Math.max(0, Math.floor(y/CELL)));
+    return row * cols + col;
+  };
+  // half-open rect: the far edge falls out of range instead of into the last cell.
+  const brokenExclusiveEdge = (x, y, w, d) => {
+    const cols = Math.max(1, Math.ceil(w/CELL)), rows = Math.max(1, Math.ceil(d/CELL));
+    if (x < 0 || y < 0 || x >= w || y >= d) return -1;
+    return Math.floor(y/CELL) * cols + Math.floor(x/CELL);
+  };
+  const brokenCenterUnchecked = (i, cols) => ({ x: (i % cols) * CELL + CELL/2, y: Math.floor(i/cols) * CELL + CELL/2 });
+  const brokenRemapIdentity = i => i;
+
+  // round() instead of floor() when bucketing.
+  const brokenBucketRound = ms => Math.round(ms / HOUR);
+  // LOCAL wall-clock bucketing (dayIndex*24 + localHour) with an explicit,
+  // machine-independent US-Eastern offset table — the classic DST-unsafe form.
+  const usEasternOffsetH = ms => {
+    // 2026 US DST: 2026-03-08 07:00Z → EDT(-4); 2026-11-01 06:00Z → EST(-5).
+    const dstStart = Date.UTC(2026,2,8,7,0,0), dstEnd = Date.UTC(2026,10,1,6,0,0);
+    return (ms >= dstStart && ms < dstEnd) ? -4 : -5;
+  };
+  const brokenBucketLocal = ms => {
+    const local = ms + usEasternOffsetH(ms) * HOUR;
+    const day = Math.floor(local / 86400000);
+    const hr  = Math.floor((local - day * 86400000) / HOUR);
+    return day * 24 + hr;
+  };
+  const brokenParseFirstColon = key => {
+    const i = key.indexOf(':'); if (i <= 0) return null;
+    const b = Number(key.slice(i+1)); return isFinite(b) ? { floorId: key.slice(0,i), bucket: b } : null;
+  };
+  const brokenParseLenient = key => ({ floorId: String(key), bucket: 0 });
+  const brokenRangeExclusive = (a, b) => { const out = []; for (let k = H.hourBucket(a); k < H.hourBucket(b); k++) out.push(k); return out; };
+  const brokenRangeUncapped  = (a, b) => { const out = []; for (let k = H.hourBucket(a); k <= H.hourBucket(b); k++) out.push(k); return out; };
+
+  const brokenAccumOverwrite = (m, i, s) => { if (i >= 0 && s > 0) m.set(i, s); };
+  const brokenAccumKeepsJunk = (m, i, s) => { m.set(i, (m.get(i) ?? 0) + s); };
+  const brokenMergeOverwrite = (t, s) => { for (const [i, v] of s) t.set(i, v); return t; };
+  const brokenEncodeDropLast = m => {
+    const idx = [...m.keys()].filter(i => m.get(i) > 0).sort((a,b)=>a-b).slice(0, -1);
+    const cells = new Int32Array(idx.length), seconds = new Float32Array(idx.length);
+    idx.forEach((v,k)=>{ cells[k]=v; seconds[k]=m.get(v); });
+    return { cells, seconds };
+  };
+  const brokenEncodeCap256 = m => {
+    const idx = [...m.keys()].sort((a,b)=>a-b).slice(0, 256);
+    const cells = new Int32Array(idx.length), seconds = new Float32Array(idx.length);
+    idx.forEach((v,k)=>{ cells[k]=v; seconds[k]=m.get(v); });
+    return { cells, seconds };
+  };
+  const brokenEncodeInsertionOrder = m => {
+    const idx = [...m.keys()].filter(i => m.get(i) > 0);
+    const cells = new Int32Array(idx.length), seconds = new Float32Array(idx.length);
+    idx.forEach((v,k)=>{ cells[k]=v; seconds[k]=m.get(v); });
+    return { cells, seconds };
+  };
+  const brokenEncodeKeepsZeros = m => {
+    const idx = [...m.keys()].sort((a,b)=>a-b);
+    const cells = new Int32Array(idx.length), seconds = new Float32Array(idx.length);
+    idx.forEach((v,k)=>{ cells[k]=v; seconds[k]=m.get(v); });
+    return { cells, seconds };
+  };
+  const brokenDecodeSentinel = () => new Map([[0, 1]]);
+  const brokenMergeRecOverwrite = (prev, delta) => delta;
+  const brokenSumLastWins = (recs, cols, rows) => {
+    const out = new Map();
+    for (const r of recs) { if (!r) continue; for (let k = 0; k < r.cells.length; k++) out.set(r.cells[k], r.seconds[k]); }
+    return out;
+  };
+  const brokenSumNoCellMmGate = (recs, cols, rows) => {
+    const out = new Map();
+    for (const r of recs) { if (!r) continue;
+      for (let k = 0; k < r.cells.length; k++) {
+        const m = H.remapCellIndex(r.cells[k], r.cols, cols, rows);
+        if (m >= 0) out.set(m, (out.get(m) ?? 0) + r.seconds[k]);
+      } }
+    return out;
+  };
+  const brokenSumNoRemap = (recs, cols, rows) => {
+    const out = new Map();
+    for (const r of recs) { if (!r) continue;
+      if (r.cellMm !== CELL) continue;
+      for (let k = 0; k < r.cells.length; k++) out.set(r.cells[k], (out.get(r.cells[k]) ?? 0) + r.seconds[k]);
+    }
+    return out;
+  };
+  const brokenSumThrows = () => { throw new Error('boom'); };
+
+  const brokenExpiredAll   = keys => keys.slice();
+  const brokenExpiredKeepsGarbage = (keys, now, days) =>
+    keys.filter(k => { const p = H.parseHistoryKey(k); return p ? p.bucket < H.retentionCutoffBucket(now, days) : false; });
+  const brokenExpiredIgnoresDays = (keys, now) => H.expiredHistoryKeys(keys, now, 30);
+  const brokenExpiredLte = (keys, now, days) =>
+    keys.filter(k => { const p = H.parseHistoryKey(k); return p ? p.bucket <= H.retentionCutoffBucket(now, days) : true; });
+
+  // Diverging blue→green→red ramp (the shape of the room-TEMPERATURE map) —
+  // not luminance-monotone, which is exactly the property presenceHeatColor has.
+  const DIVERGING = [[0x1e,0x5f,0xd0],[0x4d,0xd0,0xff],[0x7e,0xc8,0x7e],[0xff,0xb7,0x4d],[0xef,0x53,0x50]];
+  const brokenDivergingColor = t => {
+    const tt = Math.max(0, Math.min(1, t)), segs = DIVERGING.length - 1, p = tt*segs;
+    const i = Math.min(segs-1, Math.floor(p)), f = p - i, a = DIVERGING[i], b = DIVERGING[i+1];
+    const h2 = n => Math.round(n).toString(16).padStart(2,'0');
+    return `#${h2(a[0]+(b[0]-a[0])*f)}${h2(a[1]+(b[1]-a[1])*f)}${h2(a[2]+(b[2]-a[2])*f)}`;
+  };
+  const brokenColorUnclamped = t => {
+    const segs = 4, p = t*segs, i = Math.floor(p), f = p - i;
+    const a = [[0x2a,0x1a,0x54],[0x6b,0x2a,0x7a],[0xb5,0x36,0x79],[0xef,0x6b,0x45],[0xf7,0xe2,0x6b]];
+    const A = a[i] ?? [0,0,0], B = a[i+1] ?? [0,0,0];
+    const h2 = n => Math.round(n).toString(16).padStart(2,'0');
+    return `#${h2(A[0]+(B[0]-A[0])*f)}${h2(A[1]+(B[1]-A[1])*f)}${h2(A[2]+(B[2]-A[2])*f)}`;
+  };
+  const brokenColorRgbFn = t => { const c = H.presenceHeatRgb(t); return `rgb(${c.r},${c.g},${c.b})`; };
+  const brokenNormalizeLinear = (s, m) => (m > 0 && s > 0) ? Math.min(1, s/m) : 0;
+
+  // ════════════════════════════════════════════════════════════════════════
+  // A. Grid
+  // ════════════════════════════════════════════════════════════════════════
+  ok('A1 cell size is 200 mm (not the 150 mm nav grid)',
+     H.PRESENCE_CELL_MM === 200 && H.presenceCellIndex(300, 0, 1000, 600) === 1,
+     brokenCell150(300, 0, 1000, 600) === 1);
+
+  ok('A2 grid sizing ceils a partial trailing cell',
+     H.presenceGridCols(1050) === 6 && H.presenceGridRows(1050) === 6,
+     brokenColsFloor(1050) === 6);
+
+  // Round-trip EVERY cell of a deliberately non-square grid (col-major would
+  // alias only on a square one).
+  const W = 1000, D = 600, COLS = H.presenceGridCols(W), ROWS = H.presenceGridRows(D);
+  let rtAll = true, rtBrokenAll = true;
+  for (let i = 0; i < COLS * ROWS; i++) {
+    const c = H.presenceCellCenter(i, COLS, ROWS);
+    if (!c || H.presenceCellIndex(c.x, c.y, W, D) !== i) rtAll = false;
+    if (!c || brokenColMajor(c.x, c.y, W, D) !== i) rtBrokenAll = false;
+  }
+  ok(`A3 index↔centre round-trips for all ${COLS*ROWS} cells (5×3 grid)`, rtAll, rtBrokenAll);
+
+  ok('A4 far edge folds into the last cell (closed rect)',
+     H.presenceCellIndex(1000, 600, W, D) === COLS * ROWS - 1,
+     brokenExclusiveEdge(1000, 600, W, D) === COLS * ROWS - 1);
+
+  ok('A5 negative coordinates are dropped, not clamped',
+     H.presenceCellIndex(-1, 100, W, D) === -1 && H.presenceCellIndex(100, -0.001, W, D) === -1,
+     brokenClamping(-1, 100, W, D) === -1 && brokenClamping(100, -0.001, W, D) === -1);
+
+  ok('A6 out-of-rect coordinates are dropped, not clamped',
+     H.presenceCellIndex(1200, 100, W, D) === -1 && H.presenceCellIndex(100, 900, W, D) === -1,
+     brokenClamping(1200, 100, W, D) === -1 && brokenClamping(100, 900, W, D) === -1);
+
+  ok('A7 non-finite coordinates are dropped',
+     H.presenceCellIndex(NaN, 100, W, D) === -1 && H.presenceCellIndex(100, Infinity, W, D) === -1,
+     brokenClamping(NaN, 100, W, D) === -1 && brokenClamping(100, Infinity, W, D) === -1);
+
+  ok('A8 presenceCellCenter returns null off-grid',
+     H.presenceCellCenter(COLS*ROWS, COLS, ROWS) === null && H.presenceCellCenter(-1, COLS, ROWS) === null,
+     brokenCenterUnchecked(COLS*ROWS, COLS) === null);
+
+  ok('A9 cell bounds are CELL wide and contain the centre',
+     (() => { const b = H.presenceCellBounds(6, COLS, ROWS), c = H.presenceCellCenter(6, COLS, ROWS);
+              return !!b && b.x1 - b.x0 === CELL && b.y1 - b.y0 === CELL &&
+                     c.x > b.x0 && c.x < b.x1 && c.y > b.y0 && c.y < b.y1; })(),
+     (() => { const b = { x0: 0, y0: 0, x1: 150, y1: 150 }; return b.x1 - b.x0 === CELL; })());
+
+  // remap across a floor resize: 5 cols → 4 cols. Cell (col 4, row 1) = index 9
+  // no longer fits; cell (col 2, row 1) = index 7 becomes index 6.
+  ok('A10 remapCellIndex re-indexes across a column-count change',
+     H.remapCellIndex(7, 5, 4, 3) === 6 && H.remapCellIndex(9, 5, 4, 3) === -1,
+     brokenRemapIdentity(7) === 6 && brokenRemapIdentity(9) === -1);
+
+  // ════════════════════════════════════════════════════════════════════════
+  // B. Hour bucketing
+  // ════════════════════════════════════════════════════════════════════════
+  const midnightZ = Date.UTC(2026, 2, 1, 0, 0, 0, 0);
+  const lastMs    = midnightZ - 1;              // 2026-02-28T23:59:59.999Z
+  const hourStart = midnightZ - HOUR;           // 2026-02-28T23:00:00.000Z
+  ok('B1 UTC-midnight boundary: same hour shares a bucket, midnight starts the next',
+     H.hourBucket(hourStart) === H.hourBucket(lastMs) &&
+     H.hourBucket(midnightZ) === H.hourBucket(lastMs) + 1,
+     brokenBucketRound(hourStart) === brokenBucketRound(lastMs) &&
+     brokenBucketRound(midnightZ) === brokenBucketRound(lastMs) + 1);
+
+  // Spring-forward (2026-03-08 07:00Z) and fall-back (2026-11-01 06:00Z): walk
+  // real hourly instants across each and require strictly consecutive buckets —
+  // no skipped hour, no duplicate hour.
+  const consecutive = (bucketFn, aroundMs) => {
+    const bs = [];
+    for (let k = -3; k <= 3; k++) bs.push(bucketFn(aroundMs + k * HOUR));
+    return bs.every((b, i) => i === 0 || b === bs[i-1] + 1);
+  };
+  const springMs = Date.UTC(2026, 2, 8, 7, 0, 0), fallMs = Date.UTC(2026, 10, 1, 6, 0, 0);
+  ok('B2 DST spring-forward: buckets stay consecutive (no skipped hour)',
+     consecutive(H.hourBucket, springMs), consecutive(brokenBucketLocal, springMs));
+  ok('B3 DST fall-back: buckets stay consecutive (no duplicated hour)',
+     consecutive(H.hourBucket, fallMs), consecutive(brokenBucketLocal, fallMs));
+
+  // +40 min: far enough into the hour that round() and floor() disagree, so the
+  // negative control can actually fail (at +1.2 s they agree and it is vacuous).
+  const midPlus40 = midnightZ + 40 * 60 * 1000;
+  ok('B4 hourBucketStartMs inverts hourBucket',
+     H.hourBucketStartMs(H.hourBucket(midPlus40)) === midnightZ,
+     H.hourBucketStartMs(brokenBucketRound(midPlus40)) === midnightZ);
+
+  // Floor ids in this repo are opaque; a colon inside one must still parse.
+  const KEY_FLOOR = 'floor:with:colons';
+  const k1 = H.historyKey(KEY_FLOOR, 471234);
+  ok('B5 key round-trips a floorId containing colons',
+     (() => { const p = H.parseHistoryKey(k1); return !!p && p.floorId === KEY_FLOOR && p.bucket === 471234; })(),
+     (() => { const p = brokenParseFirstColon(k1); return !!p && p.floorId === KEY_FLOOR && p.bucket === 471234; })());
+
+  ok('B6 parseHistoryKey rejects malformed keys',
+     H.parseHistoryKey('nocolon') === null && H.parseHistoryKey('f:') === null &&
+     H.parseHistoryKey(':7') === null && H.parseHistoryKey('f:NaN') === null &&
+     H.parseHistoryKey('f:12.5') === null,
+     brokenParseLenient('nocolon') === null);
+
+  const rFrom = midnightZ, rTo = midnightZ + 3 * HOUR + 5;
+  ok('B7 hourBucketRange is inclusive of both endpoints',
+     H.hourBucketRange(rFrom, rTo).length === 4 &&
+     H.hourBucketRange(rFrom, rTo)[3] === H.hourBucket(rTo),
+     brokenRangeExclusive(rFrom, rTo).length === 4 &&
+     brokenRangeExclusive(rFrom, rTo)[3] === H.hourBucket(rTo));
+
+  ok('B8 hourBucketRange tolerates reversed endpoints',
+     H.hourBucketRange(rTo, rFrom).length === 4,
+     brokenRangeExclusive(rTo, rFrom).length === 4);
+
+  const bigTo = midnightZ + 500 * 24 * HOUR;
+  ok('B9 an absurd range is refused rather than fanning out to thousands of get()s',
+     H.hourBucketRange(rFrom, bigTo).length === 0,
+     brokenRangeUncapped(rFrom, bigTo).length === 0);
+
+  ok('B10 historyKeysForRange produces one key per bucket, all on the floor',
+     (() => { const ks = H.historyKeysForRange('f7', rFrom, rTo);
+              return ks.length === 4 && ks.every(k => H.parseHistoryKey(k).floorId === 'f7'); })(),
+     (() => { const ks = brokenRangeExclusive(rFrom, rTo).map(b => `f7:${b}`);
+              return ks.length === 4 && ks.every(k => H.parseHistoryKey(k).floorId === 'f7'); })());
+
+  // ════════════════════════════════════════════════════════════════════════
+  // C. Accumulator — additive merge
+  // ════════════════════════════════════════════════════════════════════════
+  const accTwice = (fn) => { const m = new Map(); fn(m, 4, 1.5); fn(m, 4, 2.5); return m.get(4); };
+  ok('C1 accumulating the same cell twice SUMS (does not overwrite)',
+     accTwice(H.accumulateDwell) === 4, accTwice(brokenAccumOverwrite) === 4);
+
+  const mergeTwice = (fn) => {
+    const t = new Map([[1, 2], [2, 5]]);
+    fn(t, new Map([[1, 3], [3, 7]]));
+    return t.get(1) === 5 && t.get(2) === 5 && t.get(3) === 7;
+  };
+  ok('C2 mergePresenceMaps is additive on overlapping cells',
+     mergeTwice(H.mergePresenceMaps), mergeTwice(brokenMergeOverwrite));
+
+  // A fixture that GENUINELY contains junk: a negative index, zero seconds, a
+  // negative duration and a NaN. Without these the "ignores junk" assertion
+  // could not fail.
+  const junkProbe = (fn) => {
+    const m = new Map();
+    fn(m, -1, 5); fn(m, 3, 0); fn(m, 3, -2); fn(m, NaN, 5); fn(m, 3, NaN); fn(m, 3, 1.5);
+    return m.size === 1 && m.get(3) === 1.5;
+  };
+  ok('C3 accumulateDwell ignores off-grid indices and non-positive/NaN durations',
+     junkProbe(H.accumulateDwell), junkProbe(brokenAccumKeepsJunk));
+
+  // Sample fixture with points genuinely INSIDE and genuinely OUTSIDE the rect.
+  const SAMPLES = [
+    [100, 100], [100, 100], [300, 100],          // in
+    [-50, 100], [1200, 100], [100, 900],         // out (left / right / below)
+    [NaN, 100],                                  // junk
+    [1000, 600],                                 // far corner → last cell
+  ];
+  const sampleProbe = (idxFn) => {
+    const m = new Map();
+    for (const [x, y] of SAMPLES) {
+      const i = idxFn(x, y, W, D);
+      if (i >= 0) m.set(i, (m.get(i) ?? 0) + 1);
+    }
+    // 3 distinct in-rect cells, and the doubled one carries 2 s.
+    return m.size === 3 && m.get(H.presenceCellIndex(100,100,W,D)) === 2 &&
+           m.get(COLS*ROWS-1) === 1;
+  };
+  ok('C4 out-of-rect samples are dropped while in-rect ones accumulate',
+     sampleProbe(H.presenceCellIndex), sampleProbe(brokenClamping));
+
+  ok('C5 accumulateSample routes a world position through the grid',
+     (() => { const m = new Map(); H.accumulateSample(m, 350, 250, W, D, 3);
+              return m.size === 1 && m.get(H.presenceCellIndex(350,250,W,D)) === 3; })(),
+     (() => { const m = new Map(); const i = brokenCell150(350,250,W,D); m.set(i,3);
+              return m.size === 1 && m.get(H.presenceCellIndex(350,250,W,D)) === 3; })());
+
+  ok('C6 presenceMaxSeconds / presenceTotalSeconds',
+     (() => { const m = new Map([[1,2],[2,9],[3,4]]);
+              return H.presenceMaxSeconds(m) === 9 && H.presenceTotalSeconds(m) === 15 &&
+                     H.presenceMaxSeconds(new Map()) === 0; })(),
+     (() => { const m = new Map([[1,2],[2,9],[3,4]]);
+              const badMax = [...m.values()][0]; return badMax === 9; })());
+
+  // ════════════════════════════════════════════════════════════════════════
+  // D. Sparse encode / decode
+  // ════════════════════════════════════════════════════════════════════════
+  const mixed = new Map([[9, 1.5], [2, 4], [40, 0.25], [7, 60], [1, 2.5]]);
+  ok('D1 encode/decode round-trips a sparse map',
+     mapEq(H.decodePresenceCells(H.encodePresenceCells(mixed)), mixed),
+     mapEq(H.decodePresenceCells(brokenEncodeDropLast(mixed)), mixed));
+
+  ok('D2 empty map encodes to zero-length arrays and decodes to an empty map',
+     (() => { const e = H.encodePresenceCells(new Map());
+              return e.cells.length === 0 && e.seconds.length === 0 &&
+                     H.decodePresenceCells(e).size === 0 && H.decodePresenceCells(null).size === 0; })(),
+     (() => { const e = H.encodePresenceCells(new Map());
+              return e.cells.length === 0 && e.seconds.length === 0 &&
+                     brokenDecodeSentinel(e).size === 0; })());
+
+  // Full floor: every cell of a 20×15 grid occupied.
+  const FW = 4000, FD = 3000, FC = H.presenceGridCols(FW), FR = H.presenceGridRows(FD);
+  const full = new Map(); for (let i = 0; i < FC * FR; i++) full.set(i, 0.5 + (i % 7));
+  ok(`D3 full-floor map (${FC*FR} cells) round-trips exactly`,
+     (() => { const e = H.encodePresenceCells(full);
+              return e.cells.length === FC*FR && mapEq(H.decodePresenceCells(e), full); })(),
+     (() => { const e = brokenEncodeCap256(full);
+              return e.cells.length === FC*FR && mapEq(H.decodePresenceCells(e), full); })());
+
+  // Determinism: the same logical map built in two different insertion orders
+  // must encode byte-identically (so an unchanged flush is detectable).
+  const orderA = new Map(); [5, 1, 9, 3].forEach(i => orderA.set(i, i));
+  const orderB = new Map(); [9, 3, 1, 5].forEach(i => orderB.set(i, i));
+  ok('D4 encoding is index-sorted, so insertion order cannot change the bytes',
+     (() => { const a = H.encodePresenceCells(orderA), b = H.encodePresenceCells(orderB);
+              return taEq(a.cells, b.cells) && taEq(a.seconds, b.seconds) && a.cells[0] === 1; })(),
+     (() => { const a = brokenEncodeInsertionOrder(orderA), b = brokenEncodeInsertionOrder(orderB);
+              return taEq(a.cells, b.cells) && taEq(a.seconds, b.seconds) && a.cells[0] === 1; })());
+
+  // Fixture GENUINELY contains a zero and a negative entry.
+  const withZeros = new Map([[1, 3], [2, 0], [3, -4], [4, 1]]);
+  ok('D5 encoding drops zero and negative dwell entries',
+     (() => { const e = H.encodePresenceCells(withZeros); return e.cells.length === 2 && taEq(e.cells, new Int32Array([1,4])); })(),
+     (() => { const e = brokenEncodeKeepsZeros(withZeros); return e.cells.length === 2 && taEq(e.cells, new Int32Array([1,4])); })());
+
+  ok('D6 presenceEncodedBytes is 8 bytes per touched cell and matches the payload',
+     (() => { const e = H.encodePresenceCells(mixed);
+              return H.presenceEncodedBytes(mixed.size) === mixed.size * 8 &&
+                     e.cells.byteLength + e.seconds.byteLength === mixed.size * 8; })(),
+     (() => { const e = H.encodePresenceCells(mixed);
+              return H.presenceEncodedBytes(mixed.size) === mixed.size * 6 &&
+                     e.cells.byteLength + e.seconds.byteLength === mixed.size * 6; })());
+
+  // ════════════════════════════════════════════════════════════════════════
+  // E. Records & range summation
+  // ════════════════════════════════════════════════════════════════════════
+  const NOW = Date.UTC(2026, 7, 19, 12, 0, 0);
+  const B0 = H.hourBucket(NOW);
+  const rec = (bucket, map, cols = COLS, rows = ROWS, at = NOW) =>
+    H.makePresenceRecord('fA', bucket, map, cols, rows, at);
+
+  const recProbe = (mergeFn) => {
+    const a = rec(B0, new Map([[1, 10], [2, 5]]));
+    const b = rec(B0, new Map([[2, 7], [3, 2]]));
+    const m = H.decodePresenceCells(mergeFn(a, b));
+    return m.get(1) === 10 && m.get(2) === 12 && m.get(3) === 2 && m.size === 3;
+  };
+  ok('E1 flushing twice into the same hour SUMS (never overwrites)',
+     recProbe(H.mergePresenceRecords), recProbe(brokenMergeRecOverwrite));
+
+  ok('E2 makePresenceRecord stamps cellMm/cols/rows and the caller-supplied clock',
+     (() => { const r = rec(B0, new Map([[1, 1]]));
+              return r.cellMm === 200 && r.cols === COLS && r.rows === ROWS &&
+                     r.updatedAt === NOW && r.bucket === B0; })(),
+     (() => { const r = rec(B0, new Map([[1, 1]]));
+              return r.cellMm === 150 && r.cols === COLS; })());
+
+  // prev written at 5 cols, delta at 4 cols: prev index 7 → 6, prev index 9 dropped.
+  const remapProbe = (mergeFn) => {
+    const prev  = H.makePresenceRecord('fA', B0, new Map([[7, 4], [9, 3]]), 5, 3, NOW);
+    const delta = H.makePresenceRecord('fA', B0, new Map([[6, 1]]), 4, 3, NOW);
+    const m = H.decodePresenceCells(mergeFn(prev, delta));
+    return m.size === 1 && m.get(6) === 5;
+  };
+  ok('E3 merging remaps a prior record written at a different column count',
+     remapProbe(H.mergePresenceRecords), remapProbe(brokenMergeRecOverwrite));
+
+  // Summation fixture: 3 hour records with overlapping cells, PLUS a record at
+  // a foreign cellMm, PLUS a record at a wider grid whose right-hand cell falls
+  // outside today's grid. All three edge classes are genuinely present.
+  const rA = rec(B0 - 2, new Map([[1, 10], [5, 3]]));
+  const rB = rec(B0 - 1, new Map([[1, 4], [9, 6]]));
+  const rC = rec(B0,     new Map([[5, 2]]));
+  const rForeign = { ...rec(B0 - 3, new Map([[1, 999]])), cellMm: 150 };
+  const rWide = H.makePresenceRecord('fA', B0 - 4, new Map([[7, 8], [5, 1]]), 7, 3, NOW); // idx7 → col0,row1 → 5 ; idx5 → col5 ≥ COLS(5) → dropped
+  const RANGE = [rA, null, rB, rC, rForeign, rWide, undefined];
+
+  const sumProbe = (sumFn) => {
+    let m; try { m = sumFn(RANGE, COLS, ROWS); } catch { return false; }
+    return m.get(1) === 14 && m.get(9) === 6 && m.get(5) === 13 && m.size === 3 && !m.has(999);
+  };
+  ok('E4 range summation adds overlapping cells across buckets',
+     sumProbe(H.sumPresenceRecords), sumProbe(brokenSumLastWins));
+  ok('E5 range summation skips records recorded at a different cell size',
+     sumProbe(H.sumPresenceRecords), sumProbe(brokenSumNoCellMmGate));
+  ok('E6 range summation remaps a wider-grid record and drops cells off today\'s grid',
+     sumProbe(H.sumPresenceRecords), sumProbe(brokenSumNoRemap));
+  ok('E7 range summation tolerates null/undefined entries without throwing',
+     sumProbe(H.sumPresenceRecords), sumProbe(brokenSumThrows));
+
+  // ════════════════════════════════════════════════════════════════════════
+  // F. Retention (active-delete selector)
+  // ════════════════════════════════════════════════════════════════════════
+  const CUT30 = H.retentionCutoffBucket(NOW, 30);
+  // Fixture genuinely contains: well-expired, exactly-at-cutoff, one-before-cutoff,
+  // fresh, an unparseable key, and a key inside a 7-day window but outside 30.
+  const KEYS = [
+    `fA:${CUT30 - 500}`,   // 0 expired at 30 d
+    `fA:${CUT30 - 1}`,     // 1 expired at 30 d (boundary-1)
+    `fA:${CUT30}`,         // 2 KEPT at 30 d (exact boundary)
+    `fA:${B0}`,            // 3 fresh
+    `fA:${B0 - 24 * 10}`,  // 4 10 days old: kept at 30 d, expired at 7 d
+    'garbage-no-bucket',   // 5 unparseable
+  ];
+  const setEq = (a, b) => a.length === b.length && a.every(x => b.includes(x));
+  // At 7 days the whole ~30-day cluster (0,1,2) is expired as well, plus the
+  // 10-day-old key 4 and the garbage key 5 — only the fresh key 3 survives.
+  const expProbe = (fn, days) => setEq(fn(KEYS, NOW, days),
+    days === 30 ? [KEYS[0], KEYS[1], KEYS[5]]
+                : [KEYS[0], KEYS[1], KEYS[2], KEYS[4], KEYS[5]]);
+
+  ok('F1 expiredHistoryKeys selects only keys older than the window',
+     expProbe(H.expiredHistoryKeys, 30), expProbe(brokenExpiredAll, 30));
+  ok('F2 the exact cutoff bucket is KEPT, cutoff-1 is deleted',
+     H.isExpiredHistoryKey(KEYS[2], NOW, 30) === false && H.isExpiredHistoryKey(KEYS[1], NOW, 30) === true,
+     brokenExpiredLte(KEYS, NOW, 30).includes(KEYS[2]) === false &&
+     brokenExpiredLte(KEYS, NOW, 30).includes(KEYS[1]) === true);
+  ok('F3 an unparseable key is swept (no un-erasable residue)',
+     H.isExpiredHistoryKey(KEYS[5], NOW, 30) === true,
+     brokenExpiredKeepsGarbage(KEYS, NOW, 30).includes(KEYS[5]) === true);
+  ok('F4 a custom retention window is honoured (7 d differs from 30 d)',
+     expProbe(H.expiredHistoryKeys, 7), expProbe(brokenExpiredIgnoresDays, 7));
+  ok('F5 default retention is 30 days',
+     H.PRESENCE_RETENTION_DAYS_DEFAULT === 30 &&
+     H.retentionCutoffBucket(NOW) === H.retentionCutoffBucket(NOW, 30),
+     H.PRESENCE_RETENTION_DAYS_DEFAULT === 30 &&
+     H.retentionCutoffBucket(NOW) === H.retentionCutoffBucket(NOW, 7));
+  ok('F6 a garbage retentionDays falls back to the default rather than erasing everything',
+     H.retentionCutoffBucket(NOW, NaN) === H.retentionCutoffBucket(NOW, 30) &&
+     H.retentionCutoffBucket(NOW, -5) === H.retentionCutoffBucket(NOW, 30),
+     H.retentionCutoffBucket(NOW, NaN) === H.retentionCutoffBucket(NOW, 0.0001));
+
+  // ════════════════════════════════════════════════════════════════════════
+  // G. Colour ramp
+  // ════════════════════════════════════════════════════════════════════════
+  ok('G1 ramp endpoints',
+     H.presenceHeatColor(0) === '#2a1a54' && H.presenceHeatColor(1) === '#f7e26b',
+     brokenDivergingColor(0) === '#2a1a54' && brokenDivergingColor(1) === '#f7e26b');
+
+  const monotone = (fn) => {
+    let prev = -1, strict = false;
+    for (let k = 0; k <= 100; k++) {
+      const L = luma(fn(k / 100));
+      if (L < prev - 1e-9) return false;
+      if (L > prev + 1e-9) strict = true;
+      prev = L;
+    }
+    return strict;
+  };
+  ok('G2 luminance is monotonically non-decreasing across 101 samples',
+     monotone(H.presenceHeatColor), monotone(brokenDivergingColor));
+
+  ok('G3 out-of-range and NaN inputs clamp to the endpoints',
+     H.presenceHeatColor(-5) === H.presenceHeatColor(0) &&
+     H.presenceHeatColor(2) === H.presenceHeatColor(1) &&
+     H.presenceHeatColor(NaN) === H.presenceHeatColor(0),
+     brokenColorUnclamped(-5) === H.presenceHeatColor(0) &&
+     brokenColorUnclamped(2) === H.presenceHeatColor(1) &&
+     brokenColorUnclamped(NaN) === H.presenceHeatColor(0));
+
+  const wellFormed = (fn) => { for (let k = 0; k <= 100; k++) if (!/^#[0-9a-f]{6}$/.test(fn(k/100))) return false; return true; };
+  ok('G4 every sample is a well-formed #rrggbb', wellFormed(H.presenceHeatColor), wellFormed(brokenColorRgbFn));
+
+  ok('G5 presenceHeatRgb agrees with presenceHeatColor',
+     (() => { for (let k = 0; k <= 20; k++) { const t = k/20, c = H.presenceHeatRgb(t);
+                const h = `#${[c.r,c.g,c.b].map(n=>n.toString(16).padStart(2,'0')).join('')}`;
+                if (h !== H.presenceHeatColor(t)) return false; } return true; })(),
+     (() => { const c = H.presenceHeatRgb(0.5);
+              return `#${[c.r+1,c.g,c.b].map(n=>n.toString(16).padStart(2,'0')).join('')}` === H.presenceHeatColor(0.5); })());
+
+  ok('G6 presenceNormalize applies the gamma lift (0.5 = sqrt), not a linear ratio',
+     Math.abs(H.presenceNormalize(25, 100) - 0.5) < 1e-6 &&
+     H.presenceNormalize(200, 100) === 1 && H.presenceNormalize(5, 0) === 0 && H.presenceNormalize(-1, 100) === 0,
+     Math.abs(brokenNormalizeLinear(25, 100) - 0.5) < 1e-6 &&
+     brokenNormalizeLinear(200, 100) === 1 && brokenNormalizeLinear(5, 0) === 0 && brokenNormalizeLinear(-1, 100) === 0);
+
+  ok('G7 presenceHeatColor is NOT geometry.ts\'s temperature heatmapColor ramp',
+     H.presenceHeatColor(0) !== '#1e5fd0' && H.presenceHeatColor(1) !== '#ef5350' &&
+     typeof H.heatmapColor === 'undefined',
+     brokenDivergingColor(0) !== '#1e5fd0' && brokenDivergingColor(1) !== '#ef5350');
+
+  // ════════════════════════════════════════════════════════════════════════
+  // H. IndexedDB store — real ops vs in-memory broken shims
+  // ════════════════════════════════════════════════════════════════════════
+  const REAL = ST;
+  // A faithful in-memory ops object with exactly ONE injected bug, so each IDB
+  // probe below has a genuine negative control.
+  function memOps(bug) {
+    const m = new Map();
+    return {
+      async putPresenceRecord(rec) {
+        const k = H.historyKey(rec.floorId, rec.bucket);
+        m.set(k, bug === 'putDrops' ? { ...rec, seconds: new Float32Array(rec.seconds.length) } : rec);
+        return true;
+      },
+      async mergePresenceRecord(d) {
+        const k = H.historyKey(d.floorId, d.bucket), p = m.get(k);
+        m.set(k, (!p || bug === 'mergeOverwrites') ? d : H.mergePresenceRecords(p, d));
+        return true;
+      },
+      async getPresenceRecord(k) { return m.get(k) ?? null; },
+      async getPresenceRecords(keys) {
+        if (bug === 'rangeFirstOnly') return m.has(keys[0]) ? [m.get(keys[0])] : [];
+        return keys.map(k => m.get(k)).filter(Boolean);
+      },
+      async listPresenceKeys() { return [...m.keys()]; },
+      async deletePresenceRecord(k) { if (bug !== 'deleteNoop') m.delete(k); return true; },
+      async sweepPresenceHistory(now, days) {
+        if (bug === 'sweepNoop') return 0;
+        if (bug === 'sweepReadTimeFilter') return 0;  // the neighborhood-store TTL pattern: hides, never erases
+        const d = H.expiredHistoryKeys([...m.keys()], now, days);
+        for (const k of d) m.delete(k);
+        return d.length;
+      },
+      async clearPresenceHistory() {
+        if (bug === 'clearOne') { const k = [...m.keys()][0]; if (k) m.delete(k); } else m.clear();
+        return true;
+      },
+    };
+  }
+
+  const FLOOR = 'hist-test-floor';
+  const mkRec = (bucket, map, at = NOW) => H.makePresenceRecord(FLOOR, bucket, map, COLS, ROWS, at);
+  const reset = async (ops) => { await ops.clearPresenceHistory(); };
+
+  const probeRoundTrip = async (ops) => {
+    await reset(ops);
+    const r = mkRec(B0, new Map([[3, 12.5], [11, 0.5]]));
+    if (!(await ops.putPresenceRecord(r))) return false;
+    const got = await ops.getPresenceRecord(H.historyKey(FLOOR, B0));
+    if (!got) return false;
+    return taEq(got.cells, r.cells) && taEq(got.seconds, r.seconds) &&
+           got.cols === COLS && got.cellMm === 200 && got.updatedAt === NOW &&
+           (await ops.getPresenceRecord(H.historyKey(FLOOR, B0 + 999))) === null;
+  };
+  ok('H1 put/get round-trips a record (typed arrays survive structured clone)',
+     await probeRoundTrip(REAL), await probeRoundTrip(memOps('putDrops')));
+
+  const probeMergeSums = async (ops) => {
+    await reset(ops);
+    await ops.mergePresenceRecord(mkRec(B0, new Map([[3, 10], [4, 1]])));
+    await ops.mergePresenceRecord(mkRec(B0, new Map([[3, 5], [8, 2]])));
+    const got = await ops.getPresenceRecord(H.historyKey(FLOOR, B0));
+    if (!got) return false;
+    const m = H.decodePresenceCells(got);
+    return m.size === 3 && m.get(3) === 15 && m.get(4) === 1 && m.get(8) === 2;
+  };
+  ok('H2 two flushes into the same hour MERGE additively in the store',
+     await probeMergeSums(REAL), await probeMergeSums(memOps('mergeOverwrites')));
+
+  const probeRange = async (ops) => {
+    await reset(ops);
+    await ops.mergePresenceRecord(mkRec(B0 - 2, new Map([[1, 3]])));
+    await ops.mergePresenceRecord(mkRec(B0,     new Map([[1, 4], [2, 1]])));
+    // B0-1 deliberately never written — the range must tolerate the hole.
+    const keys = H.historyKeysForRange(FLOOR, H.hourBucketStartMs(B0 - 2), H.hourBucketStartMs(B0));
+    const recs = await ops.getPresenceRecords(keys);
+    if (keys.length !== 3 || recs.length !== 2) return false;
+    const summed = H.sumPresenceRecords(recs, COLS, ROWS);
+    return summed.get(1) === 7 && summed.get(2) === 1 && summed.size === 2;
+  };
+  ok('H3 a range query reads several buckets, tolerates a missing one, and sums',
+     await probeRange(REAL), await probeRange(memOps('rangeFirstOnly')));
+
+  const probeDelete = async (ops) => {
+    await reset(ops);
+    await ops.putPresenceRecord(mkRec(B0, new Map([[1, 1]])));
+    await ops.deletePresenceRecord(H.historyKey(FLOOR, B0));
+    return (await ops.getPresenceRecord(H.historyKey(FLOOR, B0))) === null;
+  };
+  ok('H4 deletePresenceRecord removes a record',
+     await probeDelete(REAL), await probeDelete(memOps('deleteNoop')));
+
+  // Sweep fixture: genuinely expired, genuinely fresh, and a genuinely
+  // unparseable key (planted via a NaN bucket, which historyKey renders as
+  // `<floor>:NaN` and parseHistoryKey rejects).
+  const probeSweep = async (ops) => {
+    await reset(ops);
+    await ops.putPresenceRecord(mkRec(CUT30 - 100, new Map([[1, 1]])));  // expired
+    await ops.putPresenceRecord(mkRec(CUT30 - 1,   new Map([[1, 1]])));  // expired (boundary-1)
+    await ops.putPresenceRecord(mkRec(CUT30,       new Map([[1, 1]])));  // kept (exact boundary)
+    await ops.putPresenceRecord(mkRec(B0,          new Map([[1, 1]])));  // kept (fresh)
+    await ops.putPresenceRecord(mkRec(NaN,         new Map([[1, 1]])));  // unparseable key
+    const before = (await ops.listPresenceKeys()).length;
+    const n = await ops.sweepPresenceHistory(NOW, 30);
+    const after = await ops.listPresenceKeys();
+    return before === 5 && n === 3 && after.length === 2 &&
+           after.includes(H.historyKey(FLOOR, CUT30)) && after.includes(H.historyKey(FLOOR, B0)) &&
+           (await ops.getPresenceRecord(H.historyKey(FLOOR, CUT30 - 1))) === null;
+  };
+  ok('H5 the retention sweep ACTIVELY DELETES expired records (privacy §F)',
+     await probeSweep(REAL), await probeSweep(memOps('sweepNoop')));
+  ok('H6 the sweep is not a read-time staleness filter — the rows are really gone',
+     await probeSweep(REAL), await probeSweep(memOps('sweepReadTimeFilter')));
+
+  const probeClear = async (ops) => {
+    await reset(ops);
+    await ops.putPresenceRecord(mkRec(B0, new Map([[1, 1]])));
+    await ops.putPresenceRecord(mkRec(B0 - 1, new Map([[2, 1]])));
+    await ops.putPresenceRecord(mkRec(B0 - 2, new Map([[3, 1]])));
+    if ((await ops.listPresenceKeys()).length !== 3) return false;
+    await ops.clearPresenceHistory();
+    return (await ops.listPresenceKeys()).length === 0;
+  };
+  ok('H7 clearPresenceHistory erases EVERYTHING in one call (the erase control)',
+     await probeClear(REAL), await probeClear(memOps('clearOne')));
+
+  const probeCustomRetention = async (ops) => {
+    await reset(ops);
+    await ops.putPresenceRecord(mkRec(B0 - 24 * 10, new Map([[1, 1]])));  // 10 days old
+    await ops.putPresenceRecord(mkRec(B0,           new Map([[2, 1]])));
+    const n30 = await ops.sweepPresenceHistory(NOW, 30);
+    const n7  = await ops.sweepPresenceHistory(NOW, 7);
+    return n30 === 0 && n7 === 1 && (await ops.listPresenceKeys()).length === 1;
+  };
+  ok('H8 a caller-configured retention window drives the sweep',
+     await probeCustomRetention(REAL), await probeCustomRetention(memOps('sweepNoop')));
+
+  // ── Storage-size measurement (design §E predicts ~2 KB/occupied hour, and
+  //    <1 MB/month). MEASURED, not asserted. ──────────────────────────────
+  {
+    // A realistic occupied hour on a 10 × 8 m floor: 3600 samples at 1 Hz —
+    // two long seated dwells with radar jitter, plus walking between them and
+    // a couple of trips to the kitchen. Deterministic (mulberry32, no Math.random).
+    let s = 0x9e3779b9;
+    const rnd = () => { s |= 0; s = (s + 0x6d2b79f5) | 0;
+      let t = Math.imul(s ^ (s >>> 15), 1 | s);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+    const SW = 10000, SD = 8000, SC = H.presenceGridCols(SW), SR = H.presenceGridRows(SD);
+    const anchors = [[2400, 1800], [7600, 5200], [1200, 6800]];
+    // One occupied hour, sampled at `hz`. The SAME path either way — the point
+    // of the aggregate design is that storage tracks cells touched, not rate.
+    const occupiedHour = (hz) => {
+      const acc = new Map(), n = 3600 * hz, dt = 1 / hz;
+      for (let k = 0; k < n; k++) {
+        const t = k / hz, phase = t % 1200, seg = Math.floor(t / 1200) % anchors.length;
+        let x, y;
+        if (phase < 900) {                                // seated: jitter about an anchor
+          const a = anchors[seg];
+          x = a[0] + (rnd() - 0.5) * 500; y = a[1] + (rnd() - 0.5) * 500;
+        } else {                                          // walking to the next anchor
+          const a = anchors[seg], b = anchors[(seg + 1) % anchors.length], u = (phase - 900) / 300;
+          x = a[0] + (b[0] - a[0]) * u + (rnd() - 0.5) * 260;
+          y = a[1] + (b[1] - a[1]) * u + (rnd() - 0.5) * 260;
+        }
+        H.accumulateSample(acc, x, y, SW, SD, dt);
+      }
+      return acc;
+    };
+    const acc = occupiedHour(1);
+    const encHour = H.encodePresenceCells(acc);
+    const bytesHour = encHour.cells.byteLength + encHour.seconds.byteLength;
+    const perDay = bytesHour * 16;                        // ~16 occupied hours/day
+    note(`MEASURED storage — realistic occupied hour on a 10×8 m floor (${SC}×${SR} = ${SC*SR} cells):`);
+    note(`  cells touched      : ${acc.size} of ${SC*SR}  (${(100*acc.size/(SC*SR)).toFixed(1)}% of the floor)`);
+    note(`  total dwell        : ${H.presenceTotalSeconds(acc).toFixed(0)} s over 3600 samples`);
+    note(`  payload            : ${bytesHour} B  (${(bytesHour/1024).toFixed(2)} KB) at 8 B/cell`);
+    note(`  ~16 occupied h/day : ${(perDay/1024).toFixed(1)} KB/day`);
+    note(`  30 days            : ${(perDay*30/1024/1024).toFixed(3)} MB/month  (+ ~60 B/record header)`);
+    // Worst case: a fully-swept floor, every cell touched, every hour.
+    const worstCells = SC * SR;
+    note(`  WORST CASE (every one of ${worstCells} cells touched every hour, 24/7):`);
+    note(`    ${(worstCells*8/1024).toFixed(1)} KB/hour → ${(worstCells*8*24*30/1024/1024).toFixed(2)} MB/month`);
+    // A 1 Hz sample is independent of radar push rate — restate the §E claim as a measurement.
+    const acc10 = occupiedHour(10);                       // identical path, 10× the samples
+    note(`  SAME hour sampled at 10 Hz (36000 samples): ${acc10.size} cells → ${(acc10.size*8/1024).toFixed(2)} KB`);
+    note(`    → ${(acc10.size/acc.size).toFixed(2)}× the 1 Hz payload for 10× the samples; total dwell ${H.presenceTotalSeconds(acc10).toFixed(0)} s either way.`);
+  }
+
+  // ── IDB failure tolerance ───────────────────────────────────────────────
+  // Run LAST: shadow globalThis.indexedDB so every store op hits a broken
+  // engine. Each op must degrade (null / [] / false / 0) and NEVER throw.
+  await ST.clearPresenceHistory();  // clean the real DB before we break it
+
+  const runAllOps = async () => {
+    const out = { threw: false, vals: [] };
+    const r = mkRec(B0, new Map([[1, 1]]));
+    try {
+      out.vals.push(await ST.putPresenceRecord(r));
+      out.vals.push(await ST.mergePresenceRecord(r));
+      out.vals.push(await ST.getPresenceRecord(H.historyKey(FLOOR, B0)));
+      out.vals.push(await ST.getPresenceRecords([H.historyKey(FLOOR, B0)]));
+      out.vals.push(await ST.listPresenceKeys());
+      out.vals.push(await ST.deletePresenceRecord(H.historyKey(FLOOR, B0)));
+      out.vals.push(await ST.sweepPresenceHistory(NOW, 30));
+      out.vals.push(await ST.clearPresenceHistory());
+    } catch (e) { out.threw = true; }
+    return out;
+  };
+  const degraded = (o) => !o.threw &&
+    o.vals[0] === false && o.vals[1] === false && o.vals[2] === null &&
+    Array.isArray(o.vals[3]) && o.vals[3].length === 0 &&
+    Array.isArray(o.vals[4]) && o.vals[4].length === 0 &&
+    o.vals[5] === false && o.vals[6] === 0 && o.vals[7] === false;
+
+  // The negative control is the SAME op set without the try/catch guard.
+  const unguarded = async (openFn) => {
+    const out = { threw: false, vals: [] };
+    try { await new Promise((res, rej) => { const rq = openFn(); rq.onsuccess = () => res(rq.result); rq.onerror = () => rej(rq.error); });
+          out.vals = [false, false, null, [], [], false, 0, false]; }
+    catch { out.threw = true; }
+    return out;
+  };
+
+  const realIdb = globalThis.indexedDB;
+  let stubInstalled = false;
+  try {
+    // (a) open() throws synchronously
+    Object.defineProperty(globalThis, 'indexedDB', {
+      value: { open() { throw new Error('idb unavailable'); } }, configurable: true, writable: true,
+    });
+    stubInstalled = (() => { try { globalThis.indexedDB.open('x', 1); return false; } catch { return true; } })();
+    ok('H9 the throwing-indexedDB stub is actually installed (guards a vacuous pass)',
+       stubInstalled, realIdb === globalThis.indexedDB);
+
+    const oThrow = await runAllOps();
+    ok('H10 every op degrades (null/[]/false/0) when indexedDB.open() throws',
+       degraded(oThrow),
+       degraded(await unguarded(() => { throw new Error('idb unavailable'); })));
+
+    // (b) open() returns a request that fires onerror
+    Object.defineProperty(globalThis, 'indexedDB', {
+      value: { open() { const rq = { onsuccess: null, onerror: null, onupgradeneeded: null, error: new Error('blocked'), result: null };
+                        setTimeout(() => rq.onerror && rq.onerror(), 0); return rq; } },
+      configurable: true, writable: true,
+    });
+    const oErr = await runAllOps();
+    ok('H11 every op degrades when the open request errors asynchronously',
+       degraded(oErr),
+       degraded(await unguarded(() => { const rq = { onsuccess: null, onerror: null, error: new Error('blocked') };
+                                        setTimeout(() => rq.onerror && rq.onerror(), 0); return rq; })));
+  } finally {
+    delete globalThis.indexedDB;
+    if (globalThis.indexedDB !== realIdb) {
+      Object.defineProperty(globalThis, 'indexedDB', { value: realIdb, configurable: true, writable: true });
+    }
+  }
+
+  ok('H12 the store recovers once indexedDB works again',
+     await probeRoundTrip(REAL), await probeRoundTrip(memOps('putDrops')));
+
+  await ST.clearPresenceHistory();  // leave nothing behind (privacy §F)
+
+  // ════════════════════════════════════════════════════════════════════════
+  const passN = checks.filter(c => c.pass).length, total = checks.length;
+  const fails = checks.filter(c => !c.pass).map(c => c.name);
+  document.getElementById('out').textContent =
+    checks.map(c => `${c.pass ? 'ok  ' : 'FAIL'} ${c.name}${c.extra ? '  (' + c.extra + ')' : ''}`).join('\n') +
+    '\n\n' + notes.join('\n') +
+    `\n\n${passN}/${total}` + (fails.length ? `  FAILED: ${fails.join(', ')}` : '');
+  document.title = `MMWAVEHISTORY ${passN === total ? 'PASS' : 'FAIL'} ${passN}/${total}`;
+</script>
