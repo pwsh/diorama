@@ -18,6 +18,68 @@
     facing          FIRST-ORDER ease: facing += d*min(1, dt*K), K=8 walking
     gait            walking = speedMs > 0.08 (hard boolean); cadence -> 0 instantly
 
+  DETERMINISM / RNG BARRIER  — read this before debugging a mystery failure
+  ------------------------------------------------------------------------
+  This page seeds `Math.random` so the AI controller's goal picks (and the
+  fresh-rig avatar-pool pick) are reproducible. That makes every number below
+  a function of the seeded STREAM POSITION, and three.js consumes that stream:
+  `MathUtils.generateUUID()` draws exactly FOUR `Math.random()` values, and it
+  runs once per Object3D / Material / BufferGeometry / Texture ever constructed.
+  ThreeDRenderer alone builds 170 `new THREE.Group()` class fields, `updateFloor`
+  builds every wall/furniture/light mesh, and several procedural texture painters
+  draw explicitly. Setup therefore burns thousands of draws before frame 0.
+
+  So, before this fix, ADDING ONE UNRELATED GROUP TO THE RENDERER SHIFTED THE
+  WHOLE SEQUENCE and the sampled walk changed — a pure false alarm. Measured on
+  the pre-fix page against pristine HEAD: +1 empty Group failed `1c` (got 15,
+  want <= 12), +3 empty Groups failed `1d` instead (nav jerk 2636.91, want <= 800).
+  Different assertions failing for different object counts is the FINGERPRINT of
+  RNG coupling; a real motion regression fails the SAME assertion every time.
+
+  Fix, in three parts — all three were needed, verified by measurement:
+   1. `withRenderer` re-seeds `Math.random` at the RNG BARRIER — after construct /
+      load / updateFloor / applyViewPreset, immediately before the measured window
+      opens — and restores it on exit.
+   2. That alone is NOT enough: ThreeDRenderer captures `_interactRng = Math.random`
+      in a class field, i.e. by reference AT CONSTRUCTION, and consumes it during
+      the run. Re-pointing `Math.random` cannot reach an already-captured reference,
+      so the setup draw count still leaked in (N=0/1/3 measured 1136/2259/1994 with
+      only step 1). `setInteractRng` — the renderer's own seam — fixes it.
+   3. The fake clock is installed BEFORE construction, from a fixed base. It used
+      to start at `performance.now()`, so frame 0's dt carried however many REAL
+      milliseconds setup took; an identical re-run differed on 20 of 895 leaves.
+  Object count before the barrier is now measurement-invisible BY CONSTRUCTION, and
+  two identical runs are byte-identical.
+
+  Verify that after any renderer change with the built-in knob:
+      ?groups=1   ?groups=3        (constructs N extra Groups during SETUP)
+  All must report the identical numbers. They are the regression pin FOR the
+  barrier; if they ever diverge, a measured draw has escaped in front of it.
+
+  SAMPLING — why S6 runs five times
+  ---------------------------------
+  Every other section drives a SCRIPTED path and is bit-deterministic. S6 is not:
+  it drives the real AI controller, which picks goals at random, so one 300 s walk
+  is ONE SAMPLE of a stochastic process and its tail statistics move a lot from
+  walk to walk. Measured over 51 correct-code walks: nav-jerk peak/p90 12.0..38.5,
+  yaw-accel p99 12.8..27.1, spring absorption 23.6..146.1, nav dir-change max
+  5.7..54.6. Several original thresholds were fitted to whichever walk the seed
+  happened to produce, so correct code failed `I1 >= 50` (dips to 23.6), `F1 <= 26`
+  (reaches 27.1) and `I2 <= 25` (reaches 54.6) on some walks — a false alarm with
+  no code change at all.
+
+  So S6 is sampled: PROD_RUNS independent walks (seeds derived from SEED), and the
+  assertions read the MEDIAN via pm(). That kept `I1 >= 50`, `F1 <= 26`, `F2 <= 26`,
+  `1e`, `4a` and `4b` at their ORIGINAL values — the noise was removed by sampling
+  rather than by loosening the guard. `1a` is asserted on every walk (pmax), because
+  "the carrot is never assigned" is structural, not statistical.
+
+  Two statistics were also re-expressed, because the originals could not tell
+  correct code from a real defect at ANY threshold (both verified against the
+  reverted build, ranges in the assertion notes): nav-jerk p99/MEDIAN -> max/p90,
+  and blocked-streak MAX -> MEAN. Re-deriving a threshold for a statistic that does
+  not separate would have produced an assertion that cannot fail.
+
   Build recipe (see report / CLAUDE.md harness discipline):
     npm run build
     mkdir -p /tmp/fluid && cp test-pages/avatar-fluidity-test.html /tmp/fluid/
@@ -96,20 +158,58 @@ const baseFloor = (over) => Object.assign({
   doors: [], windows: [], furniture: [], rooms: [], bg: null, model3d: null, look3d: null,
 }, over || {});
 
-async function withRenderer(floor, fn) {
-  const r = new mod.ThreeDRenderer(el);
-  await r.load();
-  r.updateFloor(floor, SC3);
-  r.applyViewPreset('top');
+// Every measured window starts from THIS state (see the RNG BARRIER note above).
+// `?seed=` re-rolls the sampled walk; it exists because the thresholds below are
+// derived from the SPREAD across seeds, not from one lucky walk (see the header).
+const MEASURE_SEED = 20260819;
+const SEED = (+(new URLSearchParams(location.search).get('seed') || MEASURE_SEED)) | 0;
+// Fixed origin for the faked clock, so no real wall-clock value reaches the run.
+const CLOCK_BASE_MS = 60000;
+// Robustness knob: ?groups=N constructs N extra THREE.Group()s during SETUP —
+// 4 Math.random draws each — emulating an unrelated group added to the renderer.
+// With the barrier in place this MUST NOT move a single number.
+const EXTRA_GROUPS = Math.max(0, Math.min(64,
+  +(new URLSearchParams(location.search).get('groups') || 0) | 0));
+
+async function withRenderer(floor, fn, runSeed = SEED) {
+  // Fake clock FIRST, from a FIXED base. updateTargets takes no dt — the renderer
+  // reads performance.now() itself — and it captures that clock during setup, so
+  // installing the fake clock after construction left frame 0's dt carrying however
+  // many REAL milliseconds setup happened to take. That leaked into the frozen gait
+  // phase and made H4's decayed hip angles wobble ~0.002 rad run to run (measured:
+  // an identical re-run differed on 20 of 895 leaves). Nothing about the code under
+  // test — just the harness reading a wall clock.
   const realNow = performance.now.bind(performance);
-  let fakeNow = realNow();
+  let fakeNow = CLOCK_BASE_MS;
   performance.now = () => fakeNow;
   const clock = {
     advance: (ms) => { fakeNow += ms; },
     now: () => fakeNow,
   };
+  const r = new mod.ThreeDRenderer(el);
+  // real THREE.Group (not a stand-in): same class the renderer's own fields use.
+  for (let i = 0; i < EXTRA_GROUPS; i++) new (Object.getPrototypeOf(r._floorGroup).constructor)();
+  await r.load();
+  r.updateFloor(floor, SC3);
+  r.applyViewPreset('top');
+  // ── RNG BARRIER ────────────────────────────────────────────────────────────
+  // Setup is done; nothing measured has happened yet. Re-seed so the sampled run
+  // cannot see how many objects the setup above constructed. Restored on exit so
+  // each run is hermetic (and so runs cannot perturb each other either).
+  const realRandom = Math.random;
+  Math.random = mulberry32(runSeed);
+  // Second leak, and the reason a bare `Math.random` re-seed is NOT enough:
+  // ThreeDRenderer captures `_interactRng = Math.random` in a CLASS FIELD, i.e.
+  // by reference AT CONSTRUCTION, and then consumes it during the run (the 1/8
+  // device-interaction branch and the 1/10 prop-session roll in _aiPickGoal).
+  // Re-pointing `Math.random` cannot reach an already-captured reference, so that
+  // generator stayed on the page-level stream and carried the setup draw count
+  // straight into the measured walk. `setInteractRng` is the renderer's own
+  // documented seam for this; give it an INDEPENDENT stream so the picker's
+  // decisions depend on its own call count and nothing else.
+  r.setInteractRng(mulberry32(runSeed ^ 0x5bf03635));
   try { return await fn(r, clock); }
-  finally { performance.now = realNow; try { r.destroy(); } catch (e) {} }
+  finally { performance.now = realNow; Math.random = realRandom; try { r.destroy(); } catch (e) {} }
 }
 
 // Drive one scripted RAW target. pathFn(t) -> {x,y} in world mm.
@@ -425,7 +525,8 @@ function S5(s1) {
 // ─────────────────────────────────────────────────────────────────────────────
 // S6 — the REAL production chain: a synthetic AI rig walking A* paths
 // ─────────────────────────────────────────────────────────────────────────────
-async function S6() {
+async function S6(runIdx = 0) {
+  const runSeed = (SEED + runIdx * 0x9E3779B1) | 0;
   const FW = 12000, FD = 10000;
   const floor = baseFloor({
     w: FW, d: FD,
@@ -446,10 +547,11 @@ async function S6() {
     ],
     rooms: [{ id: 'rm1', name: 'Hall', anchor: { x: 3000, y: 4000 } }],
   });
-  const realRandom = Math.random;
-  Math.random = mulberry32(20260819);
+  // Determinism comes from the RNG BARRIER inside withRenderer, which re-seeds
+  // AFTER the renderer is built — seeding out here instead is what used to let
+  // setup object-count decide this run's walk.
   let S;
-  try {
+  {
     S = await withRenderer(floor, async (r, clock) => {
       const KEY = 'ai_m1', dtMs = 1000/60, dt = 1/60;
       const frames = Math.round(300 * 60);   // 300 s
@@ -482,8 +584,8 @@ async function S6() {
       }
       r._blockedWorld = origBW;
       return out;
-    });
-  } finally { Math.random = realRandom; }
+    }, runSeed);
+  }
 
   const dt = 1/60;
   const anchored = (s) => s.sit > 0.1 || s.act > 0.1 || s.lie > 0.1;
@@ -602,6 +704,7 @@ async function S6() {
   return {
     note: '300 s of a real synthetic AI rig (motionSensors avatar) in a 3-region walled ' +
       'plan, seeded Math.random, 60 fps. Aggregates over WALKING (>0.2 m/s), non-anchored frames.',
+    run_index: runIdx, run_seed: runSeed,
     frames_total: S.length, frames_walking: walk.length, walking_pct: r2(100*walk.length/S.length),
     frames_with_astar_path_pct: r2(100*S.filter(x=>x.hp>0).length/S.length),
     raw_dir_change_deg_per_frame: stats(rawD.map(x=>x.d)),
@@ -617,7 +720,13 @@ async function S6() {
     carrot_jerk_mm_s3: stats(cJ.map(x=>x.j)),
     nav_jerk_mm_s3: stats(jS.map(x=>x.j)),
     spring_absorption_ratio_p99: r2((pct(cJ.map(x=>x.j),0.99)??0) / Math.max(1e-9, pct(jS.map(x=>x.j),0.99)??1)),
+    // Spikiness of the rendered-position jerk. p99/MEDIAN is kept as a diagnostic
+    // but is NOT asserted on: its denominator (median jerk) swings 14x with how
+    // much of a walk is smooth cruising, so on correct code it ranges 239..45 390
+    // and overlaps the pre-fix build completely (289..52 520) — it cannot tell the
+    // defect from a lucky walk. max/p90 is the same question asked stably.
     nav_jerk_p99_over_median: r2((pct(jS.map(x=>x.j),0.99)??0) / Math.max(1e-9, pct(jS.map(x=>x.j),0.50)??1)),
+    nav_jerk_max_over_p90: r2(Math.max(...jS.map(x=>x.j), 0) / Math.max(1e-9, pct(jS.map(x=>x.j),0.90)??1)),
     // attribution
     carrot_jump_mm_per_frame: stats(jump.map(x=>x.m)),
     carrot_snap_events: bigJump.length,
@@ -696,6 +805,10 @@ async function S7() {
 }
 
 // ── run everything ───────────────────────────────────────────────────────────
+// Independent 300 s walks of the production AI rig. Each is one SAMPLE of a
+// stochastic process; the assertions below read the MEDIAN across them.
+const PROD_RUNS = 5;
+const PROD = [];
 const _realRandom = Math.random;
 Math.random = mulberry32(20260819);   // whole page deterministic (regression pin)
 try {
@@ -705,7 +818,10 @@ try {
   OUT.sections.H3_corner_discontinuity = await S3(s1);
   OUT.sections.H4_gait_phase_freeze = await S4();
   OUT.sections.H5_seek_speed = S5(s1);
-  OUT.sections.PROD_ai_rig = await S6();
+  // S6 is the only stochastic section (the AI controller picks goals at random),
+  // so it is SAMPLED, not run once — see the SAMPLING note in the header.
+  for (let k = 0; k < PROD_RUNS; k++) PROD.push(await S6(k));
+  OUT.sections.PROD_ai_rig = PROD[0];
   OUT.sections.X_rig_separation = await S7();
 } catch (e) {
   OUT.errors.push(String(e && e.stack || e));
@@ -718,32 +834,58 @@ try {
 const A = [];
 const chk = (name, ok, got, want, note) =>
   A.push({ name, ok: !!ok, got, want, note });
+const median = (a) => { const s = a.slice().sort((x, y) => x - y); return s[(s.length - 1) >> 1]; };
+const g = (o, ...k) => k.reduce((x, kk) => (x == null ? x : x[kk]), o);
+// Median across the PROD_RUNS independent walks (pm), plus the worst walk (pmax)
+// for 1a — "the carrot is never assigned" is structural, so it must hold on EVERY
+// walk, not merely typically — and the raw per-walk list (pall) for reporting.
+const pm = (...path) => { const v = PROD.map(r => g(r, ...path)).filter(x => typeof x === 'number');
+  return v.length ? r2(median(v)) : null; };
+const pmax = (...path) => { const v = PROD.map(r => g(r, ...path)).filter(x => typeof x === 'number');
+  return v.length ? Math.max(...v) : null; };
+const pall = (...path) => PROD.map(r => g(r, ...path));
 const P = OUT.sections.PROD_ai_rig || {};
 const SEP = OUT.sections.X_rig_separation || {};
 const H1 = OUT.sections.H1_facing_first_order || {};
 const H2 = (OUT.sections.H2_frame_rate_dependence || {}).rates || {};
 const H3 = OUT.sections.H3_corner_discontinuity || {};
 const H4 = OUT.sections.H4_gait_phase_freeze || {};
-const g = (o, ...k) => k.reduce((x, kk) => (x == null ? x : x[kk]), o);
 
 // ── item 1: the carrot setpoint must never step ──────────────────────────────
-chk('1a carrot never assigned mid-walk', P.carrot_snap_events === 0,
-  P.carrot_snap_events, '=== 0',
+// Thresholds re-derived 2026-08-19 over a 51-walk sweep of correct code vs 24-walk
+// sweeps of the negative controls; see the SAMPLING note in the header. Ranges
+// quoted are the median-of-5 (what these assertions read), controls are per-walk.
+chk('1a carrot never assigned mid-walk', pmax('carrot_snap_events') === 0,
+  pall('carrot_snap_events').join(','), 'every walk === 0',
   'a frame whose carrot moved further than _seek + the un-block correction could ' +
-  'walk it is a direct h.carrot* assignment. was: 22 (pre-fix)');
-chk('1b carrot step bounded', g(P,'carrot_jump_mm_per_frame','max') <= 60,
-  g(P,'carrot_jump_mm_per_frame','max'), '<= 60 mm',
-  'measured 48.79 (= CARROT_FIX 30 + seek ~19); 23 % margin. was: 232.33');
-chk('1c carrot still exits blocked cells', P.blocked_streak_max_frames <= 12,
-  P.blocked_streak_max_frames, '<= 12 frames',
+  'walk it is a direct h.carrot* assignment. This one is asserted on EVERY walk, ' +
+  'not the median: it is structural, not statistical. 0 on all 51 correct walks; ' +
+  'the pre-fix build scores 4..34 on all 24 of its walks (was: 22)');
+chk('1b carrot step bounded', pm('carrot_jump_mm_per_frame','max') <= 79.2,
+  pm('carrot_jump_mm_per_frame','max'), '<= 79.2 mm',
+  'correct code 40.25..57.58 (median-of-5); pre-fix build 109..248.8. Threshold is ' +
+  'the geometric midpoint: +37.6 % over the worst correct walk, -27.3 % under the ' +
+  'cheapest defect walk. The old 60 left 2 % margin and would fire on correct code');
+chk('1c carrot still exits blocked cells promptly',
+  pm('blocked_streak_frames','mean') <= 4.87,
+  pm('blocked_streak_frames','mean'), '<= 4.87 frames mean',
   'THE invariant the snap exists for — a correction so slow the carrot lingers ' +
-  'where A* cannot start is a regression, not a fix. measured 8 (0.13 s)');
-chk('1d nav jerk not spiky', P.nav_jerk_p99_over_median <= 800,
-  P.nav_jerk_p99_over_median, '<= 800',
-  'p99/median of rendered-position jerk. measured 417; 1.9x margin. was: 3269');
-chk('1e nav jerk peak', g(P,'nav_jerk_mm_s3','max') <= 350000,
-  g(P,'nav_jerk_mm_s3','max'), '<= 350000 mm/s^3',
-  'measured 202 085; 1.7x margin. was: 1 064 394');
+  'where A* cannot start is a regression, not a fix. MEAN streak, not max: the max ' +
+  'is set by how deep in a blocked region one unlucky walk got (correct code 3..76) ' +
+  'and OVERLAPS the too-slow control (57..129), so it cannot pin anything. A rate ' +
+  'regression multiplies EVERY streak, which is what the mean sees: correct code ' +
+  '1.59..2.38, CARROT_FIX_MMS->60 gives 9.95..25.78. Geometric midpoint');
+chk('1d nav jerk not spiky', pm('nav_jerk_max_over_p90') <= 45.7,
+  pm('nav_jerk_max_over_p90'), '<= 45.7',
+  'peak / p90 of rendered-position jerk. correct code 16.82..37.98 (median-of-5), ' +
+  'pre-fix 55.1..179.4, geometric midpoint. NB the old p99/MEDIAN form of this ' +
+  'assertion did not discriminate at all — correct 239..45 390 vs pre-fix ' +
+  '289..52 520, fully overlapping — because median jerk itself swings 14x with how ' +
+  'much of a walk is smooth cruising. Same question, stable denominator');
+chk('1e nav jerk peak', pm('nav_jerk_mm_s3','max') <= 350000,
+  pm('nav_jerk_mm_s3','max'), '<= 350000 mm/s^3',
+  'UNCHANGED. correct code 152 900..223 600 (median-of-5), pre-fix 559 500..1 157 000: ' +
+  'the threshold already sat between them (+56.5 % / -37.4 %). was: 1 064 394');
 
 // ── item 3: exact easing => frame-rate independence ──────────────────────────
 chk('3a 10 fps facing tracks 120 fps', g(H2,'10','divergence_after_startup_incl_corner','facing_deg') <= 20,
@@ -758,13 +900,14 @@ chk('3c steady state is rate-independent',
   'proves the ease change moved only the transient, never where a value lands');
 
 // ── item 4: stride matching under the amp ease ───────────────────────────────
-chk('4a feet track the ground', P.stride_skate_over_25pct_frames_pct <= 1.0,
-  P.stride_skate_over_25pct_frames_pct, '<= 1.0 %',
+chk('4a feet track the ground', pm('stride_skate_over_25pct_frames_pct') <= 1.0,
+  pm('stride_skate_over_25pct_frames_pct'), '<= 1.0 %',
   'walking frames whose foot speed is >25 % off body speed, cadence measured from ' +
-  'the REAL phase advance. measured 0.07. was: 11.11');
-chk('4b no foot skate at p99', g(P,'stride_foot_vs_ground_speed_ratio_realised','p99') <= 1.05,
-  g(P,'stride_foot_vs_ground_speed_ratio_realised','p99'), '<= 1.05',
-  'measured 1.00. was: 1.60');
+  'the REAL phase advance. UNCHANGED: correct code 0..0.1 (median-of-5), pre-fix ' +
+  '9.00..13.36, amp-ease->0.05 12.54..45.11. was: 11.11');
+chk('4b no foot skate at p99', pm('stride_foot_vs_ground_speed_ratio_realised','p99') <= 1.05,
+  pm('stride_foot_vs_ground_speed_ratio_realised','p99'), '<= 1.05',
+  'UNCHANGED: correct code 1.00 on every walk, pre-fix 1.55..1.65. was: 1.60');
 
 // ── item 5: separation is a force, not a teleport ────────────────────────────
 chk('5a passing jerk near free-walk', SEP.jerk_ratio_near_over_free <= 80,
@@ -777,25 +920,37 @@ chk('5b separation still separates', SEP.min_gap_mm >= 200,
   'measured 251 (the old 380 was held only BY the teleport being removed)');
 
 // ── facing: the four richer designs that measured WORSE must stay out ────────
-chk('F1 body-yaw acceleration', g(P,'body_yaw_angAccel_rad_s2','p99') <= 26,
-  g(P,'body_yaw_angAccel_rad_s2','p99'), '<= 26 rad/s^2',
-  'measured 20.81. Rejected designs: lead+spring 52.2, lead+first-order 42.5, ' +
-  'confidence-scaled 27.3, 90/55 hysteresis 32.9 — every one trips this');
-chk('F2 facing tracks the path', g(P,'facing_lag_behind_path_tangent_deg','p99') <= 26,
-  g(P,'facing_lag_behind_path_tangent_deg','p99'), '<= 26 deg',
-  'measured 20.03. Rejected designs: 44.7 / 47.1 / 46.3 / 27.8');
+chk('F1 body-yaw acceleration', pm('body_yaw_angAccel_rad_s2','p99') <= 26,
+  pm('body_yaw_angAccel_rad_s2','p99'), '<= 26 rad/s^2',
+  'UNCHANGED, and this is exactly why S6 is sampled: a SINGLE walk of correct code ' +
+  'reaches 27.11 and would fire this. Median-of-5 lands 14.16..24.70 (5.3 % margin); ' +
+  'FACE_K_WALK->200 gives 30.65..258.3. Rejected designs: lead+spring 52.2, ' +
+  'lead+first-order 42.5, 90/55 hysteresis 32.9 all still trip it. The fourth, ' +
+  'confidence-scaled at 27.3, now sits INSIDE the correct-code single-walk spread — ' +
+  'it was never separable here, and F2 (27.8 > 26) is what actually rejects it');
+chk('F2 facing tracks the path', pm('facing_lag_behind_path_tangent_deg','p99') <= 26,
+  pm('facing_lag_behind_path_tangent_deg','p99'), '<= 26 deg',
+  'UNCHANGED: correct code 15.28..21.69 (median-of-5), 19.9 % margin, and below the ' +
+  'closest rejected design. Rejected designs: 44.7 / 47.1 / 46.3 / 27.8');
 chk('F3 no per-frame yaw step at a corner',
   g(H1,'facing_max_frame_step_in_angVel_rad_s','corner') <= 0.20,
   g(H1,'facing_max_frame_step_in_angVel_rad_s','corner'), '<= 0.20 rad/s',
   'clean 1.2 m/s 90-deg corner: yaw rate must RAMP, not step. measured 0.137');
 
 // ── invariants that must survive all of the above ────────────────────────────
-chk('I1 spring still absorbs polyline corners', P.spring_absorption_ratio_p99 >= 50,
-  P.spring_absorption_ratio_p99, '>= 50',
-  'carrot jerk / nav jerk at p99 — the whole point of the carrot-chaser. measured 132');
-chk('I2 rendered path never corners hard', g(P,'nav_dir_change_deg_per_frame','max') <= 25,
-  g(P,'nav_dir_change_deg_per_frame','max'), '<= 25 deg/frame',
-  'measured 9.51; the raw walker still turns 80 deg in one frame behind it');
+chk('I1 spring still absorbs polyline corners', pm('spring_absorption_ratio_p99') >= 50,
+  pm('spring_absorption_ratio_p99'), '>= 50',
+  'carrot jerk / nav jerk at p99 — the whole point of the carrot-chaser. UNCHANGED, ' +
+  'and the second reason S6 is sampled: a single correct walk dips to 23.6 and would ' +
+  'fire this. Median-of-5 lands 57.27..142.7 (14.5 % margin); bypassing _springNav ' +
+  'gives exactly 1 on every walk');
+chk('I2 rendered path never corners hard', pm('nav_dir_change_deg_per_frame','max') <= 55,
+  pm('nav_dir_change_deg_per_frame','max'), '<= 55 deg/frame',
+  'correct code 9.28..43.06 (median-of-5) — the old 25 fired on correct code (single ' +
+  'walks reach 54.6). 55 is +27.7 % over the worst correct median, 2.95x under the ' +
+  'spring-bypass control (162.3..179.2), and still well under the 80 deg/frame the ' +
+  'RAW walker turns in one frame behind it — which is the comparison that gives this ' +
+  'assertion its meaning, so it is NOT set at the geometric midpoint (83.6) here');
 chk('I3 A* polyline stays smooth', g(H3,'B_astar_polyline','nav_jerk_mm_s3','p99') <= 150000,
   g(H3,'B_astar_polyline','nav_jerk_mm_s3','p99'), '<= 150000 mm/s^3',
   'carrot walking a real string-pulled path. measured 67 175');
@@ -807,6 +962,26 @@ chk('I4 gait settles when walking stops',
   'the phase DOES freeze mid-stride; this pins that it stays visually harmless');
 chk('I5 no errors', OUT.errors.length === 0, OUT.errors.length, '=== 0', '');
 
+// Per-walk values behind every sampled assertion, so a failure is diagnosable
+// without re-running: if one walk is an outlier the median is still the verdict.
+OUT.sections.PROD_sampled = {
+  note: `${PROD_RUNS} independent AI walks; assertions read the median (1a/I5 the max).`,
+  seeds: PROD.map(r => r.run_seed),
+  per_walk: {
+    carrot_snap_events: pall('carrot_snap_events'),
+    carrot_jump_max: pall('carrot_jump_mm_per_frame','max'),
+    blocked_streak_mean: pall('blocked_streak_frames','mean'),
+    blocked_streak_max: pall('blocked_streak_max_frames'),
+    nav_jerk_max_over_p90: pall('nav_jerk_max_over_p90'),
+    nav_jerk_max: pall('nav_jerk_mm_s3','max'),
+    yaw_accel_p99: pall('body_yaw_angAccel_rad_s2','p99'),
+    facing_lag_p99: pall('facing_lag_behind_path_tangent_deg','p99'),
+    absorption_p99: pall('spring_absorption_ratio_p99'),
+    nav_dir_max: pall('nav_dir_change_deg_per_frame','max'),
+    skate_pct: pall('stride_skate_over_25pct_frames_pct'),
+    walking_pct: pall('walking_pct'),
+  },
+};
 OUT.assertions = A;
 const pass = A.filter(x => x.ok).length, total = A.length;
 OUT.pass = pass; OUT.total = total;
