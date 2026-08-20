@@ -2297,6 +2297,122 @@ The full app runs client-side on the docs site (`pwsh.github.io/diorama/demo/`) 
 ### Sync on bind
 `Planner.bindSensor(sensorId, deviceSlug)` runs discovery + `_syncZonesObjects` immediately and schedules retries at 500 ms / 2 s / 5 s. Each retry calls `disc.invalidate()` first so any entities ESPHome pushes after the initial `get_states` snapshot get picked up. The sidebar binding dropdown calls this — zones / objects load without a manual click.
 
+### mmWave technical editor (2026-08-19, user-requested "a more robust independent editor")
+`<diorama-mmwave-editor>` (`src/ui/mmwave-editor.ts`) — a large overlay panel
+(`min(1180px,96vw) × min(820px,92vh)`, NOT a full-screen takeover; the codebase has
+no full-screen precedent and the settings drawer is the nearest shape), light DOM,
+`show(sensorId)` + `open`, registered via `./define.js`, mounted once in `app.ts`,
+opened by an `open-mmwave-editor` CustomEvent from the sidebar's active-sensor
+block. **EDIT MODE ONLY** (guarded in app.ts — zone edits write `zoneCache` through
+`save()`, which no-ops outside edit, so a kiosk zone edit would push to the device
+but not cache). Live repaint = the `<diorama-flight-modal>` idiom exactly: subscribe
+to BOTH `live` and `config`, gate `requestUpdate()` on `this.open`, **no polling**.
+Design: `docs/DESIGN-mmwave.md` §A–D. Test `mmwave-editor-test.html`
+(`MMWAVEEDITOR PASS 121/121`, real Planner + real component over a fake HaApi; 21
+source mutations each produced exactly its targeted failure).
+- **Five panes**: live targets (raw `tx/ty` AND eased `cx/cy` side by side, speed,
+  **angle**, resolution, world position via `localToWorld`, observed rate, age);
+  zones (a **sensor-local canvas at its own zoom** — fit/±/pan, independent of
+  `planner.zoom`, test-asserted: FOV wedge, range rings, inclusion + filter polygons
+  with draggable vertices, live raw (hollow) + eased (filled) dots, numeric vertex
+  table alongside); objects (halo x/y/radius on the same canvas + the icon picker);
+  device settings; diagnostics.
+- **FOUR discovered-but-dead values now render**: `procTime`, `procWarn`,
+  `zoneStillCount`/`zoneMovingCount`, and target **`angle_id` — which had NO consumer
+  anywhere in `src/`** (the 2D tooltip's "dir" is a local `atan2`, not the device's
+  own report). `presence_target_count` was likewise only a battery-badge fallback.
+- **Generic device enumeration (the real gap).** `sensor-discovery.ts` is a fixed
+  regex set, so anything the firmware names differently — a `select.*` mode, a
+  `button.*` restart, a device-side interval knob — was invisible: not read, not
+  listed, not bindable. The regexes stay the **SEMANTIC** layer (which entity *means*
+  target 1's X); `Planner.mmwaveDeviceEntities` adds the **COMPLETENESS** layer via
+  `getEntityRegistry()`+`getDevices()` grouped by `device_id` (the `scanBatteryRegistry`
+  pattern; registry-first, slug-prefix fallback only when the registry knows nothing),
+  rendered by domain (`number`→input, `switch`→toggle, `select`→dropdown,
+  `button`→press, else read-only). `semanticEntityIds` re-derives the synthesized
+  zone-vertex/object ids so up to 48 `number.*` don't flood the generic list.
+  **`select.select_option` and `button.press` had ZERO dispatch sites in the whole
+  codebase** — `Planner.selectOption`/`pressButton`/`setSwitchState` add them (view
+  mode refuses). `callService` was already generic, so this is UI + dispatch, NOT new
+  HaApi surface (`ha-client.ts`/`ha-panel-adapter.ts`/`ha-local.ts` are UNCHANGED).
+- **Write discipline**: writes on RELEASE, never during drag; `fenceZoneWrite`/
+  `zoneWriteFenced` extend the 3 s echo-clobber guard that object halos had and zones
+  did NOT (zones relied only on the coarser `verts.length >= 3` coherence rule);
+  `trimZoneVertices`/`padZoneVertices` honour the 8-slot cap and the `(0,0)`-past-
+  index-0 sentinel in BOTH directions. `Planner.mmwaveEditing` + `mmwaveSyncBlocked()`
+  fold the editor's own edit state into the `drag || editZone` gate (**all three sync
+  call sites now consult one predicate**) — an editor holding edit state outside that
+  gate gets silently overwritten by a firmware echo mid-edit. **PAN does NOT latch the
+  gate** (only vertex/halo drags do — idle panning must not freeze sync); released on
+  close and `disconnectedCallback`. Undo is UNCHANGED, not spammed: during the fence
+  `_syncZonesObjects` skips the zone entirely (no `zoneCache` write, no snapshot),
+  and the applied echo is adopted once after it expires → one `save()` per completed
+  edit.
+- **NO new slow-path rule.** Enumerated `select`/`button`/`text` entities repaint from
+  the LIVE channel; the pre-existing bound-device `number.`/`switch.` prefix rule is
+  untouched, so `churn-test` stays `CHURN PASS 48/48`. A blanket rule would resurrect
+  the idle-churn regression that rebuilt the whole 3D floor every few seconds.
+- **"Faster refresh" — THERE IS NO THROTTLE TO REMOVE** (audit-verified; say this to
+  the next person who asks). `updateLerpGoals()` reads `hass.states` FRESH on every
+  call, driven by the 2D canvas RAF at ~60 Hz; target `sensor.*`/`binary_sensor.*`
+  entities never enter `_isSlowEntity` and are ALWAYS live-path; the ω=9 `stepLerp`
+  spring is a DISPLAY smoother, not a freshness limiter. So **no polling loop was
+  invented**. `targetPushBy`/`targetPushStat` measure cadence at that existing choke
+  point counting only **DISTINCT** raw pairs (an identical republish is not a push —
+  mutation-pinned), so the readout reports the RADAR's rate, not the RAF rate. ESPHome's
+  API `batch_delay` (default 100 ms, settable 0) governs the ESPHome→HA hop only and is
+  firmware-side YAML — unreachable from a browser panel, and it does not affect HA→panel
+  delivery. A device-side interval knob becomes reachable purely as a side effect of
+  enumeration.
+- **`heading` vs `mount_angle`: NEVER compare them (2026-08-19 — the design originally
+  specified a disagreement warning; that spec was WRONG and the implementing agent
+  caught it before shipping).** `mount_angle` drives `tiltGrp.rotation.x` — a downward
+  TILT about local X — while `Sensor.heading` drives rotation about Y, a plan YAW.
+  Different axes ⇒ comparing them numerically is a category error, and on a normal
+  install (heading 90 = facing west, mount_angle 0 = no tilt) the warning fires on a
+  CORRECT configuration. A warning that cries wolf on a correct setup is worse than
+  none. The audit's real finding is that the two are **decoupled and a user cannot see
+  both**, so the deliverable is VISIBILITY: a neutral (not amber, not alarm-styled)
+  side-by-side "Orientation" block naming what each drives, stating they are **not
+  expected to match**, and noting the firmware's own interpretation of `mount_angle`
+  is **not verified in this repo** (the ESPHome component is out of tree) — the copy
+  says "Diorama applies it as" a tilt, describing THIS repo's behaviour rather than
+  asserting the device's. `headingMountMismatch`/`HEADING_MOUNT_TOL_DEG`/`angleDeltaDeg`
+  were removed entirely (swept for callers first) and the dead `.mmw-warn` alarm CSS
+  deleted with them — styled-but-unused alarm CSS is how a removed alarm comes back
+  fully dressed. A comment records WHY there is no comparator so nobody re-adds one.
+
+### Upstream review (2026-08-19, 12 months of ESPHome + HA)
+- **LD2450 entity naming is SAFE** — the component's current docs match
+  `sensor-discovery.ts`'s regexes byte-for-byte. ESPHome's 2026.1→2026.8 `id`/`name_id`
+  migration is scoped to **ESPHome's OWN web-server URLs and SSE payload**, NOT HA
+  `entity_id`s. ESPHome 2025.8's `[ld2450] replace throttle with native filters` is a
+  firmware YAML-syntax break only (no entity/id change). Close this worry.
+- **No new HA mechanism beats `state_changed`** for a browser panel, and recorder
+  guidance for ~10 Hz positional data is unchanged: don't. See the presence-history
+  section for what to do instead.
+- **`recorder/import_statistics`**: `has_mean` → `mean_type` (0/1/2), removal in HA
+  **2026.11**; `unit_class` deprecated-if-omitted since 2025.11. Diorama calls no
+  statistics-import command today, so this is not a live break — but any future
+  aggregated push must use `mean_type` from day one.
+- **`getEntitySuggestion`** (HA 2026.6): a `window.customCards` entry may offer itself
+  in the entity picker's "Community" section. `src/card.ts` already registers there —
+  additive, pure discoverability. NOT built yet; noted follow-up.
+- **`handle_safe_area`** — CLAUDE.md's hard "NEVER add this to the panel_custom YAML"
+  warning is dated to **2026.8.0**, where core's schema rejected it; an opt-out
+  reportedly landed in **2026.8.2**, i.e. AFTER that note. **Do NOT relax the warning
+  without a real 2026.8.2+ repro** — the original fix was root-caused in a Docker
+  instance, and it is unverified whether the opt-out is a YAML key at all or only a
+  frontend-side property. Unresolved on purpose.
+- Two HA MQTT dev-blog posts (2025-11 subscribe-status-callback, 2026-05 publish API)
+  could not be fetched — **"might affect"** `src/mqtt-bridge.ts`'s Path-A call shapes,
+  unverified. Check before the next MQTT-bridge change.
+- **Deps** (see the `deps:` commit): vite ^8.1.5→^8.2.1; `@types/three`/`esbuild`
+  patch refresh; three/lit/typescript already current. TS 7.0 is the native compiler
+  and `tsc -b` already passes on it. After ANY vite bump re-verify the three
+  load-bearing build properties: `grep -c MeshToonMaterial dist/assets/app.js` = 0,
+  unhashed output filenames, and `chunkVersionQuery`'s `?v=` on every chunk import.
+
 ### Local visual occupancy
 Inclusion-zone glow and object-halo glow are computed locally in `canvas-render.ts` from the lerped target positions (point-in-polygon / radius test), **not** from HA's `target_count` / `*_halo_occupied`. Reason: HA's WS push order can race target X/Y updates with count updates, briefly highlighting a zone before the dot has moved. Local testing keeps the glow in sync with what the user sees. The HA-derived counts are still kept on `z.targetCount` for numeric labels.
 
