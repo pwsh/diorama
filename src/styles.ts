@@ -317,6 +317,118 @@ diorama-toolbar { display: block; flex: 0 0 auto; }
   .tb-card { width: 64px; }
   .tb-thumb { width: 56px; height: 56px; }
 }
+
+/* ── mmWave technical editor (src/ui/mmwave-editor.ts) ──────────────────────
+   A large OVERLAY PANEL, not a full-screen takeover: the codebase has no
+   full-screen precedent and the settings drawer is the nearest shape. Sized
+   to fit a dense table plus a sensor-local canvas side by side, and clamped
+   to the viewport so a tablet still gets a usable panel. */
+.mmw-ov { position: fixed; inset: 0; z-index: 120; background: rgba(0,0,0,0.62);
+          display: flex; align-items: center; justify-content: center; padding: 16px; }
+.mmw-panel { background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+             width: min(1180px, 96vw); height: min(820px, 92vh);
+             display: flex; flex-direction: column; overflow: hidden;
+             box-shadow: 0 12px 40px rgba(0,0,0,0.65); }
+.mmw-head { display: flex; align-items: flex-start; justify-content: space-between;
+            padding: 12px 16px 8px; border-bottom: 1px solid var(--border); }
+.mmw-title { font-size: 14px; font-weight: 600; color: var(--text); }
+.mmw-sub { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
+.mmw-sub code { font-family: monospace; }
+.mmw-x { background: none; border: none; color: var(--text-dim); font-size: 18px;
+         cursor: pointer; padding: 0 4px; }
+.mmw-tabs { display: flex; gap: 2px; padding: 0 12px; border-bottom: 1px solid var(--border);
+            flex-wrap: wrap; }
+.mmw-tab { background: none; border: none; border-bottom: 2px solid transparent;
+           color: var(--text-dim); font-size: 12px; padding: 7px 10px; cursor: pointer; }
+.mmw-tab.on { border-bottom-color: var(--accent); color: var(--text); }
+.mmw-body { flex: 1; min-height: 0; overflow-y: auto; padding: 12px 16px 18px; }
+.mmw-body h4 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;
+               color: var(--text-dim); margin: 0 0 6px; font-weight: 600; }
+.mmw-empty { font-size: 12px; color: var(--text-dim); padding: 24px; text-align: center;
+             border: 1px dashed var(--border); border-radius: 6px; line-height: 1.7; }
+.mmw-note { font-size: 11px; color: var(--text); line-height: 1.6; margin: 0 0 10px; }
+.mmw-note.dim, .mmw-dim { color: var(--text-dim); }
+.mmw-dim { font-size: 11px; }
+.mmw-tbl { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+.mmw-tbl th { text-align: left; font-weight: 600; color: var(--text-dim); font-size: 10px;
+              text-transform: uppercase; letter-spacing: 0.04em;
+              padding: 3px 6px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.mmw-tbl td { padding: 4px 6px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.mmw-tbl td.num { text-align: right; font-variant-numeric: tabular-nums; font-family: monospace; }
+.mmw-tbl td.dim, .mmw-vtbl td.dim { color: var(--text-dim); }
+.mmw-tbl tr.off td { color: var(--text-dim); }
+.mmw-ok { color: #69f0ae; } .mmw-bad { color: #ff8a80; }
+.mmw-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+           vertical-align: middle; margin-right: 4px; }
+.mmw-split { display: flex; gap: 14px; align-items: flex-start; }
+.mmw-canvas-col { flex: 1 1 auto; min-width: 0; }
+.mmw-side { flex: 0 0 320px; max-width: 320px; }
+.mmw-canvas-wrap { border: 1px solid var(--border); border-radius: 6px; overflow: hidden;
+                   background: #0b0f14; }
+.mmw-canvas { display: block; width: 100%; height: 460px; touch-action: none; cursor: crosshair; }
+.mmw-canvas-bar { display: flex; gap: 5px; align-items: center; padding: 5px 7px;
+                  border-top: 1px solid var(--border); }
+.mmw-row { display: flex; align-items: center; gap: 6px; font-size: 12px;
+           padding: 4px 5px; border-bottom: 1px solid var(--border); cursor: pointer;
+           border-radius: 3px; }
+.mmw-row.sel { background: rgba(79,168,255,0.14); }
+.mmw-row-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mmw-vtbl { width: 100%; border-collapse: collapse; font-size: 11px; }
+.mmw-vtbl th { text-align: left; color: var(--text-dim); font-size: 10px; padding: 2px 3px; }
+.mmw-vtbl td { padding: 2px 3px; }
+.mmw-vtbl input { width: 100%; background: #111; border: 1px solid var(--border);
+                  border-radius: 3px; color: var(--text); font-size: 11px; padding: 2px 4px; }
+.mmw-btnrow { display: flex; gap: 5px; margin-top: 6px; }
+.mmw-btn { background: var(--surface2); border: 1px solid var(--border); color: var(--text);
+           font-size: 11px; padding: 3px 9px; border-radius: 4px; cursor: pointer; }
+.mmw-btn.danger { color: #ff8a80; border-color: rgba(255,138,128,0.4); }
+.mmw-btn:disabled { opacity: 0.4; cursor: default; }
+.mmw-mini { background: var(--surface2); border: 1px solid var(--border); color: var(--text-dim);
+            font-size: 11px; line-height: 1; padding: 3px 7px; border-radius: 3px; cursor: pointer; }
+.mmw-mini:disabled { opacity: 0.35; cursor: default; }
+.mmw-grid2 { display: grid; grid-template-columns: auto 1fr; gap: 4px 8px; font-size: 11px;
+             align-items: center; }
+.mmw-grid2 input { width: 100%; background: #111; border: 1px solid var(--border);
+                   border-radius: 3px; color: var(--text); font-size: 11px; padding: 2px 4px; }
+.mmw-icons { display: flex; flex-wrap: wrap; gap: 3px; }
+.mmw-icon { font-size: 15px; padding: 2px 3px; border-radius: 3px; cursor: pointer;
+            line-height: 1.2; background: #222; border: 1px solid var(--border); color: var(--text); }
+.mmw-icon.on { background: var(--accent); border-color: var(--accent); }
+.mmw-ctrls { display: flex; flex-direction: column; }
+.mmw-ctrl { display: flex; align-items: center; gap: 8px; font-size: 12px;
+            padding: 5px 4px; border-bottom: 1px solid var(--border); }
+.mmw-ctrl-label { flex: 0 0 210px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mmw-ctrl input[type="number"] { width: 88px; background: #111; border: 1px solid var(--border);
+                                  border-radius: 3px; color: var(--text); font-size: 11px;
+                                  padding: 2px 5px; text-align: right; }
+.mmw-ctrl select { background: #111; border: 1px solid var(--border); border-radius: 3px;
+                   color: var(--text); font-size: 11px; padding: 2px 5px; max-width: 200px; }
+.mmw-unit { color: var(--text-dim); font-size: 10px; }
+.mmw-val { font-family: monospace; }
+.mmw-eid { margin-left: auto; font-family: monospace; font-size: 10px; color: var(--text-dim);
+           overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 320px;
+           /* Entity ids are full of underscores, and overflow:hidden on a tight
+              line box CLIPS them away — the id then reads with spaces where the
+              separators are, which is worse than useless for copying. */
+           line-height: 1.7; }
+/* Orientation: two independent values on two different axes, shown side by
+   side. Deliberately NOT styled as a warning — nothing here is wrong. */
+.mmw-orient { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+.mmw-orient-cell { flex: 1 1 300px; min-width: 260px; background: rgba(0,0,0,0.25);
+                   border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; }
+.mmw-orient-k { font-size: 11px; color: var(--text-dim); }
+.mmw-orient-v { font-size: 20px; font-weight: 600; color: var(--text);
+                font-variant-numeric: tabular-nums; line-height: 1.3; }
+.mmw-orient-d { font-size: 11px; color: var(--text-dim); line-height: 1.55; margin-top: 3px; }
+.mmw-eid-inline { font-family: monospace; font-size: 10px; color: var(--text-dim);
+                  line-height: 1.7; }
+/* Diagnostics sub-tables are label/value pairs, not a wide matrix: let them
+   stop before the panel edge so the right-aligned numbers stay near their row. */
+.mmw-tbl.narrow { max-width: 760px; }
+@media (max-width: 900px) {
+  .mmw-split { flex-direction: column; }
+  .mmw-side { flex: 1 1 auto; max-width: none; width: 100%; }
+}
 `;
 
 // Inject the shared CSS. `target` defaults to document.head (iframe mode).

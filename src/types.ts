@@ -2138,6 +2138,21 @@ export interface ZonesLive {
   filter: Zone[];
 }
 
+// Observed push cadence for ONE radar target slot (runtime-only; never
+// persisted). Diorama applies NO rate limiting to target positions —
+// updateLerpGoals reads hass.states fresh every RAF frame and target entities
+// are always live-path — so "is my sensor slow?" is a question about the
+// DEVICE, not about Diorama. This records the answer at the one choke point
+// that already reads every coordinate: a new (x, y) distinct from the previous
+// one is one push. No polling loop is added; nothing is sampled that was not
+// already being read.
+export interface TargetPushStat {
+  lastAt: number;      // epoch ms of the most recent distinct report (0 = never)
+  prevX: number; prevY: number;   // last observed raw pair (change detector)
+  seen: boolean;       // whether prevX/prevY hold a real observation yet
+  stamps: number[];    // ring of recent report times (newest last), capped
+}
+
 export interface LerpSlot {
   cx: number; cy: number; // current (eased) position, sensor-local mm
   tx: number; ty: number; // target (raw HA) position

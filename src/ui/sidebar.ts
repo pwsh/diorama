@@ -7268,6 +7268,12 @@ export class Sidebar extends LitElement {
             `)}
           </select>
         </div>
+        <button class="btn" style="width:100%;margin-top:8px" data-open-mmwave-editor
+                title="Open the technical editor: live raw + eased target numbers, a sensor-local zone canvas at its own zoom, every control the bound device exposes, and device diagnostics."
+                @click=${() => this.dispatchEvent(new CustomEvent('open-mmwave-editor',
+                  { detail: { sensorId: s.id }, bubbles: true, composed: true }))}>
+          🛠 Technical editor…
+        </button>
         <button class="btn danger" style="width:100%;margin-top:8px"
                 @click=${() => {
                   const f = p.floor();

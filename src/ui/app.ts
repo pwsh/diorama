@@ -17,8 +17,10 @@ import './weather-chip.js';
 import './compass.js';
 import './toolbar.js';
 import './modals.js';
+import './mmwave-editor.js';
 import type { AuthScreen } from './auth-screen.js';
 import type { FloorModal, EntityPicker, LightConfig, MediaConfig, AlarmModal, ThermostatModal, FlightModal, SettingsDrawer } from './modals.js';
+import type { MmwaveEditor } from './mmwave-editor.js';
 
 @customElement('diorama-app')
 export class App extends LitElement {
@@ -34,6 +36,7 @@ export class App extends LitElement {
   @query('diorama-thermostat-modal') private _thermoModal?: ThermostatModal;
   @query('diorama-flight-modal') private _flightModal?: FlightModal;
   @query('diorama-settings-drawer') private _settings?: SettingsDrawer;
+  @query('diorama-mmwave-editor') private _mmwave?: MmwaveEditor;
 
   protected override createRenderRoot() { return this; }
 
@@ -205,6 +208,15 @@ export class App extends LitElement {
       const tab = (e as CustomEvent).detail?.tab as
         undefined | 'connection' | 'display' | 'weather' | 'avatars' | 'integrations' | 'data';
       this._settings?.show(tab);
+    });
+    // mmWave technical editor (sidebar button). EDIT MODE ONLY: it writes zone
+    // vertices, which route through save() for the zoneCache — and save() is a
+    // no-op outside edit, so a kiosk zone edit would push to the device but
+    // never cache, which is incoherent. Matches the sidebar being edit-only.
+    this.addEventListener('open-mmwave-editor', e => {
+      const { sensorId } = (e as CustomEvent).detail as { sensorId: string };
+      if (this._planner?.uiMode !== 'edit') return;
+      this._mmwave?.show(sensorId);
     });
     // Weather chip click → open the settings drawer on the Weather tab (edit mode only).
     this.addEventListener('open-weather', () => {
@@ -448,6 +460,7 @@ export class App extends LitElement {
         <diorama-thermostat-modal .planner=${p}></diorama-thermostat-modal>
         <diorama-flight-modal .planner=${p}></diorama-flight-modal>
         <diorama-settings-drawer .planner=${p}></diorama-settings-drawer>
+        <diorama-mmwave-editor .planner=${p}></diorama-mmwave-editor>
       </div>
     `;
   }

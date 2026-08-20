@@ -1,0 +1,896 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>MMWAVEEDITOR …</title>
+<style>
+  body { margin:0; background:#0d1116; color:#cfd8dc; font:13px/1.5 sans-serif; padding:14px; }
+  h1 { font-size:15px; margin:0 0 10px; }
+  h2 { font-size:12px; margin:14px 0 4px; color:#90caf9; }
+  #summary { font-size:14px; font-weight:bold; margin:10px 0; padding:8px 10px; border-radius:5px; }
+  .okbg { background:#12331f; color:#69f0ae; } .badbg { background:#3a1414; color:#ff8a80; }
+  .row { display:flex; justify-content:space-between; gap:10px; padding:2px 0; border-bottom:1px solid #1c2530; }
+  .pass { color:#69f0ae; } .fail { color:#ff5252; }
+  .name { color:#90caf9; } .extra { color:#ffd54f; font-size:11px; }
+  /* On-screen so the overlay gets real layout (and is screenshot-able). */
+  #mount { position:absolute; left:0; top:0; }
+</style>
+<h1>mmWave technical editor — enumeration · dispatch · write discipline · sync gate</h1>
+<div id="summary">Running…</div>
+<div id="rows"></div>
+<div id="mount"></div>
+
+<!-- Harness build (from repo root; NEVER reuse stale bundles). Drives the REAL
+     Planner AND the REAL <diorama-mmwave-editor> over an in-page fake HaApi.
+     Needs a wide window so the overlay canvas gets real layout dimensions.
+       H=/tmp/diorama-harness-mmw
+       rm -rf "$H"; mkdir -p "$H"
+       cp test-pages/mmwave-editor-test.html "$H"/
+       cp -r dist/* "$H"/
+       T=$(mktemp -d); cp -r src/* "$T"/; cp tsconfig.json "$T"/
+       cp test-pages/fake-avatar-store.ts "$T"/avatar-store.ts
+       printf "export { Planner } from '../planner.js';\nexport { injectSharedStyles } from '../styles.js';\nexport * from '../sensor-discovery.js';\nimport './mmwave-editor.js';\n" > "$T"/ui/mmw-entry.ts
+       npx esbuild "$T"/ui/mmw-entry.ts --bundle --format=esm --tsconfig="$T"/tsconfig.json \
+         --alias:lit=$PWD/node_modules/lit/index.js \
+         --alias:lit/decorators.js=$PWD/node_modules/lit/decorators.js \
+         --outfile="$H"/mmw.mod.js
+       (cd "$H" && python3 -m http.server 8811 &)
+       google-chrome --headless=new --disable-gpu --use-angle=swiftshader \
+         --enable-unsafe-swiftshader --window-size=1400,1000 \
+         --virtual-time-budget=40000 --dump-dom \
+         "http://localhost:8811/mmwave-editor-test.html" | grep -o "<title>[^<]*"
+-->
+<script type="module">
+  const V = '?v=' + Date.now();
+  const M = await import('./mmw.mod.js' + V);
+  const { Planner, injectSharedStyles, MAX_ZONE_VERTICES, trimZoneVertices, padZoneVertices,
+          deviceControlKind, semanticEntityIds } = M;
+  // The editor is light-DOM and gets ALL its layout from the shared stylesheet
+  // (app.ts injects it in the real app). Without this the overlay canvas would
+  // fall back to a canvas element's intrinsic 300x150 and §8 would be measuring
+  // nothing — see assertion 8a', which pins the CSS-driven size explicitly.
+  injectSharedStyles();
+
+  const results = [];
+  const ok = (name, cond, extra = '') => results.push({ name, pass: !!cond, extra: String(extra) });
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const frames = async n => { for (let i = 0; i < n; i++) await sleep(20); };
+  const clone = x => JSON.parse(JSON.stringify(x));
+
+  // ── Fixture ───────────────────────────────────────────────────────────────
+  // Invented device slug + entity ids. Nothing here comes from a real HA
+  // instance; the coordinates are arbitrary.
+  const SLUG = 'test_radar';
+  const DEV = 'devradar1';
+  const DEV2 = 'devother2';
+
+  const st = (state, attributes = {}) => ({ state: String(state), attributes });
+
+  function makeStates() {
+    const s = {};
+    s[`binary_sensor.${SLUG}_presence`] = st('on');
+    s[`sensor.${SLUG}_presence_target_count`] = st('1');
+    for (let t = 1; t <= 3; t++) {
+      s[`sensor.${SLUG}_target_${t}_x`] = st('0', { unit_of_measurement: 'mm' });
+      s[`sensor.${SLUG}_target_${t}_y`] = st('0', { unit_of_measurement: 'mm' });
+      s[`sensor.${SLUG}_target_${t}_speed`] = st('0', { unit_of_measurement: 'mm/s' });
+      s[`sensor.${SLUG}_target_${t}_angle`] = st('0', { unit_of_measurement: '°' });
+      s[`sensor.${SLUG}_target_${t}_resolution`] = st('75');
+      s[`binary_sensor.${SLUG}_target_${t}_active`] = st('off');
+    }
+    s[`switch.${SLUG}_ghostbuster`] = st('on');
+    s[`switch.${SLUG}_multi_target_tracking`] = st('on');
+    s[`switch.${SLUG}_mounted_upside_down`] = st('off');
+    s[`number.${SLUG}_sensor_height`] = st('2400', { unit_of_measurement: 'mm', min: 0, max: 4000, step: 10 });
+    s[`number.${SLUG}_mount_angle`] = st('0', { unit_of_measurement: '°', min: -90, max: 90, step: 1 });
+    s[`sensor.${SLUG}_radar_processing_time`] = st('12', { unit_of_measurement: 'ms' });
+    s[`binary_sensor.${SLUG}_processing_too_slow`] = st('off');
+    // Two inclusion zones + one filter zone.
+    for (const z of ['zone_1', 'zone_2']) {
+      s[`switch.${SLUG}_${z}_enable`] = st('on');
+      s[`sensor.${SLUG}_${z}_target_count`] = st('0');
+      s[`sensor.${SLUG}_${z}_still_count`] = st('0');
+      s[`sensor.${SLUG}_${z}_moving_count`] = st('0');
+      for (let v = 1; v <= MAX_ZONE_VERTICES; v++) {
+        s[`number.${SLUG}_${z}_v${v}_x`] = st('0');
+        s[`number.${SLUG}_${z}_v${v}_y`] = st('0');
+      }
+    }
+    s[`switch.${SLUG}_fz1_enable`] = st('off');
+    for (let v = 1; v <= MAX_ZONE_VERTICES; v++) {
+      s[`number.${SLUG}_fz1_v${v}_x`] = st('0');
+      s[`number.${SLUG}_fz1_v${v}_y`] = st('0');
+    }
+    // One object halo.
+    s[`switch.${SLUG}_obj_a_halo_enable`] = st('on');
+    s[`number.${SLUG}_obj_a_x`] = st('300');
+    s[`number.${SLUG}_obj_a_y`] = st('1500');
+    s[`number.${SLUG}_obj_a_halo_radius`] = st('600');
+    s[`binary_sensor.${SLUG}_obj_a_halo_occupied`] = st('off');
+    // ── Entities the REGEXES CANNOT SEE (the whole point of §D) ──
+    s[`select.${SLUG}_operating_mode`] = st('Normal',
+      { options: ['Normal', 'High sensitivity', 'Low power'], friendly_name: 'Operating mode' });
+    s[`button.${SLUG}_restart_device`] = st('unknown', { friendly_name: 'Restart device' });
+    s[`text.${SLUG}_firmware_version`] = st('2026.4.1', { friendly_name: 'Firmware version' });
+    s[`number.${SLUG}_report_interval`] = st('100',
+      { unit_of_measurement: 'ms', min: 0, max: 1000, step: 10, friendly_name: 'Report interval' });
+    s[`switch.${SLUG}_bluetooth`] = st('off', { friendly_name: 'Bluetooth' });
+    // Registry-disabled: HA publishes no state, so it must never be offered.
+    // (deliberately absent from `states`; present in the registry as disabled)
+    // ── NEGATIVE-CONTROL entities on a DIFFERENT device ──
+    // Both share the device-slug prefix. A prefix sweep would swallow them;
+    // the registry must not.
+    s[`select.${SLUG}_bogus_mode`] = st('X', { options: ['X'] });
+    s[`sensor.${SLUG}_bogus_reading`] = st('7');
+    s['sensor.unrelated_device_power'] = st('42');
+    return s;
+  }
+
+  function makeRegistry() {
+    const rows = [];
+    const push = (id, dev, extra = {}) => rows.push({ entity_id: id, device_id: dev, ...extra });
+    for (const id of Object.keys(HA_STATES)) {
+      if (id === `select.${SLUG}_bogus_mode` || id === `sensor.${SLUG}_bogus_reading`) {
+        push(id, DEV2);
+      } else if (id === 'sensor.unrelated_device_power') {
+        push(id, DEV2);
+      } else {
+        push(id, DEV);
+      }
+    }
+    // Disabled entity on the bound device — must be filtered out.
+    push(`button.${SLUG}_factory_reset`, DEV, { disabled_by: 'integration' });
+    return rows;
+  }
+
+  class FakeHa {
+    constructor(seed, states) {
+      this.map = new Map();
+      for (const [k, v] of Object.entries(seed || {})) this.map.set(k, clone(v));
+      this.states = states;
+      this._s = []; this._c = [];
+      this.calls = [];
+      this.registry = [];
+    }
+    connect() { for (const cb of this._c) cb('connected'); for (const cb of this._s) cb(this.states, undefined); }
+    onState(fn) { this._s.push(fn); }
+    onConn(fn) { this._c.push(fn); }
+    /** Deliver a state event exactly as HA would (changedId undefined = full refresh). */
+    fire(changedId) { for (const cb of this._s) cb(this.states, changedId); }
+    callService(domain, service, data) { this.calls.push({ domain, service, data: clone(data) }); return Promise.resolve(); }
+    async callServiceWithResponse() { return null; }
+    async getHistory() { return {}; }
+    async getWeatherForecasts() { return null; }
+    async getCalendarEvents() { return []; }
+    async getDevices() { return [{ id: DEV, name: 'Radar', name_by_user: null }, { id: DEV2, name: 'Other', name_by_user: null }]; }
+    async getEntityRegistry() { return clone(this.registry); }
+    async getFloorRegistry() { return []; }
+    async getAreaRegistry() { return []; }
+    async updateEntityRegistry() { return true; }
+    async listRepairsIssues() { return []; }
+    async ignoreRepairsIssue() { return true; }
+    async subscribePersistentNotifications() { return () => {}; }
+    async subscribeMqtt() { return () => {}; }
+    async publishMqtt() {}
+    async getUserData(k) { return this.map.has(k) ? clone(this.map.get(k)) : null; }
+    async setUserData(k, v) { this.map.set(k, clone(v)); return true; }
+    async refreshStates() {}
+    countSetValue(entityId) { return this.calls.filter(c => c.domain === 'number' && c.service === 'set_value' && c.data.entity_id === entityId).length; }
+    lastSetValue(entityId) {
+      for (let i = this.calls.length - 1; i >= 0; i--) {
+        const c = this.calls[i];
+        if (c.domain === 'number' && c.service === 'set_value' && c.data.entity_id === entityId) return c.data.value;
+      }
+      return undefined;
+    }
+  }
+
+  const HA_STATES = makeStates();
+
+  const SENSOR_ID = 'sen1';
+  function seedStore() {
+    return {
+      v: 2,
+      floors: [{
+        id: 'f1', name: 'Home', w: 12000, d: 12000,
+        walls: [], furniture: [], lights: [], switches: [], motionSensors: [],
+        envSensors: [], doors: [], windows: [], rooms: [], bleProxies: [], bg: null,
+        sensors: [{ id: SENSOR_ID, x: 6000, y: 2000, heading: 0, fov: 60, range: 6000,
+                    label: 'Living radar', deviceSlug: SLUG }],
+      }],
+      currentFloorId: 'f1', activeSensorId: SENSOR_ID,
+      coverage: true, imperial: false, showDetails: false, useRawTargets: true,
+    };
+  }
+
+  async function mkPlanner() {
+    localStorage.clear();
+    const fake = new FakeHa({ diorama: seedStore() }, HA_STATES);
+    fake.registry = makeRegistry();
+    const p = new Planner();
+    p.connectWith(fake);
+    // Wait for the async user_data load to land the seeded store.
+    for (let i = 0; i < 400; i++) {
+      if (p.floor()?.sensors?.[0]?.deviceSlug === SLUG) break;
+      await sleep(5);
+    }
+    await p.scanBatteryRegistry();      // deterministic registry availability
+    fake.fire(undefined);               // full sync → discovery + zone/object sync
+    return { p, fake };
+  }
+
+  async function mkEditor(p) {
+    const el = document.createElement('diorama-mmwave-editor');
+    el.planner = p;
+    document.getElementById('mount').appendChild(el);
+    await el.updateComplete;
+    el.show(SENSOR_ID);
+    await el.updateComplete;
+    await frames(2);
+    return el;
+  }
+
+  const setPane = async (el, pane) => {
+    el.querySelector(`[data-pane="${pane}"]`)?.click();
+    await el.updateComplete;
+    await frames(2);
+  };
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  try {
+    // ── §1 Pure firmware conventions: 8-slot cap + (0,0) sentinel ────────────
+    {
+      const ten = Array.from({ length: 10 }, (_, i) => ({ x: 100 + i, y: 200 + i }));
+      ok('1a trimZoneVertices caps at the firmware slot count',
+         trimZoneVertices(ten).length === MAX_ZONE_VERTICES, trimZoneVertices(ten).length);
+      // NEGATIVE CONTROL: under the cap nothing is dropped, so 1a is measuring
+      // the cap and not a blanket truncation.
+      const five = ten.slice(0, 5);
+      ok('1b (neg) a 5-vertex list is NOT truncated',
+         trimZoneVertices(five).length === 5, trimZoneVertices(five).length);
+
+      const sentinel = [{ x: 10, y: 20 }, { x: 30, y: 40 }, { x: 0, y: 0 }, { x: 50, y: 60 }];
+      ok('1c (0,0) past index 0 ends the polygon on READ',
+         trimZoneVertices(sentinel).length === 2, trimZoneVertices(sentinel).length);
+      // NEGATIVE CONTROL: a LEADING (0,0) is a legal vertex, not the sentinel.
+      const leadZero = [{ x: 0, y: 0 }, { x: 30, y: 40 }, { x: 50, y: 60 }];
+      ok('1d (neg) a leading (0,0) is kept — it is a vertex, not the sentinel',
+         trimZoneVertices(leadZero).length === 3, trimZoneVertices(leadZero).length);
+
+      const padded = padZoneVertices([{ x: 10, y: 20 }, { x: 30, y: 40 }, { x: 50, y: 60 }]);
+      ok('1e padZoneVertices fills all slots',
+         padded.length === MAX_ZONE_VERTICES, padded.length);
+      ok('1f padZoneVertices writes (0,0) into the unused tail',
+         padded.slice(3).every(v => v.x === 0 && v.y === 0), JSON.stringify(padded.slice(3, 5)));
+      // NEGATIVE CONTROL: the LIVE slots are not zeroed, so 1f discriminates.
+      ok('1g (neg) padded live slots keep their values',
+         padded[0].x === 10 && padded[2].y === 60, `${padded[0].x}/${padded[2].y}`);
+      ok('1h padZoneVertices also enforces the cap',
+         padZoneVertices(ten).length === MAX_ZONE_VERTICES &&
+         padZoneVertices(ten)[7].x === 107, padZoneVertices(ten)[7].x);
+    }
+
+    // ── §2 There is NO heading-vs-mount_angle comparison ────────────────────
+    // `Sensor.heading` is a plan YAW (about world Y); the device's
+    // `mount_angle` is applied as a downward TILT (about the body's local X).
+    // Different axes — comparing them numerically is a category error, and a
+    // correct install (facing west = heading 90, no tilt = mount_angle 0)
+    // would "disagree" by 90°. The comparison surface must not exist.
+    {
+      ok('2a no mismatch comparator is exported',
+         M.headingMountMismatch === undefined && M.HEADING_MOUNT_TOL_DEG === undefined &&
+         M.angleDeltaDeg === undefined,
+         Object.keys(M).filter(k => /head|angle|mount|tol/i.test(k)).join(',') || '(none)');
+      // NEGATIVE CONTROL: the module IS loaded and DOES export the surface this
+      // suite relies on, so 2a is measuring absence and not a failed import.
+      ok('2b (neg) the same module still exports its real helpers',
+         typeof M.trimZoneVertices === 'function' &&
+         typeof M.deviceControlKind === 'function' &&
+         M.MAX_ZONE_VERTICES === 8);
+    }
+
+    // ── §3 Domain-driven control classification ─────────────────────────────
+    {
+      ok('3a number/switch/select/button/readout classification',
+         deviceControlKind('number.a_b') === 'number' &&
+         deviceControlKind('switch.a_b') === 'switch' &&
+         deviceControlKind('select.a_b') === 'select' &&
+         deviceControlKind('button.a_b') === 'button' &&
+         deviceControlKind('sensor.a_b') === 'readout');
+      ok('3b input_* helper domains map to the same controls',
+         deviceControlKind('input_select.a') === 'select' &&
+         deviceControlKind('input_button.a') === 'button' &&
+         deviceControlKind('input_number.a') === 'number' &&
+         deviceControlKind('input_boolean.a') === 'switch');
+      // NEGATIVE CONTROL: an unknown domain must fall to readout, so 3a's
+      // 'readout' arm is discriminating.
+      ok('3c (neg) an unknown domain falls through to readout',
+         deviceControlKind('binary_sensor.a') === 'readout' &&
+         deviceControlKind('weather.a') === 'readout');
+    }
+
+    const { p, fake } = await mkPlanner();
+    const s = p.floor().sensors[0];
+    const d = p.discBy[SENSOR_ID];
+    ok('0a discovery ran for the bound device', !!d && d.devicePrefix === SLUG);
+    ok('0b regex discovery found the two inclusion zones',
+       d.inclusionZoneSlugs.length === 2, JSON.stringify(d.inclusionZoneSlugs));
+    ok('0c regex discovery found the filter zone',
+       d.filterZoneSlugs.length === 1, JSON.stringify(d.filterZoneSlugs));
+    ok('0d regex discovery found the object halo',
+       d.objectSlugs.length === 1, JSON.stringify(d.objectSlugs));
+
+    // ── §4 Generic enumeration (§D) ─────────────────────────────────────────
+    {
+      const sem = semanticEntityIds(d);
+      ok('4a the regexes DO own the known switch',
+         sem.has(`switch.${SLUG}_ghostbuster`));
+      ok('4b the regexes do NOT own the select / button / text / interval',
+         !sem.has(`select.${SLUG}_operating_mode`) &&
+         !sem.has(`button.${SLUG}_restart_device`) &&
+         !sem.has(`text.${SLUG}_firmware_version`) &&
+         !sem.has(`number.${SLUG}_report_interval`));
+      ok('4c the regexes DO own the synthesized zone-vertex numbers',
+         sem.has(`number.${SLUG}_zone_1_v1_x`) && sem.has(`number.${SLUG}_zone_1_v8_y`));
+
+      const all = p.mmwaveDeviceEntities(s);
+      ok('4d enumeration surfaces the select the regexes miss',
+         all.includes(`select.${SLUG}_operating_mode`), all.length);
+      ok('4e enumeration surfaces the button the regexes miss',
+         all.includes(`button.${SLUG}_restart_device`));
+      ok('4f enumeration surfaces a device-side interval knob',
+         all.includes(`number.${SLUG}_report_interval`));
+      // NEGATIVE CONTROL: identically-prefixed entities on ANOTHER device must
+      // be excluded. A slug-prefix sweep would include them, so this proves the
+      // registry grouping is what is doing the work.
+      ok('4g (neg) same-prefix entities on a DIFFERENT device are excluded',
+         !all.includes(`select.${SLUG}_bogus_mode`) && !all.includes(`sensor.${SLUG}_bogus_reading`),
+         all.filter(x => x.includes('bogus')).join(','));
+      ok('4h (neg) an unrelated device entity is excluded',
+         !all.includes('sensor.unrelated_device_power'));
+      ok('4i (neg) a registry-DISABLED entity is excluded (no state to show)',
+         !all.includes(`button.${SLUG}_factory_reset`));
+    }
+
+    // ── §5 Editor: device pane renders enumerated controls by domain ─────────
+    const el = await mkEditor(p);
+    ok('5a editor opened', el.open === true);
+    await setPane(el, 'device');
+    {
+      const selEl = el.querySelector(`[data-ctrl-select="select.${SLUG}_operating_mode"]`);
+      const btnEl = el.querySelector(`[data-ctrl-button="button.${SLUG}_restart_device"]`);
+      const numEl = el.querySelector(`[data-ctrl-number="number.${SLUG}_report_interval"]`);
+      const swEl  = el.querySelector(`[data-ctrl-switch="switch.${SLUG}_bluetooth"]`);
+      ok('5b a select renders as a dropdown', !!selEl && selEl.tagName === 'SELECT');
+      ok('5c the dropdown carries the entity options',
+         !!selEl && selEl.options.length === 3, selEl ? selEl.options.length : 'n/a');
+      ok('5d a button renders as a press control', !!btnEl && btnEl.tagName === 'BUTTON');
+      ok('5e a generic number renders as a numeric input',
+         !!numEl && numEl.type === 'number' && numEl.value === '100', numEl ? numEl.value : 'n/a');
+      ok('5f a generic switch renders as a toggle',
+         !!swEl && swEl.type === 'checkbox' && swEl.checked === false);
+      const ro = el.querySelector(`[data-ctrl="text.${SLUG}_firmware_version"]`);
+      ok('5g a non-controllable domain renders read-only',
+         !!ro && !ro.querySelector('input,select,button') && ro.textContent.includes('2026.4.1'));
+      // NEGATIVE CONTROL: the other device's select must NOT be rendered — so
+      // 5b is measuring "this device's select", not "any select".
+      ok('5h (neg) the other device\'s select is not rendered',
+         !el.querySelector(`[data-ctrl-select="select.${SLUG}_bogus_mode"]`));
+      // NEGATIVE CONTROL: known controls are not duplicated in the generic list.
+      const generic = el.querySelector('[data-generic]');
+      ok('5i (neg) known controls are not duplicated into the generic list',
+         !!generic && !generic.querySelector(`[data-ctrl="number.${SLUG}_sensor_height"]`));
+      ok('5j the known-controls block still shows the five known ones',
+         !!el.querySelector(`[data-ctrl-number="number.${SLUG}_sensor_height"]`) &&
+         !!el.querySelector(`[data-ctrl-switch="switch.${SLUG}_ghostbuster"]`));
+    }
+
+    // ── §6 Dispatch: select_option / press / turn_on ─────────────────────────
+    {
+      const before = fake.calls.length;
+      const selEl = el.querySelector(`[data-ctrl-select="select.${SLUG}_operating_mode"]`);
+      selEl.value = 'Low power';
+      selEl.dispatchEvent(new Event('change', { bubbles: true }));
+      const c = fake.calls[fake.calls.length - 1];
+      ok('6a a select edit dispatches select.select_option',
+         fake.calls.length === before + 1 && c.domain === 'select' && c.service === 'select_option',
+         JSON.stringify(c));
+      ok('6b it carries the chosen option and entity',
+         c.data.entity_id === `select.${SLUG}_operating_mode` && c.data.option === 'Low power',
+         JSON.stringify(c.data));
+
+      const b2 = fake.calls.length;
+      el.querySelector(`[data-ctrl-button="button.${SLUG}_restart_device"]`).click();
+      const c2 = fake.calls[fake.calls.length - 1];
+      ok('6c a button press dispatches button.press',
+         fake.calls.length === b2 + 1 && c2.domain === 'button' && c2.service === 'press' &&
+         c2.data.entity_id === `button.${SLUG}_restart_device`, JSON.stringify(c2));
+
+      const b3 = fake.calls.length;
+      const swEl = el.querySelector(`[data-ctrl-switch="switch.${SLUG}_bluetooth"]`);
+      swEl.checked = true;
+      swEl.dispatchEvent(new Event('change', { bubbles: true }));
+      const c3 = fake.calls[fake.calls.length - 1];
+      ok('6d a generic switch dispatches turn_on',
+         fake.calls.length === b3 + 1 && c3.domain === 'switch' && c3.service === 'turn_on',
+         JSON.stringify(c3));
+
+      // Domain is derived from the entity id, so helper domains work too.
+      const b4 = fake.calls.length;
+      p.selectOption('input_select.house_mode', 'Away');
+      p.pressButton('input_button.ping');
+      ok('6e helper domains route to their own services',
+         fake.calls[b4].domain === 'input_select' && fake.calls[b4].service === 'select_option' &&
+         fake.calls[b4 + 1].domain === 'input_button' && fake.calls[b4 + 1].service === 'press',
+         `${fake.calls[b4].domain}/${fake.calls[b4 + 1].domain}`);
+
+      // NEGATIVE CONTROL: view mode must refuse every write, so 6a–6e are
+      // measuring dispatch and not an unconditional recording of intent.
+      const b5 = fake.calls.length;
+      const prevMode = p.uiMode;
+      p.uiMode = 'view';
+      p.selectOption(`select.${SLUG}_operating_mode`, 'Normal');
+      p.pressButton(`button.${SLUG}_restart_device`);
+      p.setSwitchState(`switch.${SLUG}_bluetooth`, false);
+      ok('6f (neg) view mode dispatches nothing', fake.calls.length === b5, fake.calls.length - b5);
+      p.uiMode = prevMode;
+      // …and the very same calls DO land once edit mode is back.
+      p.selectOption(`select.${SLUG}_operating_mode`, 'Normal');
+      ok('6g (neg-control recovery) the identical call lands in edit mode',
+         fake.calls.length === b5 + 1);
+    }
+
+    // ── §7 Zone read: sentinel + cap through the REAL sync path ─────────────
+    {
+      const setV = (zone, vi, x, y) => {
+        HA_STATES[`number.${SLUG}_${zone}_v${vi}_x`] = st(String(x));
+        HA_STATES[`number.${SLUG}_${zone}_v${vi}_y`] = st(String(y));
+      };
+      // 4 real vertices then the (0,0) sentinel.
+      setV('zone_1', 1, -1000, 1000); setV('zone_1', 2, 1000, 1000);
+      setV('zone_1', 3, 1000, 3000);  setV('zone_1', 4, -1000, 3000);
+      for (let v = 5; v <= 8; v++) setV('zone_1', v, 0, 0);
+      fake.fire(undefined);
+      ok('7a a (0,0)-terminated polygon reads back at its real length',
+         p.zonesBy[SENSOR_ID].inclusion[0].vertices.length === 4,
+         p.zonesBy[SENSOR_ID].inclusion[0].vertices.length);
+      ok('7b the read vertices are the published values',
+         JSON.stringify(p.zonesBy[SENSOR_ID].inclusion[0].vertices) ===
+         JSON.stringify([{ x: -1000, y: 1000 }, { x: 1000, y: 1000 },
+                         { x: 1000, y: 3000 }, { x: -1000, y: 3000 }]),
+         JSON.stringify(p.zonesBy[SENSOR_ID].inclusion[0].vertices));
+      // NEGATIVE CONTROL: with all 8 slots non-zero the read is 8, so 7a is
+      // measuring the sentinel and not a fixed 4.
+      for (let v = 5; v <= 8; v++) setV('zone_1', v, 100 * v, 200 * v);
+      fake.fire(undefined);
+      ok('7c (neg) with no sentinel all 8 slots are read',
+         p.zonesBy[SENSOR_ID].inclusion[0].vertices.length === 8,
+         p.zonesBy[SENSOR_ID].inclusion[0].vertices.length);
+      // restore the 4-vertex shape for the write tests
+      for (let v = 5; v <= 8; v++) setV('zone_1', v, 0, 0);
+      fake.fire(undefined);
+    }
+
+    // ── §8 Canvas drag: write on RELEASE, fence on write, gate held ──────────
+    await setPane(el, 'zones');
+    {
+      // Select inclusion zone 1 so its vertices get handles.
+      el.querySelector('[data-zone-row="iz0"]').click();
+      await el.updateComplete;
+      await frames(3);
+      const cv = el.querySelector('canvas.mmw-canvas');
+      ok('8a the sensor-local canvas has real layout dimensions',
+         !!cv && cv.clientWidth > 100 && cv.clientHeight > 100,
+         cv ? `${cv.clientWidth}x${cv.clientHeight}` : 'no canvas');
+      ok('8a\' the canvas is CSS-sized, not at a canvas element\'s intrinsic 300x150',
+         cv.clientWidth > 400 && cv.clientHeight === 460,
+         `${cv.clientWidth}x${cv.clientHeight}`);
+      ok('8b the canvas fitted its own zoom, independent of the plan view',
+         el._zoom > 0 && el._zoom !== p.zoom, `${el._zoom}`);
+
+      const cw = cv.clientWidth, ch = cv.clientHeight;
+      const rect = cv.getBoundingClientRect();
+      const startVerts = clone(p.zonesBy[SENSOR_ID].inclusion[0].vertices);
+      const grabLocal = startVerts[0];
+      const grabPx = el._toPx(grabLocal, cw, ch);
+      const target = { x: grabLocal.x - 700, y: grabLocal.y + 400 };
+      const dropPx = el._toPx(target, cw, ch);
+      const pe = (type, px) => new PointerEvent(type, {
+        bubbles: true, cancelable: true, pointerId: 1, isPrimary: true, pointerType: 'mouse',
+        clientX: rect.left + px.x, clientY: rect.top + px.y,
+      });
+
+      const writesBefore = fake.countSetValue(`number.${SLUG}_zone_1_v1_x`);
+      // Baseline every slot so the release is measured on its OWN writes, not
+      // on whatever earlier tests happened to send.
+      const slotIds = [];
+      for (let v = 1; v <= 8; v++) slotIds.push(`number.${SLUG}_zone_1_v${v}_x`, `number.${SLUG}_zone_1_v${v}_y`);
+      const base = Object.fromEntries(slotIds.map(id => [id, fake.countSetValue(id)]));
+      cv.dispatchEvent(pe('pointerdown', grabPx));
+      ok('8c pointerdown on a handle latches the sync gate',
+         p.mmwaveEditing === true && p.mmwaveSyncBlocked() === true);
+      ok('8d pointerdown writes nothing',
+         fake.countSetValue(`number.${SLUG}_zone_1_v1_x`) === writesBefore);
+
+      cv.dispatchEvent(pe('pointermove', { x: (grabPx.x + dropPx.x) / 2, y: (grabPx.y + dropPx.y) / 2 }));
+      cv.dispatchEvent(pe('pointermove', dropPx));
+      await el.updateComplete;
+      ok('8e NO writes during the drag (16 undebounced set_value calls per write)',
+         fake.countSetValue(`number.${SLUG}_zone_1_v1_x`) === writesBefore,
+         fake.countSetValue(`number.${SLUG}_zone_1_v1_x`) - writesBefore);
+      ok('8f the store polygon is untouched mid-drag',
+         JSON.stringify(p.zonesBy[SENSOR_ID].inclusion[0].vertices) === JSON.stringify(startVerts));
+      ok('8g the gate is still held mid-drag', p.mmwaveEditing === true);
+
+      cv.dispatchEvent(pe('pointerup', dropPx));
+      await el.updateComplete;
+      ok('8h release writes exactly once per slot',
+         fake.countSetValue(`number.${SLUG}_zone_1_v1_x`) === writesBefore + 1,
+         fake.countSetValue(`number.${SLUG}_zone_1_v1_x`) - writesBefore);
+      // All 8 slots × 2 axes are written by THIS release, so a shrunk polygon
+      // clears its tail rather than leaving stale vertices on the device.
+      const bumped = slotIds.filter(id => fake.countSetValue(id) === base[id] + 1);
+      ok('8i all 16 vertex numbers are written on release', bumped.length === 16, bumped.length);
+      ok('8j the unused tail is written as the (0,0) sentinel',
+         fake.lastSetValue(`number.${SLUG}_zone_1_v5_x`) === 0 &&
+         fake.lastSetValue(`number.${SLUG}_zone_1_v8_y`) === 0);
+      // NEGATIVE CONTROL: the LIVE slots are not zero, so 8j discriminates.
+      ok('8k (neg) live slots are written with real coordinates',
+         fake.lastSetValue(`number.${SLUG}_zone_1_v1_x`) === Math.round(target.x) &&
+         fake.lastSetValue(`number.${SLUG}_zone_1_v1_y`) === Math.round(target.y),
+         `${fake.lastSetValue(`number.${SLUG}_zone_1_v1_x`)},${fake.lastSetValue(`number.${SLUG}_zone_1_v1_y`)}`);
+      ok('8l the dragged vertex landed where it was dropped',
+         p.zonesBy[SENSOR_ID].inclusion[0].vertices[0].x === Math.round(target.x),
+         JSON.stringify(p.zonesBy[SENSOR_ID].inclusion[0].vertices[0]));
+      ok('8m release clears the sync gate',
+         p.mmwaveEditing === false && p.mmwaveSyncBlocked() === false);
+      ok('8n release fenced THIS zone', p.zoneWriteFenced(SENSOR_ID, 'iz', 0) === true);
+      // NEGATIVE CONTROL: only the written zone is fenced.
+      ok('8o (neg) a different zone is NOT fenced',
+         p.zoneWriteFenced(SENSOR_ID, 'iz', 1) === false &&
+         p.zoneWriteFenced(SENSOR_ID, 'fz', 0) === false);
+    }
+
+    // ── §9 The fence actually blocks the firmware's stale echo ───────────────
+    {
+      const dragged = clone(p.zonesBy[SENSOR_ID].inclusion[0].vertices);
+      // The device has NOT applied the write yet and re-publishes the old shape.
+      const stale = [{ x: -1000, y: 1000 }, { x: 1000, y: 1000 },
+                     { x: 1000, y: 3000 }, { x: -1000, y: 3000 }];
+      stale.forEach((v, i) => {
+        HA_STATES[`number.${SLUG}_zone_1_v${i + 1}_x`] = st(String(v.x));
+        HA_STATES[`number.${SLUG}_zone_1_v${i + 1}_y`] = st(String(v.y));
+      });
+      fake.fire(undefined);
+      ok('9a a fenced zone ignores the stale echo',
+         JSON.stringify(p.zonesBy[SENSOR_ID].inclusion[0].vertices) === JSON.stringify(dragged),
+         JSON.stringify(p.zonesBy[SENSOR_ID].inclusion[0].vertices));
+      // NEGATIVE CONTROL: drop the fence and the very same echo DOES win — so
+      // 9a is measuring the fence, not an inability of the echo to apply.
+      p.zoneWritePending[SENSOR_ID][p.zoneFenceSlot('iz', 0)] = false;
+      fake.fire(undefined);
+      ok('9b (neg) without the fence the same echo overwrites the edit',
+         JSON.stringify(p.zonesBy[SENSOR_ID].inclusion[0].vertices) === JSON.stringify(stale),
+         JSON.stringify(p.zonesBy[SENSOR_ID].inclusion[0].vertices));
+    }
+
+    // ── §10 The edit-state gate blocks a mid-edit sync overwrite ─────────────
+    {
+      const held = clone(p.zonesBy[SENSOR_ID].inclusion[0].vertices);
+      const other = [{ x: -2500, y: 500 }, { x: 2500, y: 500 },
+                     { x: 2500, y: 4500 }, { x: -2500, y: 4500 }];
+      other.forEach((v, i) => {
+        HA_STATES[`number.${SLUG}_zone_1_v${i + 1}_x`] = st(String(v.x));
+        HA_STATES[`number.${SLUG}_zone_1_v${i + 1}_y`] = st(String(v.y));
+      });
+      p.mmwaveEditing = true;
+      ok('10a the editor gate reports the sync as blocked', p.mmwaveSyncBlocked() === true);
+      fake.fire(undefined);
+      ok('10b a firmware echo cannot overwrite an in-flight editor edit',
+         JSON.stringify(p.zonesBy[SENSOR_ID].inclusion[0].vertices) === JSON.stringify(held),
+         JSON.stringify(p.zonesBy[SENSOR_ID].inclusion[0].vertices));
+      // NEGATIVE CONTROL: release the gate and the identical echo lands.
+      p.mmwaveEditing = false;
+      ok('10c the gate clears', p.mmwaveSyncBlocked() === false);
+      fake.fire(undefined);
+      ok('10d (neg) with the gate released the same echo applies',
+         JSON.stringify(p.zonesBy[SENSOR_ID].inclusion[0].vertices) === JSON.stringify(other),
+         JSON.stringify(p.zonesBy[SENSOR_ID].inclusion[0].vertices));
+      // And the pre-existing gates still work (this flag is additive, not a
+      // replacement) — negative-controlled by 10d above.
+      p.editZone = { sensorId: SENSOR_ID, prefix: 'iz', zi: 0, verts: [], mousePos: null };
+      ok('10e the pre-existing zone-edit latch still blocks sync', p.mmwaveSyncBlocked() === true);
+      p.editZone = null;
+      p.drag = { kind: 'pan', start: { x: 0, y: 0 }, startCenter: { x: 0, y: 0 } };
+      ok('10f a canvas drag still blocks sync', p.mmwaveSyncBlocked() === true);
+      p.drag = null;
+      ok('10g with nothing in flight sync is unblocked', p.mmwaveSyncBlocked() === false);
+    }
+
+    // ── §11 Numeric vertex entry uses the same one write path ───────────────
+    {
+      await setPane(el, 'zones');
+      // The row click TOGGLES selection; only click when it is not already on.
+      const zrow0 = el.querySelector('[data-zone-row="iz0"]');
+      if (!zrow0.classList.contains('sel')) zrow0.click();
+      await el.updateComplete;
+      await frames(2);
+      const xIn = el.querySelector('[data-vx="1"]');
+      ok('11a the vertex table is offered alongside the canvas', !!xIn);
+      const before = fake.countSetValue(`number.${SLUG}_zone_1_v2_x`);
+      xIn.value = '1234';
+      xIn.dispatchEvent(new Event('change', { bubbles: true }));
+      await el.updateComplete;
+      ok('11b a typed vertex writes through the same path',
+         fake.countSetValue(`number.${SLUG}_zone_1_v2_x`) === before + 1 &&
+         fake.lastSetValue(`number.${SLUG}_zone_1_v2_x`) === 1234,
+         fake.lastSetValue(`number.${SLUG}_zone_1_v2_x`));
+      ok('11c a typed vertex also fences the zone',
+         p.zoneWriteFenced(SENSOR_ID, 'iz', 0) === true);
+      // The 8-slot cap on the WRITE side: adding vertices stops at the cap.
+      const addBtn = () => el.querySelector('[data-add-vertex]');
+      for (let i = 0; i < 10; i++) {
+        const b = addBtn();
+        if (!b || b.disabled) break;
+        b.click();
+        await el.updateComplete;
+      }
+      const len = p.zonesBy[SENSOR_ID].inclusion[0].vertices.length;
+      ok('11d "+ Vertex" cannot exceed the firmware slot count',
+         len === MAX_ZONE_VERTICES, len);
+      ok('11e the add control disables at the cap', addBtn()?.disabled === true);
+      // NEGATIVE CONTROL: below the cap it is enabled, so 11e discriminates.
+      el.querySelector('.mmw-vtbl tbody tr .mmw-mini').click();
+      await el.updateComplete;
+      ok('11f (neg) below the cap the add control is enabled again',
+         addBtn()?.disabled === false,
+         p.zonesBy[SENSOR_ID].inclusion[0].vertices.length);
+      // End-to-end cap: even handed a 10-vertex list the write path stores 8
+      // and never invents a 9th device slot.
+      const ten = Array.from({ length: 10 }, (_, i) => ({ x: 100 * (i + 1), y: 200 * (i + 1) }));
+      el._writeZone(s, 'iz', 0, ten);
+      ok('11g a 10-vertex write is capped in the runtime polygon',
+         p.zonesBy[SENSOR_ID].inclusion[0].vertices.length === MAX_ZONE_VERTICES,
+         p.zonesBy[SENSOR_ID].inclusion[0].vertices.length);
+      ok('11h the capped write kept the FIRST 8, not the last',
+         p.zonesBy[SENSOR_ID].inclusion[0].vertices[7].x === 800,
+         p.zonesBy[SENSOR_ID].inclusion[0].vertices[7].x);
+      ok('11i no 9th/10th device slot was ever written',
+         fake.countSetValue(`number.${SLUG}_zone_1_v9_x`) === 0 &&
+         fake.countSetValue(`number.${SLUG}_zone_1_v10_x`) === 0);
+      // NEGATIVE CONTROL: slot 8 WAS written, so 11i is not passing merely
+      // because nothing was written at all.
+      ok('11j (neg) slot 8 was written by that same call',
+         fake.lastSetValue(`number.${SLUG}_zone_1_v8_x`) === 800,
+         fake.lastSetValue(`number.${SLUG}_zone_1_v8_x`));
+    }
+
+    // ── §12 Live targets: RAW and EASED are both shown, and differ ───────────
+    {
+      const act = `binary_sensor.${SLUG}_target_1_active`;
+      const tx = `sensor.${SLUG}_target_1_x`, ty = `sensor.${SLUG}_target_1_y`;
+      HA_STATES[act] = st('on');
+      HA_STATES[tx] = st('0', { unit_of_measurement: 'mm' });
+      HA_STATES[ty] = st('1000', { unit_of_measurement: 'mm' });
+      p.updateLerpGoals();                    // first activation snaps eased = raw
+      HA_STATES[tx] = st('2400', { unit_of_measurement: 'mm' });
+      HA_STATES[ty] = st('3600', { unit_of_measurement: 'mm' });
+      p.stepLerp(0.016);                      // one small spring step
+      const sl = p.lerpBy[SENSOR_ID][0];
+      ok('12a raw follows the report immediately', sl.tx === 2400 && sl.ty === 3600,
+         `${sl.tx},${sl.ty}`);
+      ok('12b eased trails the raw report (the spring is a DISPLAY smoother)',
+         Math.abs(sl.cx - sl.tx) > 100, `${Math.round(sl.cx)} vs ${sl.tx}`);
+      HA_STATES[`sensor.${SLUG}_target_1_angle`] = st('37', { unit_of_measurement: '°' });
+      HA_STATES[`sensor.${SLUG}_target_1_speed`] = st('55', { unit_of_measurement: 'mm/s' });
+      await setPane(el, 'targets');
+      const cells = [...el.querySelectorAll('.mmw-tbl tbody tr')][0].querySelectorAll('td');
+      const txt = i => cells[i].textContent.trim();
+      ok('12c the raw X/Y columns show the un-eased report',
+         txt(2) === String(Math.round(sl.tx)) && txt(3) === String(Math.round(sl.ty)),
+         `${txt(2)},${txt(3)}`);
+      ok('12d the eased X/Y columns show the smoothed position',
+         txt(4) === String(Math.round(sl.cx)) && txt(5) === String(Math.round(sl.cy)),
+         `${txt(4)},${txt(5)}`);
+      // NEGATIVE CONTROL: the two pairs are genuinely different numbers, so
+      // 12c/12d could not both pass by reading the same cell twice.
+      ok('12e (neg) raw and eased are different numbers in this frame',
+         txt(2) !== txt(4) || txt(3) !== txt(5), `${txt(2)}/${txt(4)}`);
+      ok('12f the device-reported angle is finally displayed',
+         txt(7).includes('37'), txt(7));
+      ok('12g resolution is displayed', txt(8) === '75', txt(8));
+      // World position is the raw report through the sensor's plan pose.
+      ok('12h the derived world position uses the sensor origin',
+         txt(9) === String(Math.round(s.x + sl.tx)) && txt(10) === String(Math.round(s.y + sl.ty)),
+         `${txt(9)},${txt(10)}`);
+    }
+
+    // ── §13 Observed push cadence (measured, not invented) ──────────────────
+    {
+      const before = p.targetPushStat(SENSOR_ID, 0).count;
+      for (let i = 0; i < 4; i++) {
+        HA_STATES[`sensor.${SLUG}_target_1_x`] = st(String(2400 + (i + 1) * 50), { unit_of_measurement: 'mm' });
+        p.updateLerpGoals();
+        await sleep(30);
+      }
+      const after = p.targetPushStat(SENSOR_ID, 0);
+      ok('13a a distinct report counts as one push', after.count === before + 4,
+         `${before} → ${after.count}`);
+      ok('13b a rate is derived once two reports are seen',
+         after.hz != null && after.hz > 0 && isFinite(after.hz), after.hz);
+      ok('13c an age is reported', after.ageMs != null && after.ageMs >= 0, after.ageMs);
+      // NEGATIVE CONTROL: repeated IDENTICAL states must NOT count — otherwise
+      // the readout would report the RAF rate, not the radar's.
+      const c2 = p.targetPushStat(SENSOR_ID, 0).count;
+      for (let i = 0; i < 6; i++) { p.updateLerpGoals(); await sleep(5); }
+      ok('13d (neg) unchanged republished states do not inflate the count',
+         p.targetPushStat(SENSOR_ID, 0).count === c2,
+         `${c2} → ${p.targetPushStat(SENSOR_ID, 0).count}`);
+      // And a target going idle resets its window rather than reporting stale Hz.
+      HA_STATES[`binary_sensor.${SLUG}_target_1_active`] = st('off');
+      p.updateLerpGoals();
+      ok('13e an idle target reports no rate',
+         p.targetPushStat(SENSOR_ID, 0).hz === null && p.targetPushStat(SENSOR_ID, 0).count === 0);
+      HA_STATES[`binary_sensor.${SLUG}_target_1_active`] = st('on');
+      p.updateLerpGoals();
+    }
+
+    // ── §14 Diagnostics pane ────────────────────────────────────────────────
+    {
+      HA_STATES[`sensor.${SLUG}_zone_1_still_count`] = st('2');
+      HA_STATES[`sensor.${SLUG}_zone_1_moving_count`] = st('1');
+      HA_STATES[`sensor.${SLUG}_zone_1_target_count`] = st('3');
+      HA_STATES[`binary_sensor.${SLUG}_processing_too_slow`] = st('on');
+      fake.fire(undefined);
+      await setPane(el, 'diag');
+      const body = el.querySelector('.mmw-body').textContent;
+      ok('14a processing time is shown', body.includes('12') && body.includes('ms'));
+      ok('14b the processing-too-slow flag is surfaced',
+         body.includes('device is behind'), body.slice(0, 0));
+      ok('14c presence and target count are shown',
+         body.includes('Presence') && body.includes('Target count'));
+      const zrow = el.querySelector('[data-zone-diag="0"]').querySelectorAll('td');
+      ok('14d per-zone still/moving counts are shown',
+         zrow[2].textContent.trim() === '2' && zrow[3].textContent.trim() === '1',
+         `${zrow[2].textContent}/${zrow[3].textContent}`);
+      // NEGATIVE CONTROL: clearing the flag removes the warning text, so 14b
+      // is measuring the flag rather than static copy.
+      HA_STATES[`binary_sensor.${SLUG}_processing_too_slow`] = st('off');
+      fake.fire(undefined);
+      await el.updateComplete;
+      ok('14e (neg) clearing the flag clears the warning',
+         !el.querySelector('.mmw-body').textContent.includes('device is behind'));
+    }
+
+    // ── §15 Orientation: both values shown, distinctly, with NO alarm ────────
+    {
+      // Deliberately a numerically DIFFERENT pair on DIFFERENT axes: a sensor
+      // facing west with no downward tilt. This is a correct install, and the
+      // old equality warning fired on exactly this.
+      s.heading = 90;
+      HA_STATES[`number.${SLUG}_mount_angle`] = st('0', { unit_of_measurement: '°' });
+      fake.fire(undefined);
+      p.emitConfig();
+      await el.updateComplete;
+      const blk = el.querySelector('[data-orientation]');
+      ok('15a the orientation block is rendered', !!blk);
+      const hCell = el.querySelector('[data-orient-heading]');
+      const mCell = el.querySelector('[data-orient-mount]');
+      ok('15b the plan heading is shown in its own cell',
+         !!hCell && hCell.textContent.includes('90'), hCell && hCell.textContent.trim().slice(0, 40));
+      ok('15c the device mount angle is shown in its own SEPARATE cell',
+         !!mCell && mCell !== hCell && mCell.textContent.includes('0'),
+         mCell && mCell.textContent.trim().slice(0, 40));
+      // …and BOTH are actually VISIBLE and laid out apart. A DOM-only check
+      // would pass on a cell hidden with display:none, which is exactly the
+      // "user can't see both" failure this pane exists to fix.
+      const hBox = hCell.getBoundingClientRect(), mBox = mCell.getBoundingClientRect();
+      ok('15c\' both cells are actually rendered (not hidden)',
+         hBox.width > 50 && hBox.height > 20 && mBox.width > 50 && mBox.height > 20,
+         `${Math.round(hBox.width)}x${Math.round(hBox.height)} / ${Math.round(mBox.width)}x${Math.round(mBox.height)}`);
+      ok('15c\'\' the two cells occupy different screen space (side by side)',
+         Math.abs(hBox.left - mBox.left) > 40 || Math.abs(hBox.top - mBox.top) > 20,
+         `${Math.round(hBox.left)},${Math.round(hBox.top)} vs ${Math.round(mBox.left)},${Math.round(mBox.top)}`);
+      ok('15d each cell says what its value actually drives',
+         hCell.textContent.toLowerCase().includes('yaw') &&
+         mCell.textContent.toLowerCase().includes('tilt'));
+      ok('15e the two cells are labelled by owner (Diorama vs device)',
+         hCell.textContent.includes('Diorama') && mCell.textContent.includes('device'));
+      // THE POINT: a numerically differing pair raises NOTHING.
+      ok('15f a heading/tilt pair that merely differs raises NO warning',
+         !el.querySelector('[data-heading-warn]') && !el.querySelector('.mmw-warn'),
+         el.querySelector('.mmw-warn')?.textContent?.slice(0, 60) ?? '(none)');
+      ok('15g the note states they are not expected to match',
+         el.querySelector('[data-orient-note]').textContent.includes('not expected to match'));
+      ok('15h the note flags the firmware interpretation as unverified here',
+         el.querySelector('[data-orient-note]').textContent.includes('not verified in this repository'));
+      // NEGATIVE CONTROL for 15f: prove the query DISCRIMINATES rather than
+      // being a selector that can never match. NB `.mmw-warn` no longer exists
+      // in the stylesheet either — the alarm styling was removed with the
+      // alarm, so a future warning cannot quietly reappear fully-styled.
+      const probe = document.createElement('div');
+      probe.className = 'mmw-warn';
+      probe.textContent = 'probe';
+      el.querySelector('.mmw-body').appendChild(probe);
+      ok('15i (neg) the no-warning query would have caught a warning if present',
+         !!el.querySelector('.mmw-warn'));
+      probe.remove();
+      ok('15j (neg) …and is clean again once removed', !el.querySelector('.mmw-warn'));
+      // NEGATIVE CONTROL for 15b/15c: the cells track their sources, so they
+      // are reading live values rather than static copy.
+      s.heading = 215;
+      HA_STATES[`number.${SLUG}_mount_angle`] = st('12', { unit_of_measurement: '°' });
+      fake.fire(undefined);
+      p.emitConfig();
+      await el.updateComplete;
+      ok('15k (neg) the heading cell tracks Sensor.heading',
+         el.querySelector('[data-orient-heading]').textContent.includes('215'));
+      ok('15l (neg) the mount cell tracks the device entity',
+         el.querySelector('[data-orient-mount]').textContent.includes('12'));
+      ok('15m an EQUAL pair is no more special than a differing one — still no alarm',
+         (() => { s.heading = 12; p.emitConfig(); return true; })() &&
+         !el.querySelector('.mmw-warn'));
+      // An unpublished mount angle degrades to an honest "not published".
+      const savedMount = HA_STATES[`number.${SLUG}_mount_angle`];
+      delete HA_STATES[`number.${SLUG}_mount_angle`];
+      p.emitConfig();
+      await el.updateComplete;
+      ok('15n an unpublished mount angle reads "not published", not 0',
+         el.querySelector('[data-orient-mount]').textContent.includes('not published'),
+         el.querySelector('[data-orient-mount]').textContent.trim().slice(0, 40));
+      HA_STATES[`number.${SLUG}_mount_angle`] = savedMount;
+      s.heading = 0;
+      fake.fire(undefined);
+      p.emitConfig();
+      await el.updateComplete;
+    }
+
+    // ── §16 Churn safety: enumeration did NOT widen the slow path ────────────
+    {
+      // The scoped `number.<slug>_`/`switch.<slug>_` prefix rule for a BOUND
+      // device is pre-existing and must stay.
+      ok('16a bound-device number entities stay config-path',
+         p._isSlowEntity(`number.${SLUG}_sensor_height`) === true);
+      // NEGATIVE CONTROL for 16a: an unrelated number entity must stay LIVE-only
+      // — the blanket rule that caused the idle-churn regression is still gone.
+      ok('16b (neg) an unrelated number.* is NOT config-path',
+         p._isSlowEntity('number.some_other_thing') === false);
+      ok('16c (neg) an unrelated switch.* is NOT config-path',
+         p._isSlowEntity('switch.some_other_thing') === false);
+      // Generically-enumerated non-number/switch entities add no config traffic:
+      // the editor repaints from the LIVE channel instead.
+      ok('16d generically-enumerated select/button/text add no config-path rule',
+         p._isSlowEntity(`select.${SLUG}_operating_mode`) === false &&
+         p._isSlowEntity(`button.${SLUG}_restart_device`) === false &&
+         p._isSlowEntity(`text.${SLUG}_firmware_version`) === false);
+    }
+
+    // ── §17 Lifecycle: the gate is never left latched ────────────────────────
+    {
+      p.mmwaveEditing = true;
+      el.querySelector('.mmw-x').click();
+      await el.updateComplete;
+      ok('17a closing the editor releases the sync gate',
+         p.mmwaveEditing === false && el.open === false);
+      el.show(SENSOR_ID);
+      await el.updateComplete;
+      p.mmwaveEditing = true;
+      el.remove();
+      await sleep(10);
+      ok('17b disconnecting releases the sync gate', p.mmwaveEditing === false);
+    }
+
+  } catch (err) {
+    ok('harness exception', false, String(err && err.stack || err));
+  }
+
+  // ── Report ────────────────────────────────────────────────────────────────
+  const passed = results.filter(r => r.pass).length;
+  const total = results.length;
+  document.getElementById('rows').innerHTML = results.map(r =>
+    `<div class="row"><span class="name">${r.name}</span>` +
+    `<span class="${r.pass ? 'pass' : 'fail'}">${r.pass ? 'PASS' : 'FAIL'}` +
+    (r.extra ? ` <span class="extra">${r.extra}</span>` : '') + '</span></div>').join('');
+  const sum = document.getElementById('summary');
+  sum.textContent = `MMWAVEEDITOR ${passed === total ? 'PASS' : 'FAIL'} ${passed}/${total}`;
+  sum.className = passed === total ? 'okbg' : 'badbg';
+  document.title = `MMWAVEEDITOR ${passed === total ? 'PASS' : 'FAIL'} ${passed}/${total}`;
+</script>

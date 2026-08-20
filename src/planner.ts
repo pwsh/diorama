@@ -60,7 +60,7 @@ export interface BermudaDiscovery {
   scannedAt: number;
 }
 import type {
-  Store, Floor, Sensor, ZonesLive, ObjectHalo, LerpSlot,
+  Store, Floor, Sensor, ZonesLive, ObjectHalo, LerpSlot, TargetPushStat,
   HassState, ConnStatus, DiscoveredDevice, Vec2, AvatarKind, WeatherConfig, CameraFixture,
   ConfigIndex, ConfigMeta, ThermostatFixture, SafetySensor, AlertBeacon, Furniture, MqttBridgeConfig,
   AlertsConfig, GroundArea, Pool, CompassConfig, Ruler, RulerEnd, DimensionMode, NeighborhoodConfig,
@@ -106,6 +106,11 @@ export interface DioramaEnvelope {
 // How long a camera alert lingers (snapshot card + FOV pulse) after its
 // alertEntity flips back off. See Planner.cameraAlerting.
 const CAMERA_ALERT_LINGER_MS = 6000;
+
+// How many recent radar-report timestamps to keep per target slot for the
+// observed-cadence readout. 12 spans ~1.2 s at LD2450's ~10 Hz and ~6 s at a
+// slow 2 Hz, so the rate settles fast without a long stale tail.
+const PUSH_STAMP_CAP = 12;
 import { solvePosition, type ProxyObs } from './trilateration.js';
 // Type-only — the bridge VALUE is dynamic-import()ed in _reconfigureMqtt so
 // mqtt-bridge.ts (and, in turn, mqtt-ws.ts) stay OUT of the startup chunk.
@@ -584,6 +589,20 @@ export class Planner extends EventTarget {
   lerpBy: Record<string, LerpSlot[]> = {};
   objWritePending: Record<string, boolean[]> = {};
   objWriteTimer: Record<string, (ReturnType<typeof setTimeout> | null)[]> = {};
+  // Zone-vertex write fence — the polygon twin of objWritePending. Keyed
+  // `<sensorId>` → 6 slots (3 inclusion then 3 filter). Before this existed,
+  // zone reads relied ONLY on the coarse `verts.length >= 3` coherence rule,
+  // which cannot tell "the firmware echoed my write back" from "the firmware
+  // is publishing the OLD polygon it has not applied yet" — so a live-drag
+  // editor writing on release could see its own shape reverted one tick later.
+  // See fenceZoneWrite.
+  zoneWritePending: Record<string, boolean[]> = {};
+  zoneWriteTimer: Record<string, (ReturnType<typeof setTimeout> | null)[]> = {};
+  // Observed radar push cadence per target slot (runtime-only). Filled in
+  // updateLerpGoals — the one place that already reads every raw coordinate —
+  // so measuring costs three comparisons per sensor per frame and adds no
+  // timer, no subscription and no polling. See targetPushStat().
+  targetPushBy: Record<string, TargetPushStat[]> = {};
   izExpanded: Record<string, Set<number>> = {};
   fzExpanded: Record<string, Set<number>> = {};
   editObject: Record<string, number> = {};
@@ -624,6 +643,15 @@ export class Planner extends EventTarget {
   drag: Drag | null = null;
   dragJustEnded = false;
   editZone: EditZone | null = null;
+  // The mmWave TECHNICAL EDITOR's own edit gate (runtime only, never
+  // persisted). Slow-path sync — which includes the whole zone/object resync —
+  // is skipped while `drag || editZone` is set, at three call sites. The
+  // technical editor holds its edit state inside its own overlay (a vertex
+  // drag on its sensor-local canvas, a numeric field mid-type), NOT in
+  // `editZone`, so without this third flag a firmware echo arriving mid-edit
+  // would silently overwrite the shape being edited. Set for the duration of
+  // an editor interaction and cleared on release. See mmwaveSyncBlocked().
+  mmwaveEditing = false;
   // Smart alignment guides (Feature C, universalized). Runtime only — never
   // persisted. `alignGuides` are the active guide lines drawn while a drag is in
   // flight; `alignPool` is the CROSS-CATEGORY candidate pool (wall vertices,
@@ -809,6 +837,12 @@ export class Planner extends EventTarget {
   private _entityToDevice: Record<string, string> = {};        // entity_id → device_id
   private _deviceSensors: Record<string, string[]> = {};       // device_id → sensor.* entity ids on it
   private _entityDeviceClass: Record<string, string> = {};     // entity_id → registry original_device_class
+  // device_id → EVERY entity id on that device, any domain. The generic
+  // device-enumeration layer (mmWave technical editor) reads this; the battery
+  // resolution above deliberately keeps its own sensor-only map so widening
+  // this one can never change which sibling a battery badge picks.
+  private _deviceEntities: Record<string, string[]> = {};
+  private _entityRegName: Record<string, string> = {};          // entity_id → registry name/original_name
   // Cached RESOLUTION so per-frame batteryFor() calls are cheap map hits:
   // bound entity id → battery sensor entity id, or null when the device has no
   // battery sibling. `undefined` (absent) = not resolved yet (retry next call).
@@ -1959,7 +1993,7 @@ export class Planner extends EventTarget {
 
     const slow = changedId === undefined || this._isSlowEntity(changedId);
     if (!slow) return;
-    if (this.drag || this.editZone) return;
+    if (this.mmwaveSyncBlocked()) return;
 
     this._runFullSync(states);
 
@@ -2494,7 +2528,7 @@ export class Planner extends EventTarget {
   }
 
   private _runFullSync(states: Record<string, HassState>): void {
-    if (this.drag || this.editZone) return;
+    if (this.mmwaveSyncBlocked()) return;
     const f = this.floor();
     for (const s of f.sensors) {
       if (!s.deviceSlug) continue;
@@ -3108,6 +3142,9 @@ export class Planner extends EventTarget {
     ];
     if (!this.objWritePending[sensorId]) this.objWritePending[sensorId] = [false, false, false];
     if (!this.objWriteTimer[sensorId])   this.objWriteTimer[sensorId]   = [null, null, null];
+    // 6 zone slots: 0..2 inclusion, 3..5 filter (see zoneFenceSlot).
+    if (!this.zoneWritePending[sensorId]) this.zoneWritePending[sensorId] = [false, false, false, false, false, false];
+    if (!this.zoneWriteTimer[sensorId])   this.zoneWriteTimer[sensorId]   = [null, null, null, null, null, null];
     if (!this.izExpanded[sensorId]) this.izExpanded[sensorId] = new Set();
     if (!this.fzExpanded[sensorId]) this.fzExpanded[sensorId] = new Set();
     if (this.editObject[sensorId] === undefined) this.editObject[sensorId] = -1;
@@ -3186,6 +3223,9 @@ export class Planner extends EventTarget {
         // Only adopt firmware values when they form a coherent polygon. Keep
         // existing runtime vertices otherwise — protects user-configured
         // shapes from being wiped during partial state pushes / reconnects.
+        // Fenced: we just wrote this polygon and HA is echoing a mix of new
+        // and old vertices back. Adopting it would visibly revert the edit.
+        if (this.zoneWriteFenced(s.id, prefixes[gi], z)) continue;
         if (verts.length >= 3) {
           zone.vertices = verts;
           // Persist to the sensor's zoneCache so the next page reload paints
@@ -3288,6 +3328,9 @@ export class Planner extends EventTarget {
     delete this.lerpBy[sensorId];
     delete this.objWritePending[sensorId];
     delete this.objWriteTimer[sensorId];
+    delete this.zoneWritePending[sensorId];
+    delete this.zoneWriteTimer[sensorId];
+    delete this.targetPushBy[sensorId];
     delete this.izExpanded[sensorId];
     delete this.fzExpanded[sensorId];
     delete this.editObject[sensorId];
@@ -3313,7 +3356,7 @@ export class Planner extends EventTarget {
   }
 
   private _runFullSyncForSensor(s: Sensor, states: Record<string, HassState>): void {
-    if (!s.deviceSlug || this.drag || this.editZone) return;
+    if (!s.deviceSlug || this.mmwaveSyncBlocked()) return;
     this.discBy[s.id] = this.disc.discoverForDevice(states, s.deviceSlug);
     this.ensureLiveState(s.id);
     this._syncZonesObjects(s, states);
@@ -5107,16 +5150,27 @@ export class Planner extends EventTarget {
     const e2d: Record<string, string> = {};
     const devSensors: Record<string, string[]> = {};
     const devClass: Record<string, string> = {};
+    const devAll: Record<string, string[]> = {};
+    const regName: Record<string, string> = {};
     for (const e of ents) {
       if (e.device_id) e2d[e.entity_id] = e.device_id;
       if (e.original_device_class) devClass[e.entity_id] = e.original_device_class;
       if (e.device_id && e.entity_id.startsWith('sensor.')) {
         (devSensors[e.device_id] ??= []).push(e.entity_id);
       }
+      // Generic enumeration: group EVERY entity by device, whatever its domain
+      // and whatever its name — that is the whole point (a `select.*` mode the
+      // regexes never predicted must still surface). Disabled entities are
+      // skipped: HA publishes no state for them, so a row would be a dead end.
+      if (e.device_id && !e.disabled_by) (devAll[e.device_id] ??= []).push(e.entity_id);
+      const nm = e.name || e.original_name;
+      if (nm) regName[e.entity_id] = nm;
     }
     this._entityToDevice = e2d;
     this._deviceSensors = devSensors;
     this._entityDeviceClass = devClass;
+    this._deviceEntities = devAll;
+    this._entityRegName = regName;
     this._batteryResolve = {};        // invalidate cached resolutions
     this._batteryRegLoaded = true;
     this.emitConfig();                // sidebar battery text + 2D badges re-render
@@ -7855,6 +7909,9 @@ export class Planner extends EventTarget {
       if (!s.deviceSlug) continue;
       const d = this.discBy[s.id]; if (!d) continue;
       const lerp = this.lerpBy[s.id]; if (!lerp) continue;
+      const push = (this.targetPushBy[s.id] ??= [0, 1, 2].map(() => ({
+        lastAt: 0, prevX: 0, prevY: 0, seen: false, stamps: [] as number[],
+      })));
       for (let i = 0; i < 3; i++) {
         const useAvg = !this.useRawTargets && !!d.avgX[i];
         const xId = useAvg ? d.avgX[i] : d.targets[i]?.x_id;
@@ -7870,7 +7927,24 @@ export class Planner extends EventTarget {
         if (active) {
           if (!lerp[i].active) { lerp[i].cx = x; lerp[i].cy = y; lerp[i].vx = 0; lerp[i].vy = 0; }
           lerp[i].tx = x; lerp[i].ty = y; lerp[i].active = true;
-        } else { lerp[i].active = false; }
+          // Cadence observation: a raw pair distinct from the previous one is
+          // one report from the device. Same-value repeats are NOT counted —
+          // HA re-publishes unchanged states and counting those would report
+          // the RAF rate, not the radar's.
+          const st = push[i];
+          if (!st.seen) { st.seen = true; st.prevX = x; st.prevY = y; st.lastAt = Date.now(); }
+          else if (x !== st.prevX || y !== st.prevY) {
+            st.prevX = x; st.prevY = y;
+            const now = Date.now();
+            st.lastAt = now;
+            st.stamps.push(now);
+            if (st.stamps.length > PUSH_STAMP_CAP) st.stamps.shift();
+          }
+        } else {
+          lerp[i].active = false;
+          const st = push[i];
+          st.seen = false; st.stamps.length = 0; st.lastAt = 0;
+        }
       }
     }
   }
@@ -8722,6 +8796,160 @@ export class Planner extends EventTarget {
       else this._mowerAdvance(bs, gx, gy, dt, f, loops);
     }
     commit();
+  }
+
+  // ── Observed radar cadence ────────────────────────────────────────────────
+  // The honest answer to "how fast is this sensor actually reporting?".
+  // `hz` is (n − 1) / elapsed over the retained window and is null until two
+  // distinct reports have been seen; `ageMs` is time since the last one.
+  // Deliberately NOT a promise of any refresh improvement — Diorama never
+  // throttled these values; this only makes the device's own rate legible.
+  targetPushStat(sensorId: string, i: number): { hz: number | null; ageMs: number | null; count: number } {
+    const st = this.targetPushBy[sensorId]?.[i];
+    if (!st) return { hz: null, ageMs: null, count: 0 };
+    const n = st.stamps.length;
+    let hz: number | null = null;
+    if (n >= 2) {
+      const span = (st.stamps[n - 1] - st.stamps[0]) / 1000;
+      if (span > 0) hz = (n - 1) / span;
+    }
+    return { hz, ageMs: st.lastAt ? Date.now() - st.lastAt : null, count: n };
+  }
+
+  // ── Generic device enumeration (the COMPLETENESS layer) ───────────────────
+  // sensor-discovery.ts's regexes are the SEMANTIC layer — they say what an id
+  // MEANS. They are also a fixed list, so a firmware `select.*` mode or a
+  // `button.*` restart is invisible to the whole panel. This resolves the bound
+  // device's HA device_id from any entity discovery DID find, then returns
+  // every registry entity sharing that device_id — the scanBatteryRegistry
+  // grouping pattern, which needs no new HaApi capability.
+  //
+  // Falls back to a `<domain>.<slug>_` prefix sweep of live states ONLY when
+  // the registry knows nothing about this device (offline / LocalApi / a
+  // registry fetch that failed) — the registry is authoritative whenever it
+  // has an answer, because a prefix sweep would also catch a DIFFERENT device
+  // whose slug happens to start with the same text.
+  // Idempotent kick for the entity registry the enumeration above reads. The
+  // battery scan owns that fetch and already runs on connect; this only covers
+  // the case where the editor opens before it landed (or after a failure).
+  ensureDeviceRegistry(): void {
+    if (this._batteryRegLoaded || !this.hass) return;
+    void this.scanBatteryRegistry();
+  }
+
+  mmwaveDeviceEntities(s: Sensor): string[] {
+    if (!s.deviceSlug) return [];
+    const d = this.discBy[s.id];
+    const states = this.hass?.states ?? {};
+    // Anchors: any id discovery resolved, plus the two canonical ones, so a
+    // device whose presence entity is renamed still resolves via a target id.
+    const anchors: string[] = [];
+    if (d) {
+      anchors.push(d.hasTarget ?? '', d.targetCount ?? '', d.sensorHeight ?? '',
+                   d.mountAngle ?? '', d.procTime ?? '',
+                   d.targets[0]?.x_id ?? '', d.targets[0]?.y_id ?? '');
+    }
+    anchors.push(`binary_sensor.${s.deviceSlug}_presence`,
+                 `sensor.${s.deviceSlug}_target_1_x`);
+    let deviceId: string | null = null;
+    for (const a of anchors) {
+      if (!a) continue;
+      const dev = this._entityToDevice[a];
+      if (dev) { deviceId = dev; break; }
+    }
+    if (deviceId) {
+      const ids = this._deviceEntities[deviceId];
+      if (ids && ids.length) return ids.slice().sort();
+    }
+    // Registry-less fallback.
+    const pfx = `_${s.deviceSlug}_`;
+    return Object.keys(states)
+      .filter(id => (`_${id.replace('.', '_')}_`).includes(pfx))
+      .sort();
+  }
+
+  // Friendly label for a generically-enumerated entity: HA's friendly_name if
+  // present, else the registry name, else the id with the device slug stripped.
+  entityLabel(entityId: string, deviceSlug?: string | null): string {
+    const fn = this.hass?.states?.[entityId]?.attributes?.friendly_name;
+    if (typeof fn === 'string' && fn.trim()) return fn.trim();
+    const reg = this._entityRegName[entityId];
+    if (reg) return reg;
+    let tail = entityId.slice(entityId.indexOf('.') + 1);
+    if (deviceSlug && tail.startsWith(deviceSlug + '_')) tail = tail.slice(deviceSlug.length + 1);
+    return tail.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+  }
+
+  // ── Generic control dispatch ──────────────────────────────────────────────
+  // `callService` was already generic; these two just had NO call site in the
+  // whole codebase, which is exactly why `select.*` / `button.*` entities were
+  // unreachable. Domain is taken from the entity id so `input_select` /
+  // `input_button` work through the same path. Fire-and-forget; refuse in view
+  // mode like every other write path.
+  selectOption(entityId: string, option: string): void {
+    if (this.uiMode === 'view') return;
+    if (!this.hass || !entityId) return;
+    const domain = entityId.slice(0, entityId.indexOf('.')) || 'select';
+    try {
+      this.hass.callService(domain, 'select_option', { entity_id: entityId, option });
+    } catch (err) { console.warn('select_option failed:', err); }
+  }
+
+  pressButton(entityId: string): void {
+    if (this.uiMode === 'view') return;
+    if (!this.hass || !entityId) return;
+    const domain = entityId.slice(0, entityId.indexOf('.')) || 'button';
+    try {
+      this.hass.callService(domain, 'press', { entity_id: entityId });
+    } catch (err) { console.warn('button press failed:', err); }
+  }
+
+  setSwitchState(entityId: string, on: boolean): void {
+    if (this.uiMode === 'view') return;
+    if (!this.hass || !entityId) return;
+    const domain = entityId.slice(0, entityId.indexOf('.')) || 'switch';
+    try {
+      this.hass.callService(domain, on ? 'turn_on' : 'turn_off', { entity_id: entityId });
+    } catch (err) { console.warn('switch write failed:', err); }
+  }
+
+  // ── mmWave sync gate ──────────────────────────────────────────────────────
+  // The single predicate every slow-path zone/object resync consults. Three
+  // independent things can be mid-edit: a canvas drag, the 2D zone-draw latch,
+  // and the technical editor's overlay. Any of them means "the user's in-flight
+  // shape is the truth right now; do not let a firmware echo overwrite it".
+  mmwaveSyncBlocked(): boolean {
+    return !!this.drag || !!this.editZone || this.mmwaveEditing;
+  }
+
+  // ── Zone write fence ──────────────────────────────────────────────────────
+  // The polygon twin of fenceObjectWrite. After the editor writes a polygon,
+  // HA echoes the numbers back over several state pushes — and until the
+  // firmware has applied ALL 16 writes, the echo is a MIX of new and old
+  // vertices which still satisfies `verts.length >= 3` and would therefore be
+  // adopted, visibly reverting the edit. The fence suppresses vertex adoption
+  // for that zone for 3 s (the objWritePending window), exactly as object
+  // halos already do for x/y.
+  // Slot layout: 0..2 inclusion, 3..5 filter (see zoneFenceSlot).
+  zoneFenceSlot(prefix: 'iz' | 'fz', zi: number): number {
+    return (prefix === 'iz' ? 0 : 3) + zi;
+  }
+
+  fenceZoneWrite(sensorId: string, prefix: 'iz' | 'fz', zi: number): void {
+    this.ensureLiveState(sensorId);
+    const slot = this.zoneFenceSlot(prefix, zi);
+    if (slot < 0 || slot > 5) return;
+    this.zoneWritePending[sensorId][slot] = true;
+    const t = this.zoneWriteTimer[sensorId][slot];
+    if (t) clearTimeout(t);
+    this.zoneWriteTimer[sensorId][slot] = setTimeout(() => {
+      const arr = this.zoneWritePending[sensorId];
+      if (arr) arr[slot] = false;
+    }, 3000);
+  }
+
+  zoneWriteFenced(sensorId: string, prefix: 'iz' | 'fz', zi: number): boolean {
+    return this.zoneWritePending[sensorId]?.[this.zoneFenceSlot(prefix, zi)] === true;
   }
 
   // ── Object write fence (ack window: HA echoes back our value, suppress overwrite) ─
