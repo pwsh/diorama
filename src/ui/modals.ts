@@ -2557,6 +2557,15 @@ export class SettingsDrawer extends LitElement {
           },
           'Pan the view side to side and forward/back (mouse pan button and two-finger touch). '
           + 'With the pivot locked you can still pan freely — rotation just keeps spinning around the plan centre.')}
+        ${check('Zoom toward the pointer', sc.zoomToCursor === true,
+          v => { if (v) p.store.scene3d!.zoomToCursor = true;
+                 else delete p.store.scene3d!.zoomToCursor; },
+          'Scroll-wheel zoom moves the camera toward whatever is under the pointer, and the orbit '
+          + 'pivot follows it. Off (the default), zoom always heads straight at the plan centre, so '
+          + 'on a large plot the far end of the property gets closer and closer to impossible to '
+          + 'zoom into — each wheel tick moves less and less while the subject stays put. With the '
+          + 'pivot locked you can still never orbit around a point off the plan: the pivot is simply '
+          + 'free to be anywhere ON it instead of pinned to the middle.')}
         ${check('Allow orbiting below the horizon', !!sc.belowHorizon,
           v => { p.store.scene3d!.belowHorizon = v; },
           'Let the camera drop below the horizon and look up at the floor from underneath')}

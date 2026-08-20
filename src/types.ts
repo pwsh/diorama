@@ -1189,6 +1189,20 @@ export interface Scene3D {
   freeMovement?: boolean;    // allow panning the 3D view (side to side / forward and back).
                              // ABSENT = false. Independent of `pivotLocked` — see the matrix in
                              // `resolvePivotMode` (geometry.ts) and `setCameraPivot`.
+  zoomToCursor?: boolean;    // 3D wheel-zoom dollies toward the POINTER instead of straight at the orbit
+                             // pivot, carrying `controls.target` with it. ABSENT = false = today's
+                             // behaviour exactly. OrbitControls' dolly step is multiplicative in the
+                             // distance to the TARGET, so with the pivot welded to the plan centre the
+                             // per-tick travel collapses (measured 2250 mm/tick at radius 45 000 →
+                             // 109 mm at 2182) while anything away from the centre never gets closer
+                             // than its own distance from it — on a 32 x 52 m plot a rear-yard subject
+                             // bottoms out ~19.8 m away and its apparent size grows only 0.9 %/tick.
+                             // With this on, the pivot follows what you point at, so the zoom rate
+                             // stays constant on the subject. Under `pivotLocked` (and NOT
+                             // `freeMovement`) the lock relaxes from a POINT weld to a PLAN-RECT
+                             // containment — `_updateCameraPivot` eases the target back only when it
+                             // leaves the floor rect — so "the pivot can never drift off the plan"
+                             // still holds. See `setCameraPivot`.
   fovV?: number;             // vertical field-of-view in degrees; default 50 (the constructor's value)
   fovH?: number;             // horizontal field-of-view in degrees; absent = auto (derive from the canvas
                              // aspect, today's behavior). When set, the frustum is fixed and independent of

@@ -165,6 +165,10 @@ const _THP_UP = new THREE.Vector3(0, 1, 0);
 const _THP_X = new THREE.Vector3(1, 0, 0);
 // Reused scratch for the locked-pivot rigid rotation (`_applyPivotRotate`) —
 // zero allocation per pointermove.
+// Cursor-zoom scratch (see `_installCursorZoom`) — zero per-wheel allocation.
+const _czDir = new THREE.Vector3();
+const _czQ = new THREE.Vector3();
+const _czOff = new THREE.Vector3();
 const _pvtP = new THREE.Vector3();
 const _pvtV = new THREE.Vector3();
 const _pvtAxis = new THREE.Vector3();
@@ -2390,6 +2394,15 @@ export class ThreeDRenderer {
   private _pivotZ = 0;
   private _appliedPivotLocked: boolean | null = null;
   private _appliedPivotFree: boolean | null = null;
+  // Half-extents of the PLAN RECT about (_pivotX, _pivotZ), in scene coords.
+  // Only consulted when `_zoomToCursor` is on — that is the mode where the lock
+  // relaxes from a point weld to a containment (see `_updateCameraPivot`).
+  // 0 = unknown (a stale/4-arg caller) ⇒ the containment is skipped and the
+  // classic weld stands, so an old call site can never silently loosen the lock.
+  private _pivotHalfW = 0;
+  private _pivotHalfD = 0;
+  private _zoomToCursor = false;
+  private _appliedZoomToCursor: boolean | null = null;
   // Custom locked+free rotate gesture state (see `_installPivotRotate`).
   // `_pivotPointers` tracks every pointer down on the canvas so a second finger
   // can abandon the gesture to OrbitControls' 2-finger dolly/pan.
@@ -3449,6 +3462,8 @@ export class ThreeDRenderer {
     // Registered BEFORE the tap gate purely for readability — the two are
     // independent (the tap gate discards anything past its movement slop).
     this._installPivotRotate(dom);
+    // Pointer-ray wheel zoom (inert unless Scene3D.zoomToCursor).
+    this._installCursorZoom(dom);
     // `lastTapT` MUST start at -Infinity, never 0. `e.timeStamp` is measured
     // from the document's time origin, so with a 0 seed the dblclick test
     // `now - lastTapT < 350` is TRUE for the page's whole first 350 ms — the
@@ -4450,9 +4465,38 @@ export class ThreeDRenderer {
   // their own target; under locked-and-not-free the enforcement then eases that
   // target's x/z home — accepted and consistent with the mode (the presets
   // already frame the floor centre, so in practice it is a no-op).
-  setCameraPivot(locked: boolean, free: boolean, centerX: number, centerZ: number): void {
+  //
+  // `opts` is TRAILING and OPTIONAL (stale-caller / stale-chunk safe — omitting
+  // it reproduces today's behaviour byte for byte):
+  //   halfW/halfD  — the plan rect's half-extents about (centerX, centerZ) in
+  //                  scene coords. Consulted ONLY under zoomToCursor.
+  //   zoomToCursor — Scene3D.zoomToCursor. Turns on OrbitControls' pointer-ray
+  //                  dolly (which carries `target` with it) AND relaxes the
+  //                  locked-pivot enforcement from a point weld to a plan-rect
+  //                  containment. The two MUST travel together: the dolly moves
+  //                  the target and the weld would drag it — and the camera with
+  //                  it — straight back, so enabling one without the other is a
+  //                  rubber band, not a feature.
+  setCameraPivot(locked: boolean, free: boolean, centerX: number, centerZ: number,
+                 opts?: { halfW?: number; halfD?: number; zoomToCursor?: boolean }): void {
     this._pivotX = isFinite(centerX) ? centerX : 0;
     this._pivotZ = isFinite(centerZ) ? centerZ : 0;
+    // Plan half-extents ride WITH the centre (they move with the floor rect /
+    // glass-house union), so they refresh unconditionally and are never guarded.
+    const hw = opts?.halfW, hd = opts?.halfD;
+    this._pivotHalfW = hw != null && isFinite(hw) && hw > 0 ? hw : 0;
+    this._pivotHalfD = hd != null && isFinite(hd) && hd > 0 ? hd : 0;
+    // Zoom-to-cursor is independent of the locked/free pair, so it is applied
+    // BEFORE their early-return — and self-guarded like setFov/setBelowHorizon
+    // so a per-tick call only touches the controls on a real change.
+    // NB this drives OUR OWN wheel handler (`_installCursorZoom`), NOT
+    // OrbitControls' `zoomToCursor`. That built-in was measured and REJECTED —
+    // see `_applyCursorZoom` for the numbers and the reason.
+    const zc = opts?.zoomToCursor === true;
+    if (zc !== this._appliedZoomToCursor) {
+      this._appliedZoomToCursor = zc;
+      this._zoomToCursor = zc;
+    }
     if (locked === this._appliedPivotLocked && free === this._appliedPivotFree) return;
     this._appliedPivotLocked = locked;
     this._appliedPivotFree = free;
@@ -28440,6 +28484,144 @@ export class ThreeDRenderer {
     dom.addEventListener('pointercancel', up);
   }
 
+  // ── Pointer-ray wheel zoom (Scene3D.zoomToCursor; absent = OFF = today) ────
+  //
+  // WHY THIS EXISTS (all figures measured on the reporting user's plan — a
+  // single 32 m x 52.2 m rect with the house at plan y 13 000..31 700):
+  // OrbitControls' dolly is multiplicative in the distance to `controls.target`
+  // — one wheel tick moves EXACTLY 0.05 x radius (measured constant to 5 dp
+  // across 60 ticks) — and the locked pivot welds that target to the plan
+  // centre. So the camera always converges on one point, and for anything else
+  // the per-tick apparent-size gain DECAYS to nothing: a rear-yard subject grew
+  // 3.68 %/tick at radius 45 000, 2.35 % at 16 132 and 0.93 % at 4 475, while a
+  // subject in front of the pivot held 7.2–8.4 %/tick. That 8x asymmetry is the
+  // "front zooms quickly, rear zooms slowly" report, and it is also why the far
+  // end never arrives: the camera bottomed out 19.8 m from the rear yard.
+  //
+  // OrbitControls' OWN `zoomToCursor` was implemented, measured and REJECTED:
+  // it dollies along the pointer ray but still shrinks the radius toward
+  // `minDistance`, so the TOTAL travel a gesture can ever spend is
+  // `radius − minDistance` ≈ 44 m — less than this plot is deep. Measured, it
+  // made the rear yard strictly WORSE (best approach 20.8 m → 28.0 m, tick-45
+  // growth 0.93 % → 0.37 %) because it spends that fixed budget on a ray that
+  // only asymptotically aligns with the subject.
+  //
+  // The fix is to stop measuring the step against the pivot at all and measure
+  // it against WHAT IS UNDER THE POINTER. The step is then a fraction of a real
+  // scene distance, so the rate is scale-free (a constant 5.26 %/tick on the
+  // thing you are pointing at, forever) and the budget renews every time you
+  // point somewhere further away — the camera can cross the whole property.
+  //
+  // "What is under the pointer" is the FLOOR SLAB PLANE (scene y = 0), not a
+  // geometry raycast: a floor plan is flat, everything of interest stands on
+  // it, and a plane intersection is exact, allocation-free and cannot be
+  // confused by a wall or a sky dome between the pointer and the ground.
+  // Pointing at the sky (ray not descending) falls back to the current target,
+  // which is EXACTLY today's plain dolly.
+  //
+  // The hit point is CLAMPED INTO THE PLAN RECT, which is what keeps the
+  // locked-pivot promise: the target is a convex blend of two in-rect points,
+  // so it can never leave the plan. `_updateCameraPivot`'s containment is the
+  // backstop for every other path (presets, `cam=` templates, floor switches).
+  //
+  // Registered in the CAPTURE phase on `window` so it strictly precedes
+  // OrbitControls' own `wheel` listener on the canvas, which it then swallows
+  // with `stopPropagation`. That listener is also what dispatches OC's
+  // 'start'/'end' for a wheel, so the two things those drive — the auto-follow
+  // pause + `cameraGestures()` (the boot-pose "user posed it by hand" latch)
+  // and the Sims-cam 45° azimuth snap — are reproduced here explicitly.
+  // TOUCH PINCH deliberately still goes through OrbitControls unchanged (a
+  // two-finger gesture already has its own natural centre).
+  private _installCursorZoom(dom: HTMLElement): void {
+    window.addEventListener('wheel', (e: WheelEvent) => {
+      if (!this._zoomToCursor) return;
+      if (e.target !== dom) return;
+      const ctrl = this._controls, cam = this._camera;
+      if (!ctrl || !cam || ctrl.enabled === false || ctrl.enableZoom === false) return;
+      e.preventDefault();
+      e.stopPropagation();          // OrbitControls' own wheel must not also fire
+      // Mirror OC's wheel 'start'/'end' side effects (see the note above).
+      this._followPauseUntil = performance.now() / 1000 + 6;
+      this._camGestures++;
+      this._applyCursorZoom(e.clientX, e.clientY, e.deltaY);
+      if (this._simsCam) {
+        const t = ctrl.target;
+        const az = Math.atan2(cam.position.x - t.x, cam.position.z - t.z);
+        const step = Math.PI / 4;
+        this._snapAzimuth = Math.round(az / step) * step;
+      }
+    }, { capture: true, passive: false });
+  }
+
+  // One wheel tick of pointer-ray zoom. Zero allocation (module `_cz*` scratch).
+  // Split out from the listener so tests can drive it directly.
+  private _applyCursorZoom(clientX: number, clientY: number, deltaY: number): void {
+    const cam = this._camera, ctrl = this._controls, ren = this._renderer;
+    if (!cam || !ctrl || !ren || !deltaY) return;
+    const rect = ren.domElement.getBoundingClientRect();
+    const rw = rect.width || ren.domElement.clientWidth;
+    const rh = rect.height || ren.domElement.clientHeight;
+    if (!rw || !rh) return;
+    // Pointer ray. `unproject` needs an up-to-date camera matrix; the render
+    // loop owns that, but a wheel can land between renders (the same stale-
+    // matrix hazard `_syncPickMatrices` exists for), so refresh it here.
+    cam.updateMatrixWorld();
+    const zoomIn = deltaY < 0;
+    let onGround = false;
+    // Zooming OUT is a plain reverse dolly straight back along the view axis —
+    // exactly today's behaviour, and the only sane reading: pulling the pivot
+    // AWAY from what you just pointed at is not what anyone means by zooming
+    // out, and following the pointer ray outward would drift the view sideways.
+    if (zoomIn) {
+      const ndcX = ((clientX - rect.left) / rw) * 2 - 1;
+      const ndcY = -((clientY - rect.top) / rh) * 2 + 1;
+      _czDir.set(ndcX, ndcY, 0.5).unproject(cam).sub(cam.position).normalize();
+      // Where the ray meets the floor slab plane (scene y = 0).
+      if (_czDir.y < -1e-6) {
+        const t = -cam.position.y / _czDir.y;
+        if (t > 0 && isFinite(t)) { _czQ.copy(cam.position).addScaledVector(_czDir, t); onGround = true; }
+      }
+    }
+    if (!onGround) _czQ.copy(ctrl.target);       // sky / zoom-out ⇒ plain dolly
+    else if (this._pivotLocked && !this._pivotFree
+             && this._pivotHalfW > 0 && this._pivotHalfD > 0) {
+      // Containment: the pivot may move anywhere ON the plan, never off it.
+      // Gated on EXACTLY the mode `_updateCameraPivot` enforces, because this
+      // clamp IS that lock — under free movement the user is deliberately
+      // allowed off the plan (e.g. out among the neighborhood buildings), and
+      // dragging their zoom target back onto the rect would fight the pan.
+      _czQ.x = Math.min(this._pivotX + this._pivotHalfW,
+                        Math.max(this._pivotX - this._pivotHalfW, _czQ.x));
+      _czQ.z = Math.min(this._pivotZ + this._pivotHalfD,
+                        Math.max(this._pivotZ - this._pivotHalfD, _czQ.z));
+    }
+    // OrbitControls' own zoom curve, so the feel per notch is unchanged.
+    // deltaY < 0 ⇒ scale < 1 ⇒ frac > 0 ⇒ toward Q; deltaY > 0 ⇒ frac < 0 ⇒ back.
+    const scale = Math.pow(0.95, ctrl.zoomSpeed * Math.abs(deltaY * 0.01) * (zoomIn ? 1 : -1));
+    const L = cam.position.distanceTo(_czQ);
+    if (!(L > 1e-6)) return;
+    // Fraction of the way to the pointed-at point this notch covers. Camera AND
+    // target each move `frac` of the way there, so the camera→target offset
+    // scales by exactly `scale` — a cursor sitting ON the target reduces to
+    // today's plain dolly bit for bit, and on zoom-out Q IS the target, so the
+    // pivot provably cannot move.
+    const frac = 1 - scale;
+    _czDir.copy(_czQ).sub(cam.position).divideScalar(L);
+    cam.position.addScaledVector(_czDir, L * frac);
+    ctrl.target.x += (_czQ.x - ctrl.target.x) * frac;
+    ctrl.target.y += (_czQ.y - ctrl.target.y) * frac;
+    ctrl.target.z += (_czQ.z - ctrl.target.z) * frac;
+    // Keep the camera→target distance inside OrbitControls' own limits, or its
+    // next update() would clamp it and undo part of this in a visible jump.
+    _czOff.copy(cam.position).sub(ctrl.target);
+    const rad = _czOff.length();
+    if (rad > 1e-6) {
+      const want = Math.min(ctrl.maxDistance, Math.max(ctrl.minDistance, rad));
+      if (want !== rad) cam.position.copy(ctrl.target).addScaledVector(_czOff, want / rad);
+    }
+    ctrl.update();
+  }
+
   private _endPivotRotate(): void {
     if (this._pivotRotId == null) return;
     this._pivotRotId = null;
@@ -28470,7 +28652,24 @@ export class ThreeDRenderer {
     if (this._autoFollow || this._cinematicOrbit) return;
     const cam = this._camera, ctrl = this._controls;
     if (!cam || !ctrl) return;
-    const ex = this._pivotX - ctrl.target.x, ez = this._pivotZ - ctrl.target.z;
+    // WHERE the target is allowed to rest. Classic (default): the pivot POINT —
+    // a weld. With zoom-to-cursor on, the wheel deliberately drives the pivot at
+    // whatever is under the pointer (that is the entire point of the option), so
+    // welding it back would rubber-band the view home after every scroll — the
+    // ease translates the CAMERA by the same delta, so it would undo the zoom's
+    // recentring outright. The lock therefore relaxes from a POINT to the PLAN
+    // RECT: inside the floor's own footprint the target is left completely
+    // alone; outside it is eased back to the nearest in-bounds point by the
+    // identical mechanism. The documented guarantee — the orbit pivot can never
+    // drift OFF the plan — is what actually holds either way.
+    let gx = this._pivotX, gz = this._pivotZ;
+    if (this._zoomToCursor && this._pivotHalfW > 0 && this._pivotHalfD > 0) {
+      const loX = this._pivotX - this._pivotHalfW, hiX = this._pivotX + this._pivotHalfW;
+      const loZ = this._pivotZ - this._pivotHalfD, hiZ = this._pivotZ + this._pivotHalfD;
+      gx = Math.min(hiX, Math.max(loX, ctrl.target.x));
+      gz = Math.min(hiZ, Math.max(loZ, ctrl.target.z));
+    }
+    const ex = gx - ctrl.target.x, ez = gz - ctrl.target.z;
     if (Math.abs(ex) < 1 && Math.abs(ez) < 1) {
       if (ex !== 0 || ez !== 0) {             // snap-stop the last sub-mm
         ctrl.target.x += ex; ctrl.target.z += ez;

@@ -1211,8 +1211,17 @@ export class ThreeView extends LitElement {
         ? floorsUnionCenter(p.enabledFloors())
         : { x: f.w / 2, y: f.d / 2 };
       const pv = resolvePivotMode(sc3o);
+      // `pivotWorld` doubles as the plan rect's HALF-EXTENTS in both branches,
+      // which is exact rather than a coincidence: the non-glass case is the
+      // active floor's own centre (w/2, d/2) of the rect 0..w x 0..d, and
+      // `floorsUnionCenter` returns (max(w)/2, max(d)/2) — the centre of the
+      // union rect 0..max(w) x 0..max(d). Centre and half-extent are the same
+      // number for any rect anchored at the origin. Consumed only by the
+      // zoom-to-cursor containment (see `setCameraPivot`).
       r.setCameraPivot(pv.locked, pv.free,
-                       f.w / 2 - pivotWorld.x, pivotWorld.y - f.d / 2);
+                       f.w / 2 - pivotWorld.x, pivotWorld.y - f.d / 2,
+                       { halfW: pivotWorld.x, halfD: pivotWorld.y,
+                         zoomToCursor: sc3o?.zoomToCursor === true });
 
       // Floor / walls / furniture / bg: structural + effective lighting
       // preset (auto modes flip it as the sun/lux sensor moves) + per-floor

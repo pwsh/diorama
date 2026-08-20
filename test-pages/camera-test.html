@@ -436,6 +436,220 @@
      bigD > CTOR_DIST * 3, `iso=${bigD.toFixed(0)} ctor=${CTOR_DIST.toFixed(0)}`);
   r.updateFloor(floor, { preset: 'day', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' });
 
+  // ── 15. pointer-ray wheel zoom (Scene3D.zoomToCursor) ─────────────────────
+  // The reporting user's geometry: a big plot where the pivot is nowhere near
+  // what you want to look at. OrbitControls' dolly step is proportional to the
+  // distance to `controls.target`, so with the pivot welded to the plan centre
+  // the apparent size of anything else stops growing (measured: a rear-yard
+  // subject went 3.68 %/tick → 0.93 %/tick and bottomed out 19.8 m away). The
+  // option makes the step a fraction of the distance to WHAT IS UNDER THE
+  // POINTER instead, which is scale-free.
+  const bigW = 32000, bigD2 = 52200;
+  const bigPlot = { ...floor, w: bigW, d: bigD2 };
+  r.updateFloor(bigPlot, { preset: 'day', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' });
+  const HALF = { halfW: bigW / 2, halfD: bigD2 / 2 };
+  const wpt = (wx, wy) => ({ x: bigW / 2 - wx, y: 0, z: wy - bigD2 / 2 });
+  const dist3 = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+  const cdom = r._renderer.domElement;
+  // Project a world point to client px through the SAME basis the camera uses.
+  // right = cross(forward, worldUp) — getting that handedness backwards mirrors
+  // the vertical axis and silently aims every "click" at the opposite end of
+  // the plot, which is exactly how this was first mis-measured.
+  const toClient = (pt) => {
+    const P = cam.position, T = ctrl.target;
+    const f = { x: T.x - P.x, y: T.y - P.y, z: T.z - P.z };
+    const fl = Math.hypot(f.x, f.y, f.z); f.x /= fl; f.y /= fl; f.z /= fl;
+    const rt = { x: -f.z, y: 0, z: f.x };
+    const rl = Math.hypot(rt.x, rt.y, rt.z) || 1; rt.x /= rl; rt.y /= rl; rt.z /= rl;
+    const up = { x: rt.y * f.z - rt.z * f.y, y: rt.z * f.x - rt.x * f.z, z: rt.x * f.y - rt.y * f.x };
+    const v = { x: pt.x - P.x, y: pt.y - P.y, z: pt.z - P.z };
+    const zz = v.x * f.x + v.y * f.y + v.z * f.z;
+    const tn = Math.tan(cam.fov / 2 * D2R);
+    const nx = (v.x * rt.x + v.y * rt.y + v.z * rt.z) / zz / (tn * cam.aspect);
+    const ny = (v.x * up.x + v.y * up.y + v.z * up.z) / zz / tn;
+    const rect = cdom.getBoundingClientRect();
+    return { x: rect.left + (Math.max(-1, Math.min(1, nx)) + 1) / 2 * rect.width,
+             y: rect.top + (1 - Math.max(-1, Math.min(1, ny))) / 2 * rect.height,
+             nx, ny, front: zz > 0 };
+  };
+  // Self-check the harness projection before trusting anything it measures.
+  r.setCameraPivot(true, false, 0, 0, HALF);
+  r.applyViewPreset('front'); ctrl.update();
+  {
+    const nt = toClient({ x: ctrl.target.x, y: ctrl.target.y, z: ctrl.target.z });
+    const nRear = toClient(wpt(16000, 45000)), nFront = toClient(wpt(16000, 1500));
+    ok('15a harness: the target projects to the screen centre',
+       Math.abs(nt.nx) < 1e-9 && Math.abs(nt.ny) < 1e-9, `(${nt.nx.toFixed(4)},${nt.ny.toFixed(4)})`);
+    ok('15a harness: looking down from the front, the FAR end is above centre and the NEAR end below',
+       nRear.ny > 0 && nFront.ny < 0, `rear=${nRear.ny.toFixed(3)} front=${nFront.ny.toFixed(3)}`);
+  }
+  const wheelAt = (pt, dy) => {
+    const c = toClient(pt);
+    cdom.dispatchEvent(new WheelEvent('wheel', { deltaY: dy, clientX: c.x, clientY: c.y,
+                                                 bubbles: true, cancelable: true }));
+  };
+  // Drive 40 notches with the pointer held on `pt`; report the distance ratio.
+  const zoomRun = (pt, zc, n = 40) => {
+    r.setCameraPivot(true, false, 0, 0, { ...HALF, zoomToCursor: zc });
+    r.applyViewPreset('front');
+    for (let i = 0; i < 80; i++) { r._updateCameraPivot(1 / 60); ctrl.update(); }
+    const d0 = dist3(cam.position, pt);
+    const rates = [];
+    for (let i = 0; i < n; i++) {
+      const a = dist3(cam.position, pt);
+      wheelAt(pt, -100);
+      for (let k = 0; k < 12; k++) { r._updateCameraPivot(1 / 60); ctrl.update(); }
+      rates.push(dist3(cam.position, pt) / a);
+    }
+    return { mag: d0 / dist3(cam.position, pt), rates,
+             tgt: { x: ctrl.target.x, z: ctrl.target.z } };
+  };
+  const REAR = wpt(16000, 45000), CENTRE = wpt(16000, 26100);
+
+  // 15b. OFF is exactly today: a rear subject's zoom decays, a centred one does not.
+  const offRear = zoomRun(REAR, false), offMid = zoomRun(CENTRE, false);
+  ok('15b OFF: a subject at the pivot magnifies far more than one at the rear',
+     offMid.mag > offRear.mag * 3, `mid=${offMid.mag.toFixed(2)}x rear=${offRear.mag.toFixed(2)}x`);
+  ok('15b OFF: the rear subject\u2019s per-notch growth DECAYS (the reported symptom)',
+     (1 - offRear.rates[35]) < (1 - offRear.rates[0]) * 0.6,
+     `first=${((1 - offRear.rates[0]) * 100).toFixed(2)}% last=${((1 - offRear.rates[35]) * 100).toFixed(2)}%`);
+  ok('15b OFF: the pivot never moves', Math.hypot(offRear.tgt.x, offRear.tgt.z) < 1,
+     `t=(${offRear.tgt.x.toFixed(2)},${offRear.tgt.z.toFixed(2)})`);
+
+  // 15c. ON: the step is a constant fraction of the distance to the POINTED-AT
+  // point, for every subject — that constancy IS the fix.
+  const onRear = zoomRun(REAR, true), onMid = zoomRun(CENTRE, true);
+  ok('15c ON: a rear subject magnifies as much as a centred one',
+     Math.abs(onRear.mag / onMid.mag - 1) < 0.05,
+     `rear=${onRear.mag.toFixed(2)}x mid=${onMid.mag.toFixed(2)}x`);
+  ok('15c ON: the rear subject beats its own OFF magnification by a wide margin',
+     onRear.mag > offRear.mag * 3, `${offRear.mag.toFixed(2)}x → ${onRear.mag.toFixed(2)}x`);
+  {
+    const lo = Math.min(...onRear.rates), hi = Math.max(...onRear.rates);
+    ok('15c ON: the per-notch rate is constant across the whole run (no decay)',
+       hi - lo < 0.004, `ratio ${lo.toFixed(4)}..${hi.toFixed(4)}`);
+  }
+  ok('15c ON: the pivot actually travelled toward the rear subject',
+     Math.abs(onRear.tgt.z - REAR.z) < Math.abs(REAR.z) * 0.25,
+     `tgt.z=${onRear.tgt.z.toFixed(0)} subject.z=${REAR.z.toFixed(0)}`);
+
+  // 15d. CONTAINMENT — the whole reason this can ship under a LOCKED pivot.
+  ok('15d ON: the zoom-driven pivot stays inside the plan rect',
+     Math.abs(onRear.tgt.x) <= bigW / 2 + 1 && Math.abs(onRear.tgt.z) <= bigD2 / 2 + 1,
+     `t=(${onRear.tgt.x.toFixed(0)},${onRear.tgt.z.toFixed(0)}) half=(${bigW / 2},${bigD2 / 2})`);
+  // Aim well past the property: the pivot must stop at the boundary.
+  r.setCameraPivot(true, false, 0, 0, { ...HALF, zoomToCursor: true });
+  r.applyViewPreset('front');
+  for (let i = 0; i < 80; i++) { r._updateCameraPivot(1 / 60); ctrl.update(); }
+  for (let i = 0; i < 60; i++) {
+    wheelAt(wpt(16000, bigD2 + 40000), -100);   // 40 m beyond the rear boundary
+    for (let k = 0; k < 12; k++) { r._updateCameraPivot(1 / 60); ctrl.update(); }
+  }
+  ok('15d ON: aiming far beyond the plot still leaves the pivot on the plan',
+     Math.abs(ctrl.target.x) <= bigW / 2 + 1 && Math.abs(ctrl.target.z) <= bigD2 / 2 + 1,
+     `t=(${ctrl.target.x.toFixed(0)},${ctrl.target.z.toFixed(0)})`);
+  // A drifted target is contained to the RECT (not welded to the centre) when on…
+  r.setCameraPivot(true, false, 0, 0, { ...HALF, zoomToCursor: true });
+  ctrl.target.set(3000, 600, 18900);
+  const camBefore = cam.position.clone();
+  advance(400);
+  ok('15d ON: a target already INSIDE the plan is left completely alone',
+     near(ctrl.target.x, 3000, 1e-9) && near(ctrl.target.z, 18900, 1e-9),
+     `t=(${ctrl.target.x.toFixed(3)},${ctrl.target.z.toFixed(3)})`);
+  ok('15d ON: and the camera is not translated either',
+     cam.position.distanceTo(camBefore) < 1e-9, `d=${cam.position.distanceTo(camBefore).toExponential(1)}`);
+  ctrl.target.set(bigW / 2 + 9000, 600, bigD2 / 2 + 9000);
+  advance(600);
+  ok('15d ON: a target OUTSIDE the plan is eased back to the rect corner',
+     near(ctrl.target.x, bigW / 2, 1) && near(ctrl.target.z, bigD2 / 2, 1),
+     `t=(${ctrl.target.x.toFixed(1)},${ctrl.target.z.toFixed(1)})`);
+  // …and welded to the CENTRE when off — the default is untouched.
+  r.setCameraPivot(true, false, 0, 0, { ...HALF, zoomToCursor: false });
+  ctrl.target.set(3000, 600, 18900);
+  advance(600);
+  ok('15d OFF: the identical in-plan target is still welded to the plan centre',
+     Math.abs(ctrl.target.x) < 1 && Math.abs(ctrl.target.z) < 1,
+     `t=(${ctrl.target.x.toFixed(3)},${ctrl.target.z.toFixed(3)})`);
+
+  // 15e. the option must be inert unless asked for — including for stale callers
+  r.setCameraPivot(true, false, 0, 0, HALF);          // opts WITHOUT zoomToCursor
+  {
+    const t0 = { x: ctrl.target.x, z: ctrl.target.z };
+    r.applyViewPreset('front');
+    for (let i = 0; i < 80; i++) { r._updateCameraPivot(1 / 60); ctrl.update(); }
+    for (let i = 0; i < 20; i++) { wheelAt(REAR, -100);
+      for (let k = 0; k < 12; k++) { r._updateCameraPivot(1 / 60); ctrl.update(); } }
+    ok('15e opts without the flag → the pivot still never moves',
+       Math.hypot(ctrl.target.x, ctrl.target.z) < 1,
+       `t=(${ctrl.target.x.toFixed(2)},${ctrl.target.z.toFixed(2)})`);
+    void t0;
+  }
+  r.setCameraPivot(true, false, 0, 0);                // 4-arg stale caller
+  r.applyViewPreset('front');
+  for (let i = 0; i < 80; i++) { r._updateCameraPivot(1 / 60); ctrl.update(); }
+  for (let i = 0; i < 20; i++) { wheelAt(REAR, -100);
+    for (let k = 0; k < 12; k++) { r._updateCameraPivot(1 / 60); ctrl.update(); } }
+  ok('15e a 4-arg (stale-chunk) caller gets today\u2019s behaviour exactly',
+     Math.hypot(ctrl.target.x, ctrl.target.z) < 1,
+     `t=(${ctrl.target.x.toFixed(2)},${ctrl.target.z.toFixed(2)})`);
+
+  // 15f. free movement must NOT be clamped onto the plan — there the user is
+  // deliberately allowed to leave it, so the lock's containment does not apply.
+  r.setCameraPivot(true, true, 0, 0, { ...HALF, zoomToCursor: true });
+  r.applyViewPreset('front');
+  for (let i = 0; i < 80; i++) { r._updateCameraPivot(1 / 60); ctrl.update(); }
+  for (let i = 0; i < 50; i++) {
+    wheelAt(wpt(16000, bigD2 + 40000), -100);
+    for (let k = 0; k < 12; k++) { r._updateCameraPivot(1 / 60); ctrl.update(); }
+  }
+  ok('15f free movement: the zoom pivot is allowed off the plan',
+     Math.abs(ctrl.target.z) > bigD2 / 2, `t.z=${ctrl.target.z.toFixed(0)} half=${bigD2 / 2}`);
+
+  // 15g. a wheel still counts as a hand-posed camera gesture (the boot-pose
+  // latch in view-persist depends on this) and still pauses auto-follow.
+  r.setCameraPivot(true, false, 0, 0, { ...HALF, zoomToCursor: true });
+  {
+    const g = r.cameraGestures();
+    wheelAt(REAR, -100);
+    ok('15g ON: a wheel notch counts as a camera gesture',
+       r.cameraGestures() === g + 1, `${g} → ${r.cameraGestures()}`);
+  }
+  // 15h. zooming OUT is a plain reverse dolly — it must not drag the pivot.
+  r.setCameraPivot(true, false, 0, 0, { ...HALF, zoomToCursor: true });
+  r.applyViewPreset('front');
+  for (let i = 0; i < 80; i++) { r._updateCameraPivot(1 / 60); ctrl.update(); }
+  {
+    const before = { x: ctrl.target.x, z: ctrl.target.z };
+    for (let i = 0; i < 10; i++) { wheelAt(REAR, +100);
+      for (let k = 0; k < 12; k++) { r._updateCameraPivot(1 / 60); ctrl.update(); } }
+    ok('15h ON: zooming OUT leaves the pivot where it was',
+       near(ctrl.target.x, before.x, 1) && near(ctrl.target.z, before.z, 1),
+       `(${before.x.toFixed(1)},${before.z.toFixed(1)}) → (${ctrl.target.x.toFixed(1)},${ctrl.target.z.toFixed(1)})`);
+  }
+  // …and it must actually zoom OUT. Checking only the pivot would pass even if
+  // the notch moved the camera TOWARD the pointer (it did, before this pin).
+  r.setCameraPivot(true, false, 0, 0, { ...HALF, zoomToCursor: true });
+  r.applyViewPreset('front');
+  for (let i = 0; i < 80; i++) { r._updateCameraPivot(1 / 60); ctrl.update(); }
+  {
+    const radOf = () => Math.hypot(cam.position.x - ctrl.target.x,
+                                   cam.position.y - ctrl.target.y,
+                                   cam.position.z - ctrl.target.z);
+    for (let i = 0; i < 15; i++) { wheelAt(REAR, -100);
+      for (let k = 0; k < 12; k++) { r._updateCameraPivot(1 / 60); ctrl.update(); } }
+    const rIn = radOf();
+    const dOut = dist3(cam.position, REAR);
+    wheelAt(REAR, +100);
+    for (let k = 0; k < 12; k++) { r._updateCameraPivot(1 / 60); ctrl.update(); }
+    ok('15h ON: one OUT notch grows the orbit radius by OrbitControls\u2019 own 1/0.95',
+       Math.abs(radOf() / rIn - 1 / 0.95) < 0.005, `${rIn.toFixed(0)} → ${radOf().toFixed(0)} (${(radOf() / rIn).toFixed(4)})`);
+    ok('15h ON: an OUT notch moves the camera AWAY from the pointed-at point',
+       dist3(cam.position, REAR) > dOut,
+       `${dOut.toFixed(0)} → ${dist3(cam.position, REAR).toFixed(0)}`);
+  }
+  r.setCameraPivot(true, false, 0, 0);
+  r.updateFloor(floor, { preset: 'day', floorColor: '#8a7860', floorTex: 'wood', wallColor: '#cfd2d6' });
+
   // ── report ────────────────────────────────────────────────────────────────
   const pass = tests.filter(t => t.ok).length, total = tests.length;
   const allPass = pass === total;
