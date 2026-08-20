@@ -396,6 +396,16 @@ export class App extends LitElement {
               <!-- Compass overlay: same shared-canvas mount as the chip (one
                    instance covers 2D + 3D); hidden unless compass.show. -->
               <diorama-compass .planner=${p}></diorama-compass>
+              <!-- Presence-history RECORDING indicator (design §F). Persistent,
+                   present in ALL UI modes, and mounted here (the weather-chip
+                   idiom) so one instance covers 2D and 3D. Deliberately not a
+                   setting: a recording indicator you can switch off is not an
+                   indicator. Controls live in Settings ▸ Integrations. -->
+              ${p.presenceRecording ? html`
+                <div class="rec-chip" role="status" aria-live="polite"
+                     title="Presence history is being recorded to this device (mmWave dwell per 200 mm cell). Manage or delete it in Settings ▸ Integrations ▸ Presence history.">
+                  <span class="rec-dot"></span>Recording presence
+                </div>` : nothing}
               <!-- Data attribution (compliance, NOT configurable): shown in ALL
                    UI modes whenever a third-party data feed is enabled AND its
                    data is resolved AND its LAYER is visible. Still not a user

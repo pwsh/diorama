@@ -54,6 +54,8 @@ import { ALERT_BEACON_DEFAULTS, alertBeaconState, alertBeaconColor, alertBeaconA
 import { flagDominant } from './flags.js';
 import { vehicleRecipe } from './vehicles.js';
 import { vacMapAffine, vacSegColor, type ParsedVacMap, type VacSegment } from './valetudo-map.js';
+// mmWave presence-history ramp + normalization + grid constant (pure, zero-import).
+import { PRESENCE_CELL_MM, presenceHeatColor, presenceNormalize } from './mmwave-history.js';
 import {
   flightDisplayPos, flightShellMm, sanitizeLabelFields,
   resolveFlightGlow, flightGlowFrame, lerpHexColor, FLIGHT_DEFAULT_BEACON,
@@ -424,6 +426,10 @@ export function drawAll(ctx: CanvasRenderingContext2D, p: Planner, view: View,
   // wall-loop fills + a temp label, drawn as floor paint after ground / before
   // structural. The RAF reads live states so it tracks temperature changes.
   if (L.heatmap === true) drawHeatmap(ctx, p, view);
+  // mmWave presence history — DEFAULT OFF, and only ever populated if the user
+  // also opted IN to recording (design §F defence in depth). Ground paint, so it
+  // draws before the structural pass.
+  if (L.presenceHistory === true) drawPresenceHeat(ctx, p, view);
   // Peek floors — onion-skin reference underlay: other floors flagged `peek2d`
   // (and not disabled) draw their wall outlines as thin ghost strokes, BEFORE
   // the active floor's walls. A display state (like disabled) — all UI modes,
@@ -3588,6 +3594,62 @@ function _vacSegTint(robotId: string, rev: number, seg: VacSegment, segIdx: numb
   }
   _vacTintCache.set(key, cv);
   return cv;
+}
+
+// ── mmWave presence-history heat overlay (design §E) ──────────────────────
+// The VACUUM-MAP idiom, not the room-temperature one: bake ONE raster canvas per
+// data revision, then compose it with ONE setTransform + ONE drawImage. The temp
+// heatmap's per-room polygon fill is right for one number per room and useless
+// for a ~200 mm grid — you cannot draw thousands of coloured polygons a frame,
+// and it would throw away exactly the sub-room detail this feature exists to show.
+let _presTintCache: { key: string; canvas: HTMLCanvasElement } | null = null;
+
+function _presenceRaster(
+  key: string, cols: number, rows: number, max: number, cells: Map<number, number>,
+): HTMLCanvasElement {
+  if (_presTintCache && _presTintCache.key === key) return _presTintCache.canvas;
+  const cv = document.createElement('canvas');
+  cv.width = Math.max(1, cols); cv.height = Math.max(1, rows);
+  const cx = cv.getContext('2d');
+  if (cx) {
+    // One texel per grid cell; alpha AND colour both track the normalized dwell
+    // so untouched cells stay fully transparent (an opaque floor-wide rectangle
+    // would bury the plan). Weighted by dwell SECONDS — never visit count.
+    for (const [idx, sec] of cells) {
+      if (!(sec > 0)) continue;
+      const col = idx % cols, row = Math.floor(idx / cols);
+      if (col < 0 || row < 0 || row >= rows) continue;
+      const t = presenceNormalize(sec, max);
+      cx.globalAlpha = 0.12 + 0.88 * t;
+      cx.fillStyle = presenceHeatColor(t);
+      cx.fillRect(col, row, 1, 1);
+    }
+  }
+  // Single slot: only one floor + range is ever on screen, and the raster is
+  // rebuilt on a flush / range change, so a keyed map would only hold garbage.
+  _presTintCache = { key, canvas: cv };
+  return cv;
+}
+
+function drawPresenceHeat(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {
+  // Lazy read kick (the haFloors idiom): flipping the layer on — or switching
+  // floors — loads the overlay without the layer toggle knowing about history.
+  p.ensurePresenceHeat();
+  const heat = p.presenceHeat;
+  const f = p.floor();
+  if (!heat || heat.floorId !== f.id || heat.max <= 0 || heat.cells.size === 0) return;
+  const key = `${heat.floorId}:${p.presenceRange}:${p.presenceHistoryRev}:${heat.cols}x${heat.rows}`;
+  const img = _presenceRaster(key, heat.cols, heat.rows, heat.max, heat.cells);
+  // Cell(col,row) → screen. The grid's world origin is (0,0) and each texel is
+  // PRESENCE_CELL_MM square; canvas Y is flipped relative to world Y.
+  const sx = view.scale * PRESENCE_CELL_MM;
+  const p0 = mmToPx(view, 0, 0);
+  ctx.save();
+  ctx.globalAlpha = 0.85;
+  ctx.imageSmoothingEnabled = true;   // dwell is a continuous field, not a room map
+  ctx.setTransform(sx, 0, 0, -sx, p0.x, p0.y);
+  ctx.drawImage(img, 0, 0);
+  ctx.restore();
 }
 
 function drawVacuumMaps(ctx: CanvasRenderingContext2D, p: Planner, view: View): void {

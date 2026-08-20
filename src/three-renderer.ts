@@ -104,6 +104,10 @@ interface RobotRig {
 }
 import { wallCutsForSegment, WINDOW_DEFAULTS, isBayWindowKind, windowSillMm, windowGlassHMm, bayProjectSign, bayPlan, closedWallLoops, wallSegmentInLoops, doorSpanCenter, wallKind, WALL_KINDS, furnitureLocalToWorld, furnitureWorldToLocal, pointInPolygon as pip, centroid, loopContaining, clampPointToLoop, resolveRoomForPoint, roomLabel, roomsByLoop, roomFloorLook, intersectLoopWithRect, clipVoidToLoop, polygonArea, heatmapColor, groundAreaSkirtBase, poolWaterColor, poolDepthMm, poolRaisedMm, poolHeaterState, poolPumpOn, poolLightOn, poolRimY, poolBasinFloorY, poolWaterSurfaceY, POOL_COPING_COLOR, POOL_HEAT_GLOW, type RoomTemp } from './geometry.js';
 import { visibilityToFogDensity, moonPhaseFraction, uvBand, type WeatherNow } from './weather.js';
+// mmWave presence-history ramp + normalization. mmwave-history.ts is PURE and
+// zero-import (the avatars.ts / flights.ts shared-chunk family), so importing it
+// here costs the lazy chunk nothing and cannot pull three.js anywhere new.
+import { PRESENCE_CELL_MM, presenceHeatColor, presenceNormalize } from './mmwave-history.js';
 import { SOLAR_DEFAULTS, solarAim, solarTrackOpts, solarRotation, solarPowerValue, SOLAR_DRAW_COLOR, SOLAR_GEN_COLOR } from './solar.js';
 import { skySnapshot, moonAltAz, capSampleAltAz, satAltAz } from './sky-astro.js';
 // flights.ts is deliberately zero-import (three-free) and shared by BOTH the app
@@ -265,6 +269,22 @@ export interface VacMapEntry {
   segments: VacSegment[];
   glow: string[] | null;       // segment ids currently glowing (cleaning), or null
 }
+
+// mmWave presence-history overlay input (design §E). Pre-shaped by three-view
+// from Planner.presenceHeat so the renderer stays free of storage/range logic.
+// `cells` is the summed cellIndex → dwell-SECONDS map (weighting by dwell, never
+// visit count, is what makes standing read hotter than walking through).
+export interface PresenceHeatEntry {
+  cols: number; rows: number;
+  max: number;                       // largest dwell in `cells` — the normalization max
+  cells: Map<number, number>;
+}
+
+// Overlay plane height + depth bias. Y sits just above the vacuum overlay (6)
+// and below light pools (7); the SEPARATION that is actually load-bearing is the
+// polygonOffset, not this literal (see updatePresenceHeat).
+const PRESENCE_Y = 6.5;
+const PRESENCE_DEPTH_OFFSET = -10;   // more negative than any ground-paint level (0..-GROUND_DEPTH_LEVELS)
 
 // Outdoor weather effects (Feature W, phase W2). Pre-shaped by three-view from
 // planner.weatherNow so the renderer stays free of weather-source logic.
@@ -2562,6 +2582,16 @@ export class ThreeDRenderer {
   private _vacTexList: THREE.Texture[] = [];
   vacMapTexDisposals = 0;                           // test probe: cumulative vac-map texture disposals
   private _vacGlowMats: THREE.Material[] = [];       // materials for glowing segments (per-frame opacity pulse)
+  // mmWave presence-history heat overlay (design §E). ONE baked CanvasTexture on
+  // ONE quad per data revision — the vacuum-map idiom, NOT the room-temperature
+  // one (thousands of coloured polygons per frame is not a rendering strategy,
+  // and per-room polygons would discard the sub-room detail this exists to show).
+  private _presenceGroup = new THREE.Group();
+  // NOT freed by _clearGroup (same rule as sprite maps + the vac-map textures) —
+  // disposed explicitly in _clearPresenceHeat, which runs on rebuild, floor
+  // switch and destroy(). This is the single most important gotcha here.
+  private _presenceTex: THREE.Texture | null = null;
+  presenceTexDisposals = 0;                          // test probe: cumulative presence-texture disposals
   private _robotRigs: Record<string, RobotRig> = {};  // keyed by robot id
   private _lightGroup = new THREE.Group();
   private _switchGroup = new THREE.Group();   // switch fixtures (own layer, split from lights)
@@ -3448,6 +3478,7 @@ export class ThreeDRenderer {
                     this._bleGroup, this._alarmGroup, this._calendarGroup, this._thermoGroup, this._safetyGroup, this._alertGroup,
                     this._robotGroup, this._robotRigGroup, this._cameraGroup, this._projGroup, this._valveGroup, this._plugGroup, this._camAlertGroup, this._pzoneGroup,
                     this._groundGroup, this._poolGroup, this._sprinklerGroup, this._flagpoleGroup, this._solarGroup, this._vacMapGroup, this._heatmapGroup,
+                    this._presenceGroup,
                     this._lightGroup, this._switchGroup, this._targetGroup, this._ghostGroup,
                     this._neighborhoodGroup,
                     this._transitGroup,
@@ -4251,6 +4282,9 @@ export class ThreeDRenderer {
     // Vac-map overlay carries explicit CanvasTextures + a glow-material list —
     // tear it down through its dedicated clearer (disposes textures + resets lists).
     this._clearVacMap();
+    // Presence-history overlay: same rule — its baked CanvasTexture is NOT freed
+    // by _clearGroup, so it gets its own clearer here (floor switch) too.
+    this._clearPresenceHeat();
     this._infoRigs = [];
     this._actionRigs = [];
     // Valve flow pulses live in _valveGroup (just cleared) — drop the tracking
@@ -6276,6 +6310,92 @@ export class ThreeDRenderer {
     }
   }
 
+  // ── mmWave presence-history heat overlay (design §E) ────────────────────
+  // ONE baked CanvasTexture on ONE quad covering the whole grid — the vacuum-map
+  // idiom. Rebuilt only under three-view's _keyPresence, which bumps on a FLUSH
+  // or a range change, never per sample and never per frame.
+  //
+  // DEPTH: the ground stack is crowded (paint elev+4, temp heatmap 5, vacuum 6,
+  // light pools 7, blob shadows 8) and this project has already shipped a real
+  // z-fighting bug there that hand-picked Y gaps did not fix. So the separation
+  // is a polygonOffset (BOTH terms, like groundDepthOffset), pulled further
+  // toward the camera than any ground-paint level (which reach -GROUND_DEPTH_LEVELS)
+  // so the overlay wins against every one of them rather than tying with one.
+  updatePresenceHeat(entry: PresenceHeatEntry | null): void {
+    if (!this._scene) return;
+    this._clearPresenceHeat();
+    if (!entry || entry.cols < 1 || entry.rows < 1 || entry.max <= 0 || entry.cells.size === 0) return;
+    const tex = this._presenceTexture(entry);
+    if (!tex) return;
+    this._presenceTex = tex;
+    const mat = new THREE.MeshBasicMaterial({
+      map: tex, side: THREE.DoubleSide, transparent: true, opacity: 0.85,
+      depthWrite: false, fog: false,
+      polygonOffset: true, polygonOffsetFactor: PRESENCE_DEPTH_OFFSET, polygonOffsetUnits: PRESENCE_DEPTH_OFFSET,
+    });
+    // The grid spans [0 .. cols*CELL] × [0 .. rows*CELL] in world mm — the same
+    // closed rect presenceCellIndex bins into, so texel (col,row) lands exactly
+    // on the cell it was accumulated for.
+    const wx1 = entry.cols * PRESENCE_CELL_MM, wy1 = entry.rows * PRESENCE_CELL_MM;
+    const p00 = this._w(0, 0, PRESENCE_Y);
+    const p10 = this._w(wx1, 0, PRESENCE_Y);
+    const p11 = this._w(wx1, wy1, PRESENCE_Y);
+    const p01 = this._w(0, wy1, PRESENCE_Y);
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute([
+      p00.x, PRESENCE_Y, p00.z,  p10.x, PRESENCE_Y, p10.z,  p11.x, PRESENCE_Y, p11.z,
+      p00.x, PRESENCE_Y, p00.z,  p11.x, PRESENCE_Y, p11.z,  p01.x, PRESENCE_Y, p01.z,
+    ], 3));
+    // flipY = false below, so v runs with the raster's top-left origin.
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute([
+      0, 0,  1, 0,  1, 1,
+      0, 0,  1, 1,  0, 1,
+    ], 2));
+    geo.setAttribute('normal', new THREE.Float32BufferAttribute([
+      0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0,
+    ], 3));
+    const patch = new THREE.Mesh(geo, mat);
+    patch.userData.outlineSkip = true;   // a flat data decal, never an inverted-hull shell
+    patch.userData.presenceHeat = true;  // test hook
+    this._presenceGroup.add(patch);
+  }
+
+  // Paint the cols×rows raster: one texel per grid cell, alpha AND colour both
+  // driven by the normalized dwell so untouched cells stay fully transparent
+  // (a floor-wide opaque rectangle would hide the plan under it).
+  //
+  // Flat MeshBasicMaterial above is a documented _mat() exemption, alongside the
+  // vac-map / weather-particle / info-card decals: toon-banding a data readout
+  // would quantize the very gradient the ramp exists to convey.
+  private _presenceTexture(entry: PresenceHeatEntry): THREE.CanvasTexture | null {
+    const cv = document.createElement('canvas');
+    cv.width = entry.cols; cv.height = entry.rows;
+    const cx = cv.getContext('2d');
+    if (!cx) return null;
+    for (const [idx, sec] of entry.cells) {
+      if (!(sec > 0)) continue;
+      const col = idx % entry.cols, row = Math.floor(idx / entry.cols);
+      if (col < 0 || row < 0 || row >= entry.rows) continue;
+      const t = presenceNormalize(sec, entry.max);
+      cx.globalAlpha = 0.12 + 0.88 * t;
+      cx.fillStyle = presenceHeatColor(t);
+      cx.fillRect(col, row, 1, 1);
+    }
+    const tex = new THREE.CanvasTexture(cv);
+    tex.flipY = false;                      // UVs authored top-left origin (matches the raster)
+    tex.magFilter = THREE.LinearFilter;     // dwell is a continuous field — smooth reads better than blocky
+    tex.minFilter = THREE.LinearFilter;
+    tex.generateMipmaps = false;
+    return tex;
+  }
+
+  // Tear down the presence overlay. The CanvasTexture is disposed EXPLICITLY —
+  // _clearGroup frees geometry + materials but NOT maps.
+  private _clearPresenceHeat(): void {
+    this._clearGroup(this._presenceGroup);
+    if (this._presenceTex) { this._presenceTex.dispose(); this._presenceTex = null; this.presenceTexDisposals++; }
+  }
+
   // ── Valetudo room-map overlay ───────────────────────────────────────────
   // One translucent textured quad per room segment at y≈6 (above the floor slab,
   // below furniture blob shadows at y=8). The tint (segment color raster) is
@@ -6565,6 +6685,9 @@ export class ThreeDRenderer {
     this._vacMapGroup.visible = v.vacuumMap === true;
     // Per-room temperature heat-map rides its OWN layer, DEFAULT OFF (opt-in).
     this._heatmapGroup.visible = v.heatmap === true;
+    // mmWave presence history rides its OWN layer (`presenceHistory`, NOT
+    // `heatmap` — different feature, different ramp), DEFAULT OFF.
+    this._presenceGroup.visible = v.presenceHistory === true;
     if (this._grid) this._grid.visible = (v.grid !== false) && !this._bgVisibleNow;
     this._targetGroup.visible = v.targets !== false;
     // Now-playing cards ride the furniture/appliance layers (a media piece can be
@@ -28301,6 +28424,7 @@ export class ThreeDRenderer {
     for (const t of Object.values(this._flagTexCache)) t.dispose();
     this._flagTexCache = {};
     this._clearVacMap();   // vac-map overlay: explicit CanvasTexture disposal
+    this._clearPresenceHeat();  // presence overlay: explicit CanvasTexture disposal
     this.clearTransitPuppet();
     this._nowPlaying = {};
     this._tvScreens = {};

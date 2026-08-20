@@ -363,8 +363,12 @@
       ok('4F a hidden openings layer captures no input',
          !hitDoor(p, v4, { x: 2450, y: 1000 }) && !hitWindow(p, v4, { x: 5000, y: 1000 }), '');
       setLayers(p, undefined);
+      // Exact-inventory golden. UPDATE IT (never relax it to a subset check)
+      // whenever a layer is DELIBERATELY added to the opt-in set —
+      // `presenceHistory` joined on 2026-08-19 with the mmWave presence-history
+      // overlay, which is default-off by design (see docs/DESIGN-mmwave.md §E/§F).
       ok('4E default-off set unchanged',
-         JSON.stringify([...DEFAULT_OFF_LAYERS].sort()) === JSON.stringify(['activity','heatmap','vacuumMap']),
+         JSON.stringify([...DEFAULT_OFF_LAYERS].sort()) === JSON.stringify(['activity','heatmap','presenceHistory','vacuumMap']),
          DEFAULT_OFF_LAYERS.join(','));
     }
 

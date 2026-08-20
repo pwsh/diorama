@@ -1,0 +1,721 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>PRESENCEHEATMAP …</title>
+<style>
+  body { margin:0; background:#0d1116; color:#cfd8dc; font:13px/1.5 sans-serif; padding:14px; }
+  h1 { font-size:15px; margin:0 0 10px; }
+  #summary { font-size:14px; font-weight:bold; margin:10px 0; padding:8px 10px; border-radius:5px; }
+  .okbg { background:#12331f; color:#69f0ae; } .badbg { background:#3a1414; color:#ff8a80; }
+  .row { display:flex; justify-content:space-between; gap:10px; padding:2px 0; border-bottom:1px solid #1c2530; }
+  .pass { color:#69f0ae; } .fail { color:#ff5252; }
+  .name { color:#90caf9; } .extra { color:#ffd54f; font-size:11px; }
+  h2 { font-size:12px; color:#80cbc4; margin:14px 0 4px; }
+  #mount { position:absolute; left:-4000px; top:0; width:1000px; height:700px; }
+  #gl { width:900px; height:600px; }
+</style>
+<h1>mmWave presence history — recorder · privacy · layer · 2D + 3D overlay</h1>
+<div id="summary">Running…</div>
+<div id="rows"></div>
+<div id="mount"><div id="gl"></div></div>
+
+<!--
+  Covers the WIRING of the presence-history feature. The PURE data layer
+  (mmwave-history.ts) and the IndexedDB store (history-store.ts) have their own
+  suite in mmwave-history-test.html and are consumed here as-is.
+
+  Build (from the repo root; NEVER reuse stale bundles — a stale dist has
+  produced false PASSes in this project twice):
+    npm run build
+    H=/tmp/diorama-harness-presence
+    rm -rf "$H"; mkdir -p "$H"
+    cp test-pages/presence-heatmap-test.html "$H"/      # page FIRST
+    cp -r dist/* "$H"/                                  # dist assets SECOND
+    T=$(mktemp -d); cp -r src/* "$T"/; cp tsconfig.json "$T"/
+    cp test-pages/presence-heatmap-entry.ts "$T"/presence-heatmap-entry.ts
+    npx esbuild "$T"/presence-heatmap-entry.ts --bundle --format=esm \
+      --tsconfig="$T"/tsconfig.json \
+      --alias:lit=$PWD/node_modules/lit/index.js \
+      --alias:lit/decorators.js=$PWD/node_modules/lit/decorators.js \
+      --alias:three=$PWD/node_modules/three \
+      --outfile="$H"/presence.mod.js                    # .mod.js LAST
+
+  RUNNING — this page uses IndexedDB, so the usual `--dump-dom` +
+  `--virtual-time-budget` recipe CANNOT run it (virtual time never lets open()
+  settle; reproduced against the known-good avatar-store-test). Drive it over
+  CDP instead — see test-pages/mmwave-history-test.html's header for the full
+  recipe:
+    setsid google-chrome --headless=new --use-angle=swiftshader \
+      --enable-unsafe-swiftshader --remote-debugging-port=9334 \
+      --user-data-dir=/tmp/presence-prof about:blank &
+    curl -X PUT "http://localhost:9334/json/new?http://localhost:8951/presence-heatmap-test.html"
+    # then poll /json/list for a title starting with PRESENCEHEATMAP
+  (GET on /json/new returns 405 — it must be a PUT.)
+
+  EVERY assertion is NEGATIVE-CONTROLLED: `ok(name, cond, neg)` requires
+  cond === true AND neg === false, where `neg` is the SAME predicate evaluated
+  against a deliberately broken implementation, a broken fixture, or the
+  opposite configuration. An assertion with no negative control is recorded as
+  a FAILURE — matching mmwave-history-test.html, because this project has
+  repeatedly shipped assertions that could not fail.
+-->
+<script type="module">
+  const V = '?v=' + Date.now();
+  const M = await import('./presence.mod.js' + V);
+  const {
+    Planner, drawAll, computeView, ThreeDRenderer,
+    LAYER_DEFS, DEFAULT_OFF_LAYERS, layerIsOn,
+    PRESENCE_CELL_MM, PRESENCE_SAMPLE_MS, PRESENCE_RETENTION_DAYS_DEFAULT, HOUR_MS,
+    presenceCellIndex, presenceGridCols, presenceGridRows, hourBucket, historyKey,
+    presenceHeatColor, presenceNormalize, decodePresenceCells, makePresenceRecord,
+    listPresenceKeys, getPresenceRecords, putPresenceRecord, clearPresenceHistory,
+    heatmapColor, localToWorld,
+  } = M;
+
+  const checks = [];
+  const ok = (name, cond, neg) => {
+    if (neg === undefined) { checks.push({ name, pass: false, extra: 'NO NEGATIVE CONTROL' }); return; }
+    const pass = cond === true && neg === false;
+    checks.push({ name, pass, extra: pass ? '' : `cond=${cond} neg=${neg}` });
+  };
+  const notes = [];
+  const note = s => notes.push(s);
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const frames = n => new Promise(r => { let i = 0; const go = () => (++i >= n ? r() : requestAnimationFrame(go)); requestAnimationFrame(go); });
+  async function waitFor(cond, tries = 900) {
+    for (let i = 0; i < tries; i++) { if (cond()) return true; await sleep(4); }
+    return !!cond();
+  }
+  const near = (a, b, tol) => Math.abs(a - b) <= tol;
+
+  // document.hidden is a REAL input to the recorder (the background/multi-tab
+  // guard), and a headless page's visibility is not something the test should be
+  // at the mercy of. Take ownership of it so both states are exercised
+  // deliberately — and record what the browser actually reported first.
+  let HIDDEN = false;
+  const nativeHidden = document.hidden;
+  note(`browser reported document.hidden=${nativeHidden} (overridden below for determinism)`);
+  Object.defineProperty(document, 'hidden', { get: () => HIDDEN, configurable: true });
+
+  // ── Fake HaApi over a Map (the config-test / layers2d-test seam) ───────────
+  class FakeHa {
+    constructor(seed) {
+      this.map = new Map();
+      for (const [k, v] of Object.entries(seed || {})) this.map.set(k, JSON.parse(JSON.stringify(v)));
+      this.states = {}; this._s = []; this._c = [];
+    }
+    connect() { for (const cb of this._c) cb('connected'); for (const cb of this._s) cb(this.states, undefined); }
+    onState(fn) { this._s.push(fn); } onConn(fn) { this._c.push(fn); }
+    callService() { return Promise.resolve(); }
+    async getHistory() { return {}; } async getWeatherForecasts() { return null; }
+    async getDevices() { return []; } async getEntityRegistry() { return []; }
+    async updateEntityRegistry() { return true; }
+    async getAreaRegistry() { return []; } async getFloorRegistry() { return []; }
+    async getUserData(k) { return this.map.has(k) ? JSON.parse(JSON.stringify(this.map.get(k))) : null; }
+    async setUserData(k, v) { this.map.set(k, JSON.parse(JSON.stringify(v))); return true; }
+    async refreshStates() {} async subscribeMqtt() { return () => {}; } async publishMqtt() {}
+    async getCalendarEvents() { return {}; }
+    async subscribePersistentNotifications() { return () => {}; }
+    async listRepairsIssues() { return []; }
+    peek(k) { return this.map.has(k) ? JSON.parse(JSON.stringify(this.map.get(k))) : null; }
+  }
+
+  // Two mmWave sensors: A at the origin corner heading 0 (so sensor-local ==
+  // world offsets from A), B further along. Invented coordinates, no real data.
+  const SENSOR_A = { id: 'sA', x: 1000, y: 1000, heading: 0, fov: 120, range: 6000, label: 'Sensor A', deviceSlug: null };
+  const SENSOR_B = { id: 'sB', x: 6000, y: 4000, heading: 0, fov: 120, range: 6000, label: 'Sensor B', deviceSlug: null };
+  const mkFloor = (over = {}) => Object.assign({
+    id: 'f1', name: 'Home', w: 8000, d: 6000,
+    walls: [], furniture: [], lights: [], switches: [], sensors: [], motionSensors: [],
+    envSensors: [], bleProxies: [], doors: [], windows: [], rooms: [], groundAreas: [],
+    voidAreas: [], pools: [], roamers: [], alarmPanels: [], safetySensors: [], robots: [],
+    presenceZones: [], cameras: [], bg: null,
+  }, over);
+  const mkStore = (extra = {}, floorOver = {}) => Object.assign({
+    v: 2, floors: [mkFloor(floorOver)], currentFloorId: 'f1', activeSensorId: null,
+    coverage: false, imperial: false, showDetails: false, useRawTargets: false,
+  }, extra);
+
+  async function mkPlanner(store) {
+    localStorage.removeItem('diorama:store:v1'); localStorage.removeItem('diorama:configs');
+    const ha = new FakeHa({ diorama: store });
+    const p = new Planner();
+    p.connectWith(ha);
+    await waitFor(() => p.configIndex !== null);
+    return { p, ha };
+  }
+  // Arm the recorder but take manual control of its clock: the real timers would
+  // interleave unpredictable extra samples with the ones the test drives.
+  function armManual(p) {
+    p.setPresenceHistory(c => { c.enabled = true; });
+    p._stopPresenceHistory();     // kill the 1 Hz / 60 s / 6 h timers; `enabled` stays true
+  }
+  // A live radar slot: `t*` is the RAW spring goal (what the recorder must read),
+  // `c*` is the EASED display position (what it must NOT read).
+  const slot = (tx, ty, cx, cy) => ({ tx, ty, cx, cy, vx: 0, vy: 0, active: true });
+
+  await clearPresenceHistory();   // never inherit a previous run's records
+
+  try {
+  // ══════════════════════════════════════════════════════════════════════════
+  // A. The recorder
+  // ══════════════════════════════════════════════════════════════════════════
+  {
+    const { p } = await mkPlanner(mkStore({}, { sensors: [SENSOR_A] }));
+    armManual(p);
+    // One target standing still 500 mm east / 300 mm north of sensor A.
+    p.lerpBy[SENSOR_A.id] = [slot(500, 300, 500, 300)];
+
+    // A1 — SAMPLE RATE. Driving the tick at RAF rate (60 Hz) over exactly one
+    // second must credit ~1 s of dwell, NOT 60 s. Recording each RAF read of the
+    // same HA push as an observation is what would multiply-count dwell.
+    let t = 1_800_000_000_000;
+    p.presenceSampleTick(t);                       // baseline only
+    for (let i = 0; i < 60; i++) { t += 1000 / 60; p.presenceSampleTick(t); }
+    const rafSec = p.presencePendingSeconds();
+    // Negative control: the "one unit per sample" recorder this design rejects.
+    const brokenPerSample = 60 * 1;
+    ok('A1 60 RAF-rate ticks over 1 s credit ~1 s of dwell, not 60',
+      near(rafSec, 1, 0.05), near(brokenPerSample, 1, 0.05));
+    note(`A1 dwell after 60 ticks in 1 s = ${rafSec.toFixed(4)} s`);
+
+    // A1b — and at the real ~1 Hz cadence the same wall-clock window credits the
+    // same dwell: storage is a function of cells touched, not sample rate.
+    const before = p.presencePendingSeconds();
+    for (let i = 0; i < 3; i++) { t += PRESENCE_SAMPLE_MS; p.presenceSampleTick(t); }
+    const hzSec = p.presencePendingSeconds() - before;
+    ok('A1b 3 ticks at the 1 Hz cadence credit ~3 s (rate-independent)',
+      near(hzSec, 3, 0.05), near(hzSec, 1, 0.05));
+
+    // A2 — RAW, NOT EASED. The raw goal and the eased position are put in
+    // DIFFERENT grid cells; all the dwell must land on the raw one.
+    const f = p.floor();
+    const cols = presenceGridCols(f.w);
+    p._presAccum.clear(); p._presLastSampleAt = 0;
+    // raw goal → world (2000, 2000); eased → world (5000, 5000). Sensor A is at
+    // (1000,1000) heading 0, so local == world minus the sensor origin.
+    p.lerpBy[SENSOR_A.id] = [slot(1000, 1000, 4000, 4000)];
+    t += 5000; p.presenceSampleTick(t);
+    t += PRESENCE_SAMPLE_MS; p.presenceSampleTick(t);
+    const rawW = localToWorld(SENSOR_A, 1000, 1000);
+    const easedW = localToWorld(SENSOR_A, 4000, 4000);
+    const rawCell = presenceCellIndex(rawW.x, rawW.y, f.w, f.d);
+    const easedCell = presenceCellIndex(easedW.x, easedW.y, f.w, f.d);
+    const acc = [...p._presAccum.values()][0].map;
+    ok('A2 dwell lands on the RAW (tx/ty) cell, never the eased (cx/cy) one',
+      acc.has(rawCell) && acc.get(rawCell) > 0, acc.has(easedCell));
+    note(`A2 raw cell ${rawCell} vs eased cell ${easedCell} (cols=${cols})`);
+
+    // A3 — PER-SENSOR CONTRIBUTION TOGGLE.
+    p.store.floors[0].sensors = [SENSOR_A, { ...SENSOR_B, recordHistory: false }];
+    p._presAccum.clear(); p._presLastSampleAt = 0;
+    p.lerpBy[SENSOR_A.id] = [slot(0, 0, 0, 0)];
+    p.lerpBy[SENSOR_B.id] = [slot(0, 0, 0, 0)];
+    t += 5000; p.presenceSampleTick(t);
+    t += PRESENCE_SAMPLE_MS; p.presenceSampleTick(t);
+    const accB = [...p._presAccum.values()][0].map;
+    const cellA = presenceCellIndex(SENSOR_A.x, SENSOR_A.y, f.w, f.d);
+    const cellB = presenceCellIndex(SENSOR_B.x, SENSOR_B.y, f.w, f.d);
+    ok('A3 recordHistory:false sensor contributes nothing; its sibling still does',
+      accB.has(cellA) && accB.get(cellA) > 0, accB.has(cellB));
+
+    // A4 — hidden-tab guard: a background tab must not credit dwell (its RAF is
+    // throttled, so tx/ty would be stale).
+    p.store.floors[0].sensors = [SENSOR_A];
+    p._presAccum.clear(); p._presLastSampleAt = 0;
+    HIDDEN = true;
+    t += 5000; p.presenceSampleTick(t);
+    t += PRESENCE_SAMPLE_MS; p.presenceSampleTick(t);
+    const hiddenSec = p.presencePendingSeconds();
+    HIDDEN = false;
+    p._presLastSampleAt = 0;
+    t += 5000; p.presenceSampleTick(t);
+    t += PRESENCE_SAMPLE_MS; p.presenceSampleTick(t);
+    const visibleSec = p.presencePendingSeconds();
+    ok('A4 a hidden tab records nothing; a visible one does',
+      hiddenSec === 0, visibleSec === 0);
+
+    // A5 — inactive slots are ignored (a lost target must not keep accruing).
+    p._presAccum.clear(); p._presLastSampleAt = 0;
+    p.lerpBy[SENSOR_A.id] = [{ ...slot(0, 0, 0, 0), active: false }];
+    t += 5000; p.presenceSampleTick(t);
+    t += PRESENCE_SAMPLE_MS; p.presenceSampleTick(t);
+    const inactiveSec = p.presencePendingSeconds();
+    p.lerpBy[SENSOR_A.id] = [slot(0, 0, 0, 0)];
+    p._presLastSampleAt = 0;
+    t += 5000; p.presenceSampleTick(t);
+    t += PRESENCE_SAMPLE_MS; p.presenceSampleTick(t);
+    ok('A5 an inactive target slot accrues nothing',
+      inactiveSec === 0, p.presencePendingSeconds() === 0);
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // B. Recording is OPT-IN (design §F) — default OFF
+  // ══════════════════════════════════════════════════════════════════════════
+  {
+    const { p } = await mkPlanner(mkStore({}, { sensors: [SENSOR_A] }));
+    p.lerpBy[SENSOR_A.id] = [slot(0, 0, 0, 0)];
+    ok('B1 a store with no presenceHistory config reports recording DISABLED',
+      p.presenceHistoryEnabled() === false, p.presenceRecording === true);
+
+    let t = 1_800_000_100_000;
+    p.presenceSampleTick(t); t += PRESENCE_SAMPLE_MS; p.presenceSampleTick(t);
+    const offSec = p.presencePendingSeconds();
+    // Negative control: the SAME two ticks with recording enabled DO accrue, so
+    // the zero above is the opt-in gate and not a broken fixture.
+    armManual(p);
+    p._presLastSampleAt = 0;
+    t += 5000; p.presenceSampleTick(t); t += PRESENCE_SAMPLE_MS; p.presenceSampleTick(t);
+    const onSec = p.presencePendingSeconds();
+    ok('B2 recording OFF by default accrues nothing; enabling it accrues',
+      offSec === 0, onSec === 0);
+    note(`B2 off=${offSec}s on=${onSec.toFixed(3)}s`);
+
+    // B3 — an explicitly-enabled config is honoured (the flag is read, not
+    // hard-coded off).
+    ok('B3 enabled:true config reports recording',
+      p.presenceHistoryEnabled() === true && p.presenceRecording === true,
+      p.store.presenceHistory.enabled !== true);
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // C. The _loadFromHa explicit field-list round-trip
+  // ══════════════════════════════════════════════════════════════════════════
+  {
+    // A store carrying BOTH the new config AND a key that is deliberately NOT in
+    // the field list. The bogus key being dropped is what proves the list is the
+    // mechanism under test — if the normalizer passed everything through, the
+    // presenceHistory assertion would be vacuous.
+    const seeded = mkStore({
+      presenceHistory: { enabled: true, retentionDays: 7 },
+      __notInTheFieldList: { keepMe: true },
+    }, { sensors: [SENSOR_A] });
+    const { p } = await mkPlanner(seeded);
+    const cfg = p.store.presenceHistory;
+    ok('C1 presenceHistory survives a load (it IS in _loadFromHa’s field list)',
+      !!cfg && cfg.enabled === true && cfg.retentionDays === 7,
+      Object.prototype.hasOwnProperty.call(p.store, '__notInTheFieldList'));
+    ok('C2 retentionDays is honoured, clamped, and defaults to 30',
+      p.presenceRetentionDays() === 7, p.presenceRetentionDays() === PRESENCE_RETENTION_DAYS_DEFAULT);
+
+    const { p: p2 } = await mkPlanner(mkStore({}, { sensors: [SENSOR_A] }));
+    ok('C3 an absent retentionDays resolves to the 30-day default',
+      p2.presenceRetentionDays() === PRESENCE_RETENTION_DAYS_DEFAULT,
+      p2.presenceRetentionDays() === 7);
+    p2.setPresenceHistory(c => { c.retentionDays = 9999; });
+    ok('C4 an absurd retention is clamped rather than trusted',
+      p2.presenceRetentionDays() === 365, p2.presenceRetentionDays() === 9999);
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // D. Privacy — history never reaches the Store, an export, or switchConfig
+  // ══════════════════════════════════════════════════════════════════════════
+  {
+    await clearPresenceHistory();
+    const { p } = await mkPlanner(mkStore({}, { sensors: [SENSOR_A] }));
+    armManual(p);
+
+    // Take an export BEFORE anything is recorded, as the comparison baseline.
+    const strip = e => { const c = JSON.parse(JSON.stringify(e)); delete c.exportedAt; return JSON.stringify(c); };
+    const envBefore = strip(await p.exportConfig());
+
+    // Record a lot of DISTINCT cells so any leak would be conspicuous in size.
+    let t = 1_800_000_200_000;
+    p._presLastSampleAt = 0;
+    for (let i = 0; i < 40; i++) {
+      p.lerpBy[SENSOR_A.id] = [slot(200 * i, 200 * i, 0, 0)];
+      p.presenceSampleTick(t); t += PRESENCE_SAMPLE_MS; p.presenceSampleTick(t); t += 10;
+      p._presLastSampleAt = 0;
+    }
+    const cellsRecorded = [...p._presAccum.values()].reduce((n, e) => n + e.map.size, 0);
+    await p.flushPresenceHistory(t);
+    const keysAfterFlush = await listPresenceKeys();
+    ok('D0 the fixture really did record something (guards the leak tests below)',
+      cellsRecorded > 10 && keysAfterFlush.length > 0, cellsRecorded === 0);
+
+    const envAfter = strip(await p.exportConfig());
+    // Negative control: the identical comparison run against an envelope that
+    // DOES carry the history — it must differ, proving the equality above is a
+    // real check and not two identically-empty strings.
+    const leaky = JSON.parse(envAfter);
+    leaky.store.__presenceHistoryData = [...(await getPresenceRecords(keysAfterFlush))]
+      .map(r => ({ b: r.bucket, cells: [...r.cells], seconds: [...r.seconds] }));
+    ok('D1 an export envelope is byte-identical before and after recording',
+      envBefore === envAfter, JSON.stringify(leaky) === envBefore);
+    note(`D1 envelope length ${envAfter.length} chars, ${cellsRecorded} cells recorded`);
+
+    const looksLikeHistory = s => /"cells"|"seconds"|presenceHistoryData/.test(s);
+    ok('D2 no cell/seconds payload appears anywhere in the export',
+      looksLikeHistory(envAfter) === false, looksLikeHistory(JSON.stringify(leaky)) === false);
+
+    const phKeys = Object.keys(JSON.parse(envAfter).store.presenceHistory ?? {}).sort();
+    ok('D3 the exported presenceHistory carries SETTINGS only (enabled/retentionDays)',
+      phKeys.every(k => k === 'enabled' || k === 'retentionDays') && phKeys.length > 0,
+      ['enabled', 'cells'].every(k => k === 'enabled' || k === 'retentionDays'));
+
+    // switchConfig: history is device-local, so switching configurations must
+    // neither copy it into the new config nor destroy it.
+    const before = (await listPresenceKeys()).slice().sort();
+    const newId = await p.saveConfigAs('Second config');
+    await waitFor(() => p.activeConfigId === newId);
+    const afterSwitch = (await listPresenceKeys()).slice().sort();
+    ok('D4 switchConfig leaves the device-local history untouched',
+      before.length > 0 && JSON.stringify(before) === JSON.stringify(afterSwitch),
+      JSON.stringify(before) === JSON.stringify([]));
+    const storeStr = JSON.stringify(p.store);
+    ok('D5 the switched-to store carries no cell payload',
+      looksLikeHistory(storeStr) === false,
+      looksLikeHistory(JSON.stringify({ ...p.store, x: { cells: [1] } })) === false);
+
+    // D6 — ERASE. One call, immediate, complete — including the un-flushed
+    // accumulator, so "delete everything" cannot be undone by the next flush.
+    p._presLastSampleAt = 0;
+    p.lerpBy[SENSOR_A.id] = [slot(0, 0, 0, 0)];
+    p.presenceSampleTick(t); t += PRESENCE_SAMPLE_MS; p.presenceSampleTick(t);
+    const pendingBeforeErase = p.presencePendingSeconds();
+    await p.clearPresenceHistoryData();
+    const keysAfterErase = await listPresenceKeys();
+    ok('D6 erase removes every record AND the un-flushed accumulator',
+      keysAfterErase.length === 0 && p.presencePendingSeconds() === 0 && p.presenceHeat === null,
+      pendingBeforeErase === 0);
+    // And a flush immediately after erase must not resurrect anything.
+    await p.flushPresenceHistory(t);
+    const keysAfterPostEraseFlush = await listPresenceKeys();
+    ok('D7 a flush right after erase writes nothing back',
+      keysAfterPostEraseFlush.length === 0, keysAfterFlush.length === 0);
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // E. Flush is ADDITIVE, and the retention sweep is an ACTIVE delete
+  // ══════════════════════════════════════════════════════════════════════════
+  {
+    await clearPresenceHistory();
+    const { p } = await mkPlanner(mkStore({}, { sensors: [SENSOR_A] }));
+    armManual(p);
+    const f = p.floor();
+    // Pin both flushes inside ONE hour bucket so they must merge.
+    const base = hourBucket(1_800_000_000_000) * HOUR_MS + 60_000;
+    const dwellOnce = async (startMs, ticks) => {
+      p._presLastSampleAt = 0;
+      p.lerpBy[SENSOR_A.id] = [slot(0, 0, 0, 0)];
+      let t = startMs;
+      p.presenceSampleTick(t);
+      for (let i = 0; i < ticks; i++) { t += PRESENCE_SAMPLE_MS; p.presenceSampleTick(t); }
+      await p.flushPresenceHistory(t);
+      return t;
+    };
+    const cell = presenceCellIndex(SENSOR_A.x, SENSOR_A.y, f.w, f.d);
+    const readCell = async () => {
+      const recs = await getPresenceRecords([historyKey(f.id, hourBucket(base))]);
+      if (!recs.length) return 0;
+      return decodePresenceCells(recs[0]).get(cell) ?? 0;
+    };
+    await dwellOnce(base, 3);
+    const after1 = await readCell();
+    await dwellOnce(base + 120_000, 4);
+    const after2 = await readCell();
+    ok('E1 a second flush into the same hour ADDS to the stored record',
+      near(after2, after1 + 4, 0.1), near(after2, 4, 0.1));
+    note(`E1 stored ${after1.toFixed(2)}s then ${after2.toFixed(2)}s`);
+
+    ok('E2 flush drains the accumulator (no double-write on the next flush)',
+      p.presencePendingSeconds() === 0, after2 === 0);
+
+    // Retention: plant an old record + a fresh one, sweep at 30 days.
+    const now = base + 3_600_000;
+    const oldBucket = hourBucket(now - 40 * 24 * HOUR_MS);
+    await putPresenceRecord(makePresenceRecord(f.id, oldBucket, new Map([[cell, 12]]), 40, 30, now));
+    const keysBefore = await listPresenceKeys();
+    p.setPresenceHistory(c => { c.retentionDays = 30; });
+    p._stopPresenceHistory();
+    const { sweepPresenceHistory } = await import('./presence.mod.js' + V);
+    await sweepPresenceHistory(now, p.presenceRetentionDays());
+    const keysAfter = await listPresenceKeys();
+    const oldKey = historyKey(f.id, oldBucket);
+    const freshKey = historyKey(f.id, hourBucket(base));
+    ok('E3 the retention sweep DELETES the expired record and keeps the fresh one',
+      keysBefore.includes(oldKey) && !keysAfter.includes(oldKey) && keysAfter.includes(freshKey),
+      keysBefore.includes(oldKey) === false);
+
+    // Negative control for the sweep itself: at a 365-day window the same old
+    // record survives, so E3 is measuring retention and not a blanket wipe.
+    await putPresenceRecord(makePresenceRecord(f.id, oldBucket, new Map([[cell, 12]]), 40, 30, now));
+    await sweepPresenceHistory(now, 365);
+    const keysWide = await listPresenceKeys();
+    ok('E4 a wide retention window keeps the same record (the sweep is not a wipe)',
+      keysWide.includes(oldKey), keysWide.includes(oldKey) === false);
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // F. The layer
+  // ══════════════════════════════════════════════════════════════════════════
+  {
+    const def = LAYER_DEFS.find(d => d.key === 'presenceHistory');
+    ok('F1 presenceHistory is registered in LAYER_DEFS under cat "people"',
+      !!def && def.cat === 'people' && def.label === 'Presence history',
+      !!LAYER_DEFS.find(d => d.key === 'presenceHistoryZZZ'));
+    ok('F2 it is a SEPARATE key from the room-temperature `heatmap`',
+      !!LAYER_DEFS.find(d => d.key === 'heatmap') && def.key !== 'heatmap',
+      def.key === 'heatmap');
+    ok('F3 presenceHistory is DEFAULT OFF (absent = off)',
+      DEFAULT_OFF_LAYERS.includes('presenceHistory') && layerIsOn(undefined, 'presenceHistory') === false,
+      layerIsOn(undefined, 'targets') === false);
+    ok('F4 an explicit true turns it on',
+      layerIsOn({ presenceHistory: true }, 'presenceHistory') === true,
+      layerIsOn({ presenceHistory: false }, 'presenceHistory') === true);
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // G. 2D overlay — gating, one drawImage, and the PRESENCE ramp (not heatmap's)
+  // ══════════════════════════════════════════════════════════════════════════
+  let heatFixture = null;   // reused by the 3D section
+  {
+    await clearPresenceHistory();
+    const { p } = await mkPlanner(mkStore({}, { sensors: [SENSOR_A] }));
+    armManual(p);
+    const f = p.floor();
+    // Record a hot cell (long dwell) and a cool one (short dwell).
+    let t = Date.now();
+    p._presLastSampleAt = 0;
+    p.lerpBy[SENSOR_A.id] = [slot(0, 0, 0, 0)];              // world (1000,1000) — HOT
+    p.presenceSampleTick(t);
+    for (let i = 0; i < 20; i++) { t += PRESENCE_SAMPLE_MS; p.presenceSampleTick(t); }
+    p._presLastSampleAt = 0;
+    p.lerpBy[SENSOR_A.id] = [slot(3000, 2000, 0, 0)];        // world (4000,3000) — COOL
+    t += 10; p.presenceSampleTick(t); t += PRESENCE_SAMPLE_MS; p.presenceSampleTick(t);
+    await p.flushPresenceHistory(t);
+    await waitFor(() => p.presenceHeat !== null && p.presenceHeat.cells.size >= 2);
+    heatFixture = p.presenceHeat;
+    ok('G0 the 2D fixture has a summed overlay with a hot and a cool cell',
+      !!heatFixture && heatFixture.cells.size >= 2 && heatFixture.max >= 19,
+      !!heatFixture && heatFixture.cells.size === 0);
+
+    // Paint with the layer OFF and ON, intercepting drawImage.
+    const CW = 600, CH = 420;
+    const cv = document.createElement('canvas'); cv.width = CW; cv.height = CH;
+    const ctx = cv.getContext('2d', { willReadFrequently: true });
+    const cols = presenceGridCols(f.w), rows = presenceGridRows(f.d);
+    let grabbed = [];
+    const realDrawImage = ctx.drawImage.bind(ctx);
+    ctx.drawImage = function (img, ...rest) {
+      if (img && img.width === cols && img.height === rows) grabbed.push(img);
+      return realDrawImage(img, ...rest);
+    };
+    const paint = () => {
+      const v = computeView(cv, f.w, f.d, null, 1);
+      drawAll(ctx, p, v, null); drawAll(ctx, p, v, null);   // 2nd frame = steady state
+    };
+    p.store.layers2d = {};
+    grabbed = []; paint();
+    const offCount = grabbed.length;
+    p.store.layers2d = { presenceHistory: true };
+    grabbed = []; paint();
+    const onCount = grabbed.length;
+    ok('G1 the 2D overlay draws ONLY when the layer is explicitly on',
+      onCount === 2 && offCount === 0, offCount > 0);
+    note(`G1 drawImage(raster) calls: off=${offCount} on=${onCount} (2 = two paints)`);
+
+    // The raster is baked once per revision and REUSED — two paints must hand
+    // back the SAME canvas object, not two freshly-built ones.
+    ok('G2 the raster canvas is cached across frames (baked per revision)',
+      grabbed.length === 2 && grabbed[0] === grabbed[1], grabbed[0] !== grabbed[1]);
+
+    // G3 — the ramp. Read the hottest texel straight out of the intercepted
+    // raster and compare it to presenceHeatColor(1); the negative control is the
+    // room-TEMPERATURE ramp, which this feature must never reuse.
+    const raster = grabbed[0];
+    const rctx = raster.getContext('2d', { willReadFrequently: true });
+    let hotIdx = -1, hotSec = 0;
+    for (const [idx, sec] of heatFixture.cells) if (sec > hotSec) { hotSec = sec; hotIdx = idx; }
+    const hx = hotIdx % heatFixture.cols, hy = Math.floor(hotIdx / heatFixture.cols);
+    const px = rctx.getImageData(hx, hy, 1, 1).data;
+    const want = presenceHeatColor(presenceNormalize(hotSec, heatFixture.max));
+    const wr = parseInt(want.slice(1, 3), 16), wg = parseInt(want.slice(3, 5), 16), wb = parseInt(want.slice(5, 7), 16);
+    // The texel is painted with globalAlpha, so compare the UNPREMULTIPLIED colour.
+    const a = px[3] / 255;
+    const ur = a > 0 ? px[0] / a : 0, ug = a > 0 ? px[1] / a : 0, ub = a > 0 ? px[2] / a : 0;
+    const close = (r, g, b) => Math.abs(ur - r) <= 6 && Math.abs(ug - g) <= 6 && Math.abs(ub - b) <= 6;
+    const tempHot = heatmapColor(40, 20, 24).color;
+    const tr = parseInt(tempHot.slice(1, 3), 16), tg = parseInt(tempHot.slice(3, 5), 16), tb = parseInt(tempHot.slice(5, 7), 16);
+    ok('G3 the hottest texel uses presenceHeatColor, NOT the temperature ramp',
+      close(wr, wg, wb), close(tr, tg, tb));
+    note(`G3 texel rgb(${Math.round(ur)},${Math.round(ug)},${Math.round(ub)}) vs presence ${want} vs temp ${tempHot}`);
+
+    // G4 — cool cells really are cooler (weighting is by DWELL, not visits: the
+    // cell visited once for 1 s must not match the one stood in for 20 s).
+    let coolIdx = -1, coolSec = Infinity;
+    for (const [idx, sec] of heatFixture.cells) if (sec < coolSec) { coolSec = sec; coolIdx = idx; }
+    const cx2 = coolIdx % heatFixture.cols, cy2 = Math.floor(coolIdx / heatFixture.cols);
+    const cpx = rctx.getImageData(cx2, cy2, 1, 1).data;
+    const lum = d => 0.2126 * d[0] + 0.7152 * d[1] + 0.0722 * d[2];
+    ok('G4 a 20 s dwell paints hotter than a 1 s dwell (weighted by seconds)',
+      lum(px) > lum(cpx) && hotSec > coolSec * 5, lum(cpx) > lum(px));
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // H. 3D overlay — build, layer gate, quad extent, texture disposal
+  // ══════════════════════════════════════════════════════════════════════════
+  {
+    const r = new ThreeDRenderer(document.getElementById('gl'));
+    await r.load();
+    const f = mkFloor({ sensors: [SENSOR_A] });
+    r.updateFloor(f, {});
+    const cols = presenceGridCols(f.w), rows = presenceGridRows(f.d);
+    const entry = {
+      cols, rows, max: 20,
+      cells: new Map([[presenceCellIndex(1100, 1100, f.w, f.d), 20],
+                      [presenceCellIndex(4100, 3100, f.w, f.d), 1]]),
+    };
+    r.updatePresenceHeat(entry);
+    const grp = r._presenceGroup;
+    ok('H1 a populated entry builds exactly one quad in the presence group',
+      grp.children.length === 1 && grp.children[0].userData.presenceHeat === true,
+      grp.children.length === 0);
+
+    // H2 — the quad spans the whole grid, so texel (col,row) lands on the cell it
+    // was accumulated for.
+    const mesh = grp.children[0];
+    mesh.geometry.computeBoundingBox();
+    const bb = mesh.geometry.boundingBox;
+    const spanX = bb.max.x - bb.min.x, spanZ = bb.max.z - bb.min.z;
+    ok('H2 the quad spans cols×CELL by rows×CELL in world mm',
+      near(spanX, cols * PRESENCE_CELL_MM, 1) && near(spanZ, rows * PRESENCE_CELL_MM, 1),
+      near(spanX, PRESENCE_CELL_MM, 1));
+
+    // H3 — polygonOffset, not a hand-picked Y gap (the shipped ground-stack
+    // z-fighting lesson), and pulled further forward than any ground-paint level.
+    const mat = mesh.material;
+    ok('H3 the overlay separates by polygonOffset (BOTH terms), beyond ground paint',
+      mat.polygonOffset === true && mat.polygonOffsetFactor <= -9 && mat.polygonOffsetUnits <= -9,
+      mat.polygonOffsetFactor === 0);
+
+    // H4 — layer gating in 3D.
+    r.setLayerVisibility({ presenceHistory: true });
+    const visOn = grp.visible;
+    r.setLayerVisibility({});
+    const visAbsent = grp.visible;
+    r.setLayerVisibility({ presenceHistory: false });
+    const visOff = grp.visible;
+    ok('H4 the 3D group follows the layer flag, default OFF when absent',
+      visOn === true && visAbsent === false && visOff === false, visOn === false);
+
+    // H5 — TEXTURE DISPOSAL ON REBUILD. CanvasTextures are not freed by
+    // _clearGroup; this is the single most important gotcha in the feature.
+    const d0 = r.presenceTexDisposals;
+    r.updatePresenceHeat(entry);
+    const d1 = r.presenceTexDisposals;
+    ok('H5 rebuilding disposes the previous CanvasTexture exactly once',
+      d1 === d0 + 1, d1 === d0);
+
+    // H6 — disposal on FLOOR SWITCH.
+    r.clearTransientGroups();
+    const d2 = r.presenceTexDisposals;
+    ok('H6 a floor switch (clearTransientGroups) disposes the texture and empties the group',
+      d2 === d1 + 1 && grp.children.length === 0, d2 === d1);
+
+    // H7 — an empty / zero-max entry builds nothing (and cannot leak a texture).
+    r.updatePresenceHeat({ cols, rows, max: 0, cells: new Map() });
+    const emptyChildren = grp.children.length;
+    r.updatePresenceHeat(entry);
+    ok('H7 an empty entry builds no quad; a populated one still does',
+      emptyChildren === 0 && grp.children.length === 1, grp.children.length === 0);
+
+    // H8 — disposal on destroy().
+    const d3 = r.presenceTexDisposals;
+    r.destroy();
+    ok('H8 destroy() disposes the live texture',
+      r.presenceTexDisposals === d3 + 1, r.presenceTexDisposals === d3);
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // I. The dirty key does NOT bump per frame
+  // ══════════════════════════════════════════════════════════════════════════
+  {
+    await clearPresenceHistory();
+    const { p } = await mkPlanner(mkStore({ layers2d: { presenceHistory: true } }, { sensors: [SENSOR_A] }));
+    armManual(p);
+    p.lerpBy[SENSOR_A.id] = [slot(0, 0, 0, 0)];
+
+    // I1 — 120 samples (two minutes of recording) must not move the revision.
+    const rev0 = p.presenceHistoryRev;
+    let t = Date.now();
+    p.presenceSampleTick(t);
+    for (let i = 0; i < 120; i++) { t += PRESENCE_SAMPLE_MS; p.presenceSampleTick(t); }
+    const revAfterSamples = p.presenceHistoryRev;
+    ok('I1 120 samples bump the dirty key ZERO times',
+      revAfterSamples === rev0, p.presenceSamples === 0);
+    note(`I1 ${p.presenceSamples} samples taken, rev ${rev0} -> ${revAfterSamples}`);
+
+    // I2 — a FLUSH does bump it (one of the two permitted triggers).
+    await p.flushPresenceHistory(t);
+    const revAfterFlush = p.presenceHistoryRev;
+    ok('I2 a flush bumps the dirty key', revAfterFlush > revAfterSamples, revAfterFlush === rev0);
+
+    // I3 — and a routine flush must NOT bump configRev: that would rebuild every
+    // configRev-keyed 3D group once a minute (the flights routine-poll lesson).
+    const cfgRev0 = p.configRev;
+    p._presLastSampleAt = 0;
+    p.presenceSampleTick(t); t += PRESENCE_SAMPLE_MS; p.presenceSampleTick(t);
+    await p.flushPresenceHistory(t);
+    ok('I3 a routine flush leaves configRev alone (while still bumping its own rev)',
+      p.configRev === cfgRev0 && p.presenceHistoryRev > revAfterFlush,
+      p.configRev !== cfgRev0);
+
+    // I4 — a range change bumps it (the other permitted trigger).
+    const revBeforeRange = p.presenceHistoryRev;
+    p.setPresenceRange('7d');
+    await waitFor(() => p.presenceHistoryRev > revBeforeRange);
+    ok('I4 a scrub-range change bumps the dirty key',
+      p.presenceHistoryRev > revBeforeRange && p.presenceRange === '7d',
+      p.presenceRange === 'today');
+
+    // I5 — END TO END through the real <diorama-three-view>: the renderer's
+    // builder must not be called once per frame. Patch the prototype (one module
+    // identity: three-view's dynamic import is inlined into this same bundle).
+    const realUpdate = ThreeDRenderer.prototype.updatePresenceHeat;
+    let calls = 0;
+    ThreeDRenderer.prototype.updatePresenceHeat = function (...args) { calls++; return realUpdate.apply(this, args); };
+    const host = document.getElementById('mount');
+    const view = document.createElement('diorama-three-view');
+    view.planner = p;
+    host.appendChild(view);
+    await waitFor(() => calls > 0, 900);
+    await frames(60);
+    const callsAfterIdle = calls;
+    await frames(60);
+    const callsAfter120 = calls;
+    ok('I5 three-view rebuilds the overlay 0 times over 60 idle frames',
+      callsAfter120 === callsAfterIdle && callsAfterIdle > 0,
+      callsAfter120 > callsAfterIdle);
+    note(`I5 updatePresenceHeat calls: ${callsAfterIdle} after settle, ${callsAfter120} after 60 more frames`);
+
+    // I6 — but a flush DOES reach the renderer (the key is live, not dead).
+    p._presLastSampleAt = 0;
+    p.lerpBy[SENSOR_A.id] = [slot(2000, 2000, 0, 0)];
+    p.presenceSampleTick(Date.now()); p.presenceSampleTick(Date.now() + PRESENCE_SAMPLE_MS);
+    await p.flushPresenceHistory(Date.now() + PRESENCE_SAMPLE_MS);
+    await waitFor(() => calls > callsAfter120, 900);
+    await frames(6);
+    ok('I6 a flush DOES trigger exactly one renderer rebuild',
+      calls === callsAfter120 + 1, calls === callsAfter120);
+
+    view.remove();
+    ThreeDRenderer.prototype.updatePresenceHeat = realUpdate;
+  }
+
+  await clearPresenceHistory();
+  } catch (err) {
+    checks.push({ name: 'HARNESS THREW', pass: false, extra: String(err && err.stack || err) });
+  }
+
+  // ── Report ────────────────────────────────────────────────────────────────
+  const pass = checks.filter(c => c.pass).length;
+  const total = checks.length;
+  document.getElementById('rows').innerHTML = checks.map(c =>
+    `<div class="row"><span class="name">${c.name}</span>` +
+    `<span class="${c.pass ? 'pass' : 'fail'}">${c.pass ? 'PASS' : 'FAIL'} <span class="extra">${c.extra}</span></span></div>`
+  ).join('') + (notes.length ? `<h2>notes</h2>` + notes.map(n => `<div class="row"><span class="extra">${n}</span></div>`).join('') : '');
+  const bad = total - pass;
+  document.getElementById('summary').className = bad ? 'badbg' : 'okbg';
+  document.getElementById('summary').textContent = `PRESENCEHEATMAP ${bad ? 'FAIL' : 'PASS'} ${pass}/${total}`;
+  document.title = `PRESENCEHEATMAP ${bad ? 'FAIL' : 'PASS'} ${pass}/${total}`;
+</script>

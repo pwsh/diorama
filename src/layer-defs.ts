@@ -75,6 +75,10 @@ export const LAYER_DEFS: LayerDef[] = [
   { key: 'robots', label: 'Robots', cat: 'devices' },
   // ── People & presence ────────────────────────────────────────────────────
   { key: 'targets', label: 'Avatars', cat: 'people' },
+  // mmWave presence history (design §E). NOT `heatmap` — that key is the room
+  // TEMPERATURE map. Default OFF (below) on top of the separately opt-in
+  // recorder, so nothing is drawn unless the user asked for both.
+  { key: 'presenceHistory', label: 'Presence history', cat: 'people' },
   // ── Outside world ────────────────────────────────────────────────────────
   { key: 'geo', label: 'Geo landmarks', cat: 'outside' },
   { key: 'weatherFx', label: 'Weather effects (3D)', cat: 'outside' },
@@ -94,7 +98,7 @@ export function layerDefsByCat(): { cat: LayerCatDef; defs: LayerDef[] }[] {
 
 // Layers whose ABSENCE means OFF (the opt-in analysis/diagnostic views). Every
 // other key follows the standard opt-out rule (absent = ON).
-export const DEFAULT_OFF_LAYERS: (keyof Layers2D)[] = ['activity', 'vacuumMap', 'heatmap'];
+export const DEFAULT_OFF_LAYERS: (keyof Layers2D)[] = ['activity', 'vacuumMap', 'heatmap', 'presenceHistory'];
 
 export function layerIsOn(layers: Layers2D | undefined, k: keyof Layers2D): boolean {
   const L = layers ?? {};

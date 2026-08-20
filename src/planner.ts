@@ -64,7 +64,7 @@ import type {
   HassState, ConnStatus, DiscoveredDevice, Vec2, AvatarKind, WeatherConfig, CameraFixture,
   ConfigIndex, ConfigMeta, ThermostatFixture, SafetySensor, AlertBeacon, Furniture, MqttBridgeConfig,
   AlertsConfig, GroundArea, Pool, CompassConfig, Ruler, RulerEnd, DimensionMode, NeighborhoodConfig,
-  FlightsConfig, Door, Window as WindowType,
+  FlightsConfig, Door, Window as WindowType, PresenceHistoryConfig, PresenceRangeKey,
 } from './types.js';
 import { normalizeFlightPayload, flightBearingDistance, MAX_AIRCRAFT,
          isEmergency, emergencySquawk, sanitizeLabelFields,
@@ -124,6 +124,18 @@ import {
   buildingCapForRadius, DEFAULT_TILE_ZOOM, type NeighborhoodFeatures, type TileAddr,
 } from './neighborhood.js';
 import { getTile, putTile, tileCacheKey, clearNeighborhoodTiles, TILE_TTL_MS } from './neighborhood-store.js';
+// mmWave presence history (design §E/§F). The data layer is PURE + zero-import
+// and the store is the device-local `diorama-history` IndexedDB — both are
+// plain static imports (no three.js, nothing heavy).
+import {
+  PRESENCE_SAMPLE_MS, PRESENCE_FLUSH_MS, PRESENCE_RETENTION_DAYS_DEFAULT,
+  HOUR_MS, accumulateSample, hourBucket, historyKey, historyKeysForRange,
+  makePresenceRecord, presenceGridCols, presenceGridRows, presenceMaxSeconds,
+  sumPresenceRecords, type PresenceCellMap,
+} from './mmwave-history.js';
+import {
+  mergePresenceRecord, getPresenceRecords, sweepPresenceHistory, clearPresenceHistory,
+} from './history-store.js';
 import {
   fetchOpenMeteo, fetchOpenMeteoForecast, geocodeZip, resolveWeatherEntity, deriveFromSensors,
   toCelsius, toKmh, toMmPerH, forecastRainSoon, parseWeatherAlerts,
@@ -906,6 +918,43 @@ export class Planner extends EventTarget {
   vacuumStatus: Record<string, { value?: string; flag?: string }> = {};
   lastCommandedSegments: Record<string, string[]> = {};
   private _vacSubNs: string | null = null;   // valetudoNs the wildcard subs were registered against
+
+  // ── mmWave presence history (design §E/§F; runtime-only) ──────────────────
+  // The RECORDER's in-memory accumulator plus the summed overlay both live
+  // here. NOTHING in this block is persisted to the Store: the settings are two
+  // scalars in `store.presenceHistory`, the DATA lives exclusively in the
+  // device-local `diorama-history` IndexedDB (see history-store.ts).
+  //
+  // presenceHistoryRev is the renderers' ONE dirty-key input. It bumps on a
+  // FLUSH or a range/erase change — never per sample and never per frame. A
+  // texture rebuilt at RAF rate is the fire-flicker performance bug class.
+  // Deliberately NOT paired with emitConfig(): a routine 60 s flush must not
+  // bump configRev, or every configRev-keyed 3D group would rebuild each minute
+  // (the flights routine-poll lesson). three-view recomputes its keys every
+  // tick, so the counter alone drives the rebuild.
+  presenceHistoryRev = 0;
+  // Summed overlay for the current floor + range. null = not loaded yet.
+  presenceHeat: {
+    floorId: string; cols: number; rows: number; max: number; cells: PresenceCellMap;
+  } | null = null;
+  // Which window the overlay sums (view control — never persisted, never undo).
+  presenceRange: PresenceRangeKey = 'today';
+  // Test/diagnostic probes (runtime): samples taken, flushes completed.
+  presenceSamples = 0;
+  presenceFlushes = 0;
+  // Accumulator, keyed `<floorId>:<hourBucket>` so a flush spanning an hour
+  // boundary writes TWO correct records rather than smearing one.
+  private _presAccum = new Map<string, {
+    floorId: string; bucket: number; cols: number; rows: number; map: PresenceCellMap;
+  }>();
+  private _presLastSampleAt = 0;   // epoch ms of the previous sample (0 = no baseline)
+  private _presSampleTimer: ReturnType<typeof setInterval> | null = null;
+  private _presFlushTimer: ReturnType<typeof setInterval> | null = null;
+  private _presSweepTimer: ReturnType<typeof setInterval> | null = null;
+  private _presVisHandler: (() => void) | null = null;
+  private _presInited = false;
+  private _presHeatBusy = false;   // one in-flight refresh at a time
+  private _presHeatKey = '';       // floorId|range|rev the loaded heat was read for
 
   // ── Weather (runtime-only; recomputed from the configured source) ─────────
   // Normalized current weather. Chip + (later) 3D effects read this. Local
@@ -1960,6 +2009,14 @@ export class Planner extends EventTarget {
         .some(c => (c.calendarIds ?? []).includes(changedId))) {
       void this._refreshCalendars();
     }
+    // One-time presence-history recorder start on the first full load (mirrors
+    // _weatherInited). Inert unless the user opted IN — this is the recorder,
+    // so the guard is the whole point. _applyLoadedStore re-runs it once HA's
+    // authoritative config lands; both are idempotent.
+    if (!this._presInited && changedId === undefined) {
+      this._presInited = true;
+      this._reconfigurePresenceHistory();
+    }
     // One-time MQTT bridge start from the local-cache config on first full load
     // (mirrors _weatherInited). _applyLoadedStore re-runs it once HA's
     // authoritative config lands; both are idempotent.
@@ -2204,6 +2261,12 @@ export class Planner extends EventTarget {
     // (Re)start the Alert Center collectors to match the authoritative config
     // (honors the enabled toggle; only starts once a connection exists).
     if (this._alertInited) this._reconfigureAlertCenter();
+    // (Re)start the presence-history recorder to match the authoritative config.
+    // A config switch also invalidates the loaded overlay (different floors).
+    this._presInited = true;
+    this._reconfigurePresenceHistory();
+    this.presenceHeat = null;
+    this._presHeatKey = '';
     // A fresh config load / switch / import invalidates undo history (and this
     // is the single funnel for initial load + every registry op — so the stacks
     // clear in ONE place). Baseline is the just-loaded store.
@@ -2257,6 +2320,10 @@ export class Planner extends EventTarget {
       bgTexts:        this._migrateBgTexts(remote),
       heatmap:        remote.heatmap        ?? undefined,
       compass:        remote.compass        ?? undefined,
+      // Presence-history SETTINGS only (two scalars). The recorded history
+      // itself lives in device-local IndexedDB and is deliberately absent from
+      // Store — so it never rides export / import / switchConfig (design §F).
+      presenceHistory: remote.presenceHistory ?? undefined,
     };
   }
 
@@ -6133,6 +6200,281 @@ export class Planner extends EventTarget {
       this._mqttStatus = 'error';
       this.emitConfig();
     }
+  }
+
+  // ══ mmWave presence history (design §E/§F) ═══════════════════════════════
+  // A recorder + an overlay reader. See the runtime-state block above for the
+  // privacy contract; the storage/aggregation rules live in mmwave-history.ts.
+
+  /** Recording is OPT-IN: absent config / absent flag = OFF (design §F). */
+  presenceHistoryEnabled(): boolean {
+    return this.store.presenceHistory?.enabled === true;
+  }
+
+  /**
+   * Retention window in days, clamped ONCE here so the sweep, the settings UI
+   * and the range query can never disagree (the neighborhoodRadiusM idiom).
+   */
+  presenceRetentionDays(): number {
+    const v = this.store.presenceHistory?.retentionDays;
+    if (typeof v !== 'number' || !isFinite(v)) return PRESENCE_RETENTION_DAYS_DEFAULT;
+    return Math.max(1, Math.min(365, Math.round(v)));
+  }
+
+  /**
+   * True while the recorder is armed — what the persistent on-screen indicator
+   * reads. Deliberately keyed on the SETTING, not on "a target is currently
+   * visible": the point of the indicator (design §F) is that anyone glancing at
+   * a shared wall tablet can tell the log is being built, and an indicator that
+   * blinks out between detections would not answer that question.
+   */
+  get presenceRecording(): boolean { return this.presenceHistoryEnabled(); }
+
+  /**
+   * Mutate the recording settings (creating the config on first use), persist,
+   * and restart the recorder. Mirrors setWeather / setNeighborhood.
+   */
+  setPresenceHistory(mut: (c: PresenceHistoryConfig) => void): void {
+    if (!this.store.presenceHistory) this.store.presenceHistory = {};
+    mut(this.store.presenceHistory);
+    this.save();
+    this._reconfigurePresenceHistory();
+    this.emitConfig();
+  }
+
+  /**
+   * Which window the overlay sums. Runtime-only (a view control, never plan
+   * data) so it never touches save() / undo — but it IS a "scrub-range change",
+   * which is one of the two things allowed to bump the dirty key.
+   */
+  setPresenceRange(range: PresenceRangeKey): void {
+    if (this.presenceRange === range) return;
+    this.presenceRange = range;
+    this.presenceHeat = null;
+    this._presHeatKey = '';
+    this.presenceHistoryRev++;
+    void this.refreshPresenceHeat();
+    this.emitConfig();
+  }
+
+  /** [fromMs, toMs] for the active preset. `today` is LOCAL midnight → now. */
+  presenceRangeMs(nowMs: number): { from: number; to: number } {
+    const now = isFinite(nowMs) ? nowMs : 0;
+    switch (this.presenceRange) {
+      case 'hour': return { from: now - HOUR_MS, to: now };
+      case '7d':   return { from: now - 7 * 24 * HOUR_MS, to: now };
+      case '30d':  return { from: now - 30 * 24 * HOUR_MS, to: now };
+      case 'today':
+      default: {
+        // Local midnight. NB buckets are UTC hours (DST-proof by construction),
+        // so the bucket CONTAINING local midnight is read whole — "today" can
+        // include up to 59 minutes of last night. Sub-hour precision would need
+        // sub-hour records; hiding it would be worse than saying so.
+        const d = new Date(now);
+        d.setHours(0, 0, 0, 0);
+        return { from: d.getTime(), to: now };
+      }
+    }
+  }
+
+  /**
+   * THE ERASE CONTROL (design §F): one call, immediate, complete. Also drops the
+   * un-flushed in-memory accumulator, so "delete everything" cannot be quietly
+   * undone by the next flush writing the last minute back out.
+   */
+  async clearPresenceHistoryData(): Promise<boolean> {
+    this._presAccum.clear();
+    this._presLastSampleAt = 0;
+    const ok = await clearPresenceHistory();
+    this.presenceHeat = null;
+    this._presHeatKey = '';
+    this.presenceHistoryRev++;
+    this.emitConfig();
+    return ok;
+  }
+
+  /**
+   * ONE ~1 Hz sample of every active radar target on the current floor.
+   *
+   * Reads the RAW spring goal (`LerpSlot.tx/ty`) through localToWorld — never
+   * the eased `cx/cy`. Recording the renderer's own smoothing as if it were an
+   * observation is a lie, and it is also the thing `showRealPositions` exists to
+   * expose, so the two must agree about which number is the truth.
+   *
+   * Dwell is credited as (time since the previous sample), NOT one unit per
+   * sample: that is what makes storage a function of cells touched rather than
+   * of sample rate, and what makes "standing still" read hotter than "walking
+   * through". `nowMs` is caller-supplied (the no-clock-inside rule that makes
+   * the whole data layer testable).
+   */
+  presenceSampleTick(nowMs: number): void {
+    if (!this.presenceHistoryEnabled()) { this._presLastSampleAt = 0; return; }
+    // MULTI-TAB / BACKGROUND GUARD. A hidden tab's RAF is throttled or stopped,
+    // so `tx/ty` would be stale and the elapsed time would credit dwell to a
+    // position nobody is at any more. Skipping also means a background tab
+    // contributes nothing at all, which halves (but does NOT eliminate — see
+    // the note on the flush path) the double-count risk of two open tabs.
+    if (typeof document !== 'undefined' && document.hidden) { this._presLastSampleAt = 0; return; }
+    const prev = this._presLastSampleAt;
+    this._presLastSampleAt = nowMs;
+    if (!prev || !(nowMs > prev)) return;         // first tick only establishes the baseline
+    // Clamp the credited interval so a resumed tab / GC stall cannot dump a
+    // huge block of dwell onto one cell (the stepLerp dt-clamp discipline).
+    const dtS = Math.min((nowMs - prev) / 1000, (PRESENCE_SAMPLE_MS * 2) / 1000);
+    if (!(dtS > 0)) return;
+    const f = this.floor();
+    const cols = presenceGridCols(f.w), rows = presenceGridRows(f.d);
+    const bucket = hourBucket(nowMs);
+    const key = historyKey(f.id, bucket);
+    let slot = this._presAccum.get(key);
+    if (!slot) { slot = { floorId: f.id, bucket, cols, rows, map: new Map() }; this._presAccum.set(key, slot); }
+    // A floor resize mid-hour re-stamps the grid; mergePresenceRecords remaps a
+    // stored record onto the DELTA's grid, so the newest grid winning is right.
+    slot.cols = cols; slot.rows = rows;
+    for (const s of f.sensors) {
+      if (s.recordHistory === false) continue;    // per-sensor contribution opt-out
+      const slots = this.lerpBy[s.id];
+      if (!slots) continue;
+      for (const sl of slots) {
+        if (!sl.active) continue;
+        const w = localToWorld(s, sl.tx, sl.ty);  // RAW goal — never cx/cy
+        accumulateSample(slot.map, w.x, w.y, f.w, f.d, dtS);
+        this.presenceSamples++;
+      }
+    }
+  }
+
+  /**
+   * Total dwell seconds accumulated but NOT yet flushed. Surfaced in the
+   * settings status line so "is it actually recording?" is answerable, and used
+   * by the tests to assert the sampling RATE without reaching into IndexedDB.
+   */
+  presencePendingSeconds(): number {
+    let t = 0;
+    for (const e of this._presAccum.values()) for (const v of e.map.values()) if (v > 0) t += v;
+    return t;
+  }
+
+  /**
+   * Flush the in-memory delta into IndexedDB, merged ADDITIVELY into each
+   * (floorId, hourBucket) record. The accumulator is taken and cleared FIRST so
+   * a sample landing mid-await is credited to the next flush rather than being
+   * written twice or dropped.
+   *
+   * KNOWN, ACCEPTED: two SIMULTANEOUSLY VISIBLE tabs each run their own
+   * recorder and both merge additively, so shared dwell is counted twice. The
+   * merge is a read-modify-write inside one transaction, so nothing is lost or
+   * corrupted — the number is just inflated. Since the overlay is normalized
+   * against its own max, a uniform doubling is invisible; a tab opened for only
+   * part of the window skews the relative heat. Fixing it properly wants a
+   * cross-tab leader election (BroadcastChannel / Web Locks), which is deferred.
+   */
+  async flushPresenceHistory(nowMs: number): Promise<number> {
+    const entries = [...this._presAccum.values()].filter(e => e.map.size > 0);
+    this._presAccum.clear();
+    if (entries.length === 0) return 0;
+    let written = 0;
+    for (const e of entries) {
+      const rec = makePresenceRecord(e.floorId, e.bucket, e.map, e.cols, e.rows, nowMs);
+      if (await mergePresenceRecord(rec)) written++;
+    }
+    this.presenceFlushes++;
+    // The dirty-key bump — a FLUSH, exactly one of the two permitted triggers.
+    // No emitConfig(): see the runtime-state comment (routine work never bumps
+    // configRev).
+    this.presenceHistoryRev++;
+    this._presHeatKey = '';
+    await this.refreshPresenceHeat();
+    return written;
+  }
+
+  /**
+   * Re-read + re-sum the visible window for the current floor. Cheap by design:
+   * hour bucketing lives in the KEY, so this is a handful of direct get()s in
+   * one readonly transaction, and every record is remapped onto TODAY's grid.
+   */
+  async refreshPresenceHeat(nowMs: number = Date.now()): Promise<void> {
+    if (this._presHeatBusy) return;
+    this._presHeatBusy = true;
+    try {
+      const f = this.floor();
+      const { from, to } = this.presenceRangeMs(nowMs);
+      const keys = historyKeysForRange(f.id, from, to);
+      const recs = await getPresenceRecords(keys);
+      const cols = presenceGridCols(f.w), rows = presenceGridRows(f.d);
+      const cells = sumPresenceRecords(recs, cols, rows);
+      this.presenceHeat = { floorId: f.id, cols, rows, max: presenceMaxSeconds(cells), cells };
+      this._presHeatKey = `${f.id}|${this.presenceRange}|${this.presenceHistoryRev}`;
+      this.presenceHistoryRev++;   // data changed → rebuild the baked texture
+    } catch {
+      /* IDB unavailable — leave whatever was loaded; never throw into a tick */
+    } finally {
+      this._presHeatBusy = false;
+    }
+  }
+
+  /**
+   * LAZY read kick for the render paths (the haFloors() idiom): both renderers
+   * call this while the layer is visible, so flipping the layer on — or
+   * switching floors — loads the overlay without the layer toggle needing to
+   * know about presence history. Cheap + synchronous: one string compare.
+   */
+  ensurePresenceHeat(): void {
+    if (this._presHeatBusy) return;
+    const want = `${this.store.currentFloorId}|${this.presenceRange}|${this.presenceHistoryRev}`;
+    if (this._presHeatKey === want) return;
+    if (this.presenceHeat && this.presenceHeat.floorId === this.store.currentFloorId
+        && this._presHeatKey.startsWith(`${this.store.currentFloorId}|${this.presenceRange}|`)) return;
+    void this.refreshPresenceHeat();
+  }
+
+  /**
+   * Start / stop the recorder to match the config. Idempotent (stop-then-start,
+   * the _reconfigureMqtt idiom). Timers are the sampling clock deliberately —
+   * NOT the 2D RAF, which fires ~60× per HA push and would multiply-count dwell
+   * for a target that has not moved.
+   */
+  private _reconfigurePresenceHistory(): void {
+    this._stopPresenceHistory();
+    if (!this.presenceHistoryEnabled()) {
+      // Un-flushed samples are DROPPED, not written: a user switching recording
+      // off should not have the next minute of movement land in the store
+      // anyway. Up to one sample interval of already-observed dwell is lost,
+      // which is the privacy-preferring side of the trade.
+      this._presAccum.clear();
+      this._presLastSampleAt = 0;
+      return;
+    }
+    this._presSampleTimer = setInterval(() => this.presenceSampleTick(Date.now()), PRESENCE_SAMPLE_MS);
+    this._presFlushTimer = setInterval(() => { void this.flushPresenceHistory(Date.now()); }, PRESENCE_FLUSH_MS);
+    // ACTIVE retention sweep (§F) — now, then every 6 h while recording.
+    void sweepPresenceHistory(Date.now(), this.presenceRetentionDays());
+    this._presSweepTimer = setInterval(
+      () => { void sweepPresenceHistory(Date.now(), this.presenceRetentionDays()); },
+      Planner.PRESENCE_SWEEP_MS,
+    );
+    if (typeof document !== 'undefined' && !this._presVisHandler) {
+      // Flush on hide / unload so a closed tab does not discard its last minute.
+      // `visibilitychange` + `pagehide` is the pair that actually fires on
+      // mobile Safari (where `beforeunload` frequently does not).
+      const h = () => { if (document.hidden) void this.flushPresenceHistory(Date.now()); };
+      this._presVisHandler = h;
+      document.addEventListener('visibilitychange', h);
+      window.addEventListener('pagehide', h);
+    }
+  }
+
+  private static readonly PRESENCE_SWEEP_MS = 6 * 60 * 60 * 1000;
+
+  private _stopPresenceHistory(): void {
+    if (this._presSampleTimer) { clearInterval(this._presSampleTimer); this._presSampleTimer = null; }
+    if (this._presFlushTimer) { clearInterval(this._presFlushTimer); this._presFlushTimer = null; }
+    if (this._presSweepTimer) { clearInterval(this._presSweepTimer); this._presSweepTimer = null; }
+    if (this._presVisHandler && typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', this._presVisHandler);
+      window.removeEventListener('pagehide', this._presVisHandler);
+    }
+    this._presVisHandler = null;
   }
 
   // ── Neighborhood overlay (OpenFreeMap — Wave 1) ─────────────────────────────

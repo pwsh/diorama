@@ -1407,10 +1407,108 @@ export class SettingsDrawer extends LitElement {
         <span style="flex:1">Bermuda BLE tracking</span>
       </label>
       ${this._alertsBlock()}
+      ${this._presenceHistoryBlock()}
       ${this._mqttBlock()}
       ${this._neighborhoodBlock()}
       ${this._flightsBlock()}
     `;
+  }
+
+  // ── Presence history (mmWave dwell recorder + overlay) ───────────────────
+  // ONE block covers both halves deliberately: the recording controls and the
+  // controls for what the overlay shows belong next to the privacy copy, not
+  // scattered across two tabs where a user could enable recording and never see
+  // the retention/erase controls.
+  private _presenceHistoryBlock() {
+    const p = this.planner;
+    const cfg = p.store.presenceHistory ?? {};
+    const on = cfg.enabled === true;
+    const f = p.floor();
+    const heat = p.presenceHeat;
+    const RANGES: [import('../types.js').PresenceRangeKey, string][] = [
+      ['hour', 'Last hour'], ['today', 'Today'], ['7d', 'Last 7 days'], ['30d', 'Last 30 days'],
+    ];
+    const erase = async () => {
+      if (!confirm('Delete ALL recorded presence history from this device? This cannot be undone.')) return;
+      await p.clearPresenceHistoryData();
+      this.requestUpdate();
+    };
+    return html`
+      <div style="border-top:1px solid var(--border);margin-top:12px;padding-top:12px">
+        <div style="font-size:12px;font-weight:600;margin-bottom:6px">Presence history (mmWave)</div>
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text)"
+               title="Record how long people dwell in each 200 mm cell of the floor plan, from your mmWave sensors.">
+          <input type="checkbox" .checked=${on}
+                 @change=${(e: Event) => p.setPresenceHistory(c => { c.enabled = (e.target as HTMLInputElement).checked; })}>
+          <span style="flex:1">Record presence history</span>
+        </label>
+        <div style="font-size:10px;color:var(--text-dim);line-height:1.45;margin:4px 0 6px">
+          Off by default. This records where people stood in your home over time — enough
+          to show sleep and bathroom patterns. Nothing is sent anywhere: it is stored only
+          in this browser (IndexedDB), is never synced to Home Assistant, and is never
+          included in a configuration export. Positions are aggregated into 200 mm cells;
+          individual paths are never stored.
+        </div>
+        ${on ? html`
+          <div style="margin:6px 0 8px 8px;display:flex;flex-direction:column;gap:6px">
+            <div class="row" style="align-items:center">
+              <label style="font-size:12px;color:var(--text)"
+                     title="Records older than this are actively DELETED from the device, not merely hidden.">Keep for (days)</label>
+              <input type="number" min="1" max="365" step="1" .value=${String(p.presenceRetentionDays())}
+                     @change=${(e: Event) => {
+                       const v = parseFloat((e.target as HTMLInputElement).value);
+                       p.setPresenceHistory(c => { c.retentionDays = isFinite(v) ? Math.max(1, Math.min(365, Math.round(v))) : undefined; });
+                     }}
+                     style="width:80px">
+            </div>
+            <div style="font-size:10px;color:var(--text-dim);line-height:1.35;margin-top:-2px">
+              Older records are deleted from the device on a periodic sweep.
+            </div>
+            <div>
+              <div style="font-size:11px;color:var(--text-dim);margin-bottom:3px">
+                Contributing sensors on ${f.name}
+              </div>
+              ${f.sensors.length === 0 ? html`
+                <div style="font-size:10px;color:var(--text-dim)">No mmWave sensors on this floor.</div>`
+                : f.sensors.map(sn => html`
+                  <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text)">
+                    <input type="checkbox" .checked=${sn.recordHistory !== false}
+                           @change=${(e: Event) => {
+                             const v = (e.target as HTMLInputElement).checked;
+                             sn.recordHistory = v ? undefined : false;
+                             p.save(); p.emitConfig();
+                           }}>
+                    <span style="flex:1">${sn.label || sn.id}</span>
+                  </label>`)}
+              <div style="font-size:10px;color:var(--text-dim);line-height:1.35;margin-top:2px">
+                Unticking stops a sensor contributing from now on. It does not remove what it
+                already contributed — stored dwell carries no per-sensor tag. Use Delete below.
+              </div>
+            </div>
+          </div>` : nothing}
+        <div style="margin:2px 0 0 0;display:flex;flex-direction:column;gap:6px">
+          <div class="row" style="align-items:center">
+            <label style="font-size:12px;color:var(--text)">Overlay shows</label>
+            <select .value=${p.presenceRange}
+                    @change=${(e: Event) => p.setPresenceRange((e.target as HTMLSelectElement).value as import('../types.js').PresenceRangeKey)}>
+              ${RANGES.map(([k, lbl]) => html`<option value=${k}>${lbl}</option>`)}
+            </select>
+          </div>
+          <div style="font-size:10px;color:var(--text-dim);line-height:1.4">
+            Turn the "Presence history" layer on to see it. Brighter = more time spent
+            standing there (weighted by dwell time, not by number of visits).
+            ${heat && heat.floorId === f.id && heat.cells.size > 0
+              ? html`<br>Currently showing ${heat.cells.size} cells, hottest ${Math.round(heat.max)} s.`
+              : html`<br>Nothing recorded in this window yet.`}
+            ${on ? html`<br>${Math.round(p.presencePendingSeconds())} s recorded since the last save.` : nothing}
+          </div>
+          <div style="font-size:10px;color:var(--text-dim);line-height:1.4">
+            Continuous time scrubbing and per-person filtering are not built yet.
+          </div>
+          <button class="btn" style="align-self:flex-start;color:#ff8a80;border-color:#5c2b2b"
+                  @click=${() => { void erase(); }}>Delete all presence history</button>
+        </div>
+      </div>`;
   }
 
   // ── Demo (synthetic traffic) sub-block ───────────────────────────────────

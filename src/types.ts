@@ -680,6 +680,13 @@ export interface Sensor {
   label: string;
   deviceSlug: string | null;
   locked?: boolean;   // canvas move/rotate/delete disabled
+  // Presence-history CONTRIBUTION (design §E "per-sensor toggle"), absent = true.
+  // Deliberately a RECORDING filter, not a display filter: the stored record
+  // schema is (floorId, hourBucket) → cell→seconds with NO sensor dimension, so
+  // already-written dwell cannot be attributed back to a sensor. Unticking this
+  // stops the sensor contributing from now on; it does not retroactively remove
+  // what it already contributed (use "Delete all presence history" for that).
+  recordHistory?: boolean;
   color?: string;  // hex; tints all targets seen by this sensor in 2D + 3D
   plumbobColor?: string;  // hex; color of the spinning Sims plumbob above targets seen by this
                           // sensor (per-sensor attribution). Absent = the sensor's identity `color`
@@ -1863,7 +1870,30 @@ export interface Store {
   bgTexts?: BgTextEntry[];           // playful background text, up to 6 entries (skywriting / banner / grass / train / chopper)
   heatmap?: HeatmapConfig;           // per-room temperature heat-map comfort band (derived visual layer)
   compass?: CompassConfig;           // on-screen compass overlay + in-plan north marker
+  presenceHistory?: PresenceHistoryConfig; // mmWave presence-history RECORDING settings (the data itself never lives here — see below)
 }
+
+// mmWave presence-history settings (design §E/§F).
+//
+// THIS IS SETTINGS ONLY — two scalars. The recorded history itself lives
+// EXCLUSIVELY in the device-local `diorama-history` IndexedDB store and must
+// never reach the synced Store, a config export envelope, or switchConfig: a
+// Store is ONE CONFIGURATION and is serialized wholesale by export / import /
+// switch, so weeks of movement data would duplicate into every copy. Telemetry
+// is not configuration.
+export interface PresenceHistoryConfig {
+  // OPT-IN AT THE RECORDING LAYER (§F): absent / false = NOT recording. Binding
+  // an mmWave sensor must never silently start building a movement log. This is
+  // separate from — and additional to — the display layer's DEFAULT_OFF gate.
+  enabled?: boolean;
+  // Enforced by an ACTIVE DELETE SWEEP (never a read-time staleness filter —
+  // "the UI won't show it" does not satisfy an erase expectation). Default 30.
+  retentionDays?: number;
+}
+
+// Which time window the presence overlay sums. Runtime-only (Planner.presenceRange)
+// — a view control, not plan data, so it never enters the Store or undo.
+export type PresenceRangeKey = 'hour' | 'today' | '7d' | '30d';
 
 // On-screen compass overlay (a movable widget like the weather chip) + the
 // optional in-plan north icon. North resolves from the geo-landmark fit
@@ -2120,6 +2150,12 @@ export interface Layers2D {
   ground?: boolean;     // ground / yard covering polygons (2D fill + 3D patches); default on
   vacuumMap?: boolean;  // Valetudo robot room-map overlay (2D fill + 3D patches); default OFF (diagnostic)
   heatmap?: boolean;    // per-room temperature heat-map (2D fill + label, 3D patches); default OFF (opt-in analysis view)
+  // mmWave PRESENCE HISTORY heat overlay (design §E). Deliberately its OWN key —
+  // `heatmap` above is the room TEMPERATURE map, a different feature with a
+  // different (diverging) ramp; presence uses `presenceHeatColor`. DEFAULT OFF,
+  // and that is only the DISPLAY half: recording is separately opt-in via
+  // Store.presenceHistory.enabled (defence in depth, design §F).
+  presenceHistory?: boolean;
   dimensions?: boolean; // rulers + wall/structure dimension lines (2D); default ON
   neighborhood?: boolean; // OpenFreeMap neighborhood overlay (3D buildings this wave); default ON — but the FEATURE is opt-in via neighborhood.enabled, so this leaks nothing on its own
   flights?: boolean;      // live aircraft + ISS sky overlay; default ON — but the FEATURE is opt-in via flights.enabled, so this leaks nothing on its own

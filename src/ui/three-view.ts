@@ -5,7 +5,8 @@ import { customElement } from './define.js';
 // all of three.js, ~600 kB) is loaded lazily in firstUpdated so the 2D-only
 // startup path never downloads it.
 import type { ThreeDRenderer, ZoneWorld, HaloWorld, TargetWorld, ActivityContext,
-  InteractiveItem, GpsPinWorld, GpsLandmarkWorld, GeoEventWorld, WeatherFxState, VacMapEntry } from '../three-renderer.js';
+  InteractiveItem, GpsPinWorld, GpsLandmarkWorld, GeoEventWorld, WeatherFxState, VacMapEntry,
+  PresenceHeatEntry } from '../three-renderer.js';
 import { localToWorld, transformVerts, pointInPolygon, sensorColor, hexToInt, motionColor, lightIconKind, furnitureKind, resolveFurnitureDef, furnitureCat, isBinKind, isSpeakerKind, isScreenKind, isWetBathKind, isVehicleKind, isClimateApplianceKind, isMechanicalApplianceKind, mechanicalBindDomains, isRackKind, rackHealth, isBladedFanKind, isStairsKind, alarmStateColor, valveOpenness, sprinklerRunning, sprinklerHeadKind, sprinklerArcDeg, sprinklerRadius, sprinklerRotation, flagpoleHoistFraction, doorSpanCenter, isDroopPlant, plantThirsty, PLANT_MOISTURE_DEFAULT_THRESHOLD, hasFunctionalFront, frontVectorPlan } from '../geometry.js';
 import { compass8, fmtDistanceM } from '../geo.js';
 import { resolveNorth, markerScaleOf } from '../compass.js';
@@ -1099,6 +1100,7 @@ export class ThreeView extends LitElement {
   private _keySolar = '';
   private _keyHeatmap = '';
   private _keyVacMap = '';
+  private _keyPresence = '';
   private _keyLights = '';
   private _keyZones = '';
   private _keyHalos = '';
@@ -1161,6 +1163,7 @@ export class ThreeView extends LitElement {
         this._keyGround = this._keyPool = this._keySprinklers = this._keyFlagpoles = this._keySolar = '';
         this._keyHeatmap = '';
         this._keyVacMap = '';
+        this._keyPresence = '';
         this._keyLights = this._keyZones = this._keyHalos = '';
         this._keyGhost = this._keyNeighborhood = this._keyGps = this._keyCompass = this._keyWeather = this._keyBgText = '';
         // The flight shell is home-anchored (NOT floor-relative, like the sky) —
@@ -1920,6 +1923,27 @@ export class ThreeView extends LitElement {
           };
         });
         r.updateVacuumMaps(entries);
+      }
+
+      // mmWave presence-history heat overlay (design §E). Rides its OWN
+      // `presenceHistory` layer (default OFF) and its own revision counter.
+      //
+      // The key carries NO configRev, deliberately: presenceHistoryRev bumps on
+      // a FLUSH or a range/erase change and on nothing else, so folding in
+      // configRev would rebuild the baked texture on unrelated config traffic
+      // (the _keyBgText / _keyWeather lesson). The floor rect is in the key via
+      // cols×rows because the grid is derived from it.
+      const presOn = layers.presenceHistory === true;
+      if (presOn) p.ensurePresenceHeat();   // lazy read kick — a layer flip loads the data
+      const presHeat = presOn ? p.presenceHeat : null;
+      const presUse = presHeat && presHeat.floorId === f.id ? presHeat : null;
+      const keyPresence = `${presOn}|${f.id}|${p.presenceHistoryRev}|${presUse ? `${presUse.cols}x${presUse.rows}` : '-'}`;
+      if (keyPresence !== this._keyPresence) {
+        this._keyPresence = keyPresence;
+        const entry: PresenceHeatEntry | null = presUse
+          ? { cols: presUse.cols, rows: presUse.rows, max: presUse.max, cells: presUse.cells }
+          : null;
+        r.updatePresenceHeat(entry);
       }
 
       // GPS device pins + 3D landmark pins (both ride the geo layer). Coarse

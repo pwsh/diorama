@@ -425,6 +425,30 @@ diorama-toolbar { display: block; flex: 0 0 auto; }
 /* Diagnostics sub-tables are label/value pairs, not a wide matrix: let them
    stop before the panel edge so the right-aligned numbers stay near their row. */
 .mmw-tbl.narrow { max-width: 760px; }
+/* ── Presence-history recording indicator (design §F) ──────────────────────
+   A PERSISTENT, visible marker that a movement log is being built — not merely
+   a checkbox somewhere in settings that can be forgotten. Shown in ALL UI modes
+   (edit / kiosk / view): the case it exists for is a shared wall tablet, where
+   anyone glancing at it should be able to tell. Non-interactive by design
+   (pointer-events:none) so it can never swallow a canvas click; the controls
+   live in Settings ▸ Integrations. */
+.rec-chip {
+  position: absolute; top: 8px; left: 50%; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 6px;
+  padding: 3px 9px 3px 7px; border-radius: 999px;
+  background: rgba(28, 8, 10, 0.86); border: 1px solid rgba(255, 82, 82, 0.55);
+  color: #ffb3b3; font-size: 11px; font-weight: 600; letter-spacing: 0.02em;
+  line-height: 1.5; white-space: nowrap; pointer-events: none; z-index: 6;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.5);
+}
+.rec-chip .rec-dot {
+  width: 8px; height: 8px; border-radius: 50%; background: #ff5252;
+  box-shadow: 0 0 6px rgba(255, 82, 82, 0.9);
+  animation: diorama-rec-pulse 1.6s ease-in-out infinite;
+}
+@keyframes diorama-rec-pulse { 0%, 100% { opacity: 1 } 50% { opacity: 0.25 } }
+@media (prefers-reduced-motion: reduce) { .rec-chip .rec-dot { animation: none } }
+
 @media (max-width: 900px) {
   .mmw-split { flex-direction: column; }
   .mmw-side { flex: 1 1 auto; max-width: none; width: 100%; }
