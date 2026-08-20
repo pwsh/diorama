@@ -2382,6 +2382,85 @@ source mutations each produced exactly its targeted failure).
   deleted with them — styled-but-unused alarm CSS is how a removed alarm comes back
   fully dressed. A comment records WHY there is no comparator so nobody re-adds one.
 
+### mmWave presence history + heat-map (2026-08-19, user-requested)
+`src/mmwave-history.ts` (PURE, ZERO imports, no `Date.now()` — caller always supplies
+the epoch; the geo/trilateration/flights idiom, node-safe) + `src/history-store.ts`
+(IndexedDB `diorama-history`, store `presence`, the model-store/avatar-store/
+neighborhood-store idiom exactly) + planner recorder + a baked overlay in BOTH views.
+Design `docs/DESIGN-mmwave.md` §E/§F. Tests `mmwave-history-test.html`
+(`MMWAVEHISTORY PASS 64/64`) + `presence-heatmap-test.html`
+(`PRESENCEHEATMAP PASS 48/48`).
+- **PER-SAMPLE LOGGING IS A NON-STARTER — do not re-propose it.** At 2–10 Hz per
+  target, ~100 B/row, a realistic 3-active-target home produces **1.5–7.6 GB/month**,
+  unbounded. That rules out HA's recorder (GB/month of coordinate churn into a DB the
+  user manages for unrelated purposes, and NOT undoable from inside Diorama — the
+  standing guidance is to `exclude:` those entities) AND the synced `Store` (`save()`
+  swallows write failures with a `console.warn` — the bg-image dataURL bug at ~2.5 MB
+  is the precedent — and `Store` is ONE CONFIGURATION, so export/import/switchConfig
+  would duplicate weeks of history into every copy. Telemetry is not configuration).
+- **What is stored**: dwell **SECONDS** per **200 mm** cell, sparse, ONE record per
+  `(floorId, hourBucket)`, merged ADDITIVELY. Bucketing lives in the KEY so a range
+  query is a handful of direct `get()`s — no index, no departure from the existing IDB
+  idiom. **MEASURED**: 214 cells / occupied hour = **1712 B**, ~26.8 KB/day,
+  **0.784 MB/month**; the SAME hour at 10 Hz = 1.90 KB — **1.14× the payload for 10×
+  the samples**, i.e. size tracks CELLS TOUCHED, not push cadence. Encoding is two
+  index-sorted parallel typed arrays = exactly **8 B per touched cell** (Float32
+  seconds, NOT a 6-byte quantization — records merge repeatedly and quantization error
+  would compound per flush).
+- **200 mm is deliberately NOT the 150 mm nav grid** — that constant is tuned for
+  collision precision against furniture and may change for pathing reasons that must
+  never silently reshape stored history; 200 mm also roughly matches LD2450 positional
+  noise. `remapCellIndex` re-indexes across a floor resize (the rect is user-editable).
+  **Out-of-rect samples are DROPPED, not clamped** — radar reports through walls and
+  clamping would invent dwell against a wall nobody stood at. Hour buckets are
+  UTC-derived (`floor(ms/3600000)`) ⇒ DST is a non-event; the key parses at the LAST
+  colon so a floor id containing one survives.
+- **Recorder**: ~1 Hz `setInterval` — **NEVER the RAF**, which re-reads the same HA
+  push dozens of times and would multiply-count dwell — sampling the **RAW**
+  `LerpSlot.tx/ty` through `localToWorld`, **never the eased `cx/cy`** (recording the
+  renderer's own smoothing as if it were an observation is a lie). Dwell = elapsed
+  time since the previous sample (clamped 2× interval). Flush every 60 s +
+  `visibilitychange`/`pagehide`; retention sweep on start + every 6 h.
+- **PRIVACY (§F) — structural, each test-pinned**: `Store.presenceHistory
+  {enabled?, retentionDays?}` (**in `_normalizeStore`'s explicit field list** — the
+  recurring silent-reset trap, mutation-verified) holds SETTINGS ONLY; the data lives
+  solely in IDB, so it cannot ride an export envelope or `switchConfig`. Recording is
+  **OPT-IN, default OFF** (binding a sensor must never silently start a movement log)
+  — separate from AND additional to the layer being default-off. A `.rec-chip`
+  indicator shows in ALL UI modes (matters most on a shared wall tablet). Retention
+  default 30 d (clamp 1–365), enforced by an **ACTIVE DELETE SWEEP, not the read-time
+  TTL `neighborhood-store.ts` uses** — "the UI won't show it" does not satisfy an
+  erase expectation; an **unparseable key is swept too** so no un-erasable residue
+  accumulates. One-call `clearPresenceHistory()` behind a confirm.
+- **Layer `presenceHistory`** (cat `people`, in `LAYER_DEFS` **and**
+  `DEFAULT_OFF_LAYERS`). **`Layers2D.heatmap` is the room TEMPERATURE map — never
+  reuse it**, and the ramp is `presenceHeatColor` (a SEQUENTIAL indigo→yellow,
+  monotone in luminance so it survives greyscale), deliberately shaped apart from
+  `geometry.ts`'s diverging `heatmapColor`.
+- **Rendering copies the VACUUM-MAP idiom, not the room-temperature one** (that draws
+  one polygon per room — right for one number per room, useless for a dense grid): one
+  baked `CanvasTexture` per revision, ONE quad in 3D / one `setTransform`+`drawImage`
+  in 2D. **`CanvasTexture`s are NOT freed by `_clearGroup`** — `_clearPresenceHeat()`
+  disposes explicitly on rebuild, `clearTransientGroups` and `destroy()` (probe
+  `presenceTexDisposals`). Depth via **`polygonOffset`** (both terms), NOT a
+  hand-picked Y gap — the ground stack already produced one shipped z-fighting bug
+  that Y nudges could not fix. **`_keyPresence` carries NO configRev** (the
+  `_keyBgText`/`_keyWeather` lesson): it is `presOn|floorId|presenceHistoryRev|cols×rows`
+  and `presenceHistoryRev` bumps on a FLUSH or range/erase change ONLY — a routine
+  flush never `emitConfig`s.
+- **v1 scope**: time-range presets (last hour/today/7 d/30 d) + per-sensor toggles;
+  weighted by dwell SECONDS, never visit count. Continuous scrubbing and per-person
+  filtering are stated as unbuilt IN THE UI rather than half-implemented.
+- **Two honest limits, surfaced not hidden**: (1) `Sensor.recordHistory?` is a
+  **RECORDING** filter, not a display filter — the record schema has no sensor
+  dimension, so stored dwell cannot be attributed back and a toggle "does not remove
+  what it already contributed" (labelled as such). (2) **Two SIMULTANEOUSLY VISIBLE
+  tabs each run a recorder** and both merge additively, so shared dwell double-counts;
+  nothing is lost or corrupted (read-modify-write in one transaction) and a uniform
+  doubling is invisible after normalization, but a partly-open tab skews relative heat.
+  A `document.hidden` guard halves the exposure; a real fix wants cross-tab leader
+  election (BroadcastChannel/Web Locks). Documented at `flushPresenceHistory`.
+
 ### Upstream review (2026-08-19, 12 months of ESPHome + HA)
 - **LD2450 entity naming is SAFE** — the component's current docs match
   `sensor-discovery.ts`'s regexes byte-for-byte. ESPHome's 2026.1→2026.8 `id`/`name_id`
