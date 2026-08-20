@@ -92,8 +92,22 @@ Panes:
    `number` → input, `switch` → toggle, `select` → dropdown, `button` → press,
    everything else → read-only readout.
 5. **Diagnostics** — processing time, too-slow flag, presence, target count,
-   per-zone still/moving counts, and a `heading` vs `mount_angle` disagreement
-   warning.
+   per-zone still/moving counts, and a labelled side-by-side readout of
+   `Sensor.heading` and the device's `mount_angle`.
+
+   **CORRECTION (2026-08-19).** An earlier draft of this section specified a
+   *disagreement warning* between those two values. That was wrong and the
+   implementing agent caught it. `mount_angle` drives `tiltGrp.rotation.x`
+   (three-renderer.ts) — a downward TILT about local X — while `heading`
+   drives rotation about Y, a plan YAW. They are different axes, so comparing
+   them numerically is a category error: on a normal install (heading 90,
+   mount_angle 0) the warning fires on a correct configuration, and a warning
+   that cries wolf on a correct setup is worse than none. The audit's real
+   finding is that the two are **decoupled and a user cannot see both** — so
+   the deliverable is visibility, not an alarm. Show both, label what each
+   actually drives, claim nothing about their relationship, and note that the
+   firmware's own interpretation of `mount_angle` is unverified here (the
+   ESPHome component is out of tree).
 
 ### Write discipline (load-bearing)
 
