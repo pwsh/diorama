@@ -1,0 +1,484 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>BEDLANES …</title>
+<style>
+  body { margin:0; background:#0d1116; color:#cfd8dc; font:13px/1.5 sans-serif; padding:14px; }
+  h1 { font-size:15px; margin:0 0 10px; }
+  #summary { font-size:14px; font-weight:bold; margin:10px 0; padding:8px 10px; border-radius:5px; }
+  .okbg { background:#12331f; color:#69f0ae; } .badbg { background:#3a1414; color:#ff8a80; }
+  .row { display:flex; justify-content:space-between; gap:10px; padding:2px 0; border-bottom:1px solid #1c2530; }
+  .pass { color:#69f0ae; } .fail { color:#ff5252; }
+  .name { color:#90caf9; } .extra { color:#ffd54f; font-size:11px; }
+  #c { width:960px; height:600px; }
+</style>
+<h1>Bed lanes — two avatars lie one to each side of a queen / king</h1>
+<div id="summary">Running…</div>
+<div id="rows"></div>
+<div id="c"></div>
+
+<!--
+  BED LANES (2026-08-20, user-reported: "On king and queen beds the avatars
+  should be able to render one either side instead of just in the middle. 2
+  avatars in bed would rendered one to each side.")
+
+  The side-by-side lane machinery already existed and was already correct in its
+  shape; it was unreachable, for two INDEPENDENT reasons — this page pins both.
+
+    (1) THE GATE. `coversWouldHide` forced wantLie false whenever a bed had ≥2
+        occupants AND `sharedCovers`, and sharedCovers resolved as
+        `fu.sharedBedCovers !== false` — i.e. DEFAULT ON. So with two occupants
+        NEITHER avatar ever lay down; they stood inside the footprint until the
+        blanket lump engaged (>2 s) and hid them both. Side-by-side lying was
+        reachable only by manually unchecking "Two-person covers" on that piece.
+        FIX: the default now resolves from the bed's own lie CAPACITY —
+        `resolveBedSharedCovers` = explicit value, else `capacity < 2`. Covers ON
+        for twin/full (one lane — the blanket is the only two-in-bed read), OFF
+        for queen/king (they can genuinely lie one per side).
+
+    (2) THE SPACING. The lane offset divided the width by `used + 1`, so a pair
+        landed at ±w/6 — queen ±254 mm, king ±321 mm — i.e. both near the middle,
+        which is precisely what the user described. FIX: divisor `used`, so each
+        occupant is centred in its OWN half: ±w/4 (queen ±381, king ±482.5).
+
+  Capacity itself needed no change: floor(w / 700) already gives twin 990 → 1,
+  full 1370 → 1, queen 1524 → 2, king 1930 → 2 — exactly the two beds named.
+
+  EVERY assertion carries a negative control (the mmwave-history-test standard):
+  ok(name, cond, neg) records a FAILURE when `neg` is omitted, and passes only
+  when cond === true AND neg === false. Controls are real re-runs / real
+  measurements of a case where the property must NOT hold — never a literal.
+
+  Build recipe (from repo root; NEVER reuse stale bundles — copy order is
+  page FIRST, dist/assets SECOND, .mod.js LAST):
+    npm run build
+    H=/tmp/diorama-harness-bedlanes; rm -rf "$H"; mkdir -p "$H"
+    cp test-pages/bed-lanes-test.html "$H"/
+    cp -r dist/* "$H"/
+    npx esbuild src/geometry.ts --bundle --format=esm --outfile="$H"/geometry.mod.js
+    (cd "$H" && python3 -m http.server 8971 &)
+    google-chrome --headless=new --disable-gpu=false --use-angle=swiftshader \
+      --enable-unsafe-swiftshader --virtual-time-budget=90000 \
+      --dump-dom http://localhost:8971/bed-lanes-test.html
+-->
+<script type="module">
+  const G   = await import('./geometry.mod.js');
+  const mod = await import('./assets/three-renderer.js?v=' + Date.now());
+  const r   = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+
+  const checks = [];
+  // ── mmwave-history-test's negative-control discipline: an assertion with no
+  //    demonstrated failure mode is itself a failure.
+  const ok = (name, cond, neg) => {
+    if (neg === undefined) { checks.push({ name, pass: false, extra: 'NO NEGATIVE CONTROL' }); return; }
+    const pass = cond === true && neg === false;
+    checks.push({ name, pass, extra: pass ? '' : `cond=${cond} neg=${neg}` });
+  };
+  const near = (a, b, tol) => Number.isFinite(a) && Math.abs(a - b) <= tol;
+
+  const W = { twin: 990, full: 1370, queen: 1524, king: 1930 };
+  const KIND_W = k => G.FURNITURE_KINDS[k].w;
+
+  // Reference implementations of the PRE-FIX rules, used as negative controls.
+  const OLD_lateral  = (lane, used, w) => (used > 1 && lane >= 0) ? (lane - (used - 1) / 2) * (w / (used + 1)) : 0;
+  const OLD_covers   = fu => fu.sharedBedCovers !== false;
+
+  // ════════════════════════════════════════════════════════════════════════
+  // (A) PURE — lie capacity. Unchanged by this change, but it is the input the
+  //     new covers default is derived from, so it is pinned here too.
+  // ════════════════════════════════════════════════════════════════════════
+  ok('A1 twin (990) holds ONE sleeper',
+     G.bedLieCapacity(W.twin) === 1, G.bedLieCapacity(W.queen) === 1);
+  ok('A2 full (1370) holds ONE sleeper',
+     G.bedLieCapacity(W.full) === 1, G.bedLieCapacity(W.king) === 1);
+  ok('A3 queen (1524) holds TWO',
+     G.bedLieCapacity(W.queen) === 2, G.bedLieCapacity(W.twin) === 2);
+  ok('A4 king (1930) holds TWO',
+     G.bedLieCapacity(W.king) === 2, G.bedLieCapacity(W.full) === 2);
+  ok('A5 capacity comes from the LIVE def widths, not a kind table',
+     G.bedLieCapacity(KIND_W('bed')) === 2 && G.bedLieCapacity(KIND_W('bed_king')) === 2
+     && G.bedLieCapacity(KIND_W('bed_twin')) === 1 && G.bedLieCapacity(KIND_W('bed_full')) === 1,
+     G.bedLieCapacity(KIND_W('bed_twin')) === 2);
+  ok('A6 a degenerate width still yields at least one lane (never 0 / NaN)',
+     G.bedLieCapacity(0) === 1 && G.bedLieCapacity(-5) === 1 && G.bedLieCapacity(NaN) === 1,
+     G.bedLieCapacity(0) === 0);
+  ok('A7 the 700 mm lane divisor is unchanged',
+     G.BED_LANE_WIDTH_MM === 700, G.BED_LANE_WIDTH_MM === 600);
+
+  // ════════════════════════════════════════════════════════════════════════
+  // (B) PURE — lane offsets. THE spacing defect: ±w/4, not the old ±w/6.
+  // ════════════════════════════════════════════════════════════════════════
+  {
+    const a = G.bedLaneOffsetMm(0, 2, W.queen), b = G.bedLaneOffsetMm(1, 2, W.queen);
+    ok('B1 queen pair sits at ∓w/4 = ∓381 mm (each centred in its own half)',
+       near(a, -381, 1e-9) && near(b, 381, 1e-9),
+       near(a, OLD_lateral(0, 2, W.queen), 1e-9));   // control: the old ±w/6 = ∓254
+    ok('B1b …and the old pinched-to-the-middle value is genuinely different',
+       Math.abs(a) - Math.abs(OLD_lateral(0, 2, W.queen)) > 100,
+       near(Math.abs(a), Math.abs(OLD_lateral(0, 2, W.queen)), 1e-9));
+  }
+  {
+    const a = G.bedLaneOffsetMm(0, 2, W.king), b = G.bedLaneOffsetMm(1, 2, W.king);
+    ok('B2 king pair sits at ∓w/4 = ∓482.5 mm',
+       near(a, -482.5, 1e-9) && near(b, 482.5, 1e-9),
+       near(a, OLD_lateral(0, 2, W.king), 1e-9));
+  }
+  ok('B3 the two lanes are symmetric about the bed axis (sum = 0)',
+     near(G.bedLaneOffsetMm(0, 2, W.queen) + G.bedLaneOffsetMm(1, 2, W.queen), 0, 1e-9),
+     near(G.bedLaneOffsetMm(0, 2, W.queen) + G.bedLaneOffsetMm(1, 2, W.queen), 381, 1e-9));
+  ok('B4 a single occupant stays on the bed axis (no offset)',
+     G.bedLaneOffsetMm(0, 1, W.queen) === 0, G.bedLaneOffsetMm(0, 2, W.queen) === 0);
+  ok('B5 an over-capacity occupant (lane −1) gets no offset',
+     G.bedLaneOffsetMm(-1, 2, W.king) === 0, G.bedLaneOffsetMm(1, 2, W.king) === 0);
+  {
+    // Each lane's HALF-SHARE must stay on the mattress: |lat| + w/(2·used) = w/2.
+    const w = W.queen, lat = Math.abs(G.bedLaneOffsetMm(1, 2, w));
+    ok('B6 a lane exactly fills its own half of the mattress (|lat| + w/4 = w/2)',
+       near(lat + w / 4, w / 2, 1e-9), near(lat + w / 4, w / 3, 1e-9));
+  }
+
+  // ════════════════════════════════════════════════════════════════════════
+  // (C) PURE — shared-covers default resolution.
+  // ════════════════════════════════════════════════════════════════════════
+  ok('C1 ABSENT on a queen resolves to covers OFF (lie side by side)',
+     G.resolveBedSharedCovers({ w: W.queen }) === false,
+     OLD_covers({ w: W.queen }) === false);          // control: the old rule said ON
+  ok('C2 ABSENT on a king resolves to covers OFF',
+     G.resolveBedSharedCovers({ w: W.king }) === false, OLD_covers({ w: W.king }) === false);
+  ok('C3 ABSENT on a twin resolves to covers ON (one lane — blanket is the only read)',
+     G.resolveBedSharedCovers({ w: W.twin }) === true,
+     G.resolveBedSharedCovers({ w: W.queen }) === true);
+  ok('C4 ABSENT on a full resolves to covers ON',
+     G.resolveBedSharedCovers({ w: W.full }) === true, G.bedSharedCoversDefault(W.king) === true);
+  ok('C5 an EXPLICIT true wins on a queen (blanket restored on demand)',
+     G.resolveBedSharedCovers({ w: W.queen, sharedBedCovers: true }) === true,
+     G.resolveBedSharedCovers({ w: W.queen, sharedBedCovers: false }) === true);
+  ok('C6 an EXPLICIT false wins on a twin',
+     G.resolveBedSharedCovers({ w: W.twin, sharedBedCovers: false }) === false,
+     G.resolveBedSharedCovers({ w: W.twin, sharedBedCovers: true }) === false);
+  ok('C7 the resolved default DIFFERS from the old rule exactly on multi-lane beds',
+     G.resolveBedSharedCovers({ w: W.queen }) !== OLD_covers({ w: W.queen })
+     && G.resolveBedSharedCovers({ w: W.king })  !== OLD_covers({ w: W.king })
+     && G.resolveBedSharedCovers({ w: W.twin })  === OLD_covers({ w: W.twin })
+     && G.resolveBedSharedCovers({ w: W.full })  === OLD_covers({ w: W.full }),
+     G.resolveBedSharedCovers({ w: W.twin }) !== OLD_covers({ w: W.twin }));
+
+  // ════════════════════════════════════════════════════════════════════════
+  //  Renderer harness
+  // ════════════════════════════════════════════════════════════════════════
+  const FW = 8000, FD = 6000;
+  const BX = 4000, BY = 3000;                 // bed centre, world mm
+  const floorOf = (furniture) => ({
+    id: 'f1', name: 'F', w: FW, d: FD, sensors: [], motionSensors: [], envSensors: [],
+    walls: [], doors: [], windows: [], furniture, lights: [], switches: [], rooms: [],
+    bleProxies: [], presenceZones: [], groundAreas: [], voidAreas: [], pools: [], rulers: [],
+    cameras: [], robots: [], safetySensors: [], alarmPanels: [], alertBeacons: [],
+    thermostats: [], valves: [], plugs: [], infoCards: [], actionButtons: [],
+    calendarPanels: [], projectors: [], sprinklerZones: [], flagpoles: [], solarPanels: [],
+  });
+  const ctx = { entityOn: {}, roomNames: {}, timeBucket: 'day' };
+  const realNow = performance.now.bind(performance);
+  let fakeNow = realNow();
+  performance.now = () => fakeNow;
+  const DT = 16.7;
+
+  // World-space AABB of a rig's BODY meshes. Sprites (plumbob glyph, bubble,
+  // name label) are not meshes; the blob shadow is excluded explicitly (it is a
+  // floor decal far wider than the body) and so are inverted-hull outline shells.
+  const applyM4 = (e, x, y, z) => ({
+    x: e[0]*x + e[4]*y + e[8]*z  + e[12],
+    y: e[1]*x + e[5]*y + e[9]*z  + e[13],
+    z: e[2]*x + e[6]*y + e[10]*z + e[14],
+  });
+  const bodyBox = (h) => {
+    h.group.updateMatrixWorld(true);
+    const bb = { minX: Infinity, maxX: -Infinity, minZ: Infinity, maxZ: -Infinity };
+    h.group.traverse(o => {
+      if (!o.isMesh || o.userData.outline || o === h.blob) return;
+      const g = o.geometry; if (!g) return;
+      if (!g.boundingBox) g.computeBoundingBox();
+      const b = g.boundingBox; if (!b) return;
+      for (const cx of [b.min.x, b.max.x]) for (const cy of [b.min.y, b.max.y]) for (const cz of [b.min.z, b.max.z]) {
+        const p = applyM4(o.matrixWorld.elements, cx, cy, cz);
+        bb.minX = Math.min(bb.minX, p.x); bb.maxX = Math.max(bb.maxX, p.x);
+        bb.minZ = Math.min(bb.minZ, p.z); bb.maxZ = Math.max(bb.maxZ, p.z);
+      }
+    });
+    return bb;
+  };
+
+  // Run one bed scenario. `kind` = bed kind, `covers` = the stored
+  // sharedBedCovers value (undefined = absent = resolved default), `n` = number
+  // of occupants, `frames` = how long to settle. Returns per-rig measurements in
+  // the bed's OWN local frame (rotation 0 ⇒ scene +x = lateral, +z = headboard).
+  let runSeq = 0;
+  const run = ({ kind, covers, n, frames = 460, sampleAtLie = null, startAlong = 0 }) => {
+    r.clearTransientGroups();
+    const bedId = 'bed' + (++runSeq);
+    const d = G.FURNITURE_KINDS[kind];
+    const piece = { id: bedId, x: BX, y: BY, w: d.w, h: d.h, kind, rotation: 0 };
+    if (covers !== undefined) piece.sharedBedCovers = covers;
+    r.updateFloor(floorOf([piece]));
+    const bed = r._beds.find(b => b.id === bedId);
+    // Occupants spread across the bed width so the pairwise-separation nudge has
+    // nothing to do, and placed at `startAlong` along the head↔foot axis.
+    const keys = [];
+    const targets = [];
+    for (let i = 0; i < n; i++) {
+      const k = 't' + (i + 1);
+      keys.push(k);
+      const spread = n === 1 ? 0 : (i - (n - 1) / 2) * Math.min(600, d.w / (n + 0.5));
+      targets.push({ key: k, x: BX + spread, y: BY + startAlong, color: 0x4fc3f7 });
+    }
+    let sample = null;
+    for (let f = 0; f < frames; f++) {
+      fakeNow += DT;
+      r.updateTargets(targets, ctx);
+      if (sampleAtLie != null && !sample) {
+        const h0 = r._humanoids[keys[0]];
+        if (h0 && h0.lie >= sampleAtLie) {
+          h0.group.updateMatrixWorld(true);
+          sample = { lie: h0.lie, x: h0.group.position.x, z: h0.group.position.z };
+        }
+      }
+    }
+    const rigs = keys.map(k => {
+      const h = r._humanoids[k];
+      if (!h) return null;
+      h.group.updateMatrixWorld(true);
+      const bb = bodyBox(h);
+      return {
+        key: k, lie: h.lie, visible: h.group.visible, lieBedId: h.lieBedId,
+        lat: h.group.position.x - bed.cx,          // bed-local lateral (scene +x)
+        along: h.group.position.z - bed.cz,        // bed-local head↔foot (scene +z)
+        latMin: bb.minX - bed.cx, latMax: bb.maxX - bed.cx,
+      };
+    });
+    return { bed, rigs, cover: r._bedCovers[bedId] ?? null, sample, w: d.w, h: d.h };
+  };
+
+  // ════════════════════════════════════════════════════════════════════════
+  // (D) The renderer's bed RECORD carries the resolved default.
+  // ════════════════════════════════════════════════════════════════════════
+  ok('D1 a queen with no stored value records sharedCovers = false',
+     run({ kind: 'bed', n: 0, frames: 1 }).bed.sharedCovers === false,
+     run({ kind: 'bed_twin', n: 0, frames: 1 }).bed.sharedCovers === false);
+  ok('D2 a king with no stored value records sharedCovers = false',
+     run({ kind: 'bed_king', n: 0, frames: 1 }).bed.sharedCovers === false,
+     run({ kind: 'bed_full', n: 0, frames: 1 }).bed.sharedCovers === false);
+  ok('D3 an explicit true on a queen still records sharedCovers = true',
+     run({ kind: 'bed', covers: true, n: 0, frames: 1 }).bed.sharedCovers === true,
+     run({ kind: 'bed', covers: false, n: 0, frames: 1 }).bed.sharedCovers === true);
+
+  // ════════════════════════════════════════════════════════════════════════
+  // (E) TWO OCCUPANTS LIE — the headline. Both rigs reach lie ≈ 1 on a queen
+  //     and a king. Control: the same scenario with covers explicitly ON, which
+  //     is exactly what the old default did to EVERY queen — nobody lies.
+  // ════════════════════════════════════════════════════════════════════════
+  const Q2      = run({ kind: 'bed',      n: 2 });
+  const K2      = run({ kind: 'bed_king', n: 2 });
+  const Q2cov   = run({ kind: 'bed',      n: 2, covers: true });
+  const T2      = run({ kind: 'bed_twin', n: 2 });
+
+  ok('E1 both occupants of a QUEEN reach lie ≈ 1',
+     Q2.rigs.every(g => g && g.lie > 0.95),
+     Q2cov.rigs.every(g => g && g.lie > 0.95));
+  ok('E2 both occupants of a KING reach lie ≈ 1',
+     K2.rigs.every(g => g && g.lie > 0.95),
+     T2.rigs.every(g => g && g.lie > 0.95));   // control: a 1-lane twin pair cannot both lie
+  ok('E3 …and with covers explicitly ON nobody lies (the pre-fix behaviour)',
+     Q2cov.rigs.every(g => g && g.lie < 0.05), Q2.rigs.some(g => g.lie < 0.05));
+  ok('E4 both queen occupants latch onto the bed (lieBedId set)',
+     Q2.rigs.every(g => g.lieBedId === Q2.bed.id),
+     Q2cov.rigs.every(g => g.lieBedId === Q2cov.bed.id));
+
+  // ════════════════════════════════════════════════════════════════════════
+  // (F) ONE TO EACH SIDE — opposite signs, near-equal magnitude, ±w/4.
+  // ════════════════════════════════════════════════════════════════════════
+  // A rig that is NOT lying has no lane — its position is wherever it happens to
+  // be standing, which must never be read as a lane offset. `lieLat` makes that
+  // explicit (NaN), so the 1-lane-twin negative controls below fail for the RIGHT
+  // reason (nobody took a lane) rather than accidentally passing on a stance.
+  const lieLat = g => (g && g.lie > 0.5 ? g.lat : NaN);
+  for (const [label, S] of [['queen', Q2], ['king', K2]]) {
+    const [a, b] = S.rigs;
+    ok(`F1:${label} the two LYING rigs sit on OPPOSITE sides of the bed axis`,
+       Math.sign(lieLat(a)) === -Math.sign(lieLat(b))
+       && Math.abs(lieLat(a)) > 50 && Math.abs(lieLat(b)) > 50,
+       Math.sign(lieLat(T2.rigs[0])) === -Math.sign(lieLat(T2.rigs[1]))
+       && Math.abs(lieLat(T2.rigs[0])) > 50);   // control: 1-lane twin — nobody takes a lane
+    ok(`F2:${label} their offsets are equal in magnitude`,
+       near(Math.abs(lieLat(a)), Math.abs(lieLat(b)), 1.0),
+       near(Math.abs(lieLat(a)), 0, 1.0));
+    ok(`F3:${label} each is centred in its own half (|lat| = w/4, not the old w/6)`,
+       near(Math.abs(lieLat(a)), S.w / 4, 1.0),
+       near(Math.abs(lieLat(a)), S.w / 6, 1.0));   // control: the pre-fix spacing
+    ok(`F4:${label} the rendered lanes match the pure helper exactly`,
+       near(a.lat, G.bedLaneOffsetMm(0, 2, S.w), 1.0)
+       && near(b.lat, G.bedLaneOffsetMm(1, 2, S.w), 1.0),
+       near(a.lat, OLD_lateral(0, 2, S.w), 1.0));
+  }
+  ok('F5 a twin pair takes NO lane (single lane — neither rig lies)',
+     Number.isNaN(lieLat(T2.rigs[0])) && Number.isNaN(lieLat(T2.rigs[1])),
+     Number.isNaN(lieLat(Q2.rigs[0])));
+
+  // ════════════════════════════════════════════════════════════════════════
+  // (G) BOTH RIGS STAY VISIBLE at the default — no blanket, no hiding.
+  // ════════════════════════════════════════════════════════════════════════
+  ok('G1 both queen occupants remain VISIBLE (no covers hide)',
+     Q2.rigs.every(g => g.visible === true), Q2cov.rigs.every(g => g.visible === true));
+  ok('G2 both king occupants remain VISIBLE',
+     K2.rigs.every(g => g.visible === true), T2.rigs.every(g => g.visible === true));
+  ok('G3 no blanket lump is built for a default queen',
+     Q2.cover === null, Q2cov.cover === null);
+
+  // ════════════════════════════════════════════════════════════════════════
+  // (H) MEASURED SEPARATION + they stay on the mattress and do not interpenetrate.
+  // ════════════════════════════════════════════════════════════════════════
+  for (const [label, S] of [['queen', Q2], ['king', K2]]) {
+    const [a, b] = S.rigs;
+    const sep = Math.abs(a.lat - b.lat);
+    ok(`H1:${label} measured centre-to-centre separation = w/2 (${(S.w / 2).toFixed(0)} mm)`,
+       near(sep, S.w / 2, 2.0),
+       near(sep, S.w / 3, 2.0));               // control: the old ±w/6 pair = w/3 apart
+    // Body extents must not overlap — the actual "do they clip through each
+    // other" question, measured off the built rigs, not assumed from the offset.
+    const lo = a.lat < b.lat ? a : b, hi = a.lat < b.lat ? b : a;
+    const gap = hi.latMin - lo.latMax;
+    // Widest measured body half-extent, used to re-seat the SAME bodies on the
+    // OLD ±w/6 lanes (H4) and on a shared axis (H2's control).
+    const halfW = Math.max(lo.latMax - lo.lat, hi.lat - hi.latMin,
+                           lo.lat - lo.latMin, hi.latMax - hi.lat);
+    const oldGap = (S.w / 6) * 2 - 2 * halfW;
+    // Control: the SAME measured bodies both centred on the bed axis (one lane)
+    // — a real overlap, computed from the real half-widths, not a literal.
+    ok(`H2:${label} the two bodies do not interpenetrate (measured gap > 0)`,
+       gap > 0, (0 - 2 * halfW) > 0);
+    ok(`H2b:${label} the gap is a real clearance, not a hairline`,
+       gap > 100, gap > S.w);
+    ok(`H3:${label} every body edge stays on the mattress (|edge| ≤ w/2)`,
+       Math.max(Math.abs(a.latMin), Math.abs(a.latMax),
+                Math.abs(b.latMin), Math.abs(b.latMax)) <= S.w / 2,
+       Math.max(Math.abs(a.latMin), Math.abs(a.latMax)) <= 1);
+    ok(`H4:${label} the old ±w/6 lanes would have been measurably tighter`,
+       oldGap < gap, oldGap > gap);
+    // Longitudinal: both rigs lie on the mattress, offset toward the FOOT so the
+    // (pitched-back) body reaches the pillows — never past either end.
+    ok(`H5:${label} both rigs rest within the bed's head↔foot extent`,
+       Math.abs(a.along) <= S.h / 2 && Math.abs(b.along) <= S.h / 2,
+       Math.abs(a.along) <= 1);
+    ok(`H6:${label} both rigs share one head↔foot line (a row, not a stack)`,
+       near(a.along, b.along, 1.0), near(a.along, b.along + S.h / 4, 1.0));
+  }
+
+  // ════════════════════════════════════════════════════════════════════════
+  // (I) OVER CAPACITY — a third occupant on a king still STANDS (lane −1).
+  // ════════════════════════════════════════════════════════════════════════
+  {
+    const K3 = run({ kind: 'bed_king', n: 3 });
+    const lying = K3.rigs.filter(g => g.lie > 0.95);
+    ok('I1 exactly TWO of three king occupants lie down',
+       lying.length === 2, K3.rigs.filter(g => g.lie > 0.95).length === 3);
+    ok('I2 the third occupant stays standing (lie ≈ 0, no bed latch)',
+       K3.rigs[2].lie < 0.05 && K3.rigs[2].lieBedId == null,
+       K3.rigs[0].lie < 0.05);
+    ok('I3 the two who DO lie still take opposite lanes',
+       Math.sign(K3.rigs[0].lat) === -Math.sign(K3.rigs[1].lat)
+       && near(Math.abs(K3.rigs[0].lat), K3.w / 4, 1.0),
+       near(Math.abs(K3.rigs[0].lat), K3.w / 6, 1.0));
+    ok('I3b …and the standing third is not parked in a lane',
+       !near(Math.abs(K3.rigs[2].lat), K3.w / 4, 1.0),
+       !near(Math.abs(K3.rigs[0].lat), K3.w / 4, 1.0));
+    ok('I4 nobody is stacked on anyone (all three rigs visible)',
+       K3.rigs.every(g => g.visible === true), Q2cov.rigs.every(g => g.visible === true));
+  }
+
+  // ════════════════════════════════════════════════════════════════════════
+  // (J) EXPLICIT covers:true restores TODAY'S behaviour exactly — blanket lump
+  //     built, occupants hidden under it.
+  // ════════════════════════════════════════════════════════════════════════
+  {
+    const Qcov = run({ kind: 'bed', n: 2, covers: true, frames: 700 });
+    ok('J1 an explicit-covers queen builds the blanket lump',
+       Qcov.cover !== null, Q2.cover !== null);
+    ok('J2 …and hides both occupants under it',
+       Qcov.rigs.every(g => g.visible === false), Q2.rigs.every(g => g.visible === false));
+    ok('J3 …and neither of them lies down (covers replace the lie pose)',
+       Qcov.rigs.every(g => g.lie < 0.05), Q2.rigs.every(g => g.lie < 0.05));
+  }
+
+  // ════════════════════════════════════════════════════════════════════════
+  // (K) TWIN / FULL are UNCHANGED from today: covers on by default, two
+  //     occupants hide under the blanket exactly as before.
+  // ════════════════════════════════════════════════════════════════════════
+  {
+    const T2long = run({ kind: 'bed_twin', n: 2, frames: 700 });
+    const F2long = run({ kind: 'bed_full', n: 2, frames: 700 });
+    ok('K1 a twin still defaults to covers ON',
+       T2long.bed.sharedCovers === true, Q2.bed.sharedCovers === true);
+    ok('K2 a twin pair still builds the blanket and hides both (unchanged)',
+       T2long.cover !== null && T2long.rigs.every(g => g.visible === false),
+       Q2.cover !== null && Q2.rigs.every(g => g.visible === false));
+    ok('K3 a full pair likewise still hides under covers (unchanged)',
+       F2long.cover !== null && F2long.rigs.every(g => g.visible === false),
+       K2.cover !== null && K2.rigs.every(g => g.visible === false));
+    ok('K4 neither twin occupant lies (one lane, blanket instead)',
+       T2long.rigs.every(g => g.lie < 0.05), Q2.rigs.every(g => g.lie < 0.05));
+  }
+
+  // ════════════════════════════════════════════════════════════════════════
+  // (L) SOLO occupant unchanged — one person on a queen still lies, centred.
+  // ════════════════════════════════════════════════════════════════════════
+  {
+    const Q1 = run({ kind: 'bed', n: 1 });
+    ok('L1 a lone queen occupant lies down',
+       Q1.rigs[0].lie > 0.95, Q2cov.rigs[0].lie > 0.95);
+    ok('L2 …on the bed axis (a single lane has no lateral offset)',
+       Math.abs(Q1.rigs[0].lat) < 1, Math.abs(Q2.rigs[0].lat) < 1);
+    ok('L3 …and stays visible (no blanket for one person)',
+       Q1.rigs[0].visible === true && Q1.cover === null,
+       Q1.rigs[0].visible === true && Q1.cover !== null);
+  }
+
+  // ════════════════════════════════════════════════════════════════════════
+  // (M) FOOT-END ENTRY preserved. The lie blend routes X/Z through a foot-side
+  //     approach point IN THE OCCUPANT'S OWN LANE, so a rig slides up its side
+  //     rather than dropping in over the pillows. Start the occupants at the
+  //     HEAD end of the footprint — the worst case for this — and sample the
+  //     rig's position at the mid-blend (lie ≈ 0.5) waypoint.
+  // ════════════════════════════════════════════════════════════════════════
+  {
+    const S = run({ kind: 'bed', n: 2, sampleAtLie: 0.5, startAlong: 700 });
+    const footAlong = -(S.h / 2 - 150), headAlong = +(S.h / 2 - 150);
+    const s = S.sample;
+    ok('M0 the mid-blend waypoint was actually sampled',
+       !!s && s.lie >= 0.5 && s.lie < 0.75, !s);
+    const alongAt = s ? s.z - S.bed.cz : NaN;
+    ok('M1 at mid-blend the rig is at the FOOT-side approach point',
+       near(alongAt, footAlong, 60), near(alongAt, headAlong, 60));
+    ok('M2 …and NOT at the headboard end (never enters over the pillows)',
+       Math.abs(alongAt - headAlong) > S.h / 2,
+       Math.abs(alongAt - footAlong) > S.h / 2);
+    const latAt = s ? s.x - S.bed.cx : NaN;
+    ok('M3 the approach point is already in the occupant\'s own lane (±w/4)',
+       near(Math.abs(latAt), S.w / 4, 2.0), near(Math.abs(latAt), 0, 2.0));
+    ok('M4 both rigs still complete the lie from the head-end start',
+       S.rigs.every(g => g.lie > 0.95), Q2cov.rigs.every(g => g.lie > 0.95));
+  }
+
+  performance.now = realNow;
+  r.clearTransientGroups();
+
+  // ── report ──────────────────────────────────────────────────────────────
+  const pass = checks.filter(c => c.pass).length, total = checks.length;
+  const fails = checks.filter(c => !c.pass).map(c => c.name);
+  document.getElementById('rows').innerHTML = checks.map(c =>
+    `<div class="row"><span class="name">${c.name}</span>` +
+    `<span class="${c.pass ? 'pass' : 'fail'}">${c.pass ? 'PASS' : 'FAIL'} <span class="extra">${c.extra}</span></span></div>`).join('');
+  const title = pass === total ? `BEDLANES PASS ${pass}/${total}`
+                               : `BEDLANES FAIL ${pass}/${total} [${fails.join(',')}]`;
+  document.title = title;
+  const sum = document.getElementById('summary');
+  sum.textContent = title; sum.className = pass === total ? 'okbg' : 'badbg';
+  window.__RESULT__ = { title, pass, total, fails };
+</script>

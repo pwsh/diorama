@@ -39,7 +39,7 @@ import {
   envKindOf, envColor, envValueText, envHeight, envScale,
   INFO_CARD_MOUNT_DEFAULTS, INFO_CARD_SCALE_MIN, INFO_CARD_SCALE_MAX,
   infoCardText, infoCardMount, infoCardHeight, infoCardW, infoCardH, infoCardScale,
-  furnitureCat, type FurnitureCat, isBinKind, isScreenKind, isProjectorScreenKind, isWetBathKind, isVehicleKind, isStairsKind, isBedKind, STAIRS_MIN_RISE_MM, stairsRiseMm, stairsTreadCount, isClimateApplianceKind, isBladedFanKind,
+  furnitureCat, type FurnitureCat, isBinKind, isScreenKind, isProjectorScreenKind, isWetBathKind, isVehicleKind, isStairsKind, isBedKind, resolveBedSharedCovers, STAIRS_MIN_RISE_MM, stairsRiseMm, stairsTreadCount, isClimateApplianceKind, isBladedFanKind,
   isTreeKind, TREE_MIN_HEIGHT_MM, TREE_MAX_HEIGHT_MM,
   isMechanicalApplianceKind, mechanicalBindDomains, mechanicalRun,
   isRackKind, rackHealth, rackHealthColor,
@@ -5908,8 +5908,8 @@ export class Sidebar extends LitElement {
                   @click=${() => upd(() => { piece.color = undefined; })}>✕</button>
         </div>
         ${isBedKind(curKind as FurnitureKind) ? html`
-          <div class="row"><label title="Two occupants hide under a shared blanket (the lump breathes). Off: they lie side by side, no blanket.">Two-person covers</label>
-            <input type="checkbox" .checked=${piece.sharedBedCovers !== false}
+          <div class="row"><label title="Two occupants hide under a shared blanket (the lump breathes). Off: they lie side by side, no blanket. Default follows the bed: on for twin/full (no room to lie side by side), off for queen/king.">Two-person covers</label>
+            <input type="checkbox" .checked=${resolveBedSharedCovers(piece)}
                    @change=${(e: Event) => upd(() => {
                      piece.sharedBedCovers = (e.target as HTMLInputElement).checked;
                    })}>

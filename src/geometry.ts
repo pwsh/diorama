@@ -4130,6 +4130,41 @@ export function bedPillowLayout(kind: FurnitureKind | undefined, widthMm: number
   return { count, pitch, pw: pitch * 21 / 22 };
 }
 
+// Side-by-side LYING capacity of a bed, from its width alone (kind-independent —
+// a user-resized piece gets the capacity its real footprint earns). THE one home
+// for the 700 mm lane divisor: the renderer's lie-lane pre-pass, the shared-covers
+// default below and every test read this, never an inline floor(w / 700).
+// Canonical sizes: twin 990 → 1, full 1370 → 1, queen 1524 → 2, king 1930 → 2.
+export const BED_LANE_WIDTH_MM = 700;
+export function bedLieCapacity(widthMm: number): number {
+  return Math.max(1, Math.floor((Number.isFinite(widthMm) ? widthMm : 0) / BED_LANE_WIDTH_MM));
+}
+// Lane centre offsets along the bed's local +x for `used` occupants: each rig is
+// centred in ITS OWN equal share of the mattress width (divisor `used`, NOT
+// `used + 1` — the latter pinched a queen's pair to ±w/6 = ±254 mm, reading as
+// "both in the middle", which is exactly the reported defect). At used 2 this is
+// ±w/4: queen ±381 mm, king ±482.5 mm. Every offset stays inside the mattress
+// (|lat| + body half-width < w/2) by construction.
+export function bedLaneOffsetMm(lane: number, used: number, widthMm: number): number {
+  if (!(used > 1) || lane < 0) return 0;
+  return (lane - (used - 1) / 2) * (widthMm / used);
+}
+// Two-in-bed shared-covers (blanket lump + hidden rigs) resolution. ABSENT means
+// "whatever suits the bed": ON for a single-lane bed (a twin's two occupants have
+// nowhere to lie side by side, so the blanket is the only way to read them as
+// in bed together) and OFF for a multi-lane bed (a queen/king CAN lay one to each
+// side, which is what a real bed looks like). An explicit true/false from the
+// user always wins. Resolved ONCE into the renderer's bed record so the lie gate
+// and the covers pass can never disagree, and read by the sidebar checkbox so it
+// displays the EFFECTIVE value rather than a misleading "on".
+export function bedSharedCoversDefault(widthMm: number): boolean {
+  return bedLieCapacity(widthMm) < 2;
+}
+export function resolveBedSharedCovers(
+    fu: { w: number; sharedBedCovers?: boolean }): boolean {
+  return fu.sharedBedCovers ?? bedSharedCoversDefault(fu.w);
+}
+
 export function furnitureKind(f: { kind?: FurnitureKind }): FurnitureKind {
   return f.kind ?? 'block';
 }

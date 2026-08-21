@@ -21,6 +21,7 @@ import {
   uvParasolWanted,
   plantThirsty, PLANT_MOISTURE_DEFAULT_THRESHOLD,
   isStairsKind, stairsRiseMm, stairsTreadCount, stairsRiserCount, isBedKind, bedPillowLayout,
+  bedLieCapacity, bedLaneOffsetMm, resolveBedSharedCovers,
   isTreeKind, treeHeightMm,
   isVehicleKind, evStatusOf, evStatusColor, carChargeState,
   doorOpenFraction, garageDoorHeightMm, doorSlideDir, lighten,
@@ -7929,8 +7930,13 @@ export class ThreeDRenderer {
         this._beds.push({
           id: fu.id, x: fu.x, y: fu.y, w: fu.w, h: fu.h, rotation: fu.rotation,
           color: def.color, matressTop: def.ht * 1.05 + furnGY, cx: c.x, cz: c.z,
-          // Two-person shared-covers effect on unless explicitly disabled.
-          sharedCovers: fu.sharedBedCovers !== false,
+          // Two-person shared-covers effect. ABSENT resolves from the bed's lie
+          // capacity: ON for a single-lane bed (twin/full — no room to lie side
+          // by side, so the blanket is the only two-in-bed read), OFF for a
+          // multi-lane bed (queen/king lay one occupant to each side). Explicit
+          // user choice always wins. Resolved ONCE here so the lie gate
+          // (coversWouldHide) and _updateBedCovers can never disagree.
+          sharedCovers: resolveBedSharedCovers(fu),
         });
       }
     }
@@ -23947,7 +23953,7 @@ export class ThreeDRenderer {
         const l = furnitureWorldToLocal(bed.rotation, t.x - bed.x, t.y - bed.y);
         if (Math.abs(l.x) <= bed.w / 2 && Math.abs(l.y) <= bed.h / 2) keys.push(t.key);
       }
-      const cap = Math.max(1, Math.floor(bed.w / 700));
+      const cap = bedLieCapacity(bed.w);
       const sorted = [...keys].sort();
       // Lanes centered across the bed width (used lanes ≤ capacity); occupants
       // past capacity get lane −1 and never lie.
@@ -23956,8 +23962,10 @@ export class ThreeDRenderer {
         const k = sorted[i];
         const lane = i < cap ? i : -1;
         if (!(k in bedOfTarget)) bedOfTarget[k] = { id: bed.id, count: keys.length, lane, cap };
+        // Each occupant is centred in its OWN equal share of the mattress
+        // width (see bedLaneOffsetMm) — ±w/4 for a pair, not the old ±w/6.
         if (lane >= 0 && used > 1)
-          lieLateral[k] = (lane - (used - 1) / 2) * (bed.w / (used + 1));
+          lieLateral[k] = bedLaneOffsetMm(lane, used, bed.w);
       }
     }
 

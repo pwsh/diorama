@@ -242,7 +242,12 @@ export interface Furniture {
   powerEntity?: string | null; // appliance/TV: sensor.* (device_class power, W) driving the in-use
                               // glow/LED intensity (#8). VISUAL ONLY — never feeds effectiveState /
                               // activities. An unbound appliance reading > 10 W renders as in-use.
-  sharedBedCovers?: boolean;  // bed only: two-in-bed shared-covers effect (default/undefined = on).
+  // Bed only: the two-in-bed shared-covers effect (blanket lump + occupants
+  // hidden under it). ABSENT is NOT a flat "on" — it resolves from the bed's own
+  // lie capacity via resolveBedSharedCovers(): on for a single-lane bed
+  // (twin/full), OFF for a multi-lane bed (queen/king), which lays the two
+  // occupants one to each side instead. An explicit true/false always wins.
+  sharedBedCovers?: boolean;
                               // false → occupants lie side by side, no blanket lump.
   tempEntity?: string | null; // stove/oven (also fridge): sensor.* temperature reading. Shown as a
                               // small N° chip (2D) + camera-facing sprite (3D). Display only.
