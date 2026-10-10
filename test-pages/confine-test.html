@@ -32,6 +32,12 @@
      a clamped point rests on the wall band where `_regionOfWorld` may answer
      with the FAR side's region, and the room must still win.
 
+     LERP SEEDING: the page writes planner.lerpBy directly and sets
+     planner.stepperViews = 1 — standing in for the app's always-mounted 2D
+     canvas, which is the sole simulation stepper. Without it three-view's
+     _tickOnce would call advanceFrame → updateLerpGoals, re-derive the slots
+     from the (target-less) fake hass and despawn every seeded rig.
+
      Build recipe (from repo root; NEVER reuse stale bundles — copy test pages
      FIRST, dist assets SECOND):
        npm run build
@@ -172,6 +178,13 @@
      !!RIGHT && RIGHT !== LEFT && !pointInPolygon(6500, 3500, LEFT || []), '');
 
   const planner = new Planner();
+  // This harness seeds planner.lerpBy DIRECTLY (the fake hass carries no radar
+  // target entities). In the real app the always-mounted <diorama-canvas-2d>
+  // registers itself as the simulation stepper (Planner.stepperViews), so the
+  // 3D tick never calls advanceFrame → updateLerpGoals. Stand in for it here,
+  // or _tickOnce would re-derive the slots from hass.states and deactivate
+  // the hand-seeded targets.
+  planner.stepperViews = 1;
   await planner.connectWith(api);
   const stage = document.getElementById('stage');
   const view = document.createElement('diorama-three-view');

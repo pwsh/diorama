@@ -283,6 +283,31 @@
       ok('l: no deletion while input focused', onDelete(inp) === false && p.floor().furniture.length === 1, '');
       ok('l: deletion proceeds otherwise', onDelete(div) === true && p.floor().furniture.length === 0, '');
     }
+
+    // ── (m) selection / view state never records an undo step ────────────────
+    // switchFloor + setActiveSensor persist (the store keeps currentFloorId /
+    // activeSensorId) but must NOT push a no-op undo step or clear redo.
+    {
+      const f1 = floor('f1', 'Home', { sensors: [{ id: 's1', x: 1, y: 1, heading: 0, fov: 120, range: 6000, label: 'R' }] });
+      const { p } = await freshPlanner(makeStore([f1, floor('f2', 'Up')]));
+      p.store.floors[0].name = 'E1'; p.save();
+      p.undo();                                   // redo stack now holds 'E1'
+      p.switchFloor('f2');
+      ok('m: switchFloor keeps redo', p.canRedo === true, String(p.canRedo));
+      ok('m: switchFloor pushed no undo step', p.canUndo === false, String(p.canUndo));
+      ok('m: switchFloor persisted to cache',
+        JSON.parse(localStorage.getItem('diorama:store:v1')).currentFloorId === 'f2', '');
+      p.switchFloor('f1');
+      p.setActiveSensor('s1');
+      ok('m: setActiveSensor pushed no undo step', p.canUndo === false && p.canRedo === true,
+        `${p.canUndo}/${p.canRedo}`);
+      // A REAL edit afterwards: exactly ONE undo step, and undoing it restores
+      // the edit only (the selection is not a phantom step in between).
+      p.store.floors[0].name = 'E2'; p.save();
+      p.undo();
+      ok('m: next edit is one step', p.store.floors[0].name === 'Home' && !p.canUndo,
+        `${p.store.floors[0].name}/${p.canUndo}`);
+    }
   } catch (err) {
     ok('harness threw', false, (err && err.stack) ? err.stack.split('\n').slice(0, 3).join(' | ') : String(err));
   }

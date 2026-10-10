@@ -201,18 +201,22 @@
       ok('e: save()-only binding is slow', p._isSlowEntity('switch.save_only') === true, '');
     }
 
-    // ── (f) rev guard: rebuild only when configRev moves ─────────────────────
+    // ── (f) rev guard: rebuild only when the STORE revision moves ────────────
+    // (Not configRev: every emitConfig — incl. each bound number./switch. push —
+    // bumps that, which rebuilt the set on nearly every such event.)
     {
       const { p } = await freshPlanner(makeStore([floor('f1', 'Home')]));
       p._isSlowEntity('switch.x');
       const set1 = p._slowIdSet;
       ok('f: set built on first use', set1 instanceof Set, '');
-      ok('f: rev tracks configRev', p._slowIdsRev === p.configRev, `${p._slowIdsRev}/${p.configRev}`);
+      ok('f: rev tracks storeRev', p._slowIdsRev === p._storeRev, `${p._slowIdsRev}/${p._storeRev}`);
       p._isSlowEntity('switch.y'); p._isSlowEntity('number.z');
-      ok('f: no rebuild without configRev move', p._slowIdSet === set1, '');
       p.emitConfig();
       p._isSlowEntity('switch.y');
-      ok('f: rebuilt after configRev move', p._slowIdSet !== set1, '');
+      ok('f: no rebuild on emitConfig alone', p._slowIdSet === set1, '');
+      p.save();
+      p._isSlowEntity('switch.y');
+      ok('f: rebuilt after save() moves storeRev', p._slowIdSet !== set1, '');
       ok('f: rebuild does not emit config', (() => {
         const r = p.configRev; p._rebuildSlowIds(); return p.configRev === r;
       })(), '');

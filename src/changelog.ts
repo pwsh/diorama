@@ -22,6 +22,18 @@ export interface ChangelogEntry {
 export const CHANGELOG_DISPLAY_COUNT = 10;
 
 export const CHANGELOG: ChangelogEntry[] = [
+  // DRAFT — version not yet released; bump package.json + tag when cutting v0.67.0
+  {
+    version: 'v0.67.0', name: 'fine tuning', date: '2026-09-27',
+    notes: [
+      'New mmWave technical editor: live raw and smoothed targets, a zoomable zone canvas, every device setting your firmware exposes, and diagnostics — plus opt-in presence history drawn as a heat-map, stored only on this device',
+      'Background text goes places: set the train or plane to its own circle or square, dress the track with crossings, signals, tunnels and a station, or send cars carrying your message down a drawn road',
+      'A new Zoom toward the pointer option reaches the back of a big yard, avatars walk more smoothly, and two people in a queen or king bed lie one per side',
+      'Typing in number fields no longer fights you, and kiosk taps on hidden layers no longer toggle real devices',
+      'Lost Home Assistant connections recover cleanly, Valetudo room maps work over direct MQTT, and a long list of smaller fixes',
+      'Share a floor plan with every Home Assistant user — kiosk tablets and family accounts pick it from the list and edits sync both ways (one shell_command to paste, shown in Settings ▸ Floor Plan)',
+    ],
+  },
   {
     version: 'v0.66.1', name: 'feeders only', date: '2026-08-15',
     notes: [

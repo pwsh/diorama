@@ -23,10 +23,55 @@
        cp test-pages/fake-avatar-store.ts "$T"/avatar-store.ts
        npx esbuild "$T"/planner.ts --bundle --format=esm \
          --outfile=<harness>/planner.mod.js
-     (esbuild inlines the avatar-pack dynamic imports into one module.) -->
+       npx esbuild src/shared-config.ts --format=esm \
+         --outfile=<harness>/shared-config.mod.js
+     (esbuild inlines the avatar-pack dynamic imports into one module.)
+     Sections (n)–(u) cover SHARED configurations: window.fetch is faked for
+     /local/diorama/shared/* (served from the in-page SHARED map — 404 when
+     absent, which is what every pre-existing section sees), and the fake HaApi
+     emulates the `shell_command.diorama_shared_write` script (chunk sequence
+     rules + atomic replace) so a write lands in SHARED exactly like the real
+     python one-liner would. -->
 <script type="module">
   const V = '?v=' + Date.now();
   const { Planner } = await import('./planner.mod.js' + V);
+  const SC = await import('./shared-config.mod.js' + V);
+
+  // ── Fake shared storage: /local/diorama/shared/<name>.json ─────────────────
+  const SHARED = new Map();            // name → file text
+  const fetchLog = [];
+  const realFetch = window.fetch.bind(window);
+  window.fetch = async (url, opts) => {
+    const m = String(url).match(/\/local\/diorama\/shared\/([^/?]+)\.json(?:\?|$)/);
+    if (!m) return realFetch(url, opts);
+    fetchLog.push(m[1]);
+    if (!SHARED.has(m[1])) return new Response('404: Not Found', { status: 404 });
+    return new Response(SHARED.get(m[1]), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+  // Emulation of the python one-liner sharedWriteYaml() renders: name regex,
+  // `.part<seq>` sequencing, decode + JSON validation on the last chunk, atomic
+  // replace. Like HA, a script failure still reports success to the caller.
+  const SHELL = { enabled: true, silentFail: false, calls: [], parts: new Map() };
+  function shellWrite(d) {
+    SHELL.calls.push({ name: d.name, seq: d.seq, total: d.total, len: String(d.data).length });
+    if (SHELL.silentFail) return;
+    if (!/^[a-z0-9_-]{1,64}$/.test(d.name) || !(0 <= d.seq && d.seq < d.total && d.total <= 1000)) return;
+    if (d.seq === 0) SHELL.parts.set(d.name, { seq: 0, b: d.data });
+    else {
+      const pr = SHELL.parts.get(d.name);
+      if (!pr || pr.seq !== d.seq - 1) return;   // out of sequence → exit 1
+      pr.seq = d.seq; pr.b += d.data;
+    }
+    if (d.seq < d.total - 1) return;
+    const pr = SHELL.parts.get(d.name); SHELL.parts.delete(d.name);
+    let text;
+    try {
+      const bin = atob(pr.b); const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      text = new TextDecoder().decode(bytes); JSON.parse(text);
+    } catch { return; }
+    SHARED.set(d.name, text);
+  }
 
   const results = [];
   const ok = (name, cond, extra = '') => results.push({ name, pass: !!cond, extra: String(extra) });
@@ -47,7 +92,9 @@
 
   // ── Fake HaApi over a Map (the LocalApi seam) ──────────────────────────────
   class FakeHa {
-    constructor(seed) {
+    constructor(seed, opts = {}) {
+      this.admin = opts.admin; this.user = opts.user;
+      if (opts.offline) this.offline = true;
       this.map = new Map();
       for (const [k, v] of Object.entries(seed || {})) this.map.set(k, clone(v));
       this.states = {};
@@ -61,7 +108,17 @@
     }
     onState(fn) { this._stateCbs.push(fn); }
     onConn(fn) { this._connCbs.push(fn); }
-    callService() { return Promise.resolve(); }
+    callService(domain, service, data) {
+      if (domain === 'shell_command' && service === 'diorama_shared_write') {
+        if (!SHELL.enabled) return Promise.resolve({ success: false,
+          error: { code: 'not_found', message: 'Service shell_command.diorama_shared_write not found.' } });
+        shellWrite(data);
+        return Promise.resolve({ success: true });
+      }
+      return Promise.resolve();
+    }
+    isAdmin() { return this.admin; }
+    userName() { return this.user; }
     async getHistory() { return {}; }
     async getWeatherForecasts() { return null; }
     async getDevices() { return []; }
@@ -94,10 +151,10 @@
   const INDEX = 'diorama-configs';
   const LEGACY = 'diorama';
 
-  async function freshPlanner(seed) {
+  async function freshPlanner(seed, opts) {
     localStorage.removeItem('diorama:store:v1');
     localStorage.removeItem('diorama:configs');
-    const stub = new FakeHa(seed);
+    const stub = new FakeHa(seed, opts);
     const p = new Planner();
     p.connectWith(stub);
     await waitFor(() => p.configIndex !== null);
@@ -351,6 +408,255 @@
       ok('k: back to 1 config after delete', p.listConfigs().length === 1, `n=${p.listConfigs().length}`);
       await p.deleteConfig(p.activeConfigId);
       ok('k: delete refuses the last config', p.listConfigs().length === 1, `n=${p.listConfigs().length}`);
+    }
+
+    // ── (l) Store.alerts survives load (was missing from the field list) ─────
+    {
+      const s = makeStore('AlertsHome');
+      s.alerts = { enabled: false, showRepairs: false, minRepairSeverity: 'error', showInKiosk: true };
+      const { p } = await freshPlanner({ [LEGACY]: s });
+      ok('l: alerts config survives load', deepEq(p.store.alerts, s.alerts), JSON.stringify(p.store.alerts));
+      const env = await p.exportConfig();
+      const imp = await p.importConfig(JSON.stringify(env), 'AlertsCopy');
+      ok('l: alerts config survives export → import', imp.ok && deepEq(p.store.alerts, s.alerts),
+        JSON.stringify(p.store.alerts));
+    }
+
+    // ── (m) import validation happens BEFORE any write; pending save flushed ─
+    {
+      const { p, stub } = await freshPlanner({ [LEGACY]: makeStore('ImpHome') });
+      const n0 = p.listConfigs().length;
+      const idx0 = JSON.stringify(stub.peek(INDEX));
+      const bad = await p.importConfig(JSON.stringify({ floors: [] }), 'Empty');
+      ok('m: {"floors":[]} rejected', bad.ok === false && /floors/i.test(bad.error || ''), JSON.stringify(bad));
+      ok('m: rejected import registers no config', p.listConfigs().length === n0 &&
+        JSON.stringify(stub.peek(INDEX)) === idx0, `n=${p.listConfigs().length}`);
+      // A pending debounced edit lands on the OLD body before the import switches.
+      p.store.floors[0].name = 'PendingBeforeImport';
+      p.save();
+      const good = await p.importConfig(JSON.stringify({ diorama: 2, name: 'X', exportedAt: 'x', store: makeStore('Imported') }), 'X');
+      ok('m: import switches', good.ok && p.store.floors[0].name === 'Imported', p.store.floors[0].name);
+      ok('m: pending edit flushed onto the OLD body',
+        stub.peek(BODY('default'))?.floors?.[0]?.name === 'PendingBeforeImport',
+        stub.peek(BODY('default'))?.floors?.[0]?.name);
+    }
+
+    // ══ SHARED CONFIGURATIONS ═════════════════════════════════════════════════
+    // (n) pure module: chunk plan, name rules, YAML ↔ service-data agreement,
+    //     index parser never throws.
+    {
+      const L = SC.SHARED_CHUNK_B64;
+      ok('n: chunk size ≤ 96 KiB and a multiple of 4', L <= 96 * 1024 && L % 4 === 0, L);
+      const exact = 'a'.repeat(L / 4 * 3);                 // base64 length exactly L
+      ok('n: exactly one chunk at the boundary', SC.sharedChunkPlan(exact).chunks.length === 1);
+      ok('n: one byte over → 2 chunks', SC.sharedChunkPlan(exact + 'a').chunks.length === 2);
+      ok('n: empty payload → one (empty) chunk', SC.sharedChunkPlan('').chunks.length === 1);
+      const uni = JSON.stringify({ s: 'Größe ✓ 🏠'.repeat(20000) });
+      const plan = SC.sharedChunkPlan(uni);
+      ok('n: non-ASCII round-trips through the chunks', plan.chunks.length >= 2 &&
+        SC.base64ToUtf8(plan.chunks.join('')) === uni, plan.chunks.length);
+      ok('n: every chunk ≤ the cap', plan.chunks.every(c => c.length <= L));
+      ok('n: names accepted', ['abc', 'home-x1_2', 'a'.repeat(64)].every(n => SC.sanitizeSharedName(n) === n));
+      ok('n: bad names refused', ['../x', 'a/b', 'A', 'a.b', '', 'a'.repeat(65), null, 7]
+        .every(n => SC.sanitizeSharedName(n) === null));
+      ok('n: reserved ids refused for configs', !SC.sharedConfigIdOk('index') && !SC.sharedConfigIdOk('_probe') &&
+        SC.sharedConfigIdOk('home-ab12c'));
+      const yaml = SC.sharedWriteYaml();
+      const fields = Object.keys(SC.sharedWriteServiceData('x', 0, 1, ''));
+      ok('n: YAML templates exactly the service-data fields',
+        fields.join() === 'name,seq,total,data' && fields.every(f => yaml.includes(`"{{ ${f} }}"`)), fields.join());
+      ok('n: YAML names the command + dir', yaml.includes(SC.SHARED_WRITE_COMMAND + ': |-') &&
+        yaml.includes('"/config/www/diorama/shared"') && yaml.includes('os.replace('));
+      const pyBody = yaml.split('python3 -c "')[1].split('\n    " ')[0];
+      ok('n: script has no shlex/Jinja-hostile chars', !/["\\]|\{\{|\{%|\{#/.test(pyBody));
+      let threw = false; let r = [];
+      try {
+        r = [null, undefined, 'nope', '{', 42, { configs: 5 }, { configs: [null, 3, { id: '../x' }, { id: 'index' },
+          { id: 'ok-1', updatedAt: 'x' }, { id: 'ok-1', name: 'dup' }, { id: 'ok-2', name: 'Two', updatedAt: 9, sharedBy: 'Al' }] }]
+          .map(SC.parseSharedIndex);
+      } catch { threw = true; }
+      ok('n: parseSharedIndex never throws', !threw);
+      ok('n: garbage → empty index', r.slice(0, 6).every(x => x.version === 1 && x.configs.length === 0));
+      const last = r[6];
+      ok('n: valid entries kept, bad/dup/reserved dropped', last.configs.length === 2 &&
+        last.configs[0].id === 'ok-1' && last.configs[0].updatedAt === 0 && last.configs[0].name === 'ok-1' &&
+        last.configs[1].sharedBy === 'Al', JSON.stringify(last.configs));
+      ok('n: missing-service detection', SC.sharedErrorIsMissingService({ code: 'not_found' }) &&
+        SC.sharedErrorIsMissingService({ message: 'Service shell_command.diorama_shared_write not found.' }) &&
+        !SC.sharedErrorIsMissingService({ code: 'unauthorized', message: 'Unauthorized' }) &&
+        !SC.sharedErrorIsMissingService(null));
+      ok('n: sharedUrl', SC.sharedUrl('http://ha:8123/', 'index', 5) === 'http://ha:8123/local/diorama/shared/index.json?v=5' &&
+        SC.sharedUrl('', 'x', 'a b') === '/local/diorama/shared/x.json?v=a%20b');
+    }
+
+    // (o) non-shared behaviour is untouched: with no shared files, saves never
+    //     call the write command and nothing is marked shared.
+    {
+      SHARED.clear();
+      const c0 = SHELL.calls.length;
+      const { p, stub } = await freshPlanner({ [LEGACY]: makeStore('Plain') });
+      p.store.floors[0].name = 'PlainEdit';
+      await p.saveConfigNow();
+      ok('o: plain save writes user_data only', stub.peek(BODY('default'))?.floors?.[0]?.name === 'PlainEdit' &&
+        SHELL.calls.length === c0, SHELL.calls.length - c0);
+      ok('o: nothing marked shared', p.listConfigs().every(c => !('shared' in c) && !('sharedBy' in c)));
+      ok('o: status untouched', p.sharedStatus === 'unknown' && p.sharingAvailable === true, p.sharedStatus);
+      ok('o: the shared index WAS looked for (404 = no shares)', fetchLog.includes('index'));
+    }
+
+    // (p) share → a second HA user (fresh user_data, same shared files) sees it,
+    //     switches to it, and keeps it across a reload.
+    let A, stubA, B, stubB, sharedId;
+    {
+      SHARED.clear(); SHELL.calls = []; SHELL.parts.clear(); SHELL.enabled = true;
+      ({ p: A, stub: stubA } = await freshPlanner({ [LEGACY]: makeStore('SharedHome') }, { user: 'Alice' }));
+      await A.renameConfig('default', 'Family Home');
+      A.setNotes('n'.repeat(230000));                  // > 200 KB → ≥ 3 chunks
+      await A.saveConfigNow();
+      const r = await A.shareConfig('default');
+      sharedId = r.id;
+      ok('p: share ok', r.ok, r.error ?? '');
+      ok('p: "default" re-keyed (never collides with other users\u2019 Default)',
+        !!sharedId && sharedId !== 'default' && A.activeConfigId === sharedId &&
+        stubA.peek(INDEX).configs.some(c => c.id === sharedId) && !stubA.peek(INDEX).configs.some(c => c.id === 'default'),
+        sharedId);
+      const bodyCalls = SHELL.calls.filter(c => c.name === sharedId);
+      ok('p: body written in ≥ 3 chunks, each ≤ 96 KiB', bodyCalls.length >= 3 &&
+        bodyCalls.every(c => c.total === bodyCalls.length && c.len <= 96 * 1024) &&
+        bodyCalls.map(c => c.seq).join() === bodyCalls.map((_, i) => i).join(), bodyCalls.length);
+      const env = JSON.parse(SHARED.get(sharedId) ?? 'null');
+      ok('p: shared body is an export envelope', env?.diorama === 2 && env.name === 'Family Home' &&
+        env.store?.notes?.length === 230000 && env.store.floors[0].name === 'SharedHome');
+      const idx = SC.parseSharedIndex(SHARED.get('index'));
+      ok('p: index lists it (name + sharedBy)', idx.configs.length === 1 && idx.configs[0].id === sharedId &&
+        idx.configs[0].name === 'Family Home' && idx.configs[0].sharedBy === 'Alice', SHARED.get('index'));
+      ok('p: sharer sees it marked shared, status ok', A.listConfigs().find(c => c.id === sharedId)?.shared === true &&
+        A.sharedStatus === 'ok', A.sharedStatus);
+
+      ({ p: B, stub: stubB } = await freshPlanner({}, { admin: false, user: 'Kiosk' }));
+      const bl = B.listConfigs();
+      ok('p: other user lists own Default + the shared config', bl.length === 2 &&
+        bl.some(c => c.id === 'default' && !c.shared) && bl.some(c => c.id === sharedId && c.shared && c.name === 'Family Home'),
+        JSON.stringify(bl.map(c => [c.id, c.shared])));
+      await B.switchConfig(sharedId);
+      ok('p: other user loads the shared body', B.activeConfigId === sharedId &&
+        B.store.floors[0].name === 'SharedHome' && B.store.notes?.length === 230000, B.store.floors[0].name);
+      ok('p: shared body NOT copied into the reader\u2019s user_data', !stubB.has(BODY(sharedId)) &&
+        stubB.peek(INDEX).activeId === sharedId && !stubB.peek(INDEX).configs.some(c => c.id === sharedId));
+      const B2 = await reloadWith(stubB);
+      ok('p: reload restores the shared config as active', B2.activeConfigId === sharedId &&
+        B2.store.floors[0].name === 'SharedHome', `${B2.activeConfigId}/${B2.store.floors[0].name}`);
+      // A shared config is unshared, never deleted (even by its owner).
+      await A.newConfig('Spare');
+      await A.switchConfig(sharedId);
+      await A.deleteConfig(sharedId);
+      ok('p: deleteConfig refuses a shared config', A.activeConfigId === sharedId &&
+        A.listConfigs().some(c => c.id === sharedId && c.shared) && SHARED.has(sharedId), A.activeConfigId);
+    }
+
+    // (q) a save on a shared config round-trips through the chunks; the index
+    //     stamp advances; nothing lands in user_data.
+    {
+      const before = SC.parseSharedIndex(SHARED.get('index')).configs[0].updatedAt;
+      await new Promise(r => setTimeout(r, 5));
+      SHELL.calls = [];
+      B.store.floors[0].name = 'EditedByKiosk';
+      B.save();
+      await waitFor(() => SHARED.has(sharedId) && JSON.parse(SHARED.get(sharedId)).store.floors[0].name === 'EditedByKiosk'
+        && SC.parseSharedIndex(SHARED.get('index')).configs[0].updatedAt > before, 1500);
+      const env = JSON.parse(SHARED.get(sharedId));
+      ok('q: debounced save publishes the shared body', env.store.floors[0].name === 'EditedByKiosk' &&
+        env.store.notes.length === 230000, env.store.floors[0].name);
+      const bc = SHELL.calls.filter(c => c.name === sharedId);
+      ok('q: save went out in ≥ 3 sequenced chunks', bc.length >= 3 && bc[bc.length - 1].seq === bc[0].total - 1, bc.length);
+      const e = SC.parseSharedIndex(SHARED.get('index')).configs[0];
+      ok('q: index stamp advanced, other entries\u2019 fields kept', e.updatedAt > before && e.name === 'Family Home' &&
+        e.sharedBy === 'Alice', JSON.stringify(e));
+      ok('q: reader user_data untouched', !stubB.has(BODY(sharedId)));
+      ok('q: lastSavedAt = the published stamp', B.lastSavedAt === e.updatedAt);
+    }
+
+    // (r) concurrency: another user's newer version is picked up by refresh
+    //     (view/floor kept, undo reset) — but never over a recent local edit.
+    {
+      A.store.floors[0].name = 'LocalBeforeReload';   // A's own (unsaved-to-shared) tweak
+      A._lastLocalEditAt = 0;                          // no local edit in the last 5 s
+      const nWrites = SHELL.calls.length;
+      await A.refreshSharedIndex();
+      ok('r: refresh reloads the newer shared body', A.store.floors[0].name === 'EditedByKiosk', A.store.floors[0].name);
+      ok('r: floor kept + undo history reset', A.store.currentFloorId === 'f1' && !A.canUndo);
+      await sleep(700);   // past the 600 ms save debounce
+      ok('r: the reload wrote nothing back', SHELL.calls.length === nWrites && A._haSaveTimer === null,
+        SHELL.calls.length - nWrites);
+      // Negative control: B publishes again while A has a recent local edit.
+      B.store.floors[0].name = 'SecondKioskEdit';
+      await B.saveConfigNow();
+      A._lastLocalEditAt = Date.now();
+      await A.refreshSharedIndex();
+      ok('r: a recent local edit blocks the reload', A.store.floors[0].name === 'EditedByKiosk', A.store.floors[0].name);
+      A._lastLocalEditAt = 0;
+      await A.refreshSharedIndex();
+      ok('r: …and it lands once the edit is older than 5 s', A.store.floors[0].name === 'SecondKioskEdit', A.store.floors[0].name);
+    }
+
+    // (s) unshare: a non-admin reader may not; the owner copies it back.
+    {
+      ok('s: non-admin reader cannot unshare', !B.canUnshare(sharedId));
+      const rb = await B.unshareConfig(sharedId);
+      ok('s: unshareConfig refuses for them', rb.ok === false && SC.parseSharedIndex(SHARED.get('index')).configs.length === 1);
+      ok('s: owner can unshare', A.canUnshare(sharedId));
+      const ra = await A.unshareConfig(sharedId);
+      ok('s: unshare ok', ra.ok, ra.error ?? '');
+      ok('s: dropped from the shared index', SC.parseSharedIndex(SHARED.get('index')).configs.length === 0);
+      ok('s: body copied back into the owner\u2019s user_data', stubA.peek(BODY(sharedId))?.floors?.[0]?.name === 'SecondKioskEdit' &&
+        stubA.peek(BODY(sharedId))?.notes?.length === 230000);
+      ok('s: owner\u2019s entry no longer shared', A.listConfigs().find(c => c.id === sharedId)?.shared !== true);
+      ok('s: file left on disk as an orphan', SHARED.has(sharedId));
+      A.store.floors[0].name = 'PrivateAgain';
+      const nCalls = SHELL.calls.length;
+      await A.saveConfigNow();
+      ok('s: later saves go to user_data, not the shared file', SHELL.calls.length === nCalls &&
+        stubA.peek(BODY(sharedId))?.floors?.[0]?.name === 'PrivateAgain');
+      await B.refreshSharedIndex();
+      ok('s: reader still lists the open config (placeholder)', B.listConfigs().some(c => c.id === sharedId && !c.shared));
+      // Admin (unknown = allowed) unshare of a config they don't own.
+      const { p: C } = await freshPlanner({}, { user: 'Admin' });
+      await C.newConfig('Garage');
+      const rc = await C.shareConfig(C.activeConfigId);
+      const { p: D } = await freshPlanner({}, { admin: true });
+      ok('s: admin may unshare someone else\u2019s config', rc.ok && D.canUnshare(rc.id));
+    }
+
+    // (t) needs-command when the service is missing; Test write; silent failure.
+    {
+      SHELL.enabled = false;
+      const { p } = await freshPlanner({ [LEGACY]: makeStore('NoCmd') });
+      await p.newConfig('Cabin');
+      const r = await p.shareConfig(p.activeConfigId);
+      ok('t: share fails without the command', r.ok === false && p.sharedStatus === 'needs-command', p.sharedStatus);
+      ok('t: nothing published', !SC.parseSharedIndex(SHARED.get('index')).configs.some(c => c.name === 'Cabin'));
+      const t1 = await p.testSharedWrite();
+      ok('t: Test write reports needs-command', t1.ok === false && p.sharedStatus === 'needs-command');
+      SHELL.enabled = true;
+      const t2 = await p.testSharedWrite();
+      ok('t: Test write round-trips once configured', t2.ok && p.sharedStatus === 'ok' && SHARED.has('_probe'), t2.error ?? '');
+      SHELL.silentFail = true;   // HA reports success but the script failed
+      const r2 = await p.shareConfig(p.activeConfigId);
+      ok('t: a silently failing script is caught by the read-back', r2.ok === false && p.sharedStatus === 'error',
+        p.sharedLastError);
+      const t3 = await p.testSharedWrite();
+      ok('t: Test write catches it too', t3.ok === false && p.sharedStatus === 'error');
+      SHELL.silentFail = false;
+    }
+
+    // (u) offline (LocalApi-like) planners never touch shared storage.
+    {
+      const n0 = fetchLog.length;
+      const { p } = await freshPlanner({ [LEGACY]: makeStore('Off') }, { offline: true });
+      ok('u: offline → sharing unavailable', p.sharingAvailable === false);
+      ok('u: offline load made no shared fetch', fetchLog.length === n0, fetchLog.length - n0);
+      const r = await p.shareConfig(p.activeConfigId);
+      ok('u: share refused offline', r.ok === false);
     }
   } catch (err) {
     ok('harness threw', false, (err && err.stack) ? err.stack.split('\n').slice(0, 3).join(' | ') : String(err));

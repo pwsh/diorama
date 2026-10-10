@@ -63,15 +63,35 @@ export function normalizeCalendarEvents(raw: unknown, entityIds: string[]): CalE
       });
     }
   }
-  out.sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0));
+  // Chronological by the ACTUAL instant, not the string: events from calendars
+  // in different offsets ("…T09:00-07:00" vs "…T15:00+00:00") mis-order as
+  // strings. Unparseable starts sort last, ties fall back to the string.
+  out.sort((a, b) => {
+    const ta = calDateMs(a.start), tb = calDateMs(b.start);
+    const fa = Number.isFinite(ta), fb = Number.isFinite(tb);
+    if (fa && fb && ta !== tb) return ta - tb;
+    if (fa !== fb) return fa ? -1 : 1;
+    return a.start < b.start ? -1 : a.start > b.start ? 1 : 0;
+  });
   return out;
 }
+
+// A DATE-ONLY value ("2026-07-20", an all-day event) is a LOCAL calendar day.
+// `new Date('2026-07-20')` parses it as UTC midnight, which west of UTC is the
+// PREVIOUS local evening — the all-day event was never "today". Datetimes
+// (with or without an offset) keep the platform parse.
+export function parseCalDate(iso: string): Date {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso.trim());
+  if (m) return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  return new Date(iso);
+}
+function calDateMs(iso: string): number { return parseCalDate(iso).getTime(); }
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 export function isSameDay(iso: string, now: Date): boolean {
-  const d = new Date(iso);
+  const d = parseCalDate(iso);
   if (isNaN(d.getTime())) return false;
   return d.getFullYear() === now.getFullYear()
     && d.getMonth() === now.getMonth()
@@ -81,7 +101,7 @@ export function isSameDay(iso: string, now: Date): boolean {
 // "HH:mm" for a timed event; "All day" for all-day; "Mon 21" for a future day.
 export function calTimeLabel(ev: CalEvent, now: Date = new Date()): string {
   if (ev.allDay) return 'All day';
-  const d = new Date(ev.start);
+  const d = parseCalDate(ev.start);
   if (isNaN(d.getTime())) return '';
   if (isSameDay(ev.start, now)) {
     const hh = String(d.getHours()).padStart(2, '0');

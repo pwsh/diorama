@@ -34,7 +34,7 @@
   const M = await import('./align.mod.js' + V);
   const {
     Planner, drawAll, furnRotateHandlePx, FURN_ROTATE_OFFSET_PX,
-    onCanvasMouseDown, onCanvasMouseMove, onCanvasMouseUp, onCanvasClick,
+    onCanvasMouseDown, onCanvasMouseMove, onCanvasMouseUp, onCanvasClick, onCanvasDblClick,
     nearestAlign, bestAlignShift, ALIGN_DRAG_KINDS, ALIGN_POLY_DRAG_KINDS,
     resolveFurnitureWallCollision,
   } = M;
@@ -181,7 +181,11 @@
       const p = await freshPlanner(makeStore([floor('f1', 'Home', {
         furniture: [mkFurn('fu1', 3000, 3000)],
       })]));
-      drag(p, { x: 3000, y: 3000 }, { x: 3050, y: 3020 }, { release: false });
+      // 150 mm = 7.5 px at this view: past the 5 px click slop (alignment only
+      // engages once the pointer has left it — 2026-09 review) but still inside
+      // the 8 px / 160 mm tolerance of its OWN old centre, so an un-excluded
+      // self-entry WOULD snap it back.
+      drag(p, { x: 3000, y: 3000 }, { x: 3150, y: 3020 }, { release: false });
       ok('5: dragged item is excluded from its own pool', p.alignGuides.length === 0, JSON.stringify(p.alignGuides));
       ok('5: pool is empty on a bare floor', p.alignPool.xs.length === 0, p.alignPool.xs.length);
       onCanvasMouseUp(p, canvas, evAt(0, 0));
@@ -390,7 +394,9 @@
       p.activeGroundAreaId = 'g1';
       drawAll(canvas.getContext('2d'), p, view);
       onCanvasMouseDown(p, canvas, view, evAt(2400, 2410));
-      onCanvasMouseMove(p, canvas, view, evAt(2405, 2415));
+      // 120 mm = 6 px: past the 5 px click slop, which is where the pool is
+      // first built (alignment is off inside the slop — 2026-09 review).
+      onCanvasMouseMove(p, canvas, view, evAt(2520, 2415));
       const pxs = p.alignPool.xs;
       ok('13: poly drag pool ADDS other shapes\' vertices', pxs.includes(2600) && pxs.includes(2800) && pxs.includes(3000), pxs.length);
       ok('13: poly drag pool excludes the dragged shape', !pxs.includes(2500), pxs.length);
@@ -410,7 +416,8 @@
       for (let i = 0; i < 60; i++) walls.push(mkWall('w' + i, [{ x: i * 300, y: 12000 }, { x: i * 300, y: 15000 }, { x: 1 + i * 300, y: 15000 }]));
       const p = await freshPlanner(makeStore([floor('f1', 'Home', { furniture, walls })]));
       const t0 = performance.now();
-      drag(p, { x: 500, y: 400 }, { x: 520, y: 420 }, { release: false });
+      // 170 mm diagonal ≈ 8.5 px — past the click slop, so the pool is built here.
+      drag(p, { x: 500, y: 400 }, { x: 620, y: 520 }, { release: false });
       const t1 = performance.now();
       ok('14: big-floor pool built once', p.alignPool !== null && p.alignPool.xs.length === 399 + 180,
          `${p.alignPool.xs.length} candidates in ${(t1 - t0).toFixed(2)} ms`);
@@ -808,6 +815,136 @@
           a && b && `${Math.round(a.x - C.x)},${Math.round(a.y - C.y)} → ${Math.round(b.x - C.x)},${Math.round(b.y - C.y)}`);
         ok('18i: the offset constant is exported for the harness',
           FURN_ROTATE_OFFSET_PX > 0, FURN_ROTATE_OFFSET_PX);
+      }
+    }
+
+    // ── (19) Click-vs-drag is SCREEN px; no guides inside the click slop ────
+    // (2026-09 review.) A click-to-toggle fixture decides click/drag by how far
+    // the POINTER moved (5 px mouse), never by floor mm, and alignment only
+    // engages once the pointer has left that slop — a 1 px jitter used to snap
+    // the light onto a guide (8 px ≈ 160 mm here), pushing it past the old 30 mm
+    // threshold: no toggle AND the light silently moved.
+    {
+      const mkLightFloor = () => makeStore([floor('f1', 'Home', {
+        walls: [mkWall('w1', [{ x: 6000, y: 1000 }, { x: 6000, y: 9000 }])],
+        lights: [{ id: 'l1', x: 5940, y: 3000, entity_id: null }],
+      })]);
+      {
+        const p = await freshPlanner(mkLightFloor());
+        onCanvasMouseDown(p, canvas, view, evAt(5940, 3000));
+        onCanvasMouseMove(p, canvas, view, evAt(5960, 3000));   // 1 px jitter
+        ok('19a: a 1 px jitter draws NO guide (inside the click slop)', p.alignGuides.length === 0, JSON.stringify(p.alignGuides));
+        onCanvasMouseUp(p, canvas, evAt(5960, 3000));
+        const l = p.floor().lights[0];
+        ok('19a: …and the release is a CLICK: the light toggles', l.localState === 'on', l.localState);
+        ok('19a: …and stays exactly where it was', l.x === 5940 && l.y === 3000, `${l.x},${l.y}`);
+      }
+      {
+        // Zoomed OUT (1 px = 20 mm): a 10 px drag is 200 mm — a drag, not a click.
+        const p = await freshPlanner(mkLightFloor());
+        onCanvasMouseDown(p, canvas, view, evAt(5940, 3000));
+        onCanvasMouseMove(p, canvas, view, evAt(5940, 3200));
+        onCanvasMouseUp(p, canvas, evAt(5940, 3200));
+        const l = p.floor().lights[0];
+        ok('19b: a 10 px drag MOVES the light (no toggle)', l.localState !== 'on' && l.y !== 3000, `${l.localState} y=${l.y}`);
+      }
+      {
+        // Zoomed IN (1 px = 1 mm): a 25 px drag is only 25 mm of floor — the old
+        // 30 mm floor test called it a click; the screen-px rule calls it a drag.
+        const zv = { ox: 40, oy: 620, scale: 1 };
+        const zAt = (mx, my) => ({
+          clientX: rect.left + (mx * zv.scale + zv.ox) / dpr,
+          clientY: rect.top + (zv.oy - my * zv.scale) / dpr,
+          altKey: false, shiftKey: false, ctrlKey: false, metaKey: false,
+          button: 0, buttons: 1, preventDefault() {}, stopPropagation() {},
+        });
+        const p = await freshPlanner(makeStore([floor('f1', 'Home', {
+          lights: [{ id: 'l1', x: 300, y: 300, entity_id: null }],
+        })]));
+        onCanvasMouseDown(p, canvas, zv, zAt(300, 300));
+        onCanvasMouseMove(p, canvas, zv, zAt(325, 300));
+        onCanvasMouseUp(p, canvas, zAt(325, 300));
+        const l = p.floor().lights[0];
+        ok('19c: zoomed in, a 25 px / 25 mm drag is a DRAG (fine placement works)',
+          l.localState !== 'on' && l.x !== 300, `${l.localState} x=${l.x}`);
+      }
+    }
+
+    // ── (20) Double-click finish never records the last point twice ─────────
+    // A dblclick is click, click, dblclick: the latches used to append the
+    // finishing point twice, so [A, B, B] passed the ≥3 check as a zero-area
+    // polygon and a wall got a zero-length last segment. (2026-09 review.)
+    {
+      const click = (p, x, y) => { p.dragJustEnded = false; onCanvasClick(p, canvas, view, evAt(x, y)); };
+      const dbl = (p, x, y) => onCanvasDblClick(p, canvas, view, evAt(x, y));
+      {
+        const p = await freshPlanner(makeStore([floor('f1', 'Home')]));
+        p.setTool('ground');
+        click(p, 1000, 1000); click(p, 4000, 1000); click(p, 4000, 4000); click(p, 4000, 4000);
+        dbl(p, 4000, 4000);
+        const g = (p.floor().groundAreas ?? [])[0];
+        ok('20a: a triangle finished by double-click keeps exactly 3 distinct points',
+          g && g.points.length === 3, g ? JSON.stringify(g.points) : 'no area');
+      }
+      {
+        const p = await freshPlanner(makeStore([floor('f1', 'Home')]));
+        p.setTool('ground');
+        click(p, 1000, 1000); click(p, 4000, 1000); click(p, 4000, 1000);
+        dbl(p, 4000, 1000);
+        ok('20b: [A, B, B] + dblclick is NOT a (zero-area) polygon',
+          (p.floor().groundAreas ?? []).length === 0, JSON.stringify(p.floor().groundAreas));
+      }
+      {
+        const p = await freshPlanner(makeStore([floor('f1', 'Home')]));
+        p.setTool('path');
+        click(p, 1000, 1000); click(p, 5000, 1000); click(p, 5000, 1000);
+        dbl(p, 5000, 1000);
+        const g = (p.floor().groundAreas ?? [])[0];
+        ok('20c: a path finished by double-click has no zero-length last segment',
+          g && g.path && g.path.centerline.length === 2, g ? JSON.stringify(g.path?.centerline) : 'no path');
+      }
+      {
+        const p = await freshPlanner(makeStore([floor('f1', 'Home')]));
+        p.setWallAngleSnap(false);
+        p.setTool('wall');
+        click(p, 1000, 1000); click(p, 5000, 1000); click(p, 5000, 1000);
+        dbl(p, 5000, 1000);
+        const w = p.floor().walls[0];
+        const zeroSeg = w && w.points.some((q, i) => i > 0 && Math.hypot(q.x - w.points[i - 1].x, q.y - w.points[i - 1].y) < 1);
+        ok('20d: a wall finished by double-click has no zero-length segment',
+          w && w.points.length === 2 && !zeroSeg, w ? JSON.stringify(w.points) : 'no wall');
+      }
+    }
+
+    // ── (21) A pinch that interrupts a drag CANCELS it (restores press state) ─
+    {
+      const { cancelCanvasDrag } = M;
+      {
+        const p = await freshPlanner(makeStore([floor('f1', 'Home', {
+          walls: [mkWall('w1', [{ x: 6000, y: 1000 }, { x: 6000, y: 9000 }])],
+          furniture: [mkFurn('fu1', 3000, 3000)],
+        })]));
+        onCanvasMouseDown(p, canvas, view, evAt(3000, 3000));
+        onCanvasMouseMove(p, canvas, view, evAt(5900, 3400));
+        const moved = p.floor().furniture[0].x !== 3000;
+        cancelCanvasDrag(p);
+        const fu = p.floor().furniture[0];
+        ok('21a: cancelling a furniture drag restores its press-time position',
+          moved && fu.x === 3000 && fu.y === 3000 && p.drag === null, `${fu.x},${fu.y}`);
+        ok('21a: …and drops the alignment pool + guides',
+          p.alignPool === null && p.alignGuides.length === 0);
+        ok('21a: …and leaves no drag-ended latch to swallow the next tap', p.dragJustEnded === false);
+      }
+      {
+        const p = await freshPlanner(makeStore([floor('f1', 'Home', {
+          walls: [mkWall('w1', [{ x: 1000, y: 1000 }, { x: 5000, y: 1000 }])],
+        })]));
+        onCanvasMouseDown(p, canvas, view, evAt(3000, 1000));   // midpoint INSERT handle
+        const spliced = p.floor().walls[0].points.length === 3;
+        onCanvasMouseMove(p, canvas, view, evAt(3000, 2000));
+        cancelCanvasDrag(p);
+        ok('21b: cancelling an insert drag removes the spliced-in vertex',
+          spliced && p.floor().walls[0].points.length === 2, JSON.stringify(p.floor().walls[0].points));
       }
     }
   } catch (err) {

@@ -9,7 +9,7 @@
 // across both modes).
 
 import type { ConnStatus, HassState } from './types.js';
-import type { HaApi, StateListener, ConnListener, HaDevice, HaEntityReg, HaFloorReg, HaAreaReg, HistoryPoint, ForecastRecord } from './ha-client.js';
+import type { HaApi, StateListener, ConnListener, HaDevice, HaEntityReg, HaFloorReg, HaAreaReg, HistoryPoint, ForecastRecord, ServiceCallResult } from './ha-client.js';
 import { normalizeHistory, normalizeForecasts, normalizeRepairs, normalizeFloorRegistry, normalizeAreaRegistry } from './ha-client.js';
 import { normalizeCalendarEvents, type CalEvent } from './surfaces.js';
 import type { NotificationsUpdate, RepairIssue } from './alerts.js';
@@ -18,6 +18,8 @@ import type { NotificationsUpdate, RepairIssue } from './alerts.js';
 // long-stable subset (connection.sendMessagePromise / subscribeEvents).
 interface HassLike {
   states: Record<string, HassState>;
+  // The logged-in HA user (HA's frontend hass object always carries it).
+  user?: { is_admin?: boolean; name?: string } | null;
   connection: {
     sendMessagePromise<T = unknown>(msg: Record<string, unknown>): Promise<T>;
     subscribeEvents(
@@ -28,6 +30,11 @@ interface HassLike {
     subscribeMessage<T = unknown>(
       cb: (ev: T) => void, msg: Record<string, unknown>,
     ): Promise<() => void>;
+    // home-assistant-js-websocket Connection lifecycle events. 'ready' fires on
+    // EVERY (re)connect; 'disconnected' when the socket drops. Optional in the
+    // typing so a test fake without them still attaches.
+    addEventListener?(ev: 'ready' | 'disconnected' | 'reconnect-error', cb: () => void): void;
+    removeEventListener?(ev: 'ready' | 'disconnected' | 'reconnect-error', cb: () => void): void;
   };
 }
 
@@ -38,36 +45,93 @@ export class HassPanelAdapter implements HaApi {
   private _stateListeners: StateListener[] = [];
   private _connListeners: ConnListener[] = [];
   private _attached = false;
+  private _closed = false;
+  // state_changed unsubscribe handle (resolves async) — kept so close() can
+  // release HA's subscription instead of leaking it for the tab's lifetime.
+  private _unsubState: (() => void) | null = null;
+  private _connEvents: HassLike['connection'] | null = null;
+  // After HA's own reconnect the library re-subscribes state_changed for us,
+  // but any change that happened while we were down is lost — resync the whole
+  // map so a kiosk left running for days can't drift from HA's truth.
+  private _onReady = (): void => {
+    if (this._closed) return;
+    this._emitConn('connected');
+    void this.refreshStates().catch(() => { /* next ready / visibility refresh retries */ });
+  };
+  private _onDisconnected = (): void => {
+    if (!this._closed) this._emitConn('disconnected');
+  };
 
   // Called by the panel element every time HA pushes a new hass object.
   // Only the first call does setup; later calls are ignored because we track
   // state via our own state_changed subscription.
   attach(hass: HassLike): void {
-    if (this._attached) return;
+    if (this._attached || this._closed) return;
     this._attached = true;
     this._conn = hass.connection;
+    this._isAdmin = typeof hass.user?.is_admin === 'boolean' ? hass.user.is_admin : undefined;
+    this._userName = typeof hass.user?.name === 'string' && hass.user.name ? hass.user.name : undefined;
     this.states = { ...hass.states };
     this._emitConn('connected');
     this._emitState();
     this._conn.subscribeEvents(ev => {
+      if (this._closed) return;
       const { entity_id, new_state } = ev.data;
       if (new_state) this.states[entity_id] = new_state;
       else delete this.states[entity_id];
       this._emitState(entity_id);
-    }, 'state_changed').catch(err => {
+    }, 'state_changed').then(unsub => {
+      if (this._closed) { try { unsub(); } catch { /* ignore */ } return; }
+      this._unsubState = unsub;
+    }).catch(err => {
       console.error('diorama panel: subscribeEvents failed', err);
       this._emitConn('error');
     });
+    // Registered once per adapter (attach is one-shot above), so a later
+    // hass push can never double-register.
+    try {
+      this._conn.addEventListener?.('ready', this._onReady);
+      this._conn.addEventListener?.('disconnected', this._onDisconnected);
+      this._connEvents = this._conn;
+    } catch { /* not a real Connection — resync falls back to visibility refreshes */ }
   }
+
+  // Detach from HA's connection for good (Planner.dispose → hass.close). HA
+  // owns the socket, so this only releases OUR subscriptions/listeners.
+  // Idempotent; a closed adapter ignores further attach() calls.
+  close(): void {
+    if (this._closed) return;
+    this._closed = true;
+    try { this._unsubState?.(); } catch { /* ignore */ }
+    this._unsubState = null;
+    try {
+      this._connEvents?.removeEventListener?.('ready', this._onReady);
+      this._connEvents?.removeEventListener?.('disconnected', this._onDisconnected);
+    } catch { /* ignore */ }
+    this._connEvents = null;
+    this._conn = null;
+  }
+
+  private _isAdmin: boolean | undefined = undefined;
+  private _userName: string | undefined = undefined;
+  isAdmin(): boolean | undefined { return this._isAdmin; }
+  userName(): string | undefined { return this._userName; }
 
   connect(): void { /* no-op — HA owns the connection */ }
   onState(fn: StateListener): void { this._stateListeners.push(fn); }
   onConn(fn: ConnListener): void { this._connListeners.push(fn); }
 
-  callService(domain: string, service: string, data: Record<string, unknown>): unknown {
-    return this._conn?.sendMessagePromise({
-      type: 'call_service', domain, service, service_data: data,
-    });
+  // sendMessagePromise REJECTS on `success:false`; normalize to the resolved
+  // ServiceCallResult shape HassClient returns so a refused call (bad entity,
+  // HA error, dropped socket) never becomes an unhandled rejection at a bare
+  // fire-and-forget call site.
+  callService(domain: string, service: string, data: Record<string, unknown>): Promise<ServiceCallResult> {
+    if (!this._conn) return Promise.resolve({ success: false, error: { code: 'not_connected' } });
+    try {
+      return this._conn.sendMessagePromise({
+        type: 'call_service', domain, service, service_data: data,
+      }).then(() => ({ success: true }), (error: unknown) => ({ success: false, error }));
+    } catch (error) { return Promise.resolve({ success: false, error }); }
   }
 
   async getHistory(entityIds: string[], startISO: string, endISO: string): Promise<Record<string, HistoryPoint[]>> {
@@ -199,11 +263,8 @@ export class HassPanelAdapter implements HaApi {
   }
 
   async publishMqtt(topic: string, payload: string, retain = false): Promise<void> {
-    if (!this._conn) return;
-    await this._conn.sendMessagePromise({
-      type: 'call_service', domain: 'mqtt', service: 'publish',
-      service_data: { topic, payload, qos: 0, retain },
-    });
+    // Same resolve-never-reject contract as HassClient.publishMqtt.
+    await this.callService('mqtt', 'publish', { topic, payload, qos: 0, retain });
   }
 
   async getUserData<T = unknown>(key: string): Promise<T | null> {
@@ -259,6 +320,7 @@ export class HassPanelAdapter implements HaApi {
   async refreshStates(): Promise<void> {
     if (!this._conn) return;
     const res = await this._conn.sendMessagePromise<HassState[]>({ type: 'get_states' });
+    if (this._closed) return;
     if (Array.isArray(res)) {
       this.states = {};
       for (const s of res) this.states[s.entity_id] = s;

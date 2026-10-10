@@ -85,11 +85,17 @@ export function toKmh(v: number, unit?: string): number {
 
 // Precipitation RATE → mm/h. A bare 'mm' / 'in' unit is treated as an
 // accumulation-over-the-report-period rate proxy (best the panel can do
-// without a period); imperial rates convert inch→mm.
+// without a period); imperial rates convert inch→mm. A PER-DAY rate
+// (`mm/d`, `in/d`, `mm/day`, …) is divided by 24 — reading it as per-hour
+// overstated the rate 24× and tipped a drizzle into "pouring".
 export function toMmPerH(v: number, unit?: string): number {
   const u = (unit ?? '').toLowerCase().trim();
-  if (u.includes('in')) return v * 25.4;   // in/h or in
-  return v;                                 // mm/h or mm
+  const perDay = /\/\s*(d|day|24\s*h)$/.test(u);
+  const perMin = /\/\s*min$/.test(u);
+  // Imperial only when the unit STARTS with inches ('in', 'in/h', 'inch/d') —
+  // a substring test also caught 'mm/min'.
+  const mm = u.startsWith('in') ? v * 25.4 : v;
+  return perDay ? mm / 24 : perMin ? mm * 60 : mm;   // mm/h or mm passthrough
 }
 
 // Visibility → km. Miles → km; metres → km; km / blank passed through.
@@ -448,7 +454,10 @@ export async function fetchOpenMeteo(lat: number, lon: number): Promise<WeatherN
     +   ',cloud_cover,relative_humidity_2m,apparent_temperature,wind_gusts_10m,visibility,uv_index'
     + '&daily=weather_code&forecast_days=2'
     + '&hourly=precipitation_probability,weather_code&forecast_hours=4'
-    + '&wind_speed_unit=kmh&temperature_unit=celsius&timezone=auto';
+    // unixtime: with timezone=auto the hourly `time` strings are the LOCATION's
+    // local wall clock with no offset, which Date.parse then read in the
+    // BROWSER's zone — rainSoon's 3 h window was off by the zone difference.
+    + '&wind_speed_unit=kmh&temperature_unit=celsius&timezone=auto&timeformat=unixtime';
   try {
     const res = await fetch(url);
     if (!res.ok) return null;
@@ -477,7 +486,7 @@ export async function fetchOpenMeteo(lat: number, lon: number): Promise<WeatherN
       const probs = Array.isArray(j.hourly?.precipitation_probability) ? j.hourly!.precipitation_probability as unknown[] : [];
       const codes = Array.isArray(j.hourly?.weather_code) ? j.hourly!.weather_code as unknown[] : [];
       const recs = times.map((tm, i) => ({
-        datetime: String(tm),
+        datetime: openMeteoTimeIso(tm),
         precipitation_probability: numOM(probs[i]),
         condition: isFinite(Number(codes[i])) ? wmoToCondition(Number(codes[i]), true) : undefined,
       }));
@@ -487,6 +496,15 @@ export async function fetchOpenMeteo(lat: number, lon: number): Promise<WeatherN
   } catch {
     return null;
   }
+}
+
+// Open-Meteo `time` value → an absolute ISO instant. `timeformat=unixtime`
+// returns epoch SECONDS (the unambiguous form); an offset-less ISO string (the
+// default format) is passed through verbatim for back-compat with fixtures.
+export function openMeteoTimeIso(tm: unknown): string {
+  const n = typeof tm === 'number' ? tm : (typeof tm === 'string' && /^\d+$/.test(tm) ? Number(tm) : NaN);
+  if (Number.isFinite(n)) return new Date(n * 1000).toISOString();
+  return String(tm);
 }
 
 // Pure: normalize an Open-Meteo `current` block → the base WeatherNow (condition

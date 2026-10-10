@@ -457,6 +457,54 @@
     }
     performance.now = realNow;
 
+    // ── H3c–H3g (2026-09 renderer review): a seat pulled up to an OUTDOOR table.
+    // `hostTopY` (what the seated arm IK + the seat lift aim at) used to omit the
+    // HOST's grade offset while `seatY` included the chair's, so at a −600 mm
+    // grade the table top read 600 mm too high (the rig floated). The capture
+    // also ignored walls and the non-table seat kinds the editor excludes.
+    {
+      const spotsAt = (gl, furniture, walls = houseWalls) => {
+        r.clearTransientGroups();
+        r.updateFloor(mkFloor([], { walls, furniture }), sceneAt(gl));
+        return r._sitSpots;
+      };
+      const PT = { x: OUT.x, y: OUT.y + 1100 };   // chair 350 mm off the table's edge
+      const set = [fu('pt', 'picnic_table', PT.x, PT.y, 1800, 1500),
+                   fu('lcT', 'lawn_chair', OUT.x, OUT.y, 700, 1200)];
+      const lo = spotsAt(LOW, set).find(sp => sp.id.startsWith('lcT:'));
+      const zero = spotsAt(0, set).find(sp => sp.id.startsWith('lcT:'));
+      ok('H3c a chair beside an outdoor picnic table captures it as its host',
+         lo?.hostActivity === 'eat_at_table' && zero?.hostActivity === 'eat_at_table',
+         `lo=${lo?.hostActivity} zero=${zero?.hostActivity}`);
+      // Negative control: the pre-fix formula (def.ht + elevation) gives 750 at
+      // BOTH levels, which fails the LOW half.
+      ok('H3d the host table top rides the grade like the seat does',
+         !!lo && !!zero && near(zero.hostTopY, 750) && near(lo.hostTopY, 750 + LOW) &&
+         near(lo.hostTopY - lo.seatY, zero.hostTopY - zero.seatY),
+         `top0=${zero?.hostTopY} topLow=${lo?.hostTopY} seatLow=${lo?.seatY}`);
+      // A solid wall between chair and table: not "at" that table (doorways are
+      // opaque to a capture — the editor's seatBelongsToTable rule). An
+      // INVISIBLE divider is passable, which is the negative control.
+      const wallBetween = (kind) => [...houseWalls, { id: 'wb', kind,
+        points: [{ x: OUT.x - 2000, y: OUT.y + 300 }, { x: OUT.x + 2000, y: OUT.y + 300 }] }];
+      const walled = spotsAt(0, set, wallBetween('full')).find(sp => sp.id.startsWith('lcT:'));
+      const ghost = spotsAt(0, set, wallBetween('invisible')).find(sp => sp.id.startsWith('lcT:'));
+      ok('H3e a solid wall between seat and table blocks the capture (invisible does not)',
+         !!walled && walled.hostActivity == null && walled.hostTopY == null &&
+         ghost?.hostActivity === 'eat_at_table',
+         `walled=${walled?.hostActivity} invisible=${ghost?.hostActivity}`);
+      // A swing set's seats exist only for the swing itself (NON_TABLE_SEAT_KINDS).
+      const sw = spotsAt(0, [fu('pt', 'picnic_table', PT.x, PT.y, 1800, 1500),
+                             fu('sw', 'swingset', OUT.x, OUT.y + 200, 2800, 1600)])
+        .filter(sp => sp.id.startsWith('sw:'));
+      const lc = spotsAt(0, [fu('pt', 'picnic_table', PT.x, PT.y, 1800, 1500),
+                             fu('lcS', 'lawn_chair', OUT.x, OUT.y + 200, 700, 1200)])
+        .find(sp => sp.id.startsWith('lcS:'));
+      ok('H3f a swing set beside a picnic table is never captured as a dining seat',
+         sw.length === 2 && sw.every(sp => sp.hostActivity == null) && lc?.hostActivity === 'eat_at_table',
+         `swing=${sw.map(sp => sp.hostActivity).join(',')} chairSameSpot=${lc?.hostActivity}`);
+    }
+
     // ── H5: ground areas — an INDOOR area is floor covering and never moves.
     {
       const inArea = { id: 'ai', kind: 'concrete', points: sq(IN.x, IN.y, 400), elevationMm: 0 };

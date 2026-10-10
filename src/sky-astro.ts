@@ -355,7 +355,10 @@ export const MIN_STAR_ALT = 0.03; // rad ≈ 1.7°
 export function capSampleAltAz(n: number, minAltRad: number, seed = 0x51ed):
     { altRad: number; azRad: number }[] {
   let s = seed & 0x7fffffff;
-  const rnd = () => { s = (s * 1103515245 + 12345) & 0x7fffffff; return s / 0x7fffffff; };
+  // Exact 32-bit LCG step: `s * 1103515245` as a double reaches ~2^61, past the
+  // 2^53 mantissa, so the low bits the mask keeps were rounding noise (a
+  // degenerate, platform-shaped sequence). Math.imul multiplies mod 2^32 exactly.
+  const rnd = () => { s = (Math.imul(s, 1103515245) + 12345) & 0x7fffffff; return s / 0x7fffffff; };
   const sinMin = Math.sin(minAltRad);
   const out: { altRad: number; azRad: number }[] = [];
   for (let i = 0; i < n; i++) {

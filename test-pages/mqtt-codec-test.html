@@ -28,6 +28,7 @@
     import {
       encodeConnect, encodeSubscribe, encodePublish, encodePingReq, encodeDisconnect,
       encodeRemainingLength, decodePackets, matchTopicFilter,
+      payloadToString, bytesToBinaryString, MqttWsClient,
     } from './mqtt-ws.mod.js';
 
     const tests = [];
@@ -193,6 +194,83 @@
     mm('shorter filter no #', 'a/b', 'a/b/c', false);
     mm('misplaced # invalid', 'a/#/b', 'a/x/b', false);
     mm('valetudo map', 'valetudo/+/MapData/map-data', 'valetudo/robot1/MapData/map-data', true);
+
+    // ── (7) binary-safe payload strings ─────────────────────────────────────
+    // Valetudo's MapData is zlib BINARY: a UTF-8 decode would turn every invalid
+    // byte into U+FFFD and the map could never be inflated. Valid UTF-8 must
+    // still decode as text (Frigate JSON with non-ASCII names).
+    {
+      const utf = new TextEncoder().encode('{"camera":"garäge ✓"}');
+      ok('payloadToString: valid UTF-8 decodes as text', payloadToString(utf) === '{"camera":"garäge ✓"}');
+      // zlib header + the 0x80–0x9F band windows-1252 would remap + 0xff + NUL
+      const bin = Uint8Array.from([0x78, 0x9c, 0x80, 0x81, 0x8d, 0x9f, 0xa0, 0xff, 0x00, 0x41]);
+      const s = payloadToString(bin);
+      const back = Uint8Array.from(Array.from(s, c => c.charCodeAt(0)));
+      ok('payloadToString: binary is byte-for-byte (lossless)',
+        s.length === bin.length && hex(back) === hex(bin), `got ${hex(back)}`);
+      ok('payloadToString: binary has no U+FFFD', !s.includes('�'));
+      // Negative control: the OLD lossy decode really does destroy it.
+      ok('negative control: plain TextDecoder corrupts binary', new TextDecoder().decode(bin).includes('�'));
+      const big = new Uint8Array(200000); for (let i = 0; i < big.length; i++) big[i] = (i * 131) & 0xff;
+      const bs = bytesToBinaryString(big);
+      let same = bs.length === big.length;
+      for (let i = 0; same && i < big.length; i += 997) same = bs.charCodeAt(i) === big[i];
+      ok('bytesToBinaryString: 200 kB chunked, lossless', same, `len ${bs.length}`);
+      let threw = null;
+      try { encodePublish('x'.repeat(70000), 'p'); } catch (e) { threw = e; }
+      ok('encode: >65535-byte string throws (no silent truncation)', threw instanceof RangeError, String(threw));
+    }
+
+    // ── (8) client: text frames, binary PUBLISH delivery, keepalive watchdog ──
+    {
+      const sleep = ms => new Promise(r => setTimeout(r, ms));
+      class FakeWS {
+        constructor(url) {
+          this.url = url; this.readyState = 0; this.sent = []; this.pingreqs = 0;
+          this.onopen = this.onmessage = this.onclose = this.onerror = null;
+          FakeWS.last = this;
+          setTimeout(() => { this.readyState = 1; this.onopen && this.onopen(); }, 0);
+        }
+        set binaryType(_v) {}
+        send(b) {
+          this.sent.push(b);
+          const t = b[0] >> 4;
+          // CONNACK delivered as a TEXT frame (string) to exercise that path.
+          if (t === 1) this.onmessage && this.onmessage({ data: String.fromCharCode(0x20, 0x02, 0x00, 0x00) });
+          if (t === 12) { this.pingreqs++; if (FakeWS.answerPings) this.onmessage({ data: Uint8Array.from([0xd0, 0x00]).buffer }); }
+        }
+        close() { this.readyState = 3; this.onclose && this.onclose(); }
+      }
+
+      // text-frame CONNACK + binary PUBLISH
+      FakeWS.answerPings = true;
+      const c1 = new MqttWsClient({ url: 'ws://x/', clientId: 't', keepalive: 0.05, WebSocketCtor: FakeWS });
+      let msg = null; c1.onMessage(m => { msg = m; });
+      let connected = false;
+      await Promise.race([c1.connect().then(() => { connected = true; }), sleep(200)]);
+      ok('client: TEXT-frame CONNACK accepted (not dropped as empty)', connected && c1.status === 'up', c1.status);
+      const bin = Uint8Array.from([0x78, 0x9c, 0x80, 0x9f, 0xff]);
+      FakeWS.last.onmessage({ data: encodePublish('valetudo/r/MapData/map-data', bin).buffer });
+      ok('client: PUBLISH carries raw payloadBytes', msg && hex(msg.payloadBytes) === hex(bin), msg && hex(msg.payloadBytes));
+      ok('client: PUBLISH payload string is binary-safe',
+        msg && hex(Uint8Array.from(Array.from(msg.payload, ch => ch.charCodeAt(0)))) === hex(bin));
+      await sleep(300);   // ~6 keepalive periods, every ping answered
+      ok('watchdog: answered pings keep the link up', c1.status === 'up' && FakeWS.last.pingreqs >= 3,
+        `status=${c1.status} pings=${FakeWS.last.pingreqs}`);
+      c1.close();
+
+      // half-open: pings go unanswered → the watchdog fails the link
+      FakeWS.answerPings = false;
+      const c2 = new MqttWsClient({ url: 'ws://x/', clientId: 't', keepalive: 0.05, WebSocketCtor: FakeWS });
+      const seen = []; c2.onStatus(s => seen.push(s));
+      await c2.connect();
+      await sleep(40);
+      ok('watchdog: still up before 1.5 periods', c2.status === 'up', c2.status);
+      await sleep(260);
+      ok('watchdog: unanswered pings → error (half-open detected)',
+        seen.includes('error') && c2.status !== 'up', `seen=${seen}`);
+      c2.close();
+    }
 
     // ── render ───────────────────────────────────────────────────────────────
     const pass = tests.filter(t => t.ok).length;

@@ -9,9 +9,9 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -24,3 +24,25 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      # The three load-bearing build properties CLAUDE.md requires after any
+      # vite bump: three.js stays out of the startup chunk, output filenames
+      # stay stable/unhashed, and every relative chunk import carries the
+      # per-build ?v= query (chunkVersionQuery) that pins the module graph.
+      # NB dynamic imports are emitted with BACKTICKS (import(`./x.js?v=…`)),
+      # so the quote class must include ` or the check passes vacuously.
+      - name: Verify build invariants
+        run: |
+          set -eu
+          test "$(grep -c MeshToonMaterial dist/assets/app.js)" = 0
+          test -f dist/assets/app.js
+          test -f dist/assets/three-renderer.js
+          test -f dist/diorama-panel.js
+          test -f dist/diorama-card.js
+          Q='["'\''`]'
+          # positive control: the pattern family still finds versioned imports
+          test "$(cat dist/assets/*.js dist/*.js | grep -oE "(from|import\()[[:space:]]*${Q}\./[^\"'\`]*\?v=" | wc -l)" -gt 0
+          if grep -lE "(from|import\()[[:space:]]*${Q}\./[^\"'\`?]*${Q}" dist/assets/*.js dist/*.js; then
+            echo "::error::relative chunk import(s) in the files above are missing the ?v= build query"
+            exit 1
+          fi

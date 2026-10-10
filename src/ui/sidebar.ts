@@ -1,6 +1,7 @@
 import { LitElement, html, nothing } from 'lit';
 import { property, state } from 'lit/decorators.js';
 import { customElement } from './define.js';
+import { installNumCommit } from './num-commit.js';
 import { startZoneEdit } from '../canvas-interact.js';
 import type { Planner, Tool } from '../planner.js';
 import { NEW_ROOM, NEW_LANDMARK } from '../planner.js';
@@ -49,6 +50,7 @@ import {
   floorsDisplayOrder,
 } from '../geometry.js';
 import { solveHomography, homographyResidualsMm } from '../homography.js';
+import { padZoneVertices } from '../sensor-discovery.js';
 import {
   resolveSunPlan, solarAim, solarTrackOpts, solarRotation, solarPowerValue, solarPowerText,
   SOLAR_FIXED_AZIMUTH_DEG, SOLAR_FIXED_TILT_DEG, SOLAR_TILT_MIN, SOLAR_TILT_MAX,
@@ -56,7 +58,7 @@ import {
 import { demoSunAltAz } from '../weather.js';
 import { CLOCK_PRESETS, DATE_PRESETS, type ValueRule, type RuleOp } from '../value-rules.js';
 import type { Vec2, InfoCard, InfoCardMount, InfoCardDisplayMode, ActionButton, ActionKind, Ruler, DimensionMode, NeighborhoodConfig, DoorKind, GarageStyle } from '../types.js';
-import { resolveRulerEnds } from '../geometry.js';
+import { resolveRulerEnds, doorOpenFraction } from '../geometry.js';
 import { floorElevationMm, DOOR_DEFAULT_W, doorDefaultWidth, isSlidingDoorKind,
   isDoubleLeafDoorKind, rotateDoorAboutCenter, rotateWindowAboutCenter,
   GARAGE_DOOR_H, GARAGE_HEIGHT_MIN, GARAGE_HEIGHT_MAX,
@@ -214,6 +216,20 @@ const IDENTIFY_GROUPED_SECTIONS = new Set([
   'robots', 'safety', 'sensors', 'solar', 'sprinklers', 'thermostats', 'valves', 'windows',
 ]);
 
+// A rule operand is stored as a NUMBER only when the WHOLE trimmed text is a
+// plain numeric literal — the same strict gate value-rules.ts's formatter uses.
+// parseFloat's prefix parse turned "12:30" into 12, "2026-07-20" into 2026 and
+// "10|20" into 10 while the field kept showing the text, so eq/contains/regex
+// rules against times, dates and enum strings silently compared the wrong thing.
+const STRICT_NUMERIC = /^[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?$/i;
+export function ruleValueFromText(text: string): string | number {
+  const t = text.trim();
+  return STRICT_NUMERIC.test(t) ? parseFloat(t) : text;
+}
+
+// Numeric fields commit on `change`; see num-commit.ts for the two gaps it closes.
+installNumCommit();
+
 @customElement('diorama-sidebar')
 export class Sidebar extends LitElement {
   @property({ attribute: false }) planner!: Planner;
@@ -282,6 +298,12 @@ export class Sidebar extends LitElement {
       return Array.isArray(arr) ? arr.filter((x): x is string => typeof x === 'string') : [];
     } catch { return []; }
   }
+  // Range-slider live preview: apply + repaint on every `input` step WITHOUT
+  // save(), so the whole drag lands as ONE undo step when the slider's `change`
+  // (pointer release / keyboard step) calls planner.save(). The bg-image opacity
+  // slider's preview/commit idiom, generalized.
+  private _rangePreview(mut: () => void): void { mut(); this.planner.emitConfig(); }
+
   private _persistCollapsed(): void {
     try { localStorage.setItem('diorama:sidebar:collapsed', JSON.stringify([...this._collapsed])); }
     catch { /* private mode / quota — collapse state is best-effort */ }
@@ -740,7 +762,7 @@ export class Sidebar extends LitElement {
                  style="width:82px;background:#111;color:var(--text);border:1px solid var(--border);
                         border-radius:4px;padding:2px 4px;font-size:11px"
                  placeholder=${`auto: ${floorElevationMm(floors, f.id)}`}
-                 .value=${f.elevationMm == null ? '' : String(f.elevationMm)}
+                 .value=${f.elevationMm == null ? '' : String(f.elevationMm)} data-model=${f.elevationMm == null ? '' : String(f.elevationMm)}
                  @change=${(e: Event) => {
                    const raw = (e.target as HTMLInputElement).value.trim();
                    const v = raw === '' ? undefined : Number(raw);
@@ -1270,32 +1292,32 @@ export class Sidebar extends LitElement {
                  @input=${(e: Event) => upd(() => { m.label = (e.target as HTMLInputElement).value; })}>
         </div>
         <div class="row"><label>X (mm)</label>
-          <input type="number" .value=${String(Math.round(m.x))}
-                 @input=${(e: Event) => upd(() => { m.x = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
+          <input type="number" .value=${String(Math.round(m.x))} data-model=${String(Math.round(m.x))}
+                 @change=${(e: Event) => upd(() => { m.x = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
         </div>
         <div class="row"><label>Y (mm)</label>
-          <input type="number" .value=${String(Math.round(m.y))}
-                 @input=${(e: Event) => upd(() => { m.y = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
+          <input type="number" .value=${String(Math.round(m.y))} data-model=${String(Math.round(m.y))}
+                 @change=${(e: Event) => upd(() => { m.y = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
         </div>
         <div class="row"><label>Heading (°)</label>
-          <input type="number" .value=${String(Math.round(m.heading))}
-                 @input=${(e: Event) => upd(() => {
+          <input type="number" .value=${String(Math.round(m.heading))} data-model=${String(Math.round(m.heading))}
+                 @change=${(e: Event) => upd(() => {
                    const v = parseFloat((e.target as HTMLInputElement).value) || 0;
                    m.heading = ((Math.round(v) % 360) + 360) % 360;
                  })}>
         </div>
         <div class="row"><label>FOV (°)</label>
-          <input type="number" min="5" max="360" .value=${String(Math.round(m.fov))}
-                 @input=${(e: Event) => upd(() => {
-                   const v = parseFloat((e.target as HTMLInputElement).value) || 0;
-                   m.fov = Math.max(5, Math.min(360, v));
+          <input type="number" min="5" max="360" .value=${String(Math.round(m.fov))} data-model=${String(Math.round(m.fov))}
+                 @change=${(e: Event) => upd(() => {
+                   const v = parseFloat((e.target as HTMLInputElement).value);
+                   if (isFinite(v)) m.fov = Math.max(5, Math.min(360, v));
                  })}>
         </div>
         <div class="row"><label>Range (mm)</label>
-          <input type="number" min="100" .value=${String(Math.round(m.range))}
-                 @input=${(e: Event) => upd(() => {
-                   const v = parseFloat((e.target as HTMLInputElement).value) || 0;
-                   m.range = Math.max(100, v);
+          <input type="number" min="100" .value=${String(Math.round(m.range))} data-model=${String(Math.round(m.range))}
+                 @change=${(e: Event) => upd(() => {
+                   const v = parseFloat((e.target as HTMLInputElement).value);
+                   if (isFinite(v)) m.range = Math.max(100, v);
                  })}>
         </div>
         <div class="row"><label>Color</label>
@@ -1318,9 +1340,10 @@ export class Sidebar extends LitElement {
         <div class="row"><label>Intensity</label>
           <input type="range" min="0" max="2" step="0.05" .value=${String(motionIntensity(m))}
                  style="flex:1"
-                 @input=${(e: Event) => upd(() => {
+                 @input=${(e: Event) => this._rangePreview(() => {
                    m.intensity = parseFloat((e.target as HTMLInputElement).value) || 0;
-                 })}>
+                 })}
+                 @change=${() => this.planner.save()}>
           <span style="font-size:10px;color:var(--text-dim);margin-left:4px;min-width:28px;text-align:right">
             ${motionIntensity(m).toFixed(2)}
           </span>
@@ -1434,16 +1457,16 @@ export class Sidebar extends LitElement {
                  @input=${(e: Event) => upd(() => { en.label = (e.target as HTMLInputElement).value; })}>
         </div>
         <div class="row"><label>X (mm)</label>
-          <input type="number" .value=${String(Math.round(en.x))}
-                 @input=${(e: Event) => upd(() => { en.x = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
+          <input type="number" .value=${String(Math.round(en.x))} data-model=${String(Math.round(en.x))}
+                 @change=${(e: Event) => upd(() => { en.x = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
         </div>
         <div class="row"><label>Y (mm)</label>
-          <input type="number" .value=${String(Math.round(en.y))}
-                 @input=${(e: Event) => upd(() => { en.y = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
+          <input type="number" .value=${String(Math.round(en.y))} data-model=${String(Math.round(en.y))}
+                 @change=${(e: Event) => upd(() => { en.y = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
         </div>
         <div class="row"><label>Height (mm)</label>
-          <input type="number" min="0" .value=${String(Math.round(envHeight(en)))}
-                 @input=${(e: Event) => upd(() => {
+          <input type="number" min="0" .value=${String(Math.round(envHeight(en)))} data-model=${String(Math.round(envHeight(en)))}
+                 @change=${(e: Event) => upd(() => {
                    const v = parseFloat((e.target as HTMLInputElement).value);
                    en.height = isFinite(v) ? Math.max(0, v) : ENV_DEFAULTS.height;
                  })}>
@@ -1451,9 +1474,10 @@ export class Sidebar extends LitElement {
         <div class="row"><label>Size</label>
           <input type="range" min=${ENV_SCALE_MIN} max=${ENV_SCALE_MAX} step="0.1"
                  .value=${String(envScale(en))} style="flex:1"
-                 @input=${(e: Event) => upd(() => {
+                 @input=${(e: Event) => this._rangePreview(() => {
                    en.scale = parseFloat((e.target as HTMLInputElement).value) || 1;
-                 })}>
+                 })}
+                 @change=${() => this.planner.save()}>
           <span style="font-size:10px;color:var(--text-dim);margin-left:4px;min-width:28px;text-align:right">
             ${envScale(en).toFixed(1)}×
           </span>
@@ -1575,11 +1599,11 @@ export class Sidebar extends LitElement {
             ${OPS.map(o => html`<option value=${o.v} ?selected=${r.op === o.v}>${o.label}</option>`)}
           </select>
           <input style="width:52px;font-size:10px" .value=${String(r.value)}
-                 @input=${(e: Event) => upd(() => {
-                   const v = (e.target as HTMLInputElement).value;
-                   const n = parseFloat(v); r.value = isNaN(n) ? v : n; })}>
+                 @change=${(e: Event) => upd(() => { r.value = ruleValueFromText((e.target as HTMLInputElement).value); })}>
           ${r.op === 'between' ? html`<input style="width:44px;font-size:10px" placeholder="max" .value=${r.value2 ?? ''}
-                 @input=${(e: Event) => upd(() => { r.value2 = parseFloat((e.target as HTMLInputElement).value) || 0; })}>` : nothing}
+                 @change=${(e: Event) => upd(() => {
+                   const n = parseFloat((e.target as HTMLInputElement).value);
+                   if (isFinite(n)) r.value2 = n; })}>` : nothing}
           <input type="color" style="width:26px;padding:0" .value=${r.color ?? '#ff5252'}
                  @input=${(e: Event) => upd(() => { r.color = (e.target as HTMLInputElement).value; })}>
           <label style="font-size:9px;color:var(--text-dim);display:flex;align-items:center;gap:2px" title="Flash / pulse">
@@ -1620,16 +1644,16 @@ export class Sidebar extends LitElement {
           </select>
         </div>
         <div class="row"><label>X (mm)</label>
-          <input type="number" .value=${String(Math.round(ic.x))}
-                 @input=${(e: Event) => upd(() => { ic.x = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
+          <input type="number" .value=${String(Math.round(ic.x))} data-model=${String(Math.round(ic.x))}
+                 @change=${(e: Event) => upd(() => { ic.x = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
         </div>
         <div class="row"><label>Y (mm)</label>
-          <input type="number" .value=${String(Math.round(ic.y))}
-                 @input=${(e: Event) => upd(() => { ic.y = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
+          <input type="number" .value=${String(Math.round(ic.y))} data-model=${String(Math.round(ic.y))}
+                 @change=${(e: Event) => upd(() => { ic.y = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
         </div>
         <div class="row"><label>Height (mm)</label>
-          <input type="number" min="0" .value=${String(Math.round(infoCardHeight(ic)))}
-                 @input=${(e: Event) => upd(() => {
+          <input type="number" min="0" .value=${String(Math.round(infoCardHeight(ic)))} data-model=${String(Math.round(infoCardHeight(ic)))}
+                 @change=${(e: Event) => upd(() => {
                    const v = parseFloat((e.target as HTMLInputElement).value);
                    ic.height = isFinite(v) ? Math.max(0, v) : undefined;
                  })}>
@@ -1643,7 +1667,8 @@ export class Sidebar extends LitElement {
         <div class="row"><label>Size</label>
           <input type="range" min=${INFO_CARD_SCALE_MIN} max=${INFO_CARD_SCALE_MAX} step="0.1"
                  .value=${String(infoCardScale(ic))} style="flex:1"
-                 @input=${(e: Event) => upd(() => { ic.fontScale = parseFloat((e.target as HTMLInputElement).value) || 1; })}>
+                 @input=${(e: Event) => this._rangePreview(() => { ic.fontScale = parseFloat((e.target as HTMLInputElement).value) || 1; })}
+                 @change=${() => this.planner.save()}>
           <span style="font-size:10px;color:var(--text-dim);margin-left:4px;min-width:28px;text-align:right">
             ${infoCardScale(ic).toFixed(1)}×</span>
         </div>
@@ -1664,8 +1689,8 @@ export class Sidebar extends LitElement {
                     @click=${() => upd(() => { ic.entity_id = null; })}>Unbind</button>` : nothing}
           </div>
           <div class="row"><label>Decimals</label>
-            <input type="number" min="0" max="6" placeholder="auto" .value=${ic.format?.decimals ?? ''}
-                   @input=${(e: Event) => upd(() => {
+            <input type="number" min="0" max="6" placeholder="auto" .value=${ic.format?.decimals ?? ''} data-model=${ic.format?.decimals ?? ''}
+                   @change=${(e: Event) => upd(() => {
                      const v = (e.target as HTMLInputElement).value;
                      fmt().decimals = v === '' ? undefined : Math.max(0, Math.min(6, parseInt(v, 10) || 0)); })}>
           </div>
@@ -1860,16 +1885,16 @@ export class Sidebar extends LitElement {
                  @change=${(e: Event) => upd(() => { b.confirm = (e.target as HTMLInputElement).checked; })}><span></span></span>
         </label>
         <div class="row"><label>X (mm)</label>
-          <input type="number" .value=${String(Math.round(b.x))}
-                 @input=${(e: Event) => upd(() => { b.x = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
+          <input type="number" .value=${String(Math.round(b.x))} data-model=${String(Math.round(b.x))}
+                 @change=${(e: Event) => upd(() => { b.x = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
         </div>
         <div class="row"><label>Y (mm)</label>
-          <input type="number" .value=${String(Math.round(b.y))}
-                 @input=${(e: Event) => upd(() => { b.y = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
+          <input type="number" .value=${String(Math.round(b.y))} data-model=${String(Math.round(b.y))}
+                 @change=${(e: Event) => upd(() => { b.y = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
         </div>
         <div class="row"><label>Height (mm)</label>
-          <input type="number" min="0" .value=${String(Math.round(actionButtonHeight(b)))}
-                 @input=${(e: Event) => upd(() => { const v = parseFloat((e.target as HTMLInputElement).value); b.height = isFinite(v) ? Math.max(0, v) : undefined; })}>
+          <input type="number" min="0" .value=${String(Math.round(actionButtonHeight(b)))} data-model=${String(Math.round(actionButtonHeight(b)))}
+                 @change=${(e: Event) => upd(() => { const v = parseFloat((e.target as HTMLInputElement).value); b.height = isFinite(v) ? Math.max(0, v) : undefined; })}>
         </div>
         <button class="btn" style="width:100%;margin-top:4px" @click=${() => p.fireAction(b, true)}>▶ Test fire</button>
         ${this._lockRow(b)}
@@ -1944,16 +1969,16 @@ export class Sidebar extends LitElement {
                  @input=${(e: Event) => upd(() => { b.name = (e.target as HTMLInputElement).value; })}>
         </div>
         <div class="row"><label>X (mm)</label>
-          <input type="number" .value=${String(Math.round(b.x))}
-                 @input=${(e: Event) => upd(() => { b.x = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
+          <input type="number" .value=${String(Math.round(b.x))} data-model=${String(Math.round(b.x))}
+                 @change=${(e: Event) => upd(() => { b.x = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
         </div>
         <div class="row"><label>Y (mm)</label>
-          <input type="number" .value=${String(Math.round(b.y))}
-                 @input=${(e: Event) => upd(() => { b.y = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
+          <input type="number" .value=${String(Math.round(b.y))} data-model=${String(Math.round(b.y))}
+                 @change=${(e: Event) => upd(() => { b.y = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
         </div>
         <div class="row"><label>Height (mm)</label>
-          <input type="number" min="0" .value=${String(Math.round(bleProxyHeight(b)))}
-                 @input=${(e: Event) => upd(() => {
+          <input type="number" min="0" .value=${String(Math.round(bleProxyHeight(b)))} data-model=${String(Math.round(bleProxyHeight(b)))}
+                 @change=${(e: Event) => upd(() => {
                    const v = parseFloat((e.target as HTMLInputElement).value);
                    b.height = isFinite(v) ? Math.max(0, v) : BLE_PROXY_DEFAULTS.height;
                  })}>
@@ -2056,16 +2081,16 @@ export class Sidebar extends LitElement {
         </div>
         ${this._lockRow(a)}
         <div class="row"><label>X (mm)</label>
-          <input type="number" .value=${String(Math.round(a.x))}
-                 @input=${(e: Event) => upd(() => { a.x = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
+          <input type="number" .value=${String(Math.round(a.x))} data-model=${String(Math.round(a.x))}
+                 @change=${(e: Event) => upd(() => { a.x = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
         </div>
         <div class="row"><label>Y (mm)</label>
-          <input type="number" .value=${String(Math.round(a.y))}
-                 @input=${(e: Event) => upd(() => { a.y = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
+          <input type="number" .value=${String(Math.round(a.y))} data-model=${String(Math.round(a.y))}
+                 @change=${(e: Event) => upd(() => { a.y = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
         </div>
         <div class="row"><label>Height (mm)</label>
-          <input type="number" min="0" .value=${String(Math.round(alarmHeight(a)))}
-                 @input=${(e: Event) => upd(() => {
+          <input type="number" min="0" .value=${String(Math.round(alarmHeight(a)))} data-model=${String(Math.round(alarmHeight(a)))}
+                 @change=${(e: Event) => upd(() => {
                    const v = parseFloat((e.target as HTMLInputElement).value);
                    a.height = isFinite(v) ? Math.max(0, v) : undefined;
                  })}>
@@ -2157,8 +2182,8 @@ export class Sidebar extends LitElement {
         </div>
         ${this._lockRow(c)}
         <div class="row"><label>Height (mm)</label>
-          <input type="number" min="0" .value=${String(Math.round(calendarHeight(c)))}
-                 @input=${(e: Event) => upd(() => {
+          <input type="number" min="0" .value=${String(Math.round(calendarHeight(c)))} data-model=${String(Math.round(calendarHeight(c)))}
+                 @change=${(e: Event) => upd(() => {
                    const v = parseFloat((e.target as HTMLInputElement).value);
                    c.height = isFinite(v) ? Math.max(0, v) : undefined;
                  })}>
@@ -2248,16 +2273,16 @@ export class Sidebar extends LitElement {
         </div>
         ${this._lockRow(t)}
         <div class="row"><label>X (mm)</label>
-          <input type="number" .value=${String(Math.round(t.x))}
-                 @input=${(e: Event) => upd(() => { t.x = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
+          <input type="number" .value=${String(Math.round(t.x))} data-model=${String(Math.round(t.x))}
+                 @change=${(e: Event) => upd(() => { t.x = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
         </div>
         <div class="row"><label>Y (mm)</label>
-          <input type="number" .value=${String(Math.round(t.y))}
-                 @input=${(e: Event) => upd(() => { t.y = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
+          <input type="number" .value=${String(Math.round(t.y))} data-model=${String(Math.round(t.y))}
+                 @change=${(e: Event) => upd(() => { t.y = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
         </div>
         <div class="row"><label>Height (mm)</label>
-          <input type="number" min="0" .value=${String(Math.round(thermostatHeight(t)))}
-                 @input=${(e: Event) => upd(() => {
+          <input type="number" min="0" .value=${String(Math.round(thermostatHeight(t)))} data-model=${String(Math.round(thermostatHeight(t)))}
+                 @change=${(e: Event) => upd(() => {
                    const v = parseFloat((e.target as HTMLInputElement).value);
                    t.height = isFinite(v) ? Math.max(0, v) : undefined;
                  })}>
@@ -2371,12 +2396,12 @@ export class Sidebar extends LitElement {
         </div>
         ${this._lockRow(s)}
         <div class="row"><label>X (mm)</label>
-          <input type="number" .value=${String(Math.round(s.x))}
-                 @input=${(e: Event) => upd(() => { s.x = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
+          <input type="number" .value=${String(Math.round(s.x))} data-model=${String(Math.round(s.x))}
+                 @change=${(e: Event) => upd(() => { s.x = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
         </div>
         <div class="row"><label>Y (mm)</label>
-          <input type="number" .value=${String(Math.round(s.y))}
-                 @input=${(e: Event) => upd(() => { s.y = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
+          <input type="number" .value=${String(Math.round(s.y))} data-model=${String(Math.round(s.y))}
+                 @change=${(e: Event) => upd(() => { s.y = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
         </div>
         <div class="row"><label>HA entity</label>
           <span style="font-size:11px;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
@@ -2459,15 +2484,16 @@ export class Sidebar extends LitElement {
         <div class="row"><label>Volume</label>
           <input type="range" min="0" max="1" step="0.05"
                  .value=${String(s.volume ?? 1)}
-                 @input=${(e: Event) => upd(() => { s.volume = parseFloat((e.target as HTMLInputElement).value); })}>
+                 @input=${(e: Event) => this._rangePreview(() => { s.volume = parseFloat((e.target as HTMLInputElement).value); })}
+                 @change=${() => this.planner.save()}>
           <span style="font-size:11px;color:var(--text-dim);min-width:30px;text-align:right">
             ${Math.round((s.volume ?? 1) * 100)}%</span>
         </div>` : nothing}
       ${hasDur ? html`
         <div class="row"><label>Duration (s)</label>
-          <input type="number" min="1" .value=${s.duration != null ? String(s.duration) : ''}
+          <input type="number" min="1" .value=${s.duration != null ? String(s.duration) : ''} data-model=${s.duration != null ? String(s.duration) : ''}
                  placeholder="device default"
-                 @input=${(e: Event) => upd(() => {
+                 @change=${(e: Event) => upd(() => {
                    const v = parseFloat((e.target as HTMLInputElement).value);
                    s.duration = isFinite(v) && v > 0 ? Math.round(v) : null;
                  })}>
@@ -2539,12 +2565,12 @@ export class Sidebar extends LitElement {
         </div>
         ${this._lockRow(b)}
         <div class="row"><label>X (mm)</label>
-          <input type="number" .value=${String(Math.round(b.x))}
-                 @input=${(e: Event) => upd(() => { b.x = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
+          <input type="number" .value=${String(Math.round(b.x))} data-model=${String(Math.round(b.x))}
+                 @change=${(e: Event) => upd(() => { b.x = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
         </div>
         <div class="row"><label>Y (mm)</label>
-          <input type="number" .value=${String(Math.round(b.y))}
-                 @input=${(e: Event) => upd(() => { b.y = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
+          <input type="number" .value=${String(Math.round(b.y))} data-model=${String(Math.round(b.y))}
+                 @change=${(e: Event) => upd(() => { b.y = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
         </div>
         <div class="row"><label>HA entity</label>
           <span style="font-size:11px;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
@@ -2653,17 +2679,17 @@ export class Sidebar extends LitElement {
         </div>
         ${this._lockRow(r)}
         <div class="row"><label>Dock X</label>
-          <input type="number" .value=${String(Math.round(r.x))}
-                 @input=${(e: Event) => upd(() => { r.x = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
+          <input type="number" .value=${String(Math.round(r.x))} data-model=${String(Math.round(r.x))}
+                 @change=${(e: Event) => upd(() => { r.x = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
         </div>
         <div class="row"><label>Dock Y</label>
-          <input type="number" .value=${String(Math.round(r.y))}
-                 @input=${(e: Event) => upd(() => { r.y = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
+          <input type="number" .value=${String(Math.round(r.y))} data-model=${String(Math.round(r.y))}
+                 @change=${(e: Event) => upd(() => { r.y = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
         </div>
         <div class="row"><label>Rotation (°)</label>
-          <input type="number" step="5" .value=${String(Math.round(r.rotation ?? 0))}
+          <input type="number" step="5" .value=${String(Math.round(r.rotation ?? 0))} data-model=${String(Math.round(r.rotation ?? 0))}
                  title="Which way the dock faces — 0 = the opening points toward −Y (screen-down); degrees turn it clockwise on screen."
-                 @input=${(e: Event) => upd(() => {
+                 @change=${(e: Event) => upd(() => {
                    const n = parseFloat((e.target as HTMLInputElement).value);
                    r.rotation = isFinite(n) ? n : 0;
                  })}>
@@ -2795,8 +2821,8 @@ export class Sidebar extends LitElement {
     const raw = parseVacuumPosition(rawAttrs);
     const numRow = (label: string, val: number, mut: (n: number) => void, step = 1) => html`
       <div class="row"><label>${label}</label>
-        <input type="number" step=${step} .value=${String(val)}
-               @input=${(e: Event) => upd(() => mut(parseFloat((e.target as HTMLInputElement).value) || 0))}>
+        <input type="number" step=${step} .value=${String(val)} data-model=${String(val)}
+               @change=${(e: Event) => upd(() => mut(parseFloat((e.target as HTMLInputElement).value) || 0))}>
       </div>`;
     return html`
       <div style="border-top:1px solid var(--border);margin-top:6px;padding-top:6px">
@@ -3044,31 +3070,31 @@ export class Sidebar extends LitElement {
         </div>
         ${this._lockRow(c)}
         <div class="row"><label>X (mm)</label>
-          <input type="number" .value=${String(Math.round(c.x))}
-                 @input=${(e: Event) => upd(() => { c.x = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
+          <input type="number" .value=${String(Math.round(c.x))} data-model=${String(Math.round(c.x))}
+                 @change=${(e: Event) => upd(() => { c.x = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
         </div>
         <div class="row"><label>Y (mm)</label>
-          <input type="number" .value=${String(Math.round(c.y))}
-                 @input=${(e: Event) => upd(() => { c.y = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
+          <input type="number" .value=${String(Math.round(c.y))} data-model=${String(Math.round(c.y))}
+                 @change=${(e: Event) => upd(() => { c.y = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
         </div>
         <div class="row"><label>Facing (°)</label>
-          <input type="number" .value=${String(Math.round(c.rotation ?? 0))}
-                 @input=${(e: Event) => upd(() => {
+          <input type="number" .value=${String(Math.round(c.rotation ?? 0))} data-model=${String(Math.round(c.rotation ?? 0))}
+                 @change=${(e: Event) => upd(() => {
                    const v = parseFloat((e.target as HTMLInputElement).value) || 0;
                    c.rotation = ((Math.round(v) % 360) + 360) % 360;
                  })}>
         </div>
         <div class="row"><label>FOV (°)</label>
-          <input type="number" min="5" max="180" .value=${String(cameraFov(c))}
-                 @input=${(e: Event) => upd(() => { c.fov = parseFloat((e.target as HTMLInputElement).value) || CAMERA_DEFAULTS.fov; })}>
+          <input type="number" min="5" max="180" .value=${String(cameraFov(c))} data-model=${String(cameraFov(c))}
+                 @change=${(e: Event) => upd(() => { c.fov = parseFloat((e.target as HTMLInputElement).value) || CAMERA_DEFAULTS.fov; })}>
         </div>
         <div class="row"><label>Range (mm)</label>
-          <input type="number" min="200" .value=${String(cameraRange(c))}
-                 @input=${(e: Event) => upd(() => { c.range = parseFloat((e.target as HTMLInputElement).value) || CAMERA_DEFAULTS.range; })}>
+          <input type="number" min="200" .value=${String(cameraRange(c))} data-model=${String(cameraRange(c))}
+                 @change=${(e: Event) => upd(() => { c.range = parseFloat((e.target as HTMLInputElement).value) || CAMERA_DEFAULTS.range; })}>
         </div>
         <div class="row"><label>Height (mm)</label>
-          <input type="number" .value=${String(cameraHeight(c))}
-                 @input=${(e: Event) => upd(() => { c.height = parseFloat((e.target as HTMLInputElement).value) || CAMERA_DEFAULTS.height; })}>
+          <input type="number" .value=${String(cameraHeight(c))} data-model=${String(cameraHeight(c))}
+                 @change=${(e: Event) => upd(() => { c.height = parseFloat((e.target as HTMLInputElement).value) || CAMERA_DEFAULTS.height; })}>
         </div>
         <div class="row"><label>HA entity</label>
           <span style="font-size:11px;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
@@ -3166,12 +3192,12 @@ export class Sidebar extends LitElement {
           Frigate reports boxes at the DETECT resolution, often lower than the stream.
         </div>
         <div class="row"><label>Detect W</label>
-          <input type="number" min="1" .value=${calib?.detectW ? String(calib.detectW) : ''} placeholder="auto"
-                 @input=${(e: Event) => upd(() => { this._ensureCalib(c).detectW = parseFloat((e.target as HTMLInputElement).value) || undefined; })}>
+          <input type="number" min="1" .value=${calib?.detectW ? String(calib.detectW) : ''} data-model=${calib?.detectW ? String(calib.detectW) : ''} placeholder="auto"
+                 @change=${(e: Event) => upd(() => { this._ensureCalib(c).detectW = parseFloat((e.target as HTMLInputElement).value) || undefined; })}>
         </div>
         <div class="row"><label>Detect H</label>
-          <input type="number" min="1" .value=${calib?.detectH ? String(calib.detectH) : ''} placeholder="auto"
-                 @input=${(e: Event) => upd(() => { this._ensureCalib(c).detectH = parseFloat((e.target as HTMLInputElement).value) || undefined; })}>
+          <input type="number" min="1" .value=${calib?.detectH ? String(calib.detectH) : ''} data-model=${calib?.detectH ? String(calib.detectH) : ''} placeholder="auto"
+                 @change=${(e: Event) => upd(() => { this._ensureCalib(c).detectH = parseFloat((e.target as HTMLInputElement).value) || undefined; })}>
         </div>
         ${pic ? html`
           <div style="margin-top:6px;position:relative">
@@ -3295,16 +3321,16 @@ export class Sidebar extends LitElement {
         </div>
         ${this._lockRow(pr)}
         <div class="row"><label>X (mm)</label>
-          <input type="number" .value=${String(Math.round(pr.x))}
-                 @input=${(e: Event) => upd(() => { pr.x = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
+          <input type="number" .value=${String(Math.round(pr.x))} data-model=${String(Math.round(pr.x))}
+                 @change=${(e: Event) => upd(() => { pr.x = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
         </div>
         <div class="row"><label>Y (mm)</label>
-          <input type="number" .value=${String(Math.round(pr.y))}
-                 @input=${(e: Event) => upd(() => { pr.y = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
+          <input type="number" .value=${String(Math.round(pr.y))} data-model=${String(Math.round(pr.y))}
+                 @change=${(e: Event) => upd(() => { pr.y = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
         </div>
         <div class="row"><label>Height (mm)</label>
-          <input type="number" .value=${String(projectorHeight(pr))}
-                 @input=${(e: Event) => upd(() => { pr.height = parseFloat((e.target as HTMLInputElement).value) || PROJECTOR_DEFAULTS.height; })}>
+          <input type="number" .value=${String(projectorHeight(pr))} data-model=${String(projectorHeight(pr))}
+                 @change=${(e: Event) => upd(() => { pr.height = parseFloat((e.target as HTMLInputElement).value) || PROJECTOR_DEFAULTS.height; })}>
         </div>
         <div class="row"><label>Target screen</label>
           <select .value=${pr.screenId ?? ''}
@@ -3318,15 +3344,15 @@ export class Sidebar extends LitElement {
         </div>
         ${!pr.screenId ? html`
           <div class="row"><label>Aim (°)</label>
-            <input type="number" step="15" .value=${String(Math.round(pr.rotation ?? 0))}
-                   @input=${(e: Event) => upd(() => {
+            <input type="number" step="15" .value=${String(Math.round(pr.rotation ?? 0))} data-model=${String(Math.round(pr.rotation ?? 0))}
+                   @change=${(e: Event) => upd(() => {
                      const v = parseFloat((e.target as HTMLInputElement).value) || 0;
                      pr.rotation = ((Math.round(v) % 360) + 360) % 360;
                    })}>
           </div>` : nothing}
         <div class="row"><label title="Throw ratio D:W — scales the beam spread + heading-only reach">Throw ratio</label>
-          <input type="number" min="0.2" step="0.1" .value=${String(projectorThrow(pr))}
-                 @input=${(e: Event) => upd(() => { pr.throwRatio = parseFloat((e.target as HTMLInputElement).value) || PROJECTOR_DEFAULTS.throwRatio; })}>
+          <input type="number" min="0.2" step="0.1" .value=${String(projectorThrow(pr))} data-model=${String(projectorThrow(pr))}
+                 @change=${(e: Event) => upd(() => { pr.throwRatio = parseFloat((e.target as HTMLInputElement).value) || PROJECTOR_DEFAULTS.throwRatio; })}>
         </div>
         <div class="row"><label>Beam color</label>
           <input type="color" .value=${projectorBeamColor(pr)}
@@ -3407,8 +3433,8 @@ export class Sidebar extends LitElement {
         </div>
         ${this._lockRow(v)}
         <div class="row"><label>Rotation (°)</label>
-          <input type="number" .value=${String(Math.round(v.rotation ?? 0))}
-                 @input=${(e: Event) => upd(() => { v.rotation = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
+          <input type="number" .value=${String(Math.round(v.rotation ?? 0))} data-model=${String(Math.round(v.rotation ?? 0))}
+                 @change=${(e: Event) => upd(() => { v.rotation = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
         </div>
         <div class="row"><label title="Permit open/close from the panel. Off = view-only status.">Allow open/close</label>
           <span class="mini-toggle">
@@ -3495,8 +3521,8 @@ export class Sidebar extends LitElement {
                  @input=${(e: Event) => upd(() => { z.label = (e.target as HTMLInputElement).value; })}>
         </div>
         <div class="row"><label>Zone #</label>
-          <input type="number" .value=${z.zoneNumber != null ? String(z.zoneNumber) : ''} placeholder="—"
-                 @input=${(e: Event) => upd(() => {
+          <input type="number" .value=${z.zoneNumber != null ? String(z.zoneNumber) : ''} data-model=${z.zoneNumber != null ? String(z.zoneNumber) : ''} placeholder="—"
+                 @change=${(e: Event) => upd(() => {
                    const v = parseInt((e.target as HTMLInputElement).value, 10);
                    z.zoneNumber = isFinite(v) ? v : undefined;
                  })}>
@@ -3508,16 +3534,16 @@ export class Sidebar extends LitElement {
           </select>
         </div>
         <div class="row"><label>Arc (°)</label>
-          <input type="number" min="10" max="360" step="10" .value=${String(sprinklerArcDeg(z))}
-                 @input=${(e: Event) => upd(() => { z.arcDeg = parseFloat((e.target as HTMLInputElement).value) || 180; })}>
+          <input type="number" min="10" max="360" step="10" .value=${String(sprinklerArcDeg(z))} data-model=${String(sprinklerArcDeg(z))}
+                 @change=${(e: Event) => upd(() => { z.arcDeg = parseFloat((e.target as HTMLInputElement).value) || 180; })}>
         </div>
         <div class="row"><label>Throw (mm)</label>
-          <input type="number" min="300" step="100" .value=${String(sprinklerRadius(z))}
-                 @input=${(e: Event) => upd(() => { z.radius = parseFloat((e.target as HTMLInputElement).value) || 3000; })}>
+          <input type="number" min="300" step="100" .value=${String(sprinklerRadius(z))} data-model=${String(sprinklerRadius(z))}
+                 @change=${(e: Event) => upd(() => { z.radius = parseFloat((e.target as HTMLInputElement).value) || 3000; })}>
         </div>
         <div class="row"><label>Heading (°)</label>
-          <input type="number" .value=${String(Math.round(sprinklerRotation(z)))}
-                 @input=${(e: Event) => upd(() => { z.rotation = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
+          <input type="number" .value=${String(Math.round(sprinklerRotation(z)))} data-model=${String(Math.round(sprinklerRotation(z)))}
+                 @change=${(e: Event) => upd(() => { z.rotation = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
         </div>
         ${this._lockRow(z)}
         <div class="row"><label>HA entity</label>
@@ -3603,8 +3629,8 @@ export class Sidebar extends LitElement {
           </select>
         </div>
         <div class="row"><label>Height (mm)</label>
-          <input type="number" min="1000" max="15000" step="500" .value=${String(fp.height ?? 6000)}
-                 @input=${(e: Event) => upd(() => {
+          <input type="number" min="1000" max="15000" step="500" .value=${String(fp.height ?? 6000)} data-model=${String(fp.height ?? 6000)}
+                 @change=${(e: Event) => upd(() => {
                    const v = parseFloat((e.target as HTMLInputElement).value);
                    fp.height = isFinite(v) ? Math.max(1000, v) : 6000;
                  })}>
@@ -3723,8 +3749,8 @@ export class Sidebar extends LitElement {
                  @input=${(e: Event) => upd(() => { sp.label = (e.target as HTMLInputElement).value; })}>
         </div>
         <div class="row"><label>Base rotation (°)</label>
-          <input type="number" step="5" .value=${String(solarRotation(sp))}
-                 @input=${(e: Event) => upd(() => {
+          <input type="number" step="5" .value=${String(solarRotation(sp))} data-model=${String(solarRotation(sp))}
+                 @change=${(e: Event) => upd(() => {
                    const v = parseFloat((e.target as HTMLInputElement).value);
                    sp.rotation = isFinite(v) ? v : 0;
                  })}>
@@ -3739,8 +3765,8 @@ export class Sidebar extends LitElement {
         </div>
         ${trackAz ? nothing : html`
           <div class="row"><label>Fixed azimuth (° compass)</label>
-            <input type="number" step="5" .value=${String(sp.fixedAzimuthDeg ?? SOLAR_FIXED_AZIMUTH_DEG)}
-                   @input=${(e: Event) => upd(() => {
+            <input type="number" step="5" .value=${String(sp.fixedAzimuthDeg ?? SOLAR_FIXED_AZIMUTH_DEG)} data-model=${String(sp.fixedAzimuthDeg ?? SOLAR_FIXED_AZIMUTH_DEG)}
+                   @change=${(e: Event) => upd(() => {
                      const v = parseFloat((e.target as HTMLInputElement).value);
                      sp.fixedAzimuthDeg = isFinite(v) ? v : SOLAR_FIXED_AZIMUTH_DEG;
                    })}>
@@ -3755,8 +3781,8 @@ export class Sidebar extends LitElement {
         ${trackTilt ? nothing : html`
           <div class="row"><label>Fixed tilt (°)</label>
             <input type="number" step="5" min=${SOLAR_TILT_MIN} max=${SOLAR_TILT_MAX}
-                   .value=${String(sp.fixedTiltDeg ?? SOLAR_FIXED_TILT_DEG)}
-                   @input=${(e: Event) => upd(() => {
+                   .value=${String(sp.fixedTiltDeg ?? SOLAR_FIXED_TILT_DEG)} data-model=${String(sp.fixedTiltDeg ?? SOLAR_FIXED_TILT_DEG)}
+                   @change=${(e: Event) => upd(() => {
                      const v = parseFloat((e.target as HTMLInputElement).value);
                      sp.fixedTiltDeg = isFinite(v) ? v : SOLAR_FIXED_TILT_DEG;
                    })}>
@@ -3876,8 +3902,8 @@ export class Sidebar extends LitElement {
         </div>
         ${this._lockRow(pl)}
         <div class="row"><label>Height (mm)</label>
-          <input type="number" min="0" .value=${String(Math.round(plugHeight(pl)))}
-                 @input=${(e: Event) => upd(() => {
+          <input type="number" min="0" .value=${String(Math.round(plugHeight(pl)))} data-model=${String(Math.round(plugHeight(pl)))}
+                 @change=${(e: Event) => upd(() => {
                    const val = parseFloat((e.target as HTMLInputElement).value);
                    pl.height = isFinite(val) ? Math.max(0, val) : undefined;
                  })}>
@@ -4111,9 +4137,9 @@ export class Sidebar extends LitElement {
         </div>
         <div class="row" title="Raise (+) or sink (−) this area relative to grade. A raised tier gets a sloped/vertical skirt; nest smaller polygons at higher values for a hill/berm. Negative = a sunken basin preview.">
           <label>Elevation</label>
-          <input type="number" step="50" .value=${String(g.elevationMm ?? 0)}
+          <input type="number" step="50" .value=${String(g.elevationMm ?? 0)} data-model=${String(g.elevationMm ?? 0)}
                  style="flex:1" placeholder="0"
-                 @input=${(e: Event) => upd(() => {
+                 @change=${(e: Event) => upd(() => {
                    const v = Math.round(Number((e.target as HTMLInputElement).value) || 0);
                    if (v === 0) delete g.elevationMm; else g.elevationMm = v;
                  })}>
@@ -4145,10 +4171,12 @@ export class Sidebar extends LitElement {
         ${g.path ? html`
           <div class="row" title="Ribbon width — the generated polygon is regenerated (bufferPolyline) on every change.">
             <label>Path width</label>
-            <input type="number" step="50" min="100" .value=${String(g.path.width)}
+            <input type="number" step="50" min="100" .value=${String(g.path.width)} data-model=${String(g.path.width)}
                    style="flex:1"
-                   @input=${(e: Event) => upd(() => {
-                     const v = Math.max(100, Math.round(Number((e.target as HTMLInputElement).value) || 100));
+                   @change=${(e: Event) => upd(() => {
+                     const raw = parseFloat((e.target as HTMLInputElement).value);
+                     if (!isFinite(raw)) return;
+                     const v = Math.max(100, Math.round(raw));
                      if (g.path) { g.path.width = v; p.regenGroundAreaPath(g); }
                    })}>
             <span style="color:var(--text-dim);font-size:11px">mm</span>
@@ -4250,14 +4278,14 @@ export class Sidebar extends LitElement {
                  @input=${(e: Event) => upd(() => { pl.waterColor = (e.target as HTMLInputElement).value; })}>
         </div>
         <div class="row" title="Basin depth below grade."><label>Depth</label>
-          <input type="number" step="100" min="300" .value=${String(poolDepthMm(pl))} style="flex:1"
-                 @input=${(e: Event) => upd(() => { pl.depthMm = Math.max(300, Math.round(Number((e.target as HTMLInputElement).value) || 1200)); })}>
+          <input type="number" step="100" min="300" .value=${String(poolDepthMm(pl))} data-model=${String(poolDepthMm(pl))} style="flex:1"
+                 @change=${(e: Event) => upd(() => { const v = parseFloat((e.target as HTMLInputElement).value); if (isFinite(v)) pl.depthMm = Math.max(300, Math.round(v)); })}>
           <span style="color:var(--text-dim);font-size:11px">mm</span>
         </div>
         ${pl.kind === 'spa' ? html`
           <div class="row" title="Spa height above grade (0 = in-ground)."><label>Raised</label>
-            <input type="number" step="50" min="0" .value=${String(poolRaisedMm(pl))} style="flex:1"
-                   @input=${(e: Event) => upd(() => { pl.raisedMm = Math.max(0, Math.round(Number((e.target as HTMLInputElement).value) || 0)); })}>
+            <input type="number" step="50" min="0" .value=${String(poolRaisedMm(pl))} data-model=${String(poolRaisedMm(pl))} style="flex:1"
+                   @change=${(e: Event) => upd(() => { pl.raisedMm = Math.max(0, Math.round(Number((e.target as HTMLInputElement).value) || 0)); })}>
             <span style="color:var(--text-dim);font-size:11px">mm</span>
           </div>` : nothing}
         <div style="font-weight:600;font-size:11px;margin:6px 0 2px;color:var(--text-dim)">Equipment</div>
@@ -5064,7 +5092,7 @@ export class Sidebar extends LitElement {
             </div>
             ${bIsPoint ? html`
               <div class="row"><label>Length</label>
-                <input type="number" min="0" step="10" .value=${res ? String(Math.round(res.mm)) : ''}
+                <input type="number" min="0" step="10" .value=${res ? String(Math.round(res.mm)) : ''} data-model=${res ? String(Math.round(res.mm)) : ''}
                        title="Enter a length in mm — end B moves along the current bearing"
                        @change=${(e: Event) => {
                          const v = parseFloat((e.target as HTMLInputElement).value);
@@ -5136,11 +5164,16 @@ export class Sidebar extends LitElement {
     const exp = this._doorExpanded.has(d.id);
     const states = p.hass?.states;
     const st = d.entity_id && states ? states[d.entity_id] : null;
-    const isOpen = st?.state === 'on';
+    // Openness through the SAME resolver the 2D/3D renderers use: a cover.*-bound
+    // opening reports open/closed/opening + current_position, never 'on', so a
+    // raw `state === 'on'` test showed every cover-bound door/window as closed.
+    const frac = doorOpenFraction(p.effectiveState(d));
+    const isOpen = frac > 0.02;
     const unavail = st && (st.state === 'unavailable' || st.state === 'unknown');
     const bound = !!d.entity_id;
-    const effOpen = !bound && d.localState ? d.localState === 'on' : isOpen;
-    const badge = !bound ? '—' : unavail ? 'n/a' : isOpen ? 'OPEN' : 'closed';
+    const effOpen = isOpen;
+    const badge = !bound ? '—' : unavail ? 'n/a'
+      : !isOpen ? 'closed' : frac < 0.98 ? `OPEN ${Math.round(frac * 100)}%` : 'OPEN';
     const badgeClass = bound && !unavail && isOpen ? 'bound' : '';
     return html`
       <div data-item-row=${d.id} style="border-bottom:1px solid var(--border)">
@@ -5327,12 +5360,12 @@ export class Sidebar extends LitElement {
         </div>
         ${this._lockRow(d)}
         <div class="row"><label>X (mm)</label>
-          <input type="number" .value=${String(Math.round(d.x))}
-                 @input=${(e: Event) => upd(() => { d.x = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
+          <input type="number" .value=${String(Math.round(d.x))} data-model=${String(Math.round(d.x))}
+                 @change=${(e: Event) => upd(() => { d.x = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
         </div>
         <div class="row"><label>Y (mm)</label>
-          <input type="number" .value=${String(Math.round(d.y))}
-                 @input=${(e: Event) => upd(() => { d.y = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
+          <input type="number" .value=${String(Math.round(d.y))} data-model=${String(Math.round(d.y))}
+                 @change=${(e: Event) => upd(() => { d.y = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
         </div>
         <div class="row"><label>Kind</label>
           <select @change=${(e: Event) => upd(() => {
@@ -5375,7 +5408,7 @@ export class Sidebar extends LitElement {
           <label title="Opening height in mm (1800–4200). Sets the wall opening's lintel AND the drawn leaf; blank uses the 2100 mm default.">Opening height (mm)</label>
           <input type="number" min=${GARAGE_HEIGHT_MIN} max=${GARAGE_HEIGHT_MAX} step="50"
                  placeholder=${String(GARAGE_DOOR_H)}
-                 .value=${d.garageHeight == null ? '' : String(Math.round(d.garageHeight))}
+                 .value=${d.garageHeight == null ? '' : String(Math.round(d.garageHeight))} data-model=${d.garageHeight == null ? '' : String(Math.round(d.garageHeight))}
                  @change=${(e: Event) => upd(() => {
                    const raw = (e.target as HTMLInputElement).value.trim();
                    const v = parseFloat(raw);
@@ -5390,14 +5423,14 @@ export class Sidebar extends LitElement {
           'Tints the door panel / slab / leaf. Glass, locks and garage track hardware keep their own colours; in the 2D plan it replaces the closed-state stroke only.',
           v => upd(() => { if (v == null) delete d.color; else d.color = v; }))}
         <div class="row"><label>Width (mm)</label>
-          <input type="number" min="200" .value=${String(Math.round(d.w))}
-                 @input=${(e: Event) => upd(() => {
-                   d.w = Math.max(200, parseFloat((e.target as HTMLInputElement).value) || 0);
+          <input type="number" min="200" .value=${String(Math.round(d.w))} data-model=${String(Math.round(d.w))}
+                 @change=${(e: Event) => upd(() => {
+                   { const v = parseFloat((e.target as HTMLInputElement).value); if (isFinite(v)) d.w = Math.max(200, v); }
                  })}>
         </div>
         <div class="row"><label>Rotation (°)</label>
-          <input type="number" step="15" .value=${String(Math.round(d.rotation))}
-                 @input=${(e: Event) => upd(() => {
+          <input type="number" step="15" .value=${String(Math.round(d.rotation))} data-model=${String(Math.round(d.rotation))}
+                 @change=${(e: Event) => upd(() => {
                    const v = parseFloat((e.target as HTMLInputElement).value) || 0;
                    // Pivot about the SPAN CENTRE, not the hinge — a 180° turn
                    // must flip inside/outside in place, not fling the panel to
@@ -5471,11 +5504,16 @@ export class Sidebar extends LitElement {
     const exp = this._windowExpanded.has(w.id);
     const states = p.hass?.states;
     const st = w.entity_id && states ? states[w.entity_id] : null;
-    const isOpen = st?.state === 'on';
+    // Openness through the SAME resolver the 2D/3D renderers use: a cover.*-bound
+    // opening reports open/closed/opening + current_position, never 'on', so a
+    // raw `state === 'on'` test showed every cover-bound door/window as closed.
+    const frac = doorOpenFraction(p.effectiveState(w));
+    const isOpen = frac > 0.02;
     const unavail = st && (st.state === 'unavailable' || st.state === 'unknown');
     const bound = !!w.entity_id;
-    const effOpen = !bound && w.localState ? w.localState === 'on' : isOpen;
-    const badge = !bound ? '—' : unavail ? 'n/a' : isOpen ? 'OPEN' : 'closed';
+    const effOpen = isOpen;
+    const badge = !bound ? '—' : unavail ? 'n/a'
+      : !isOpen ? 'closed' : frac < 0.98 ? `OPEN ${Math.round(frac * 100)}%` : 'OPEN';
     const badgeClass = bound && !unavail && isOpen ? 'bound' : '';
     return html`
       <div data-item-row=${w.id} style="border-bottom:1px solid var(--border)">
@@ -5575,22 +5613,22 @@ export class Sidebar extends LitElement {
         </div>
         ${this._lockRow(w)}
         <div class="row"><label>X (mm)</label>
-          <input type="number" .value=${String(Math.round(w.x))}
-                 @input=${(e: Event) => upd(() => { w.x = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
+          <input type="number" .value=${String(Math.round(w.x))} data-model=${String(Math.round(w.x))}
+                 @change=${(e: Event) => upd(() => { w.x = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
         </div>
         <div class="row"><label>Y (mm)</label>
-          <input type="number" .value=${String(Math.round(w.y))}
-                 @input=${(e: Event) => upd(() => { w.y = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
+          <input type="number" .value=${String(Math.round(w.y))} data-model=${String(Math.round(w.y))}
+                 @change=${(e: Event) => upd(() => { w.y = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
         </div>
         <div class="row"><label>Width (mm)</label>
-          <input type="number" min="200" .value=${String(Math.round(w.w))}
-                 @input=${(e: Event) => upd(() => {
-                   w.w = Math.max(200, parseFloat((e.target as HTMLInputElement).value) || 0);
+          <input type="number" min="200" .value=${String(Math.round(w.w))} data-model=${String(Math.round(w.w))}
+                 @change=${(e: Event) => upd(() => {
+                   { const v = parseFloat((e.target as HTMLInputElement).value); if (isFinite(v)) w.w = Math.max(200, v); }
                  })}>
         </div>
         <div class="row"><label>Rotation (°)</label>
-          <input type="number" step="15" .value=${String(Math.round(w.rotation))}
-                 @input=${(e: Event) => upd(() => {
+          <input type="number" step="15" .value=${String(Math.round(w.rotation))} data-model=${String(Math.round(w.rotation))}
+                 @change=${(e: Event) => upd(() => {
                    const v = parseFloat((e.target as HTMLInputElement).value) || 0;
                    // Windows are already centre-anchored, so this only sets
                    // `rotation` — routed through the shared helper so the door
@@ -5613,16 +5651,16 @@ export class Sidebar extends LitElement {
         </div>
         <div class="row"><label>Sill (mm)</label>
           <input type="number" min="0" max="2400" step="50"
-                 .value=${String(Math.round(windowSillMm(w)))}
-                 @input=${(e: Event) => upd(() => {
+                 .value=${String(Math.round(windowSillMm(w)))} data-model=${String(Math.round(windowSillMm(w)))}
+                 @change=${(e: Event) => upd(() => {
                    const v = parseFloat((e.target as HTMLInputElement).value);
                    w.sill = isFinite(v) ? Math.max(0, Math.min(2400, v)) : windowSillMm({ kind: w.kind });
                  })}>
         </div>
         <div class="row"><label>Height (mm)</label>
           <input type="number" min="200" max="2600" step="50"
-                 .value=${String(Math.round(windowGlassHMm(w)))}
-                 @input=${(e: Event) => upd(() => {
+                 .value=${String(Math.round(windowGlassHMm(w)))} data-model=${String(Math.round(windowGlassHMm(w)))}
+                 @change=${(e: Event) => upd(() => {
                    const v = parseFloat((e.target as HTMLInputElement).value);
                    w.height = isFinite(v) ? Math.max(200, Math.min(2600, v)) : windowGlassHMm({ kind: w.kind });
                  })}>
@@ -5711,9 +5749,10 @@ export class Sidebar extends LitElement {
             <div class="row" style="margin-top:4px"><label title="0 = closed (covering), 100 = open (gathered)">Open %</label>
               <input type="range" min="0" max="100" step="5" style="flex:1"
                      .value=${String(Math.round(w.curtainPos ?? 0))}
-                     @input=${(e: Event) => upd(() => {
+                     @input=${(e: Event) => this._rangePreview(() => {
                        w.curtainPos = Math.max(0, Math.min(100, parseFloat((e.target as HTMLInputElement).value) || 0));
-                     })}>
+                     })}
+                 @change=${() => this.planner.save()}>
               <span style="font-size:11px;color:var(--text-dim);min-width:32px;text-align:right">${Math.round(w.curtainPos ?? 0)}%</span>
             </div>` : nothing}
         ` : nothing}
@@ -5915,21 +5954,21 @@ export class Sidebar extends LitElement {
                    })}>
           </div>` : nothing}
         <div class="row"><label>Width (mm)</label>
-          <input type="number" min="50" .value=${String(Math.round(piece.w))}
-                 @input=${(e: Event) => upd(() => {
-                   piece.w = Math.max(50, parseFloat((e.target as HTMLInputElement).value) || 0);
+          <input type="number" min="50" .value=${String(Math.round(piece.w))} data-model=${String(Math.round(piece.w))}
+                 @change=${(e: Event) => upd(() => {
+                   { const v = parseFloat((e.target as HTMLInputElement).value); if (isFinite(v)) piece.w = Math.max(50, v); }
                  })}>
         </div>
         <div class="row"><label>Depth (mm)</label>
-          <input type="number" min="50" .value=${String(Math.round(piece.h))}
-                 @input=${(e: Event) => upd(() => {
-                   piece.h = Math.max(50, parseFloat((e.target as HTMLInputElement).value) || 0);
+          <input type="number" min="50" .value=${String(Math.round(piece.h))} data-model=${String(Math.round(piece.h))}
+                 @change=${(e: Event) => upd(() => {
+                   { const v = parseFloat((e.target as HTMLInputElement).value); if (isFinite(v)) piece.h = Math.max(50, v); }
                  })}>
         </div>
         <div class="row"><label>Elevation (mm)</label>
-          <input type="number" step="50" .value=${String(Math.round(piece.elevation ?? 0))}
+          <input type="number" step="50" .value=${String(Math.round(piece.elevation ?? 0))} data-model=${String(Math.round(piece.elevation ?? 0))}
                  title="Base height above the floor (the piece's BOTTOM). Positive raises (1372 = upper flight of an L staircase); negative sinks — stairs at −2743 descend a full storey and cut a stairwell. A landing's walking surface sits at elevation + 1372, so a landing halfway down a basement stair needs −2743"
-                 @input=${(e: Event) => upd(() => {
+                 @change=${(e: Event) => upd(() => {
                    const v = parseFloat((e.target as HTMLInputElement).value);
                    piece.elevation = isFinite(v) && v !== 0 ? v : undefined;
                  })}>
@@ -5938,8 +5977,8 @@ export class Sidebar extends LitElement {
         ${isStairsKind(curKind) ? this._stairLinkRow(piece, upd) : nothing}
         ${isTreeKind(curKind) ? this._treeHeightRow(piece, curKind, upd) : nothing}
         <div class="row"><label>Rotation (°)</label>
-          <input type="number" step="15" .value=${String(Math.round(piece.rotation ?? 0))}
-                 @input=${(e: Event) => upd(() => {
+          <input type="number" step="15" .value=${String(Math.round(piece.rotation ?? 0))} data-model=${String(Math.round(piece.rotation ?? 0))}
+                 @change=${(e: Event) => upd(() => {
                    const v = parseFloat((e.target as HTMLInputElement).value) || 0;
                    piece.rotation = ((Math.round(v / 15) * 15) % 360 + 360) % 360;
                  })}>
@@ -5974,10 +6013,10 @@ export class Sidebar extends LitElement {
     return html`
       <div class="row"><label>Height (mm)</label>
         <input type="number" min=${TREE_MIN_HEIGHT_MM} max=${TREE_MAX_HEIGHT_MM} step="100"
-               .value=${piece.ht != null ? String(Math.round(piece.ht)) : ''}
+               .value=${piece.ht != null ? String(Math.round(piece.ht)) : ''} data-model=${piece.ht != null ? String(Math.round(piece.ht)) : ''}
                placeholder=${String(defHt)}
                title="Overall height of this tree, ground to crown. Blank = the kind default (${defHt} mm). The trunk and canopy scale together, so a taller value grows a bigger tree rather than stretching this one. Clamped ${TREE_MIN_HEIGHT_MM}–${TREE_MAX_HEIGHT_MM} mm; the footprint (width/depth above) still sets the canopy spread."
-               @input=${(e: Event) => upd(() => {
+               @change=${(e: Event) => upd(() => {
                  const v = parseFloat((e.target as HTMLInputElement).value);
                  piece.ht = (isFinite(v) && Math.round(v) !== defHt)
                    ? Math.min(TREE_MAX_HEIGHT_MM, Math.max(TREE_MIN_HEIGHT_MM, v))
@@ -5999,20 +6038,20 @@ export class Sidebar extends LitElement {
     const msg = this._stairsFitMsg[piece.id];
     return html`
       <div class="row"><label>Rise (mm)</label>
-        <input type="number" min=${STAIRS_MIN_RISE_MM} step="10" .value=${piece.ht != null ? String(Math.round(piece.ht)) : ''}
+        <input type="number" min=${STAIRS_MIN_RISE_MM} step="10" .value=${piece.ht != null ? String(Math.round(piece.ht)) : ''} data-model=${piece.ht != null ? String(Math.round(piece.ht)) : ''}
                placeholder=${String(defHt)}
                title="Total height this flight / ramp climbs, foot to head. Blank = the kind default (${defHt} mm). Steps are laid out from the rise AND the run, so a short rise builds one or two real steps instead of three slivers."
-               @input=${(e: Event) => upd(() => {
+               @change=${(e: Event) => upd(() => {
                  const v = parseFloat((e.target as HTMLInputElement).value);
                  piece.ht = (isFinite(v) && v >= STAIRS_MIN_RISE_MM && Math.round(v) !== defHt) ? v : undefined;
                })}>
       </div>
       ${curKind === 'stairs' || curKind === 'stairs_half' ? html`
         <div class="row"><label>Steps</label>
-          <input type="number" min="1" step="1" .value=${piece.stairTreads != null ? String(Math.round(piece.stairTreads)) : ''}
+          <input type="number" min="1" step="1" .value=${piece.stairTreads != null ? String(Math.round(piece.stairTreads)) : ''} data-model=${piece.stairTreads != null ? String(Math.round(piece.stairTreads)) : ''}
                  placeholder=${`auto: ${stairsTreadCount(piece.h, stairsRiseMm(piece, defHt))}`}
                  title="How many steps this flight has. Blank = derived from the run depth and the rise. Counting the steps on your real staircase overrides both — the treads, the plan symbol and the height a figure stands at all follow this number."
-                 @input=${(e: Event) => upd(() => {
+                 @change=${(e: Event) => upd(() => {
                    const v = parseFloat((e.target as HTMLInputElement).value);
                    piece.stairTreads = (isFinite(v) && v >= 1) ? Math.min(60, Math.round(v)) : undefined;
                  })}>
@@ -6403,7 +6442,7 @@ export class Sidebar extends LitElement {
         ` : nothing}
       </div>
       <div class="row"><label title="% below which the plant is 'thirsty' (droops). Default 20, matching HA's plant integration. Species vary widely.">Thirsty below</label>
-        <input type="number" min="0" max="100" step="1" .value=${String(thr)}
+        <input type="number" min="0" max="100" step="1" .value=${String(thr)} data-model=${String(thr)}
                style="width:64px;font-size:11px"
                @change=${(e: Event) => upd(() => {
                  const n = parseFloat((e.target as HTMLInputElement).value);
@@ -6761,16 +6800,16 @@ export class Sidebar extends LitElement {
                  @input=${(e: Event) => upd(() => { rec.label = (e.target as HTMLInputElement).value; })}>
         </div>
         <div class="row"><label>Width (mm)</label>
-          <input type="number" min="50" .value=${String(Math.round(rec.w))}
-                 @input=${(e: Event) => upd(() => { rec.w = Math.max(50, parseFloat((e.target as HTMLInputElement).value) || 0); })}>
+          <input type="number" min="50" .value=${String(Math.round(rec.w))} data-model=${String(Math.round(rec.w))}
+                 @change=${(e: Event) => upd(() => { { const v = parseFloat((e.target as HTMLInputElement).value); if (isFinite(v)) rec.w = Math.max(50, v); } })}>
         </div>
         <div class="row"><label>Depth (mm)</label>
-          <input type="number" min="50" .value=${String(Math.round(rec.h))}
-                 @input=${(e: Event) => upd(() => { rec.h = Math.max(50, parseFloat((e.target as HTMLInputElement).value) || 0); })}>
+          <input type="number" min="50" .value=${String(Math.round(rec.h))} data-model=${String(Math.round(rec.h))}
+                 @change=${(e: Event) => upd(() => { { const v = parseFloat((e.target as HTMLInputElement).value); if (isFinite(v)) rec.h = Math.max(50, v); } })}>
         </div>
         <div class="row"><label>Height (mm)</label>
-          <input type="number" min="10" .value=${String(Math.round(rec.ht))}
-                 @input=${(e: Event) => upd(() => { rec.ht = Math.max(10, parseFloat((e.target as HTMLInputElement).value) || 0); })}>
+          <input type="number" min="10" .value=${String(Math.round(rec.ht))} data-model=${String(Math.round(rec.ht))}
+                 @change=${(e: Event) => upd(() => { { const v = parseFloat((e.target as HTMLInputElement).value); if (isFinite(v)) rec.ht = Math.max(10, v); } })}>
         </div>
         <div class="row"><label>Surface</label>
           <input type="checkbox" .checked=${!!rec.surface}
@@ -6791,8 +6830,8 @@ export class Sidebar extends LitElement {
         <div class="row"><label>Seat (mm)</label>
           <input type="number" min="0" placeholder="none"
                  title="Seat-top height; set it to make the object sittable"
-                 .value=${rec.seat != null ? String(Math.round(rec.seat)) : ''}
-                 @input=${(e: Event) => upd(() => {
+                 .value=${rec.seat != null ? String(Math.round(rec.seat)) : ''} data-model=${rec.seat != null ? String(Math.round(rec.seat)) : ''}
+                 @change=${(e: Event) => upd(() => {
                    const v = parseFloat((e.target as HTMLInputElement).value);
                    rec.seat = isFinite(v) && v > 0 ? v : undefined;
                  })}>
@@ -6810,8 +6849,8 @@ export class Sidebar extends LitElement {
     const p = this.planner;
     const upd = (mut: () => void) => { mut(); p.save(); p.emitConfig(); };
     const numIn = (v: number, on: (n: number) => void) => html`
-      <input type="number" style="width:46px;font-size:10px" .value=${String(Math.round(v))}
-             @input=${(e: Event) => upd(() => on(parseFloat((e.target as HTMLInputElement).value) || 0))}>`;
+      <input type="number" style="width:46px;font-size:10px" .value=${String(Math.round(v))} data-model=${String(Math.round(v))}
+             @change=${(e: Event) => upd(() => on(parseFloat((e.target as HTMLInputElement).value) || 0))}>`;
     const setRot = (i: number, n: number) => { if (!prim.rot) prim.rot = [0, 0, 0]; prim.rot[i] = n; };
     return html`
       <div style="border-top:1px solid var(--border);padding:4px 0">
@@ -6979,8 +7018,8 @@ export class Sidebar extends LitElement {
                     onSave: (v: number) => void) => html`
       <div class="row">
         <label>${label}</label>
-        <input type="number" min=${min} max=${max} step=${step} .value=${String(val)}
-               @input=${(e: Event) => {
+        <input type="number" min=${min} max=${max} step=${step} .value=${String(val)} data-model=${String(val)}
+               @change=${(e: Event) => {
                  const v = parseFloat((e.target as HTMLInputElement).value);
                  if (isFinite(v)) onSave(Math.max(min, Math.min(max, v)));
                }}>
@@ -7035,8 +7074,8 @@ export class Sidebar extends LitElement {
           ${['strip', 'string', 'under_cabinet'].includes(curKind) ? html`
             <div class="row"><label>Length (mm)</label>
               <input type="number" min="300" max="15000" step="100"
-                     .value=${String(Math.round(l.length ?? 2000))}
-                     @input=${(e: Event) => upd(() => {
+                     .value=${String(Math.round(l.length ?? 2000))} data-model=${String(Math.round(l.length ?? 2000))}
+                     @change=${(e: Event) => upd(() => {
                        const v = parseFloat((e.target as HTMLInputElement).value);
                        l.length = isFinite(v) ? Math.max(300, Math.min(15000, v)) : 2000;
                      })}>
@@ -7044,8 +7083,8 @@ export class Sidebar extends LitElement {
           ` : nothing}
           ${['fireplace', 'strip', 'sconce', 'string', 'under_cabinet', 'wall_sconce', 'step', 'flood', 'exhaust_wall', 'ground_spot'].includes(curKind) ? html`
             <div class="row"><label>Rotation (°)</label>
-              <input type="number" step="15" .value=${String(Math.round(l.rotation ?? 0))}
-                     @input=${(e: Event) => upd(() => {
+              <input type="number" step="15" .value=${String(Math.round(l.rotation ?? 0))} data-model=${String(Math.round(l.rotation ?? 0))}
+                     @change=${(e: Event) => upd(() => {
                        const v = parseFloat((e.target as HTMLInputElement).value) || 0;
                        l.rotation = ((Math.round(v) % 360) + 360) % 360;
                      })}>
@@ -7063,8 +7102,8 @@ export class Sidebar extends LitElement {
           ` : nothing}
           ${curKind === 'ground_spot' ? html`
             <div class="row"><label>Tilt (° above horizon)</label>
-              <input type="number" min="5" max="85" step="5" .value=${String(Math.round(l.tilt ?? 35))}
-                     @input=${(e: Event) => upd(() => {
+              <input type="number" min="5" max="85" step="5" .value=${String(Math.round(l.tilt ?? 35))} data-model=${String(Math.round(l.tilt ?? 35))}
+                     @change=${(e: Event) => upd(() => {
                        const v = parseFloat((e.target as HTMLInputElement).value);
                        l.tilt = isFinite(v) ? Math.max(5, Math.min(85, v)) : 35;
                      })}>
@@ -7106,8 +7145,8 @@ export class Sidebar extends LitElement {
             </select>
           </div>
           <div class="row"><label>Rotation (°)</label>
-            <input type="number" step="15" .value=${String(Math.round(s.rotation ?? 0))}
-                   @input=${(e: Event) => upd(() => {
+            <input type="number" step="15" .value=${String(Math.round(s.rotation ?? 0))} data-model=${String(Math.round(s.rotation ?? 0))}
+                   @change=${(e: Event) => upd(() => {
                      const v = parseFloat((e.target as HTMLInputElement).value) || 0;
                      s.rotation = ((Math.round(v) % 360) + 360) % 360;
                    })}>
@@ -7174,26 +7213,26 @@ export class Sidebar extends LitElement {
           <input type="text" data-label-for=${s.id} .value=${s.label} @input=${u('label')}></div>
         ${this._lockRow(s)}
         <div class="row"><label>X (mm)</label>
-          <input type="number" .value=${String(s.x)} @input=${u('x', v => parseFloat(v) || 0)}></div>
+          <input type="number" .value=${String(s.x)} data-model=${String(s.x)} @change=${u('x', v => parseFloat(v) || 0)}></div>
         <div class="row"><label>Y (mm)</label>
-          <input type="number" .value=${String(s.y)} @input=${u('y', v => parseFloat(v) || 0)}></div>
+          <input type="number" .value=${String(s.y)} data-model=${String(s.y)} @change=${u('y', v => parseFloat(v) || 0)}></div>
         <div class="row"><label>Heading (°)</label>
-          <input type="number" .value=${String(s.heading)}
-                 @input=${(e: Event) => {
+          <input type="number" .value=${String(s.heading)} data-model=${String(s.heading)}
+                 @change=${(e: Event) => {
                    const v = parseFloat((e.target as HTMLInputElement).value) || 0;
                    s.heading = ((Math.round(v) % 360) + 360) % 360;
                    p.save(); p.emitConfig();
                  }}></div>
         <div class="row"><label>FOV (°)</label>
-          <input type="number" .value=${String(s.fov)}
-                 @input=${(e: Event) => {
+          <input type="number" .value=${String(s.fov)} data-model=${String(s.fov)}
+                 @change=${(e: Event) => {
                    const v = parseFloat((e.target as HTMLInputElement).value) || 0;
                    s.fov = Math.max(5, Math.min(360, v));
                    p.save(); p.emitConfig();
                  }}></div>
         <div class="row"><label>Range (mm)</label>
-          <input type="number" .value=${String(s.range)}
-                 @input=${(e: Event) => {
+          <input type="number" .value=${String(s.range)} data-model=${String(s.range)}
+                 @change=${(e: Event) => {
                    const v = parseFloat((e.target as HTMLInputElement).value) || 0;
                    s.range = Math.max(100, v);
                    p.save(); p.emitConfig();
@@ -7401,10 +7440,19 @@ export class Sidebar extends LitElement {
     const p = this.planner;
     const verts = vertices.length ? [...vertices] : [{ x: 0, y: 0 }];
     while (verts.length < 3) verts.push({ x: 0, y: 0 });
+    // Every write is FENCED first (the mmWave editor's `_writeZone` discipline):
+    // the firmware echoes the 16 number entities back one by one, and an
+    // unfenced partial echo reverts the edit through _syncZonesObjects.
     const onSave = (vi: number, axis: 'x' | 'y') => (e: Event) => {
-      const v = parseFloat((e.target as HTMLInputElement).value) || 0;
+      const v = parseFloat((e.target as HTMLInputElement).value);
+      if (!isFinite(v)) return;
       verts[vi] = { ...verts[vi], [axis]: v };
+      p.fenceZoneWrite(s.id, prefix, zi);
       p.saveZoneVertex(s, prefix, zi, vi, verts[vi].x, verts[vi].y);
+    };
+    const writeAll = (next: readonly { x: number; y: number }[]) => {
+      p.fenceZoneWrite(s.id, prefix, zi);
+      p.saveAllZoneVertices(s, prefix, zi, padZoneVertices(next));
     };
     return html`
       <div style="background:rgba(0,0,0,0.3);border-radius:4px;padding:6px;margin-bottom:4px">
@@ -7413,12 +7461,12 @@ export class Sidebar extends LitElement {
           <span style="color:var(--text-dim)">Y mm</span>
           <span></span>
           ${verts.map((v, vi) => html`
-            <input type="number" .value=${String(Math.round(v.x))} @change=${onSave(vi, 'x')}
+            <input type="number" .value=${String(Math.round(v.x))} data-model=${String(Math.round(v.x))} @change=${onSave(vi, 'x')}
                    style="width:100%;background:#111;border:1px solid var(--border);border-radius:3px;color:var(--text);font-size:11px;padding:2px 4px">
-            <input type="number" .value=${String(Math.round(v.y))} @change=${onSave(vi, 'y')}
+            <input type="number" .value=${String(Math.round(v.y))} data-model=${String(Math.round(v.y))} @change=${onSave(vi, 'y')}
                    style="width:100%;background:#111;border:1px solid var(--border);border-radius:3px;color:var(--text);font-size:11px;padding:2px 4px">
             <button class="icon-btn" title="Remove vertex"
-                    @click=${() => { verts.splice(vi, 1); p.saveAllZoneVertices(s, prefix, zi, verts); }}>✕</button>
+                    @click=${() => { verts.splice(vi, 1); writeAll(verts); }}>✕</button>
           `)}
         </div>
         <div style="display:flex;gap:4px;margin-top:4px">
@@ -7427,8 +7475,7 @@ export class Sidebar extends LitElement {
                     @click=${() => startZoneEdit(p, s.id, prefix, zi)}>+ Vertex</button>
           ` : nothing}
           <button class="btn danger" style="font-size:11px;padding:2px 6px"
-                  @click=${() => { if (confirm('Clear all vertices for this zone?'))
-                                    p.saveAllZoneVertices(s, prefix, zi, []); }}>⟳ Reset</button>
+                  @click=${() => { if (confirm('Clear all vertices for this zone?')) writeAll([]); }}>⟳ Reset</button>
         </div>
       </div>
     `;
@@ -7463,20 +7510,29 @@ export class Sidebar extends LitElement {
   private _objectEditor(s: Sensor, oi: number, obj: ObjectHalo) {
     const p = this.planner;
     const numIn = (val: number, onSave: (v: number) => void) => html`
-      <input type="number" .value=${String(Math.round(val))}
-             @change=${(e: Event) => onSave(parseFloat((e.target as HTMLInputElement).value) || 0)}
+      <input type="number" .value=${String(Math.round(val))} data-model=${String(Math.round(val))}
+             @change=${(e: Event) => {
+               const v = parseFloat((e.target as HTMLInputElement).value);
+               if (isFinite(v)) onSave(v);
+             }}
              style="width:100%;background:#111;border:1px solid var(--border);border-radius:3px;color:var(--text);font-size:11px;padding:2px 4px">
     `;
+    // Fence before writing so the firmware's echo cannot revert the edit (the
+    // mmWave editor's object-halo discipline).
+    const field = (f: 'x' | 'y' | 'radius', v: number) => {
+      p.fenceObjectWrite(s.id, oi);
+      p.saveObjectField(s, oi, f, v);
+    };
     const ICONS = ['📍','💺','🖥','🚪','🛋','🪑','🛏','📺','🚿','📦','🪴','🗑','🖨','🛒','🚗','🐕'];
     return html`
       <div style="background:rgba(0,0,0,0.3);border-radius:4px;padding:6px;margin-bottom:4px">
         <div style="display:grid;grid-template-columns:auto 1fr;gap:4px 8px;font-size:11px;align-items:center">
           <span style="color:var(--text-dim)">X (mm)</span>
-          ${numIn(obj.x, v => p.saveObjectField(s, oi, 'x', v))}
+          ${numIn(obj.x, v => field('x', v))}
           <span style="color:var(--text-dim)">Y (mm)</span>
-          ${numIn(obj.y, v => p.saveObjectField(s, oi, 'y', v))}
+          ${numIn(obj.y, v => field('y', v))}
           <span style="color:var(--text-dim)">Radius</span>
-          ${numIn(obj.radius, v => p.saveObjectField(s, oi, 'radius', v))}
+          ${numIn(obj.radius, v => field('radius', v))}
         </div>
         <div style="font-size:10px;color:var(--text-dim);margin:6px 0 3px">Icon</div>
         <div style="display:flex;flex-wrap:wrap;gap:3px">
@@ -7510,7 +7566,7 @@ export class Sidebar extends LitElement {
       return html`
         <div class="sensor-cfg-row">
           <label>${label}</label>
-          <input type="number" min=${min} max=${max} step=${step} .value=${String(cur)}
+          <input type="number" min=${min} max=${max} step=${step} .value=${String(cur)} data-model=${String(cur)}
                  @change=${(e: Event) => p.hass?.callService('number', 'set_value',
                    { entity_id: entityId, value: parseFloat((e.target as HTMLInputElement).value) || 0 })}>
           ${unit ? html`<span style="color:var(--text-dim);font-size:10px;margin-left:2px">${unit}</span>` : nothing}
@@ -7744,7 +7800,7 @@ export class Sidebar extends LitElement {
           <div class="row" style="margin-top:8px"
                title="Compass bearing (° clockwise from true north) that plan +Y points. 0 = plan +Y faces true north. Used only with a single calibrated landmark.">
             <label>North bearing°</label>
-            <input type="number" step="1" .value=${String(geo?.northDeg ?? 0)}
+            <input type="number" step="1" .value=${String(geo?.northDeg ?? 0)} data-model=${String(geo?.northDeg ?? 0)}
                    @change=${(e: Event) => p.setGeo(g => {
                      const v = parseFloat((e.target as HTMLInputElement).value);
                      g.northDeg = isFinite(v) ? ((v % 360) + 360) % 360 : 0;
@@ -7754,7 +7810,7 @@ export class Sidebar extends LitElement {
         <div class="row" style="margin-top:8px"
              title="How far past the floor bounding box GPS pins may render (metres). Used in G2.">
           <label>Boundary (m)</label>
-          <input type="number" min="0" step="5" .value=${String(geo?.boundaryM ?? 30)}
+          <input type="number" min="0" step="5" .value=${String(geo?.boundaryM ?? 30)} data-model=${String(geo?.boundaryM ?? 30)}
                  @change=${(e: Event) => p.setGeo(g => {
                    const v = parseFloat((e.target as HTMLInputElement).value);
                    g.boundaryM = isFinite(v) ? Math.max(0, v) : 30;
@@ -7763,7 +7819,7 @@ export class Sidebar extends LitElement {
         <div class="row"
              title="Calibration drops GPS samples worse than this accuracy (metres).">
           <label>Accuracy gate (m)</label>
-          <input type="number" min="1" step="5" .value=${String(geo?.accuracyGateM ?? 30)}
+          <input type="number" min="1" step="5" .value=${String(geo?.accuracyGateM ?? 30)} data-model=${String(geo?.accuracyGateM ?? 30)}
                  @change=${(e: Event) => p.setGeo(g => {
                    const v = parseFloat((e.target as HTMLInputElement).value);
                    g.accuracyGateM = isFinite(v) ? Math.max(1, v) : 30;
@@ -7833,10 +7889,10 @@ export class Sidebar extends LitElement {
           </div>
           <input type="range" min="0.2" max="3" step="0.1" style="width:100%"
                  .value=${String(cfg?.verticalScale ?? 1)}
-                 @input=${(e: Event) => setN(n => { n.verticalScale = Math.max(0.2, Math.min(3, parseFloat((e.target as HTMLInputElement).value))); })}>
+                 @change=${(e: Event) => setN(n => { n.verticalScale = Math.max(0.2, Math.min(3, parseFloat((e.target as HTMLInputElement).value))); })}>
           <div class="row" style="padding:1px 0">
             <label style="flex:1;font-size:11px" title="Fallback height per storey when OSM has no height/levels tag (metres).">Default level height (m)</label>
-            <input type="number" min="2" max="5" step="0.5" style="width:64px" .value=${String(cfg?.defaultLevelHeightM ?? 3)}
+            <input type="number" min="2" max="5" step="0.5" style="width:64px" .value=${String(cfg?.defaultLevelHeightM ?? 3)} data-model=${String(cfg?.defaultLevelHeightM ?? 3)}
                    @change=${(e: Event) => setN(n => { const v = parseFloat((e.target as HTMLInputElement).value); n.defaultLevelHeightM = isFinite(v) ? Math.max(2, Math.min(5, v)) : 3; })}>
           </div>
           <div style="color:var(--text-dim);font-size:10px;line-height:1.35;margin-top:2px">
@@ -7874,7 +7930,7 @@ export class Sidebar extends LitElement {
           </div>
           <input type="range" min="0.3" max="1" step="0.05" style="width:100%"
                  .value=${String(cfg?.opacity ?? 1)}
-                 @input=${(e: Event) => setN(n => { n.opacity = Math.max(0.3, Math.min(1, parseFloat((e.target as HTMLInputElement).value))); })}>
+                 @change=${(e: Event) => setN(n => { n.opacity = Math.max(0.3, Math.min(1, parseFloat((e.target as HTMLInputElement).value))); })}>
           <div style="margin-top:6px">
             <div style="color:var(--text-dim);font-size:11px;margin-bottom:2px">Colors</div>
             ${colorRow('Buildings', 'colorBuildings', '#9aa2ab')}
@@ -8565,22 +8621,22 @@ export class Sidebar extends LitElement {
             </span>
           </label>
           <div class="row"><label>Scale (mm/unit)</label>
-            <input type="number" min="0.1" step="0.1" .value=${String(m.scale)}
-                   @input=${(e: Event) => upd(() => {
+            <input type="number" min="0.1" step="0.1" .value=${String(m.scale)} data-model=${String(m.scale)}
+                   @change=${(e: Event) => upd(() => {
                      m.scale = Math.max(0.1, parseFloat((e.target as HTMLInputElement).value) || 10);
                    })}>
           </div>
           <div class="row"><label>X offset (mm)</label>
-            <input type="number" .value=${String(Math.round(m.x))}
-                   @input=${(e: Event) => upd(() => { m.x = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
+            <input type="number" .value=${String(Math.round(m.x))} data-model=${String(Math.round(m.x))}
+                   @change=${(e: Event) => upd(() => { m.x = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
           </div>
           <div class="row"><label>Y offset (mm)</label>
-            <input type="number" .value=${String(Math.round(m.y))}
-                   @input=${(e: Event) => upd(() => { m.y = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
+            <input type="number" .value=${String(Math.round(m.y))} data-model=${String(Math.round(m.y))}
+                   @change=${(e: Event) => upd(() => { m.y = parseFloat((e.target as HTMLInputElement).value) || 0; })}>
           </div>
           <div class="row"><label>Rotation (°)</label>
-            <input type="number" step="15" .value=${String(Math.round(m.rotation))}
-                   @input=${(e: Event) => upd(() => {
+            <input type="number" step="15" .value=${String(Math.round(m.rotation))} data-model=${String(Math.round(m.rotation))}
+                   @change=${(e: Event) => upd(() => {
                      const v = parseFloat((e.target as HTMLInputElement).value) || 0;
                      m.rotation = ((Math.round(v / 15) * 15) % 360 + 360) % 360;
                    })}>
@@ -8588,9 +8644,10 @@ export class Sidebar extends LitElement {
           <div class="row"><label>Opacity</label>
             <input type="range" min="0.05" max="1" step="0.05" .value=${String(m.opacity)}
                    style="width:90px"
-                   @input=${(e: Event) => upd(() => {
+                   @input=${(e: Event) => this._rangePreview(() => {
                      m.opacity = parseFloat((e.target as HTMLInputElement).value) || 1;
-                   })}>
+                   })}
+                 @change=${() => this.planner.save()}>
           </div>
           <button class="btn danger" style="width:100%;margin-top:4px" @click=${this._removeObj}>
             Remove model
@@ -8732,9 +8789,12 @@ export class Sidebar extends LitElement {
                @change=${() => p.save()}>
       </div>
       <div class="row"><label>Rotation°</label>
-        <input type="number" min="-360" max="360" step="1" .value=${String(bg.rotation || 0)}
-               @input=${(e: Event) => { bg.rotation = parseFloat((e.target as HTMLInputElement).value) || 0; p.emitConfig(); }}
-               @change=${() => p.save()}>
+        <input type="number" min="-360" max="360" step="1" .value=${String(bg.rotation || 0)} data-model=${String(bg.rotation || 0)}
+               @change=${(e: Event) => {
+                 const v = parseFloat((e.target as HTMLInputElement).value);
+                 if (!isFinite(v)) return;   // unparseable → num-commit re-syncs the field
+                 bg.rotation = v; p.save(); p.emitConfig();
+               }}>
       </div>
       <button class="btn danger" style="width:100%;margin-top:4px" @click=${this._clearBg}>
         Clear image

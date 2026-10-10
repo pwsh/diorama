@@ -21,12 +21,18 @@ const DEG = Math.PI / 180;
 
 export interface LocalMeters { x: number; y: number; } // x east, y north
 
+// Longitude DIFFERENCE wrapped into [−180, 180): a point 0.1° across the
+// antimeridian is 0.1° away, not 359.9°.
+export function wrapLonDelta(d: number): number {
+  return d - 360 * Math.floor((d + 180) / 360);
+}
+
 // Equirectangular tangent-plane projection about (lat0, lon0). Returns local
 // metres with y NORTH-positive; the caller maps into the plan frame.
 export function projectLatLon(lat: number, lon: number, lat0: number, lon0: number): LocalMeters {
   const lat0r = lat0 * DEG;
   return {
-    x: (lon - lon0) * DEG * Math.cos(lat0r) * EARTH_R,
+    x: wrapLonDelta(lon - lon0) * DEG * Math.cos(lat0r) * EARTH_R,
     y: (lat - lat0) * DEG * EARTH_R,
   };
 }
@@ -34,9 +40,12 @@ export function projectLatLon(lat: number, lon: number, lat0: number, lon0: numb
 // Inverse of projectLatLon — local metres (about the same origin) → lat/lon.
 export function unprojectMeters(x: number, y: number, lat0: number, lon0: number): { lat: number; lon: number } {
   const lat0r = lat0 * DEG;
+  const lon = lon0 + (x / (EARTH_R * Math.cos(lat0r))) / DEG;
   return {
     lat: lat0 + (y / EARTH_R) / DEG,
-    lon: lon0 + (x / (EARTH_R * Math.cos(lat0r))) / DEG,
+    // Keep the result a valid longitude across the antimeridian (identity for
+    // every in-range value, so the round trip is unchanged elsewhere).
+    lon: (lon >= -180 && lon < 180) ? lon : lon - 360 * Math.floor((lon + 180) / 360),
   };
 }
 

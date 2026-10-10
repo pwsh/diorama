@@ -341,6 +341,16 @@
       ok('8: LAX→LGB distance within 2% of great-circle',
         Math.abs(city.distNm - TRUE_NM) / TRUE_NM < 0.02, `got ${city.distNm.toFixed(3)} nm`);
       near('8: LAX→LGB bearing ≈ 120.4° (SE)', city.bearingRad * 180 / Math.PI, 120.4, 0.5);
+      // Antimeridian (2026-09 review): the raw longitude difference made an
+      // aircraft 0.1° across ±180 read ~13 000 nm away. 0.1° of longitude at the
+      // equator ≈ 6.0 nm, bearing due EAST from 179.95°E to −179.95°.
+      const am = FB.flightBearingDistance(0, 179.95, 0, -179.95);
+      ok('8: antimeridian crossing wraps (≈6 nm, due east)',
+        Math.abs(am.distNm - 6.004) < 0.05 && Math.abs(am.bearingRad - Math.PI / 2) < 1e-6,
+        `${am.distNm.toFixed(3)} nm @ ${(am.bearingRad * 180 / Math.PI).toFixed(2)}°`);
+      const amW = FB.flightBearingDistance(0, -179.95, 0, 179.95);
+      ok('8: antimeridian crossing westbound wraps too',
+        Math.abs(amW.distNm - 6.004) < 0.05 && Math.abs(amW.bearingRad - 3 * Math.PI / 2) < 1e-6);
     }
 
     // ── 6. flightDisplayPos ─────────────────────────────────────────────────
@@ -3066,6 +3076,20 @@
         G('AAL.', 'AAL.') && G('AAL.', 'AALX') === false);
       ok('20: `.*` in plain text is literal (no accidental regex)',
         G('AAL.*', 'AAL.*23') && G('AAL.*', 'AAL123') === false);
+      // Linear-time walk (2026-09 review): `*a*a*…*b` compiled to a backtracking
+      // regex took ~635 ms on a 30-char input; the two-pointer glob must not.
+      {
+        const t0 = performance.now();
+        let r = true;
+        for (let i = 0; i < 20; i++) r = G('*a*a*a*a*a*a*a*a*a*a*a*a*b', 'a'.repeat(30)) && r;
+        const ms = performance.now() - t0;
+        ok('20: pathological glob is fast (no backtracking blow-up) and still correct',
+          r === false && ms < 100 && G('*a*a*b', 'xaxab') === true, `${ms.toFixed(1)} ms`);
+      }
+      ok('20: runs of `*` collapse to one wildcard',
+        G('SWA***', 'SWA1') && G('**451', 'SWA2451') && G('S**A', 'SXA') && G('S**A', 'SXB') === false);
+      ok('20: a literal `*` in the TEXT never consumes a pattern wildcard',
+        G('A*', 'A*') && G('*', '*') && G('A*B', 'A*B') && G('A*B', 'A*C') === false);
       const hostiles = ['(((', ')', '[a-z', '\\', '^$', '+++', '{2,}', 'a|b', '/x/', 'a-b',
         '(a+)+$', '\\d{3}'];
       let threw = false, matchedItself = true;

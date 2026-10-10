@@ -321,6 +321,63 @@ panel_iframe:
 
 Reload HA. In iframe mode, paste a Long-Lived Access Token on first load.
 
+### Sharing a floor plan between HA users
+
+Configurations live in Home Assistant's per-user storage, so a second HA
+user (a kiosk tablet account, a family member) normally starts with an empty
+**Default**. To share one, publish it to every user: Diorama writes it as a
+static file under `www/diorama/shared/` (everyone reads it through `/local/`)
+using a `shell_command` you add once. Paste this into `configuration.yaml`
+(Settings ▸ Floor Plan ▸ Shared configurations ▸ Setup shows the same block
+with a Copy button), then **restart Home Assistant**:
+
+```yaml
+# Diorama — shared floor plans. Writes /config/www/diorama/shared/<name>.json
+# (served to every Home Assistant user at /local/diorama/shared/).
+# Restart Home Assistant after adding. Your config directory must already
+# contain a www/ folder when HA starts, or /local/ is not served.
+shell_command:
+  diorama_shared_write: |-
+    python3 -c "
+    import sys,os,re,base64,json,glob
+    d,n,b=sys.argv[1],sys.argv[2],sys.argv[5]
+    s,t=int(sys.argv[3]),int(sys.argv[4])
+    if not re.fullmatch('[a-z0-9_-]{1,64}',n) or not 0<=s<t<=1000: sys.exit('diorama: bad name or sequence')
+    os.makedirs(d,exist_ok=True)
+    p=os.path.join(d,n+'.part')
+    if s==0: [os.remove(x) for x in glob.glob(glob.escape(p)+'*')]
+    elif not os.path.exists(p+str(s-1)): sys.exit('diorama: chunk out of sequence')
+    else: os.replace(p+str(s-1),p+str(s))
+    with open(p+str(s),'a') as h: h.write(b)
+    if s<t-1: sys.exit(0)
+    with open(p+str(s)) as h: raw=base64.b64decode(h.read(),validate=True)
+    json.loads(raw)
+    f=os.path.join(d,n+'.json')
+    with open(f+'.tmp','wb') as h: h.write(raw)
+    os.replace(f+'.tmp',f)
+    os.remove(p+str(s))
+    " "/config/www/diorama/shared" "{{ name }}" "{{ seq }}" "{{ total }}" "{{ data }}"
+```
+
+Then in **Settings ▸ Floor Plan ▸ Shared configurations** press **Test
+write**, and **Share** next to the configuration. Other users pick it from
+the Configurations list (marked *(shared)*); their edits sync back, and
+open panels pick up another user's save within ~2 minutes (or on tab
+resume).
+
+- `www/` must exist in your config directory when HA **starts**, or HA does
+  not serve `/local/` at all.
+- Any HA user who can call `shell_command.diorama_shared_write` can edit
+  shared plans — Home Assistant's own service permissions govern that.
+- Simultaneous edits are last-writer-wins. **Unshare** (owner or admin)
+  copies the plan back into your own configurations; the file stays in
+  `www/diorama/shared/` until you delete it by hand.
+- The shared file is an ordinary export (`.diorama.json`), so it can also be
+  imported by hand. Not shared: per-device viewport, presence history, and
+  imported OBJ models (they live in each browser).
+- In standalone mode (panel served from a different origin than HA) the
+  browser may not be allowed to read `/local/` — use the native panel.
+
 ### Standalone / offline (no Home Assistant)
 
 Diorama also runs as a plain web page with no HA connection at all — for
@@ -393,7 +450,8 @@ sidebar order / theme prefs. This means:
 
 Diorama stores a **registry of named configurations**, not a single plan: an
 index at `diorama-configs` plus one full body per configuration at
-`diorama-cfg-<id>`. Manage them under **Settings ▸ Data ▸ Configurations**
+`diorama-cfg-<id>` (per HA user — see *Sharing a floor plan between HA
+users* for publishing one to everyone). Manage them under **Settings ▸ Data ▸ Configurations**
 (save as, new, rename, import, export, delete) — handy for keeping a
 work-in-progress redesign beside your live home.
 

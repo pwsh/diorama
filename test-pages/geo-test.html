@@ -28,7 +28,7 @@
        (matches the trilateration.html build-then-copy flow; no live HA). -->
   <script type="module">
     import {
-      projectLatLon, fitGeoTransform, latLonToPlan, planToLatLon, medianLatLon,
+      projectLatLon, unprojectMeters, fitGeoTransform, latLonToPlan, planToLatLon, medianLatLon,
       parseLatLon, fmtDistanceM, fmtAccuracyM,
       projectRecordedPins, recordedChainLengthMm,
     } from './geo.mod.js';
@@ -89,6 +89,13 @@
     // 1° of longitude at 45°N ≈ 111194.9·cos(45°) ≈ 78626.6 m.
     near('proj 1° lon @45N → 78.63 km', projectLatLon(45, -92, 45, -93).x, 78626.55, 1, 'm');
     ok('proj origin → (0,0)', (() => { const m = projectLatLon(45, -93, 45, -93); return Math.hypot(m.x, m.y) < 1e-6; })(), '≈0');
+    // Antimeridian (2026-09 review): the raw lon difference put a point 0.1°
+    // across ±180 some 40 000 km away. 0.1° of longitude at the equator ≈ 11.12 km.
+    near('proj wraps across the antimeridian (east)', projectLatLon(0, -179.95, 0, 179.95).x, 11119.49, 1, 'm');
+    near('proj wraps across the antimeridian (west)', projectLatLon(0, 179.95, 0, -179.95).x, -11119.49, 1, 'm');
+    ok('unproject stays a valid longitude across ±180',
+      (() => { const g = unprojectMeters(11119.49, 0, 0, 179.95);
+               return g.lon >= -180 && g.lon < 180 && Math.abs(g.lon - (-179.95)) < 1e-4; })());
 
     // ── 2/3/5-point Procrustes recovery of a known rotation + translation ────
     const OFFS5 = [

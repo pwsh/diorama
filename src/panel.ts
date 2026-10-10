@@ -44,6 +44,13 @@ class DioramaPanel extends HTMLElement {
   private _adapter = new HassPanelAdapter();
   private _planner: Planner | null = null;
   private _app: App | null = null;
+  // Last hass HA handed us — kept so a panel element re-inserted after a
+  // teardown can reboot without waiting for the next state push.
+  private _hass: unknown = null;
+  // Deferred teardown: a synchronous DOM move (remove + re-append) fires
+  // disconnected→connected back-to-back; only a removal that is still in
+  // effect a macrotask later disposes the Planner.
+  private _teardownTimer: ReturnType<typeof setTimeout> | null = null;
 
   private _ro: ResizeObserver | null = null;
   private _sizeRaf = 0;
@@ -54,6 +61,14 @@ class DioramaPanel extends HTMLElement {
   // HA frontend sets this on every state change. First call boots the app.
   set hass(h: unknown) {
     if (!h) return;
+    this._hass = h;
+    // A disconnected element must not boot a Planner nobody can see; the
+    // stored hass reboots it in connectedCallback.
+    if (!this._planner && !this.isConnected) return;
+    this._boot(h);
+  }
+
+  private _boot(h: unknown): void {
     if (!this._planner) {
       // Inject styles INTO the panel element — it sits inside HA frontend's
       // shadow DOM, where document.head styles can't reach.
@@ -192,13 +207,43 @@ class DioramaPanel extends HTMLElement {
   // HA tears the panel out of the DOM when you navigate away and can put it
   // back on return; re-arm the listeners so a second visit still sizes itself.
   connectedCallback(): void {
-    if (this._planner) this._startSizing();
+    if (this._teardownTimer) { clearTimeout(this._teardownTimer); this._teardownTimer = null; }
+    if (this._planner) {
+      this._startSizing();
+      // Re-attached after a DOM move whose teardown was cancelled above: the
+      // Planner survived but the app element may have been removed.
+      if (!this._app) {
+        const app = document.createElement('diorama-app') as App;
+        app.adoptPlanner(this._planner);
+        this.appendChild(app);
+        this._app = app;
+      }
+    } else if (this._hass) {
+      // Re-inserted after a full teardown — reboot on the last known hass.
+      this._boot(this._hass);
+    }
   }
 
   disconnectedCallback(): void {
     this._stopSizing();
-    this._app?.remove();
-    this._app = null;
+    if (this._teardownTimer) clearTimeout(this._teardownTimer);
+    this._teardownTimer = setTimeout(() => {
+      this._teardownTimer = null;
+      if (this.isConnected) return;
+      // Really gone: stop every Planner timer / subscription (MQTT bridge,
+      // alert center, presence recorder, pollers) instead of leaking a whole
+      // running Planner per visit, and release our state_changed subscription.
+      this._app?.remove();
+      this._app = null;
+      const p = this._planner as (Planner & { dispose?: () => void }) | null;
+      this._planner = null;
+      try { p?.dispose?.(); } catch (err) { console.warn('diorama panel: dispose failed', err); }
+      // Planner.dispose() closes its hass; close explicitly too in case the
+      // Planner predates dispose(). Both are idempotent.
+      try { this._adapter.close(); } catch { /* ignore */ }
+      this._adapter = new HassPanelAdapter();
+      this._lastH = -1; this._sig = '';
+    }, 0);
   }
 }
 

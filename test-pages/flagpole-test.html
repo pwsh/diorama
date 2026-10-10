@@ -129,13 +129,21 @@
   const poleGrp = r._flagpoleGroup.children[0];
   assert('pole = ≥2 cylinders (tapered)', countGeo(poleGrp, 'CylinderGeometry') >= 2);
   assert('pole has a finial sphere', countGeo(poleGrp, 'SphereGeometry') >= 1);
-  assert('flag = exactly 2 planes (double-faced)', countGeo(rFull.assembly, 'PlaneGeometry') === 2);
-  // Non-mirror: two planes SHARE one geometry + one material (map), back rotated π.
-  const [front, back] = rFull.assembly.children;
-  assert('flag planes share geometry', front.geometry === back.geometry);
-  assert('flag planes share material + texture', front.material === back.material && front.material.map === back.material.map);
-  assert('flag back plane rotated π (un-mirrored)', near(Math.abs(back.rotation.y), Math.PI, 1e-3), `y=${back.rotation.y}`);
-  assert('flag front plane not rotated', near(front.rotation.y, 0, 1e-6));
+  // RE-PINNED (2026-09 review fix): the flag was two FrontSide planes with the
+  // back rotated π — the banner technique, which only works for a plane CENTRED
+  // on its origin. This hoist-anchored cloth's back face therefore hung on the
+  // pole's OPPOSITE side, and the flag jumped across the pole as the camera
+  // orbited. It is now ONE DoubleSide plane (mirrored from behind, like a real
+  // flag). The pins below assert that shape AND that the cloth occupies +X only.
+  assert('flag = exactly 1 plane (DoubleSide cloth)', countGeo(rFull.assembly, 'PlaneGeometry') === 1);
+  const [cloth] = rFull.assembly.children;
+  assert('flag cloth is DoubleSide', cloth.material.side === 2 /* THREE.DoubleSide */, `side=${cloth.material.side}`);
+  assert('flag cloth not rotated', near(cloth.rotation.y, 0, 1e-6));
+  {
+    cloth.geometry.computeBoundingBox();
+    const bb = cloth.geometry.boundingBox;
+    assert('flag cloth hangs on ONE side of the pole (x ≥ 0)', bb.min.x >= -1e-3 && bb.max.x > 0, `x=[${bb.min.x.toFixed(1)}, ${bb.max.x.toFixed(1)}]`);
+  }
 
   // Hoist Y ordering: full > half(checkbox) > entity 30%.
   const yFull = rFull.assembly.position.y, yHalf = rHalf.assembly.position.y, yEnt = rEnt.assembly.position.y;

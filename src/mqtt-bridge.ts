@@ -30,6 +30,7 @@ export interface BridgeConfig {
   WebSocketCtor?: typeof WebSocket;   // direct path: injectable fake socket
   backoffBaseMs?: number;             // direct reconnect base (default 2000)
   backoffMaxMs?: number;              // direct reconnect cap (default 30000)
+  stableUpMs?: number;                // 'up' this long before backoff resets (default 30000)
 }
 
 // The subset of HaApi the bridge needs. Typed narrowly (not the whole HaApi) so
@@ -41,7 +42,12 @@ export interface BridgeApi {
   publishMqtt(topic: string, payload: string, retain?: boolean): Promise<void>;
 }
 
-export interface BridgeMessage { topic: string; payloadString: string; }
+// `payloadString` is always present. On the DIRECT path it is binary-safe: valid
+// UTF-8 decodes as text, anything else (Valetudo's zlib map) arrives as a
+// byte-per-code-point string (see mqtt-ws.ts payloadToString), and the raw bytes
+// ride along in `payloadBytes`. The HA relay only ever hands us a string (HA's
+// JSON event serialization), so `payloadBytes` is absent there.
+export interface BridgeMessage { topic: string; payloadString: string; payloadBytes?: Uint8Array; }
 export type BridgeMessageCb = (m: BridgeMessage) => void;
 
 export interface BridgeHandlers {
@@ -145,7 +151,14 @@ export function startBridge(
   // ── Path B: direct broker ─────────────────────────────────────────────────
   const backoffBase = cfg.backoffBaseMs ?? 2000;
   const backoffMax = cfg.backoffMaxMs ?? 30000;
+  const stableUpMs = cfg.stableUpMs ?? 30000;
   let backoff = backoffBase;
+  // The backoff only resets after the link has stayed up for `stableUpMs`. A
+  // broker that accepts CONNECT and then drops us immediately (bad ACL, client
+  // id clash, flapping proxy) would otherwise reset to the 2 s base on every
+  // 'up' and hammer it in a connect/up/close storm.
+  let stableTimer: ReturnType<typeof setTimeout> | null = null;
+  const clearStable = (): void => { if (stableTimer) { clearTimeout(stableTimer); stableTimer = null; } };
   let client: MqttWsClient | null = null;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let matcher: ((f: string, t: string) => boolean) | null = null;
@@ -159,11 +172,11 @@ export function startBridge(
     backoff = Math.min(backoff * 2, backoffMax);
   };
 
-  const dispatchDirect = (topic: string, payloadString: string): void => {
+  const dispatchDirect = (topic: string, payloadString: string, payloadBytes?: Uint8Array): void => {
     if (!matcher) return;
     for (const [filter, cbs] of subs) {
       if (matcher(filter, topic)) {
-        for (const cb of cbs) { try { cb({ topic, payloadString }); } catch { /* consumer threw */ } }
+        for (const cb of cbs) { try { cb({ topic, payloadString, payloadBytes }); } catch { /* consumer threw */ } }
       }
     }
   };
@@ -171,10 +184,14 @@ export function startBridge(
   const connect = async (): Promise<void> => {
     if (stopped) return;
     setStatus('connecting');
+    let mine: MqttWsClient | null = null;
     try {
       const mod = await import('./mqtt-ws.js');
       if (stopped) return;
       matcher = mod.matchTopicFilter;
+      // Retire any previous client before replacing it (its late onclose is
+      // ignored by the identity guard below).
+      if (client) { const old = client; client = null; try { old.close(); } catch { /* ignore */ } }
       const creds = readBrokerCreds();
       const c = new mod.MqttWsClient({
         url: buildBrokerUrl(cfg),
@@ -184,22 +201,25 @@ export function startBridge(
         keepalive: 60,
         WebSocketCtor: cfg.WebSocketCtor,
       });
-      client = c;
-      c.onMessage(m => dispatchDirect(m.topic, m.payload));
+      client = c; mine = c;
+      c.onMessage(m => { if (c === client) dispatchDirect(m.topic, m.payload, m.payloadBytes); });
       c.onStatus((s: MqttStatus) => {
-        if (stopped) return;
+        // A retired client's late 'closed' must not knock the CURRENT one down.
+        if (stopped || c !== client) return;
         if (s === 'up') {
           setStatus('up');
-          backoff = backoffBase;                 // reset on a clean connect
+          clearStable();
+          stableTimer = setTimeout(() => { stableTimer = null; backoff = backoffBase; }, stableUpMs);
           for (const filter of subs.keys()) c.subscribe(filter);   // resubscribe everything
         } else if (s === 'error' || s === 'closed') {
+          clearStable();                         // dropped before proving stable — keep backing off
           setStatus('error');
           scheduleReconnect();
         }
       });
       await c.connect();
     } catch {
-      if (stopped) return;
+      if (stopped || (mine && mine !== client)) return;
       setStatus('error');
       scheduleReconnect();
     }
@@ -222,6 +242,7 @@ export function startBridge(
     stop() {
       stopped = true;
       if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+      clearStable();
       try { client?.close(); } catch { /* ignore */ }
       client = null;
       subs.clear();

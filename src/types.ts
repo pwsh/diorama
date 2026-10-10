@@ -2112,7 +2112,10 @@ export interface BgTrainScenery {
 // A saved floor-plan configuration. The full Store body lives at HA user_data
 // key `diorama-cfg-<id>` (+ the active one mirrored in the diorama:store:v1
 // localStorage cache); this lightweight record lives in the index.
-export interface ConfigMeta { id: string; name: string; updatedAt: number; }
+// `shared` / `sharedBy` are set only on the MERGED view Planner.listConfigs()
+// returns (a config published to www/diorama/shared/ — see src/shared-config.ts);
+// they are never written into the per-user user_data index.
+export interface ConfigMeta { id: string; name: string; updatedAt: number; shared?: boolean; sharedBy?: string; }
 // The registry index (HA user_data key `diorama-configs` + localStorage cache
 // `diorama:configs`). `activeId` is the last-active selection restored on load.
 export interface ConfigIndex { version: 1; activeId: string; configs: ConfigMeta[]; }

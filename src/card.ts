@@ -113,6 +113,10 @@ export class DioramaCard extends LitElement {
     super.disconnectedCallback();
     // Do NOT tear down the shared Planner — other cards / a re-mount reuse it.
     this._planner?.removeEventListener('config', this._onCfg);
+    // Cancel any still-pending floor/layers retry — an unmounted card must not
+    // keep re-applying its config to the SHARED planner for up to 20 s while a
+    // different card is on screen.
+    this._disposeTpl?.(); this._disposeTpl = null;
     this._ro?.disconnect(); this._ro = null;
     noteCardUnmounted();
   }

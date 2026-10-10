@@ -194,6 +194,74 @@
           `status=${bridge.status} n=${FakeWS.instances.length}/${nBefore}`);
       }
 
+      // ── DIRECT: binary-safe payload delivery (Valetudo map is zlib BINARY) ──
+      {
+        FakeWS.instances.length = 0;
+        const bridge = startBridge(
+          { mode: 'direct', brokerHost: 'b', WebSocketCtor: FakeWS, backoffBaseMs: 20 },
+          new FakeApi(), {});
+        let got = null;
+        bridge.subscribe('valetudo/+/MapData/map-data', m => got = m);
+        await sleep(60);
+        const bin = Uint8Array.from([0x78, 0x9c, 0x80, 0x9f, 0xa0, 0xff, 0x00]);
+        FakeWS.instances[0].serverPublish('valetudo/r1/MapData/map-data', bin);
+        const back = got && Uint8Array.from(Array.from(got.payloadString, c => c.charCodeAt(0)));
+        const hx = u => u ? Array.from(u).map(b => b.toString(16).padStart(2, '0')).join('') : '';
+        ok('direct: binary payloadString is byte-for-byte', got && hx(back) === hx(bin), hx(back));
+        ok('direct: raw payloadBytes forwarded', got && hx(got.payloadBytes) === hx(bin), got && hx(got.payloadBytes));
+        got = null;
+        FakeWS.instances[0].serverPublish('valetudo/r1/MapData/map-data', '{"n":"Küche"}');
+        ok('direct: UTF-8 text payload still decodes as text', got && got.payloadString === '{"n":"Küche"}', got && got.payloadString);
+        bridge.stop();
+      }
+
+      // ── DIRECT: backoff is NOT reset by a flapping 'up' ─────────────────────
+      // A broker that CONNACKs and immediately drops us must keep backing off
+      // (20 → 40 → 80 ms) instead of resetting to the base on every 'up'.
+      const flap = async (stableUpMs) => {
+        FakeWS.instances.length = 0;
+        const born = [];
+        class FlapWS extends FakeWS {
+          constructor(u, p) { super(u, p); born.push(performance.now()); }
+          send(bytes) {
+            super.send(bytes);
+            if ((bytes[0] >> 4) === 1) setTimeout(() => this.close(), 2);   // drop right after CONNACK
+          }
+        }
+        const bridge = startBridge(
+          { mode: 'direct', brokerHost: 'b', WebSocketCtor: FlapWS,
+            backoffBaseMs: 20, backoffMaxMs: 1000, stableUpMs },
+          new FakeApi(), {});
+        await sleep(400);
+        bridge.stop();
+        return born.slice(1).map((t, i) => t - born[i]);
+      };
+      {
+        const gaps = await flap(10000);
+        ok('direct: flapping link keeps backing off (gaps grow)',
+          gaps.length >= 3 && gaps[2] > gaps[0] * 2.5, `gaps=${gaps.map(g => g.toFixed(0))}`);
+        // Negative control: a link that proves stable before each drop DOES
+        // reset to the base, so the gaps stay near the base.
+        FakeWS.instances.length = 0;
+        const born = [];
+        class StableWS extends FakeWS {
+          constructor(u, p) { super(u, p); born.push(performance.now()); }
+          send(bytes) {
+            super.send(bytes);
+            if ((bytes[0] >> 4) === 1) setTimeout(() => this.close(), 30);   // up 30 ms > stableUpMs 5
+          }
+        }
+        const bridge = startBridge(
+          { mode: 'direct', brokerHost: 'b', WebSocketCtor: StableWS,
+            backoffBaseMs: 20, backoffMaxMs: 1000, stableUpMs: 5 },
+          new FakeApi(), {});
+        await sleep(400);
+        bridge.stop();
+        const g2 = born.slice(1).map((t, i) => t - born[i]);
+        ok('direct: a stable link resets backoff to base (control)',
+          g2.length >= 3 && g2[2] < g2[0] * 1.8, `gaps=${g2.map(g => g.toFixed(0))}`);
+      }
+
       render();
     }
 

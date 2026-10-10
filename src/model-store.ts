@@ -26,36 +26,40 @@ function openDb(): Promise<IDBDatabase> {
   });
 }
 
-export async function saveModel(floorId: string, blob: ModelBlob): Promise<void> {
+// Open → run → ALWAYS close, including when the transaction rejects. A
+// close() skipped on the error path leaks the connection for the page's
+// lifetime (and blocks any future onupgradeneeded version change).
+async function withDb<T>(fn: (db: IDBDatabase) => Promise<T>): Promise<T> {
   const db = await openDb();
-  await new Promise<void>((resolve, reject) => {
+  try { return await fn(db); } finally { db.close(); }
+}
+
+export async function saveModel(floorId: string, blob: ModelBlob): Promise<void> {
+  await withDb(db => new Promise<void>((resolve, reject) => {
     const tx = db.transaction(STORE, 'readwrite');
     tx.objectStore(STORE).put(blob, floorId);
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
-  });
-  db.close();
+    tx.onabort = () => reject(tx.error);
+  }));
 }
 
 export async function loadModel(floorId: string): Promise<ModelBlob | null> {
-  const db = await openDb();
-  const out = await new Promise<ModelBlob | null>((resolve, reject) => {
+  const out = await withDb(db => new Promise<ModelBlob | null>((resolve, reject) => {
     const tx = db.transaction(STORE, 'readonly');
     const req = tx.objectStore(STORE).get(floorId);
     req.onsuccess = () => resolve((req.result as ModelBlob) ?? null);
     req.onerror = () => reject(req.error);
-  });
-  db.close();
+  }));
   return out;
 }
 
 export async function deleteModel(floorId: string): Promise<void> {
-  const db = await openDb();
-  await new Promise<void>((resolve, reject) => {
+  await withDb(db => new Promise<void>((resolve, reject) => {
     const tx = db.transaction(STORE, 'readwrite');
     tx.objectStore(STORE).delete(floorId);
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
-  });
-  db.close();
+    tx.onabort = () => reject(tx.error);
+  }));
 }

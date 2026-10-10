@@ -22,56 +22,57 @@ function openDb(): Promise<IDBDatabase> {
   });
 }
 
-export async function savePackJson(id: string, json: string): Promise<void> {
+// Open → run → ALWAYS close, including when the transaction rejects. A
+// close() skipped on the error path leaks the connection for the page's
+// lifetime (and blocks any future onupgradeneeded version change).
+async function withDb<T>(fn: (db: IDBDatabase) => Promise<T>): Promise<T> {
   const db = await openDb();
-  await new Promise<void>((resolve, reject) => {
+  try { return await fn(db); } finally { db.close(); }
+}
+
+export async function savePackJson(id: string, json: string): Promise<void> {
+  await withDb(db => new Promise<void>((resolve, reject) => {
     const tx = db.transaction(STORE, 'readwrite');
     tx.objectStore(STORE).put(json, id);
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
-  });
-  db.close();
+    tx.onabort = () => reject(tx.error);
+  }));
 }
 
 export async function loadPackJson(id: string): Promise<string | null> {
-  const db = await openDb();
-  const out = await new Promise<string | null>((resolve, reject) => {
+  const out = await withDb(db => new Promise<string | null>((resolve, reject) => {
     const tx = db.transaction(STORE, 'readonly');
     const req = tx.objectStore(STORE).get(id);
     req.onsuccess = () => resolve((req.result as string) ?? null);
     req.onerror = () => reject(req.error);
-  });
-  db.close();
+  }));
   return out;
 }
 
 export async function deletePackJson(id: string): Promise<void> {
-  const db = await openDb();
-  await new Promise<void>((resolve, reject) => {
+  await withDb(db => new Promise<void>((resolve, reject) => {
     const tx = db.transaction(STORE, 'readwrite');
     tx.objectStore(STORE).delete(id);
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
-  });
-  db.close();
+    tx.onabort = () => reject(tx.error);
+  }));
 }
 
 export async function listPackIds(): Promise<string[]> {
-  const db = await openDb();
-  const out = await new Promise<string[]>((resolve, reject) => {
+  const out = await withDb(db => new Promise<string[]>((resolve, reject) => {
     const tx = db.transaction(STORE, 'readonly');
     const req = tx.objectStore(STORE).getAllKeys();
     req.onsuccess = () => resolve((req.result as IDBValidKey[]).map(k => String(k)));
     req.onerror = () => reject(req.error);
-  });
-  db.close();
+  }));
   return out;
 }
 
 // Read every stored user pack as { id, json }. Used by planner hydration.
 export async function loadAllPacks(): Promise<{ id: string; json: string }[]> {
-  const db = await openDb();
-  const out = await new Promise<{ id: string; json: string }[]>((resolve, reject) => {
+  const out = await withDb(db => new Promise<{ id: string; json: string }[]>((resolve, reject) => {
     const tx = db.transaction(STORE, 'readonly');
     const store = tx.objectStore(STORE);
     const keysReq = store.getAllKeys();
@@ -82,8 +83,8 @@ export async function loadAllPacks(): Promise<{ id: string; json: string }[]> {
       resolve(keys.map((k, i) => ({ id: String(k), json: vals[i] })));
     };
     tx.onerror = () => reject(tx.error);
-  });
-  db.close();
+    tx.onabort = () => reject(tx.error);
+  }));
   return out;
 }
 

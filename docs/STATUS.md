@@ -1,7 +1,8 @@
 # Project status & pick-up guide
 
-Last updated: 2026-08-15, at **v0.66.1**. This is the single document to
-read (alongside `CLAUDE.md`) to resume work with full context.
+Last updated: 2026-09-26, at **v0.66.1** + unreleased work on main (see the
+top ledger entry). This is the single document to read (alongside
+`CLAUDE.md`) to resume work with full context.
 
 ## Where things stand
 
@@ -464,6 +465,52 @@ instance.
   room).
 
 ### Shipped since the DESIGN-sims arc (reverse order)
+
+- **Full review batch: upstream refresh, deps, CI, ~60 logic/perf fixes**
+  (2026-09-26; UNCOMMITTED in the working tree pending the user's review
+  — sits on top of the 19 unreleased commits past v0.66.1). Reviewed HA
+  2026.8.2–2026.9 and ESPHome 2026.8/9 (no LD2450 or entity-id impact;
+  `handle_safe_area` RESOLVED — 2026.8.2 accepts it, still omitted from
+  the README YAML because it breaks ≤2026.8.1; 2026.9's `updated`
+  notification deltas were already upserted) and bumped three 0.186.1,
+  vite 8.3.1, esbuild 0.28.2 with no source changes. **CI was broken**:
+  GitHub removed the node20 action runtime on 2026-09-23, so every
+  action on the old majors fails — now checkout@v5 / setup-node@v5 /
+  gh-release@v3 (all node24; the job still builds on Node 22), plus a
+  mutation-tested "Verify build invariants" step (chunk split, unhashed
+  names, `?v=` on every import — vite writes dynamic imports with
+  BACKTICKS, so the first grep passed vacuously) and sourcemaps out of
+  the HACS zip.
+  Top fixes: HA clients settle pending requests on close, replay
+  subscriptions after re-auth and never reconnect after `auth_invalid`;
+  `callService` never rejects; `Planner.dispose()` + panel/card
+  teardown stop leaked timers and a card re-applying its config to the
+  shared planner; `toggleServiceFor` stops calling `binary_sensor.toggle`
+  and picks lock/vacuum/mower services by state; `alerts` was missing
+  from `_normalizeStore` and reset on every load; `importConfig`
+  validates before writing; direct MQTT is binary-safe (Valetudo's zlib
+  maps were destroyed by U+FFFD) with a half-open-link watchdog and a
+  backoff that no longer storms; flight glob rules were an exponential
+  regex (~635 ms per poll); antimeridian-safe geo + neighborhood; A*
+  stops allocating ~1 MB per rig per frame; `_isSlowEntity` became Set
+  lookups keyed on a store revision; plant/star layouts deterministic;
+  a floor switch no longer burns an undo step and clears redo.
+  Deliberate behavior changes: number fields commit on `change`, not
+  per keystroke; a canvas press blurs a field with a pending edit (so it
+  commits to the item being edited); the decorative star layout
+  re-rolled once; an unreachable A* goal HOLDS the carrot instead of
+  straight-seeking through walls; the flag is one DoubleSide mesh (back
+  reads mirrored); click-vs-drag is screen px, not 30 mm; hidden layers
+  are untappable in every 2D hit test. Gate: typecheck + build + the
+  invariants script, and every suite whose count moved re-run green
+  (TERRAIN 126, BGTEXTMULTI 560, FLIGHTS 1284, LAYERS2D 113, ALIGNGUIDES
+  175, UNDO 52, MQTTCODEC 57, MQTTBRIDGE 23, VALETUDO 37, CARD 96 …);
+  view-persist still 81/82 (pre-existing 6d). CLAUDE.md is amended in
+  place under "(2026-09-26 review batch)" markers.
+  **+ Shared configurations** (2026-10-09, also uncommitted): a config can be
+  published to `www/diorama/shared/` (base64-chunked `shell_command` write,
+  atomic replace, read via `/local/`) so every HA user sees it — see
+  CLAUDE.md "Shared configurations"; CONFIG 128/128 (was 66).
 
 - **Flight tracking: OpenSky + adsb.lol over a server-side HA proxy**
   (2026-08-15, user-reported "the flight tracking API went down. Add in
@@ -4346,6 +4393,23 @@ alarm keypad, smoke/CO, appliance animation, robots, weather W3, layer
 splits) shipped ahead of it in July 2026 — see the ledger above.
 
 ## Open threads / known deferrals
+
+**Noted, not built (2026-09-26 review batch)**:
+
+- Presence history is remapped when a plan is moved/rotated, but undo/redo
+  of that move does NOT move the stored history back.
+- HA-relay MQTT (Path A) binary payloads are unverified — the direct path
+  is now binary-safe, but the relay hands over HA's JSON-serialized string
+  and whether a zlib Valetudo map survives it is untested.
+- `_onStates` still bumps `configRev` for every config-path entity; a
+  lighter repaint-only channel would be an architectural change.
+- `view-persist-test` 6d (the throttled 3D pose write) is still red at
+  HEAD (81/82) — root cause unresolved.
+- `getEntitySuggestion` (HA 2026.6 card entity-picker discoverability)
+  still not built.
+- `Planner.stepperViews = 1` as the test-hook stand-in for a mounted 2D
+  canvas (confine/real-pos/demo-avatar) is a convention, not an API —
+  revisit if more harnesses need it.
 
 **Vehicle model library (2026-08-04, user-requested research — build
 later)** — `docs/research/vehicle-model-library.md` (Sonnet sweep seeded

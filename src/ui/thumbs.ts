@@ -14,7 +14,7 @@ import type { Floor, Scene3D, ObjectRecipe } from '../types.js';
 import { FURNITURE_KINDS } from '../geometry.js';
 import { vehicleRecipe } from '../vehicles.js';
 import {
-  glyphDataURL, thumbCacheKey, loadThumbCache, saveThumbCache,
+  glyphDataURL, thumbCacheKey, loadThumbCache, saveThumbCache, rememberThumb, touchThumb,
 } from './thumbs-cache.js';
 
 const PX = 128;
@@ -30,6 +30,21 @@ function baseFloor(w = 6000, d = 6000): Floor {
   } as unknown as Floor;
 }
 const nullState = () => null;
+
+// Glyph tiles are pure functions of (glyph, dim) — cache the encoded dataURL.
+// Without this, a WebGL-less device re-encoded a PNG per card per toolbar
+// render (the dim placeholder is returned on every get() until the capture
+// lands, which on such a device is never).
+const _glyphMemo = new Map<string, string>();
+function glyphTile(glyph: string, dim = false): string {
+  const key = `${dim ? 'd' : 'n'}|${glyph}`;
+  let url = _glyphMemo.get(key);
+  if (url === undefined) {
+    url = glyphDataURL(glyph, PX, dim ? { dim: true } : undefined);
+    if (url) _glyphMemo.set(key, url);
+  }
+  return url;
+}
 
 interface GetCtx { customObjects?: ObjectRecipe[] }
 
@@ -49,11 +64,13 @@ class ThumbService {
   // one. `onReady` fires when the real capture lands so the toolbar re-renders.
   get(desc: ThumbDesc, glyph: string, onReady: () => void, ctx?: GetCtx): string {
     const key = thumbCacheKey(desc);
-    const hit = this._mem.get(key) ?? this._persist[key];
-    if (hit) return hit;
+    const memHit = this._mem.get(key);
+    if (memHit) return memHit;
+    const hit = this._persist[key];
+    if (hit) { touchThumb(this._persist, key); this._mem.set(key, hit); return hit; }
     // Glyph descriptors (fixtures / structure / ground) never need 3D.
     if (desc.type === 'glyph') {
-      const g = glyphDataURL(desc.glyph, PX);
+      const g = glyphTile(desc.glyph);
       this._mem.set(key, g);
       return g;
     }
@@ -64,7 +81,7 @@ class ThumbService {
       this._queue.push({ desc, ctx, onReady });
       this._drain();
     }
-    return glyphDataURL(glyph, PX, { dim: true });      // dim = "loading" placeholder
+    return glyphTile(glyph, true);                       // dim = "loading" placeholder
   }
 
   private async _ensure(): Promise<boolean> {
@@ -86,6 +103,11 @@ class ThumbService {
         const RA = R as any;
         if (!RA.loaded || !RA._renderer) throw new Error('renderer failed to load');
         if (RA._controls) RA._controls.enableDamping = false;
+        // Stop the renderer's own animation loop. load() starts `_animate`, which
+        // re-renders this hidden 128 px scene every frame FOREVER (for the whole
+        // session, once any toolbar card asked for a thumbnail). Captures never
+        // need it: `_readback` renders synchronously on demand.
+        if (RA._rafId != null) { cancelAnimationFrame(RA._rafId); RA._rafId = null; }
         this._R = RA;
         this._host = host;
         return true;
@@ -123,7 +145,7 @@ class ThumbService {
         try { url = this._capture(job.desc, job.ctx); } catch { url = ''; }
         if (!url) url = this._fallback(job.desc);
         this._mem.set(key, url);
-        this._persist[key] = url;
+        rememberThumb(this._persist, key, url);
         job.onReady();
       }
       if (this._queue.length) {
@@ -141,7 +163,7 @@ class ThumbService {
       : desc.type === 'light' ? '💡'
       : desc.type === 'custom' ? '🧩'
       : desc.type === 'vehicle' ? '🚙' : '▦';
-    return glyphDataURL(g, PX);
+    return glyphTile(g);
   }
 
   // ── One synchronous capture (scene setup → render → toDataURL) ────────────────
@@ -170,6 +192,7 @@ class ThumbService {
     if (!def) return '';
     const f = baseFloor();
     f.furniture = [{ id: 'it', x: f.w / 2, y: f.d / 2, w: def.w, h: def.h, kind, rotation: 0 } as unknown as Floor['furniture'][number]];
+    this._clearLights();
     this._R.updateFloor(f, DAY, undefined, undefined, nullState);
     const target: [number, number, number] = [0, Math.min(def.ht * 0.5, 850), 0];
     const radius = Math.max(def.w, def.h) * 1.5 + def.ht * 0.9 + 1400;
@@ -184,6 +207,7 @@ class ThumbService {
       id: 'it', x: f.w / 2, y: f.d / 2, w, h, kind: 'block',
       customKindId: recipe.id, rotation: 0,
     } as unknown as Floor['furniture'][number]];
+    this._clearLights();
     this._R.updateFloor(f, DAY, undefined, [recipe], nullState);
     const target: [number, number, number] = [0, Math.min(ht * 0.5, 850), 0];
     const radius = Math.max(w, h) * 1.5 + ht * 0.9 + 1400;
@@ -214,6 +238,15 @@ class ThumbService {
     // Camera on the room side so the fixture reads against the corner (mirrors capLight).
     this._orbit([0, 1200, 0], 6800, 22, Math.PI * 1.86);
     return this._readback();
+  }
+
+  // The light group is NOT rebuilt by updateFloor — a light capture leaves its
+  // fixture (and its floor pool / point light) in the scene, and every later
+  // furniture / custom / vehicle capture used to bake it in. Empty it first.
+  // (The symmetric direction is already clean: a light capture's updateFloor
+  // is given an empty furniture list, which rebuilds the floor group empty.)
+  private _clearLights(): void {
+    this._R.updateLightsSwitches([], [], nullState);
   }
 
   private _orbit(target: [number, number, number], radius: number, elevDeg: number, aziRad: number): void {

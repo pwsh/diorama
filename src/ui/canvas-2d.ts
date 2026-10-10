@@ -7,6 +7,7 @@ import { computeView, drawAll, pxToMm, type View } from '../canvas-render.js';
 import {
   onCanvasMouseDown, onCanvasMouseMove, onCanvasMouseUp,
   onCanvasClick, onCanvasDblClick, finishZoneEdit, cancelZoneEdit,
+  markTouchPress, cancelCanvasDrag, dedupeDrawLatches,
 } from '../canvas-interact.js';
 import { browserViewStorage, saveView2d } from '../view-persist.js';
 import type { Planner } from '../planner.js';
@@ -74,8 +75,15 @@ export class Canvas2D extends LitElement {
   // disconnectedCallback) on reconnect once the canvas has been initialized. In
   // the app this element is never disconnected (it stays mounted under
   // display:none), so `_ctx` is null at the initial connect and this is a no-op.
+  // The planner this canvas registered with as the simulation stepper
+  // (Planner.stepperViews) — remembered so disconnect decrements the SAME one.
+  private _stepperOf: Planner | null = null;
   override connectedCallback(): void {
     super.connectedCallback();
+    if (this.planner && !this._stepperOf) {
+      this.planner.stepperViews = (this.planner.stepperViews | 0) + 1;
+      this._stepperOf = this.planner;
+    }
     if (this._ctx && !this._raf) {
       this._ro?.observe(this._canvas);
       window.addEventListener('mouseup', this._onUp);
@@ -83,6 +91,7 @@ export class Canvas2D extends LitElement {
       window.addEventListener('keyup', this._onKeyUp);
       window.addEventListener('focusin', this._onFocusIn);
       window.addEventListener('focusout', this._onFocusOut);
+      window.addEventListener('blur', this._onBlur);
       this.planner.addEventListener('config', this._onConfig);
       requestAnimationFrame(() => this._resize());
       this._startRaf();
@@ -91,6 +100,10 @@ export class Canvas2D extends LitElement {
 
   override disconnectedCallback(): void {
     super.disconnectedCallback();
+    if (this._stepperOf) {
+      this._stepperOf.stepperViews = Math.max(0, (this._stepperOf.stepperViews | 0) - 1);
+      this._stepperOf = null;
+    }
     this._ro?.disconnect();
     if (this._raf) cancelAnimationFrame(this._raf);
     this._raf = 0;
@@ -99,8 +112,21 @@ export class Canvas2D extends LitElement {
     window.removeEventListener('keyup', this._onKeyUp);
     window.removeEventListener('focusin', this._onFocusIn);
     window.removeEventListener('focusout', this._onFocusOut);
+    window.removeEventListener('blur', this._onBlur);
     this.planner.removeEventListener('config', this._onConfig);
   }
+
+  // The window lost focus mid-gesture (alt-tab, an OS dialog, a devtools click):
+  // the matching keyup / mouseup will never reach us. Drop the Space pan-hold so
+  // it can't stick, and END any in-flight drag / pan here rather than leaving it
+  // attached to the next mouse move.
+  private _onBlur = () => {
+    if (this._spaceHeld) {
+      this._spaceHeld = false;
+      if (this._canvas) this._canvas.style.cursor = 'default';
+    }
+    if (this._panFrom || this.planner.drag) this._onUp();
+  };
 
   // Focusing ANY editable target (a sidebar name input, a settings field…)
   // COOLS the hot selection: the user has moved from canvas selection into a
@@ -254,6 +280,12 @@ export class Canvas2D extends LitElement {
     this._canvas.addEventListener('contextmenu', e => e.preventDefault());
 
     this._canvas.addEventListener('mousemove', e => {
+      // Released OUTSIDE the page (no mouseup ever arrived): a move with no
+      // button held ends the drag / pan instead of dragging on with the button up.
+      if (e.buttons === 0 && (this._panFrom || this.planner.drag)) {
+        this._onUp(e);
+        return;
+      }
       if (this._panFrom) {
         const dpr = window.devicePixelRatio || 1;
         const dx = (e.clientX - this._panFrom.px) * dpr;
@@ -287,6 +319,7 @@ export class Canvas2D extends LitElement {
     window.addEventListener('keyup', this._onKeyUp);
     window.addEventListener('focusin', this._onFocusIn);
     window.addEventListener('focusout', this._onFocusOut);
+    window.addEventListener('blur', this._onBlur);
 
     // Touch — 1 finger uses mouse path; 2 fingers do pinch+pan.
     const toEvt = (t: Touch): MouseEvent => new MouseEvent('mousemove', {
@@ -306,6 +339,7 @@ export class Canvas2D extends LitElement {
         e.preventDefault();
         const t = e.touches[0];
         this._tap = { x: t.clientX, y: t.clientY, t: performance.now(), moved: false };
+        markTouchPress();   // 12 px touch slop for the click-vs-drag decision
         onCanvasMouseDown(this.planner, this._canvas, this._view, toEvt(t));
       } else if (e.touches.length === 2) {
         e.preventDefault();
@@ -319,9 +353,11 @@ export class Canvas2D extends LitElement {
           anchor: pxToMm(this._canvas, this._view, { clientX: mid.x, clientY: mid.y }),
           zoom: this.planner.zoom,
         };
-        // Cancel any in-flight 1-finger drag so the object doesn't jump.
-        this.planner.drag = null;
-        this.planner.dragJustEnded = false;
+        // Cancel any in-flight 1-finger drag so the object doesn't jump — and
+        // UNDO it: a spliced-in vertex / a half-moved item is restored to its
+        // press-time state (never left unsaved to ride into the next undo step),
+        // and the alignment pool + guides are dropped.
+        cancelCanvasDrag(this.planner);
       }
     }, { passive: false });
     this._canvas.addEventListener('touchmove', e => {
@@ -452,11 +488,15 @@ export class Canvas2D extends LitElement {
   // canvas-interact sees the same mouseup→click ordering as a real mouse.
   private _maybeTap(e: TouchEvent): void {
     const tap = this._tap; this._tap = null;
-    if (!tap || tap.moved) return;
-    if (performance.now() - tap.t > 600) return;     // long-press, not a tap
+    // Every path that synthesizes NO click must clear the drag-ended latch
+    // itself: onCanvasMouseUp set it expecting a follow-up click to consume it,
+    // and a leftover latch would swallow the user's NEXT tap.
+    const noClick = () => { this.planner.dragJustEnded = false; };
+    if (!tap || tap.moved) return noClick();
+    if (performance.now() - tap.t > 600) return noClick();     // long-press, not a tap
     const ct = e.changedTouches[0];
-    if (!ct) return;
-    if (Math.hypot(ct.clientX - tap.x, ct.clientY - tap.y) > 12) return;
+    if (!ct) return noClick();
+    if (Math.hypot(ct.clientX - tap.x, ct.clientY - tap.y) > 12) return noClick();
     const now = performance.now();
     this._lastSyntheticClick = now;
     const prev = this._lastTap;
@@ -507,6 +547,8 @@ export class Canvas2D extends LitElement {
       if (p.store.activeSensorId) { p.store.activeSensorId = null; p.save(); p.emitConfig(); }
     }
     if (e.key === 'Enter' && p.editZone) { finishZoneEdit(p); return; }
+    // Enter finishes a draw latch — drop repeated points first (see dblclick).
+    if (e.key === 'Enter') dedupeDrawLatches(p);
     if (e.key === 'Enter' && p.drawingPresenceZone) { p.finishPresenceZone(); return; }
     if (e.key === 'Enter' && p.drawingGroundArea) { p.finishGroundArea(); return; }
     if (e.key === 'Enter' && p.drawingPath) { p.finishPath(); return; }
@@ -611,23 +653,40 @@ export class Canvas2D extends LitElement {
       try {
         const dt = this._lastFrame ? Math.min((now - this._lastFrame) / 1000, 0.1) : 0.016;
         this._lastFrame = now;
-        this.planner.stepLerp(dt);
-        this.planner.stepRobots(dt);
+        this.planner.advanceFrame(now);   // planner-owned dt; dedupes views sharing one planner
         const dpr = window.devicePixelRatio || 1;
         const cw = this._canvas.clientWidth, ch = this._canvas.clientHeight;
-        if (cw > 4 && ch > 4 &&
-            (this._canvas.width !== cw * dpr || this._canvas.height !== ch * dpr)) {
+        // The canvas is display:none while the 3D view is up (app) — clientWidth
+        // is then 0. The lerp / robot advance above MUST keep running (the 3D
+        // rigs read them), but painting an invisible canvas every frame was the
+        // single largest idle cost in 3D, so skip the draw entirely.
+        const visible = cw > 4 && ch > 4;
+        if (visible &&
+            (this._canvas.width !== Math.round(cw * dpr) || this._canvas.height !== Math.round(ch * dpr))) {
           this._resize();
         }
+        if (!visible) return;
         this._recomputeView();
         this._persistView();
         const bgImg = this._ensureBg();
         if (this._ctx) drawAll(this._ctx, this.planner, this._view, bgImg);
       } catch (err) {
         console.error('canvas-2d render failed:', err);
-        // Wipe so a partial draw can't leave the screen wedged on old data.
-        if (this._ctx && this._canvas) {
-          this._ctx.clearRect(0, 0, this._canvas.width, this._canvas.height);
+        // An exception mid-draw can leave the context's transform / alpha /
+        // dash / save-stack unbalanced, which would offset EVERY later frame.
+        // Reset the whole state (and stack) before wiping.
+        const ctx = this._ctx;
+        if (ctx && this._canvas) {
+          const r = (ctx as CanvasRenderingContext2D & { reset?: () => void }).reset;
+          if (typeof r === 'function') r.call(ctx);
+          else {
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
+            ctx.globalAlpha = 1;
+            ctx.globalCompositeOperation = 'source-over';
+            ctx.setLineDash([]);
+            ctx.shadowBlur = 0;
+          }
+          ctx.clearRect(0, 0, this._canvas.width, this._canvas.height);
         }
       }
     };

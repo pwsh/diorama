@@ -1,6 +1,6 @@
 import { resolve, dirname } from 'node:path';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { defineConfig, type Plugin } from 'vite';
 
 // Deploy-on-build: with DIORAMA_DEPLOY=1 in the env, copy dist/ to the HA
@@ -44,12 +44,16 @@ function chunkVersionQuery(): Plugin {
     apply: 'build',
     buildStart() { buildId = Date.now().toString(36); },  // fresh per (watch) build
     generateBundle(_opts, bundle) {
+      // Escape EVERY regex metacharacter in the basename (not just dots) and
+      // only rewrite specifiers in an import context — `from "…"`,
+      // `import "…"`, `import("…")` — so an unrelated string literal that
+      // merely happens to end in the same file name is never touched.
+      const escapeRe = (x: string): string => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       const bust = (code: string, imported: string): string => {
-        const base = imported.split('/').pop()!.replace(/\./g, '\\.');
-        // Quoted specifier ending in /<basename> (or bare ./<basename>).
+        const base = escapeRe(imported.split('/').pop()!);
         return code.replace(
-          new RegExp(`(["'\`])((?:[^"'\`]*/)?${base})\\1`, 'g'),
-          `$1$2?v=${buildId}$1`,
+          new RegExp(`(\\b(?:from|import)\\s*\\(?\\s*)(["'\`])((?:[^"'\`]*/)?${base})\\2`, 'g'),
+          `$1$2$3?v=${buildId}$2`,
         );
       };
       for (const f of Object.values(bundle)) {
@@ -87,7 +91,8 @@ function haDeploy(): Plugin {
       }
       if (!existsSync(dirname(target)) && smb) {
         // Share not mounted — try (credentials come from the GNOME keyring).
-        try { execSync(`gio mount ${smb}`, { stdio: 'inherit' }); } catch { /* reported below */ }
+        // argv form — never interpolate the share URL into a shell string.
+        try { execFileSync('gio', ['mount', smb], { stdio: 'inherit' }); } catch { /* reported below */ }
       }
       if (!existsSync(dirname(target))) {
         console.error(`[ha-deploy] HA share unreachable at ${dirname(target)}` +

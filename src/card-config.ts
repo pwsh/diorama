@@ -103,6 +103,12 @@ export function validateCardConfig(raw: unknown): DioramaCardConfig {
   }
   if (c.panelPath !== undefined) {
     if (typeof c.panelPath !== 'string') throw new Error('diorama-card: panelPath must be a string');
+    // It lands straight in an href: only a same-origin absolute PATH is allowed
+    // (no scheme → no javascript:/data: URLs; no leading '//' → no
+    // protocol-relative jump to another host).
+    if (c.panelPath && (!c.panelPath.startsWith('/') || c.panelPath.startsWith('//') || c.panelPath.startsWith('/\\'))) {
+      throw new Error('diorama-card: panelPath must be a path starting with "/" (e.g. "/diorama")');
+    }
     if (c.panelPath) out.panelPath = c.panelPath;
   }
   if (c.scene !== undefined) {

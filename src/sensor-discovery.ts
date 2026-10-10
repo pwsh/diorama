@@ -26,7 +26,13 @@ export class SensorDiscovery {
     return this._devices;
   }
 
-  discoverForDevice(states: Record<string, HassState>, p: string): DiscoveredDevice {
+  // `knownDevices` (optional): every device slug on the instance. Defaults to
+  // this instance's own listDevices scan. Needed because the zone / halo
+  // patterns capture a free-form slug: device `radar` would otherwise ALSO claim
+  // `switch.radar_kitchen_zone_1_enable`, which belongs to device
+  // `radar_kitchen` (a longer slug sharing the prefix).
+  discoverForDevice(states: Record<string, HassState>, p: string,
+                    knownDevices?: readonly string[]): DiscoveredDevice {
     // Cache is hot only once the device has finished its initial entity
     // publish — both inclusion zones and object halos must be present. (Filter
     // zones are optional.) On a partial cache, re-scan so newly-arrived
@@ -65,12 +71,22 @@ export class SensorDiscovery {
       r.targetActive.push(e(`binary_sensor.${p}_target_${t}_active`));
     }
     const escP = p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    // Longer device slugs that extend this one (`radar` → `radar_kitchen`): an
+    // entity under `<longer>_…` is THAT device's, never ours.
+    const longer = (knownDevices ?? this.listDevices(states))
+      .filter(q => q !== p && q.startsWith(p + '_'));
+    const ownsSlug = (slug: string): boolean => {
+      const full = `${p}_${slug}`;
+      for (const q of longer) if (full.startsWith(q + '_')) return false;
+      return true;
+    };
     const zoneEnableRe = new RegExp(`^switch\\.${escP}_(.+)_enable$`);
     const polygonSlugs: string[] = [];
     for (const id of Object.keys(states)) {
       const m = id.match(zoneEnableRe);
       if (!m) continue;
       const slug = m[1];
+      if (!ownsSlug(slug)) continue;
       if (slug.endsWith('_halo')) continue;
       polygonSlugs.push(slug);
     }
@@ -88,6 +104,7 @@ export class SensorDiscovery {
     for (const id of Object.keys(states)) {
       const m = id.match(haloEnableRe);
       if (!m) continue;
+      if (!ownsSlug(m[1] + '_halo')) continue;
       r.objectSlugs.push(m[1]);
     }
     r.haloOccupied = r.objectSlugs.map(slug =>

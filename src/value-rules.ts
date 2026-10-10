@@ -28,11 +28,41 @@ export interface ValueRule {
 
 export interface RuleHit { color?: string; flash?: boolean; label?: string; }
 
-// Does one rule match the raw state string? Numeric ops coerce via parseFloat
-// (NaN → no match); string ops compare the raw state. eq/neq compare
-// numerically only when BOTH sides coerce, else as case-sensitive strings.
+// The raw state is numeric ONLY when the whole trimmed string is a number — the
+// same strict gate formatEntityValue uses. A parseFloat prefix-parse read
+// "14:35" as 14 and "2026-07-20" as 2026, so `gt 10` matched a clock time.
+const STRICT_NUMERIC = /^[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?$/i;
+export function strictNumber(raw: string): number {
+  const s = String(raw).trim();
+  return STRICT_NUMERIC.test(s) ? parseFloat(s) : NaN;
+}
+
+// `regex` rules: user-authored patterns are compiled ONCE (they ran per rule per
+// state per frame), length-capped, and matched against a length-capped input —
+// a bounded budget for a pathological pattern. An invalid or over-long pattern
+// never matches. Bounded cache: cleared wholesale when it fills.
+export const RULE_REGEX_MAX_PATTERN = 200;
+export const RULE_REGEX_MAX_INPUT = 500;
+const REGEX_CACHE_MAX = 256;
+const _regexCache = new Map<string, RegExp | null>();
+function compiledRuleRegex(src: string): RegExp | null {
+  const hit = _regexCache.get(src);
+  if (hit !== undefined) return hit;
+  let re: RegExp | null = null;
+  if (src.length <= RULE_REGEX_MAX_PATTERN) {
+    try { re = new RegExp(src); } catch { re = null; }
+  }
+  if (_regexCache.size >= REGEX_CACHE_MAX) _regexCache.clear();
+  _regexCache.set(src, re);
+  return re;
+}
+
+// Does one rule match the raw state string? Numeric ops coerce only a WHOLLY
+// numeric state (strictNumber; NaN → no match); string ops compare the raw
+// state. eq/neq compare numerically only when BOTH sides coerce, else as
+// case-sensitive strings.
 export function ruleMatches(rule: ValueRule, raw: string): boolean {
-  const n = parseFloat(raw);
+  const n = strictNumber(raw);
   const v = typeof rule.value === 'number' ? rule.value : parseFloat(String(rule.value));
   switch (rule.op) {
     case 'lt':  return !isNaN(n) && !isNaN(v) && n < v;
@@ -53,9 +83,12 @@ export function ruleMatches(rule: ValueRule, raw: string): boolean {
       return String(raw) !== String(rule.value);
     case 'contains':
       return String(raw).toLowerCase().includes(String(rule.value).toLowerCase());
-    case 'regex':
-      try { return new RegExp(String(rule.value)).test(String(raw)); }
-      catch { return false; }
+    case 'regex': {
+      const re = compiledRuleRegex(String(rule.value));
+      if (!re) return false;
+      re.lastIndex = 0;   // (a user pattern can't carry flags, but be explicit)
+      return re.test(String(raw).slice(0, RULE_REGEX_MAX_INPUT));
+    }
   }
 }
 

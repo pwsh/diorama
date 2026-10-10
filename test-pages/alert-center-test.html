@@ -267,6 +267,44 @@
       f.alertBeacons = [{ id: 'ab4', x: 0, y: 0, entity_id: null }];
       p.acknowledgeAlertBeacon(f.alertBeacons[0]);
       ok('unbound beacon flips localState (demo)', f.alertBeacons[0].localState === 'on');
+
+      // ── Low-overflight flyover moment: pushed only when the alert FIRES ──
+      // (it used to be pushed on every poll, evicting real appliance/weather
+      // moments from the 8-entry household event list).
+      p.store.flights = { enabled: true, alerts: { lowAltFt: 3000 } };
+      p.flightsNow = [{ hex: 'abc123', callsign: 'LOW1', altFt: 1200, distNm: 1, lat: 0, lon: 0 }];
+      const fly0 = p.householdEvents.filter(e => e.kind === 'flyover').length;
+      p._computeFlightAlerts();
+      p._computeFlightAlerts();
+      p._computeFlightAlerts();
+      const fly1 = p.householdEvents.filter(e => e.kind === 'flyover').length;
+      ok('flyover pushed once per alert firing (not per poll)', fly1 === fly0 + 1, `${fly0}→${fly1}`);
+      p.flightsNow = null; p.store.flights = undefined;
+
+      // ── A reconfigure landing BEFORE the notification subscribe resolves ──
+      // must not leak the superseded subscription (generation token).
+      class SlowHa extends FakeHa {
+        constructor() { super(); this.unsubbed = 0; this.pending = []; }
+        subscribePersistentNotifications() {
+          return new Promise(res => this.pending.push(() => res(() => { this.unsubbed++; })));
+        }
+      }
+      const h2 = new SlowHa();
+      const p2 = new Planner();
+      p2.connectWith(h2);
+      await waitFor(() => p2.configIndex !== null);   // initial load (itself a reconfigure) settled
+      await waitFor(() => h2.pending.length >= 1);
+      const n0 = h2.pending.length;
+      p2.setAlertsConfig(c => { c.showRepairs = false; });   // reconfigure mid-subscribe
+      await waitFor(() => h2.pending.length > n0);
+      const nAll = h2.pending.length;
+      for (const r of h2.pending) r();   // every subscribe resolves late, in order
+      await sleep(8);
+      ok('superseded pending subscriptions unsubscribe themselves', h2.unsubbed === nAll - 1,
+        `unsubbed=${h2.unsubbed} of ${nAll}`);
+      ok('latest subscription is the one kept', typeof p2._alertNotifUnsub === 'function');
+      p2.dispose();
+      ok('dispose() unsubscribes the live subscription', h2.unsubbed === nAll, `unsubbed=${h2.unsubbed}`);
     } catch (err) {
       ok('Planner section ran without throwing', false, String(err && err.stack || err));
     }

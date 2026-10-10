@@ -4,7 +4,47 @@ import { normalizeCalendarEvents, type CalEvent } from './surfaces.js';
 
 type StateListener = (states: Record<string, HassState>, changedId?: string) => void;
 type ConnListener = (status: ConnStatus) => void;
-type Pending = (msg: { id: number; success: boolean; result?: unknown }) => void;
+type Pending = (msg: { id?: number; success: boolean; result?: unknown; error?: unknown }) => void;
+
+// Normalized outcome of a fire-and-forget service call. BOTH real clients
+// resolve this shape (never reject) so a refused call can't surface as an
+// unhandled rejection at the ~dozen bare `hass.callService(...)` call sites.
+export interface ServiceCallResult { success: boolean; error?: unknown; }
+
+// The synthetic result every in-flight request settles with when the socket
+// drops (or when a request is attempted while the socket isn't authenticated).
+const DISCONNECTED = { success: false, error: { code: 'disconnected' } } as const;
+
+// Map a user-entered Home Assistant base URL onto its WebSocket API endpoint.
+// Case-insensitive on the scheme (URL lower-cases it), tolerant of a missing
+// scheme (`homeassistant.local:8123` → http), keeps any path prefix (reverse
+// proxy sub-path), drops query/hash. Returns null for anything that isn't
+// http(s)/ws(s) or doesn't parse — the caller reports a conn error instead of
+// letting `new WebSocket()` throw synchronously. Pure: `fallbackOrigin` is
+// passed in rather than read from window.
+export function haWebSocketUrl(base: string, fallbackOrigin = ''): string | null {
+  const raw = String(base ?? '').trim() || fallbackOrigin;
+  if (!raw) return null;
+  const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : 'http://' + raw;
+  let u: URL;
+  try { u = new URL(withScheme); } catch { return null; }
+  const proto = ({ 'http:': 'ws:', 'https:': 'wss:', 'ws:': 'ws:', 'wss:': 'wss:' } as Record<string, string>)[u.protocol];
+  if (!proto || !u.host) return null;
+  const path = u.pathname.replace(/\/+$/, '');
+  return `${proto}//${u.host}${path}/api/websocket`;
+}
+
+// A live generic subscription (mqtt/subscribe, persistent_notification/
+// subscribe). `msg` is the subscribe command WITHOUT its id, kept so the
+// subscription can be REPLAYED on a fresh id after a reconnect; `id` is the
+// wire id it currently lives under (re-keyed on every replay, which is why the
+// unsubscribe handle captures the record, never the number).
+interface SubRecord {
+  id: number;
+  msg: Record<string, unknown>;
+  cb: (event: unknown) => void;
+  confirmed: boolean;
+}
 
 interface RawWsMsg {
   id?: number;
@@ -186,7 +226,9 @@ export interface HaApi {
   connect(): void;
   onState(fn: StateListener): void;
   onConn(fn: ConnListener): void;
-  callService(domain: string, service: string, data: Record<string, unknown>): unknown;
+  // Fire-and-forget service call. RESOLVES (never rejects) with the outcome in
+  // every implementation, so bare call sites can't leak unhandled rejections.
+  callService(domain: string, service: string, data: Record<string, unknown>): Promise<ServiceCallResult>;
   // Call a service that RETURNS data (`return_response: true`) and resolve its
   // raw `{context, response}` result — or null on any failure (unknown service,
   // HA error, disconnected). The generic form of the weather-forecast /
@@ -245,6 +287,16 @@ export interface HaApi {
   // Ignore / un-ignore a Repairs issue (WS repairs/ignore_issue). Resolves true
   // on success; false on any error (incl. non-admin).
   ignoreRepairsIssue(domain: string, issueId: string, ignore: boolean): Promise<boolean>;
+  // Tear the connection surface down for good: stop reconnecting, drop
+  // subscriptions, settle every in-flight request. Called by Planner.dispose().
+  // Optional so test fakes needn't implement it. Idempotent.
+  close?(): void;
+  // Is the connected HA user an administrator? `undefined` = UNKNOWN (the
+  // standalone token client can't tell) — callers treat unknown as "allow" and
+  // let HA's own permissions refuse. Optional so test fakes needn't implement it.
+  isAdmin?(): boolean | undefined;
+  // The connected HA user's display name, when known (shared-config `sharedBy`).
+  userName?(): string | undefined;
 }
 
 export type { StateListener, ConnListener };
@@ -252,43 +304,117 @@ export type { StateListener, ConnListener };
 export class HassClient implements HaApi {
   states: Record<string, HassState> = {};
 
-  private _url: string;
+  private _url: string | null;
   private _token: string;
   private _ws: WebSocket | null = null;
   private _id = 1;
   private _pending = new Map<number, Pending>();
-  // Generic subscription callbacks keyed by the subscribe command's message id
-  // (mqtt/subscribe rides this). HA delivers ongoing `{type:'event', id, event}`
-  // messages for the subscription's lifetime.
-  private _subscriptions = new Map<number, (event: unknown) => void>();
+  // Generic subscriptions keyed by their CURRENT wire id (mqtt/subscribe and
+  // persistent_notification/subscribe ride this). HA delivers ongoing
+  // `{type:'event', id, event}` messages for the subscription's lifetime; on a
+  // reconnect every confirmed record is re-sent under a new id (see
+  // _replaySubscriptions).
+  private _subscriptions = new Map<number, SubRecord>();
   private _stateListeners: StateListener[] = [];
   private _connListeners: ConnListener[] = [];
   private _reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private _alive = false;
+  // Terminal states: close() was called, or HA rejected the token. Either way
+  // auto-reconnect must stop — a bad token would otherwise retry every 5 s
+  // forever.
+  private _closed = false;
+  private _authInvalid = false;
 
   constructor(baseUrl: string, token: string) {
-    this._url = (baseUrl.replace(/\/$/, '') || window.location.origin)
-                  .replace(/^http/, 'ws') + '/api/websocket';
+    const origin = typeof window !== 'undefined' ? window.location.origin : '';
+    this._url = haWebSocketUrl(String(baseUrl ?? '').replace(/\/$/, ''), origin);
     this._token = token;
   }
 
   connect(): void {
-    if (this._reconnectTimer) clearTimeout(this._reconnectTimer);
-    if (this._ws) { try { this._ws.close(); } catch (_) {} }
-    this._ws = new WebSocket(this._url);
-    this._ws.onmessage = e => this._onMsg(JSON.parse(e.data));
-    this._ws.onclose = () => {
-      this._alive = false; this._emitConn('disconnected');
-      this._reconnectTimer = setTimeout(() => this.connect(), 5000);
+    if (this._closed) return;
+    if (this._reconnectTimer) { clearTimeout(this._reconnectTimer); this._reconnectTimer = null; }
+    this._authInvalid = false;
+    // Retire the previous socket FIRST: detach its handlers so its (async)
+    // onclose can't schedule a reconnect or settle requests belonging to the
+    // new socket.
+    this._retireSocket();
+    if (!this._url) { this._emitConn('error'); return; }
+    let ws: WebSocket;
+    try { ws = new WebSocket(this._url); }
+    catch { this._emitConn('error'); this._scheduleReconnect(); return; }
+    this._ws = ws;
+    ws.onmessage = e => {
+      if (ws !== this._ws) return;
+      let msg: RawWsMsg;
+      try { msg = JSON.parse(e.data); } catch { return; }
+      this._onMsg(msg);
     };
-    this._ws.onerror = () => { this._alive = false; this._emitConn('error'); };
+    ws.onclose = () => {
+      if (ws !== this._ws) return;
+      this._ws = null;
+      this._alive = false;
+      this._flushPending();
+      this._emitConn(this._authInvalid ? 'auth_invalid' : 'disconnected');
+      this._scheduleReconnect();
+    };
+    ws.onerror = () => {
+      if (ws !== this._ws) return;
+      this._alive = false; this._emitConn('error');
+    };
+  }
+
+  // A long-lived token carries no user info we can read cheaply → unknown.
+  isAdmin(): boolean | undefined { return undefined; }
+  userName(): string | undefined { return undefined; }
+
+  // Permanently shut the client down (Planner.dispose → hass.close). Idempotent.
+  close(): void {
+    if (this._closed) return;
+    this._closed = true;
+    if (this._reconnectTimer) { clearTimeout(this._reconnectTimer); this._reconnectTimer = null; }
+    this._retireSocket();
+    this._subscriptions.clear();
+  }
+
+  private _retireSocket(): void {
+    const old = this._ws;
+    this._ws = null;
+    this._alive = false;
+    if (old) {
+      old.onmessage = null; old.onclose = null; old.onerror = null;
+      try { old.close(); } catch { /* ignore */ }
+    }
+    // Anything still waiting on the retired socket will never get a reply.
+    this._flushPending();
+  }
+
+  private _scheduleReconnect(): void {
+    if (this._closed || this._authInvalid || this._reconnectTimer) return;
+    this._reconnectTimer = setTimeout(() => { this._reconnectTimer = null; this.connect(); }, 5000);
+  }
+
+  // Settle every in-flight request as failed. Callers already handle
+  // `success:false` (they return null / [] / false), so nothing hangs — e.g.
+  // the flights poll latch, a pending save flush, a calendar refresh.
+  private _flushPending(): void {
+    if (!this._pending.size) return;
+    const cbs = [...this._pending.values()];
+    this._pending.clear();
+    for (const cb of cbs) { try { cb({ ...DISCONNECTED }); } catch { /* ignore */ } }
+  }
+
+  private get _open(): boolean {
+    // 1 === WebSocket.OPEN (literal so a scripted fake socket works too).
+    return !!this._ws && this._ws.readyState === 1 && this._alive;
   }
 
   onState(fn: StateListener): void { this._stateListeners.push(fn); }
   onConn(fn: ConnListener): void { this._connListeners.push(fn); }
 
-  callService(domain: string, service: string, data: Record<string, unknown>) {
-    return this._send({ type: 'call_service', domain, service, service_data: data });
+  async callService(domain: string, service: string, data: Record<string, unknown>): Promise<ServiceCallResult> {
+    const res = await this._send({ type: 'call_service', domain, service, service_data: data });
+    return res.success ? { success: true } : { success: false, error: res.error };
   }
 
   async getHistory(entityIds: string[], startISO: string, endISO: string): Promise<Record<string, HistoryPoint[]>> {
@@ -401,26 +527,22 @@ export class HassClient implements HaApi {
   subscribeMqtt(
     topic: string, cb: (m: { topic: string; payload: string }) => void,
   ): Promise<() => void> {
-    const id = this._id++;
     return new Promise<() => void>((resolve, reject) => {
-      // Ongoing event handler for this subscription's lifetime.
-      this._subscriptions.set(id, ev => {
+      if (!this._open) { reject(new Error('disconnected')); return; }
+      const rec = this._addSubscription({ type: 'mqtt/subscribe', topic }, ev => {
         const e = (ev ?? {}) as { topic?: unknown; payload?: unknown };
         try { cb({ topic: String(e.topic ?? ''), payload: e.payload == null ? '' : String(e.payload) }); }
         catch { /* consumer threw — never break the socket loop */ }
-      });
-      // First `result` confirms the subscribe (or rejects — admin gate lands here).
-      this._pending.set(id, m => {
+      }, m => {
+        // First `result` confirms the subscribe (or rejects — admin gate lands here).
         const raw = m as { success?: boolean; error?: { code?: string; message?: string } };
         if (raw.success) {
-          resolve(() => this._unsubscribeId(id));
+          resolve(() => this._unsubscribe(rec));
         } else {
-          this._subscriptions.delete(id);
           const err = raw.error;
           reject(new Error(err?.message || err?.code || 'mqtt/subscribe failed'));
         }
       });
-      this._sendRaw({ id, type: 'mqtt/subscribe', topic });
     });
   }
 
@@ -431,10 +553,46 @@ export class HassClient implements HaApi {
     });
   }
 
-  private _unsubscribeId(id: number): void {
-    this._subscriptions.delete(id);
+  // Register + send a generic subscription. `onResult` sees the confirmation;
+  // an unconfirmed (failed) subscription is dropped. The record outlives the
+  // socket: _replaySubscriptions re-sends confirmed ones after a reconnect.
+  private _addSubscription(
+    msg: Record<string, unknown>, cb: (event: unknown) => void, onResult: Pending,
+  ): SubRecord {
+    const rec: SubRecord = { id: this._id++, msg, cb, confirmed: false };
+    this._subscriptions.set(rec.id, rec);
+    this._pending.set(rec.id, m => {
+      if (m.success) rec.confirmed = true;
+      else if (this._subscriptions.get(rec.id) === rec) this._subscriptions.delete(rec.id);
+      onResult(m);
+    });
+    this._sendRaw({ id: rec.id, ...msg });
+    return rec;
+  }
+
+  private _unsubscribe(rec: SubRecord): void {
+    if (this._subscriptions.get(rec.id) !== rec) return;   // already gone
+    this._subscriptions.delete(rec.id);
     // Generic cancel — HA's websocket_api unsubscribes any subscription by id.
-    this._sendRaw({ id: this._id++, type: 'unsubscribe_events', subscription: id });
+    if (this._open) this._sendRaw({ id: this._id++, type: 'unsubscribe_events', subscription: rec.id });
+  }
+
+  // After a reconnect HA has forgotten every subscription made on the old
+  // socket. Re-send each confirmed one under a NEW id (ids must increase per
+  // connection) and re-key the record, so the consumer's callback + unsubscribe
+  // handle keep working transparently. A replay HA now refuses is dropped.
+  private _replaySubscriptions(): void {
+    const recs = [...this._subscriptions.values()];
+    for (const rec of recs) {
+      if (!rec.confirmed) { this._subscriptions.delete(rec.id); continue; }
+      this._subscriptions.delete(rec.id);
+      rec.id = this._id++;
+      this._subscriptions.set(rec.id, rec);
+      this._pending.set(rec.id, m => {
+        if (!m.success && this._subscriptions.get(rec.id) === rec) this._subscriptions.delete(rec.id);
+      });
+      this._sendRaw({ id: rec.id, ...rec.msg });
+    }
   }
 
   // Per-user JSON storage backed by HA's `frontend.user_data.<userid>` table.
@@ -460,9 +618,13 @@ export class HassClient implements HaApi {
       case 'auth_ok':
         this._alive = true; this._emitConn('connected');
         this._getStates(); this._subscribeEvents();
+        this._replaySubscriptions();
         break;
       case 'auth_invalid':
-        this._alive = false; this._emitConn('auth_invalid');
+        // Terminal until the user supplies a new token (a new client). HA
+        // closes the socket next; onclose must NOT schedule a reconnect.
+        this._alive = false; this._authInvalid = true;
+        this._emitConn('auth_invalid');
         break;
       case 'result': {
         const cb = this._pending.get(msg.id ?? -1);
@@ -472,7 +634,7 @@ export class HassClient implements HaApi {
       case 'event': {
         // Generic subscription events (mqtt/subscribe) route by message id first.
         const sub = msg.id != null ? this._subscriptions.get(msg.id) : undefined;
-        if (sub) { sub((msg as { event?: unknown }).event); break; }
+        if (sub) { sub.cb((msg as { event?: unknown }).event); break; }
         if (msg.event?.event_type === 'state_changed') {
           const { entity_id, new_state } = msg.event.data;
           if (new_state) this.states[entity_id] = new_state;
@@ -484,10 +646,15 @@ export class HassClient implements HaApi {
     }
   }
 
-  private _send(obj: Record<string, unknown>): Promise<{ success: boolean; result?: unknown }> {
+  // One request/response round-trip. Settles `{success:false}` IMMEDIATELY when
+  // the socket isn't open + authenticated (HA would reject a pre-auth command
+  // and a closed socket never answers), and on a later drop via _flushPending —
+  // so no caller can hang forever on a dead connection.
+  private _send(obj: Record<string, unknown>): Promise<{ success: boolean; result?: unknown; error?: unknown }> {
+    if (!this._open) return Promise.resolve({ ...DISCONNECTED });
     const id = this._id++;
     return new Promise(resolve => {
-      this._pending.set(id, m => resolve({ success: !!m.success, result: m.result }));
+      this._pending.set(id, m => resolve({ success: !!m.success, result: m.result, error: m.error }));
       this._sendRaw({ id, ...obj });
     });
   }
@@ -515,9 +682,10 @@ export class HassClient implements HaApi {
 
   // ── Alert Center ──
   subscribePersistentNotifications(cb: (u: NotificationsUpdate) => void): Promise<() => void> {
-    const id = this._id++;
+    // Never throws: a dead socket / unsupported HA resolves to a no-op unsubscribe.
+    if (!this._open) return Promise.resolve(() => {});
     return new Promise<() => void>(resolve => {
-      this._subscriptions.set(id, ev => {
+      const rec = this._addSubscription({ type: 'persistent_notification/subscribe' }, ev => {
         const e = (ev ?? {}) as { type?: unknown; notifications?: unknown };
         try {
           cb({
@@ -525,14 +693,7 @@ export class HassClient implements HaApi {
             notifications: (e.notifications as NotificationsUpdate['notifications']) ?? {},
           });
         } catch { /* consumer threw — never break the socket loop */ }
-      });
-      this._pending.set(id, m => {
-        // Non-admin-safe command — a failure (unsupported HA) just resolves to a
-        // no-op unsubscribe so the caller never has to try/catch.
-        if (!(m as { success?: boolean }).success) this._subscriptions.delete(id);
-        resolve(() => this._unsubscribeId(id));
-      });
-      this._sendRaw({ id, type: 'persistent_notification/subscribe' });
+      }, () => resolve(() => this._unsubscribe(rec)));
     });
   }
 

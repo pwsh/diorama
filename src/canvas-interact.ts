@@ -37,6 +37,127 @@ import type { Vec2, Furniture, ObjectRecipe, Light, Wall, WindowKind, DoorKind, 
 // shape can never align to itself.
 const ALIGN_TOL_PX = 8;
 
+// ── Click-vs-drag in SCREEN px ───────────────────────────────────────────────
+// The toggle-on-click fixtures (lights, switches, doors, plugs, alarm plates…)
+// decide "click or drag" by how far the POINTER travelled on screen, not how far
+// the item moved on the floor: a floor-mm threshold made fine placement
+// impossible zoomed in and turned taps into drags zoomed out. The slop matches
+// the 3D tap gate and canvas-2d's touch-tap synthesis (5 px mouse / 12 px touch).
+// Module-level (one pointer, like `altPress` below); recorded on every press and
+// widened on every move, so an out-and-back drag still counts as a drag.
+export const CLICK_SLOP_PX_MOUSE = 5;
+export const CLICK_SLOP_PX_TOUCH = 12;
+let press: { cx: number; cy: number; maxPx: number; touch: boolean } | null = null;
+let nextPressTouch = false;
+// canvas-2d calls this right before forwarding a TOUCH start into
+// onCanvasMouseDown (the synthetic MouseEvent carries no pointer type).
+export function markTouchPress(): void { nextPressTouch = true; }
+function notePress(e: { clientX?: number; clientY?: number } | undefined): void {
+  const touch = nextPressTouch; nextPressTouch = false;
+  press = (e && Number.isFinite(e.clientX) && Number.isFinite(e.clientY))
+    ? { cx: e.clientX!, cy: e.clientY!, maxPx: 0, touch } : null;
+}
+function notePressMove(e: { clientX?: number; clientY?: number } | undefined): void {
+  if (!press || !e || !Number.isFinite(e.clientX) || !Number.isFinite(e.clientY)) return;
+  const d = Math.hypot(e.clientX! - press.cx, e.clientY! - press.cy);
+  if (d > press.maxPx) press.maxPx = d;
+}
+function pressSlop(): number { return press?.touch ? CLICK_SLOP_PX_TOUCH : CLICK_SLOP_PX_MOUSE; }
+// True once the pointer has travelled past the click slop (or when no press was
+// recorded — a drag set up programmatically keeps its old behaviour).
+function pressPastSlop(): boolean { return !press || press.maxPx >= pressSlop(); }
+// The release of a click-vs-drag fixture: a click when the pointer stayed inside
+// the slop. Without a recorded press, fall back to the legacy 30 mm floor test.
+function isClickRelease(it: Vec2, start: Vec2): boolean {
+  if (press) return press.maxPx < pressSlop();
+  return Math.hypot(it.x - start.x, it.y - start.y) < 30;
+}
+
+// ── Drag cancellation (a pinch interrupting a one-finger drag) ───────────────
+// The press snapshot of the CURRENT floor, taken before onCanvasMouseDown could
+// mutate anything (a midpoint insert splices a vertex AT press time), kept only
+// while the press actually started a drag. `cancelCanvasDrag` restores it in
+// place, so an interrupted drag leaves no trace: no stray inserted vertex, no
+// half-moved item bundled into the next unrelated undo step.
+let dragSnap: { floorId: string; json: string } | null = null;
+
+export function cancelCanvasDrag(p: Planner): void {
+  const drag = p.drag;
+  p.drag = null;
+  p.dragJustEnded = false;
+  p.alignGuides = [];
+  p.alignPool = null;
+  const snapRec = dragSnap; dragSnap = null;
+  press = null;
+  if (!drag) return;
+  // LD2450 zone / halo edits live in the planner's live-state maps, not the floor.
+  const sa = p.activeSensor();
+  if (sa && (drag.kind === 'vert' || drag.kind === 'zonemove')) {
+    const zl = p.zonesBy[sa.id];
+    const arr = zl ? (drag.prefix === 'iz' ? zl.inclusion : zl.filter) : null;
+    if (arr?.[drag.zi]) arr[drag.zi].vertices = drag.startVerts.map(v => ({ ...v }));
+  } else if (sa && drag.kind === 'obj') {
+    const o = p.objectsBy[sa.id]?.[drag.oi];
+    if (o) { o.x = drag.startObj.x; o.y = drag.startObj.y; }
+  } else if (sa && drag.kind === 'objR') {
+    const o = p.objectsBy[sa.id]?.[drag.oi];
+    if (o) o.radius = drag.startR;
+  }
+  const f = p.floor();
+  if (snapRec && snapRec.floorId === f.id) {
+    try {
+      const before = JSON.parse(snapRec.json) as Record<string, unknown>;
+      const live = f as unknown as Record<string, unknown>;
+      // The snapshot skips the (up to multi-MB) bg image payload — a drag can't
+      // change it — so carry the live one over.
+      const bb = before.bg as Record<string, unknown> | null | undefined;
+      const lb = live.bg as Record<string, unknown> | null | undefined;
+      if (bb && lb && bb.dataUrl === undefined && lb.dataUrl !== undefined) bb.dataUrl = lb.dataUrl;
+      for (const k of Object.keys(live)) if (!(k in before)) delete live[k];
+      for (const k of Object.keys(before)) live[k] = before[k];
+    } catch { /* a bad snapshot must never take the canvas down */ }
+  }
+  p.emitConfig();
+}
+
+// ── Draw-latch point hygiene ─────────────────────────────────────────────────
+// A double-click is click, click, dblclick: the latches used to record the
+// finishing point TWICE, so [A, B, B] passed the ≥3 check as a zero-area
+// polygon, a path got a zero-length last segment and a wall a zero-length
+// segment. Clicks now skip a point within 1 mm of the previous one, and the
+// finish paths dedupe consecutive (and, for closed shapes, closing) repeats
+// before counting points.
+const DRAW_DEDUPE_MM = 1;
+function pushDistinct(pts: Vec2[], v: Vec2): void {
+  const last = pts[pts.length - 1];
+  if (last && Math.hypot(v.x - last.x, v.y - last.y) <= DRAW_DEDUPE_MM) return;
+  pts.push(v);
+}
+export function dedupeDrawPoints(pts: Vec2[], closed: boolean): Vec2[] {
+  for (let i = pts.length - 1; i > 0; i--) {
+    if (Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y) <= DRAW_DEDUPE_MM) pts.splice(i, 1);
+  }
+  if (closed) {
+    while (pts.length > 1) {
+      const a = pts[0], b = pts[pts.length - 1];
+      if (Math.hypot(a.x - b.x, a.y - b.y) > DRAW_DEDUPE_MM) break;
+      pts.pop();
+    }
+  }
+  return pts;
+}
+// Dedupe whichever draw latch is armed — the dblclick AND the Enter-key finish
+// (canvas-2d) both call this right before the planner's finish*.
+export function dedupeDrawLatches(p: Planner): void {
+  if (p.drawingPresenceZone) dedupeDrawPoints(p.drawingPresenceZone.points, true);
+  if (p.drawingGroundArea) dedupeDrawPoints(p.drawingGroundArea.points, true);
+  if (p.drawingPoolArea) dedupeDrawPoints(p.drawingPoolArea.points, true);
+  if (p.drawingVoidArea) dedupeDrawPoints(p.drawingVoidArea.points, true);
+  if (p.drawingExclusion) dedupeDrawPoints(p.drawingExclusion.points, true);
+  if (p.drawingPath) dedupeDrawPoints(p.drawingPath.points, false);
+  if (p.drawingWall) dedupeDrawPoints(p.drawingWall.points, false);
+}
+
 // Every id whose coordinates must stay OUT of the pool for this drag.
 function alignSelfIds(f: ReturnType<Planner['floor']>, drag: Drag): Set<string> {
   const out = new Set<string>();
@@ -211,6 +332,10 @@ function draggedShape(p: Planner, f: ReturnType<Planner['floor']>, drag: Drag)
 function applyAlignSnap(p: Planner, view: View, drag: Drag, free: boolean, ref?: Vec2): void {
   p.alignGuides = [];
   if (p.uiMode !== 'edit' || free || !ALIGN_DRAG_KINDS.has(drag.kind)) return;
+  // No guides until the pointer has left the click slop: a 1 px jitter on a
+  // click-to-toggle fixture must never snap it onto a guide (8 px ≈ 80 mm),
+  // which would push the item past its own click test — no toggle, item moved.
+  if (!pressPastSlop()) return;
   const f = p.floor();
   if (!p.alignPool) p.alignPool = buildAlignPool(p, drag);
   const pool = p.alignPool;
@@ -896,7 +1021,22 @@ function selectedZoneBodyAt(p: Planner, view: View, mm: Vec2): boolean {
 }
 
 export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: View, e: MouseEvent): void {
+  // A fresh press always starts clean: a drag that ended without a follow-up
+  // click (mouseup off-canvas, a touch that moved / held too long) must not
+  // swallow THIS gesture's click.
+  p.dragJustEnded = false;
+  notePress(e);
+  dragSnap = null;
   if (p.uiMode !== 'edit') return;  // kiosk/view: no drags, no selections
+  const f0 = p.floor();
+  let json: string | null = null;
+  // Skip the bg image dataURL (up to ~2.5 MB) — it never changes mid-drag.
+  try { json = JSON.stringify(f0, (k, v) => (k === 'dataUrl' ? undefined : v)); } catch { json = null; }
+  mouseDownInner(p, canvas, view, e);
+  if (p.drag && json !== null) dragSnap = { floorId: f0.id, json };
+}
+
+function mouseDownInner(p: Planner, canvas: HTMLCanvasElement, view: View, e: MouseEvent): void {
   if (p.editZone) return;
   if (p.placingRoomId) return;  // room-placement latch: let the click set the anchor
   if (p.placingLandmarkId) return;  // geo-landmark latch: let the click place the pin
@@ -1427,6 +1567,7 @@ export function onCanvasMouseDown(p: Planner, canvas: HTMLCanvasElement, view: V
 }
 
 export function onCanvasMouseMove(p: Planner, canvas: HTMLCanvasElement, view: View, e: MouseEvent): void {
+  if (p.drag) notePressMove(e);
   const raw = pxToMm(canvas, view, e);
   // While the wall tool is armed, resolve the live cursor preview through the
   // SAME helper the click commit uses (15° angle lock off the previous vertex,
@@ -2098,7 +2239,7 @@ export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement, e?: Mouse
   // reaches onCanvasClick, which owns the identify (it has the `view` the hit
   // sweep needs). Presses that started no drag skip straight there.
   if (altIdentifyAt(e)) {
-    p.drag = null; p.alignGuides = []; p.alignPool = null;
+    p.drag = null; p.alignGuides = []; p.alignPool = null; dragSnap = null;
     canvas.style.cursor = 'default';
     return;
   }
@@ -2106,6 +2247,8 @@ export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement, e?: Mouse
   const f = p.floor();
   const sa = p.activeSensor();
   const drag = p.drag;
+  notePressMove(e);          // the release point counts toward click-vs-drag too
+  dragSnap = null;           // committed — nothing left to cancel
   p.drag = null;
   p.dragJustEnded = true;
   p.alignGuides = [];
@@ -2145,8 +2288,7 @@ export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement, e?: Mouse
     if (ap) {
       // Click-vs-drag: a tiny movement opens the alarm modal; a real move snaps
       // the plate flush to the nearest wall (like a switch, no ganging).
-      const moved = Math.hypot(ap.x - drag.start.x, ap.y - drag.start.y);
-      if (moved < 30) {
+      if (isClickRelease(ap, drag.start)) {
         ap.x = drag.start.x; ap.y = drag.start.y;
         openAlarmModal(canvas, ap.id);
       } else {
@@ -2161,8 +2303,7 @@ export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement, e?: Mouse
       // Click-vs-drag: a tiny movement just selects (read-only fixture — the
       // sidebar section is the detail view); a real move snaps the plaque flush
       // to the nearest wall (like a switch/alarm, no ganging).
-      const moved = Math.hypot(cp.x - drag.start.x, cp.y - drag.start.y);
-      if (moved < 30) {
+      if (isClickRelease(cp, drag.start)) {
         cp.x = drag.start.x; cp.y = drag.start.y;
       } else {
         cp.x = snap(cp.x, 10); cp.y = snap(cp.y, 10);
@@ -2175,8 +2316,7 @@ export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement, e?: Mouse
     if (th) {
       // Click-vs-drag: a tiny movement opens the thermostat modal; a real move
       // snaps the plate flush to the nearest wall (like a switch, no ganging).
-      const moved = Math.hypot(th.x - drag.start.x, th.y - drag.start.y);
-      if (moved < 30) {
+      if (isClickRelease(th, drag.start)) {
         th.x = drag.start.x; th.y = drag.start.y;
         openThermostatModal(canvas, th.id);
       } else {
@@ -2191,8 +2331,7 @@ export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement, e?: Mouse
       // Click-vs-drag: a tiny movement FIRES the action (control fixtures fire in
       // edit + kiosk, like alarm/lock); a real move snaps flush to the nearest
       // wall when wallMount (like a switch, no ganging), free otherwise.
-      const moved = Math.hypot(ab.x - drag.start.x, ab.y - drag.start.y);
-      if (moved < 30) {
+      if (isClickRelease(ab, drag.start)) {
         ab.x = drag.start.x; ab.y = drag.start.y;
         p.fireAction(ab);
       } else {
@@ -2207,10 +2346,14 @@ export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement, e?: Mouse
       // Click-vs-drag: a tiny movement is a click (unbound → manual test
       // trigger via toggleItem; bound → display-only no-op). A real move just
       // snaps to grid — ceiling-mounted, so NO wall snap.
-      const moved = Math.hypot(ss.x - drag.start.x, ss.y - drag.start.y);
-      if (moved < 30) {
+      if (isClickRelease(ss, drag.start)) {
         ss.x = drag.start.x; ss.y = drag.start.y;
-        if (!ss.entity_id) p.toggleItem(ss);
+        // A siren routes through triggerSiren exactly like the kiosk path (bound
+        // siren.* → state-picked turn_on/turn_off, switch → toggle, unbound →
+        // localState; allowControl:false refuses). Detectors: unbound = manual
+        // test trigger, bound = display-only.
+        if (ss.kind === 'siren') p.triggerSiren(ss);
+        else if (!ss.entity_id) p.toggleItem(ss);
       } else {
         ss.x = snap(ss.x, 10); ss.y = snap(ss.y, 10);
         p.save();
@@ -2222,8 +2365,7 @@ export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement, e?: Mouse
       // Click-vs-drag: a tiny movement is a click → acknowledge (bound alert.*)
       // or demo-flip (unbound). A real move snaps to grid — ceiling-mounted, NO
       // wall snap (like the safety detector).
-      const moved = Math.hypot(ab.x - drag.start.x, ab.y - drag.start.y);
-      if (moved < 30) {
+      if (isClickRelease(ab, drag.start)) {
         ab.x = drag.start.x; ab.y = drag.start.y;
         p.acknowledgeAlertBeacon(ab);
       } else {
@@ -2237,8 +2379,7 @@ export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement, e?: Mouse
       // Click-vs-drag: a tiny move is a click → run/dock (bound) or toggle the
       // demo (unbound). A real move relocates the DOCK (free placement) + shifts
       // the live robot state by the same delta so the body moves with its base.
-      const dx = ro.x - drag.start.x, dy = ro.y - drag.start.y;
-      if (Math.hypot(dx, dy) < 30) {
+      if (isClickRelease(ro, drag.start)) {
         ro.x = drag.start.x; ro.y = drag.start.y;
         p.toggleRobot(ro);
       } else {
@@ -2263,8 +2404,7 @@ export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement, e?: Mouse
       // Click-vs-drag: a tiny move is a click → toggle projecting (bound entity
       // or unbound localState). A real move relocates the ceiling mount (free
       // placement — no wall snap). toggleItem refuses in view mode.
-      const moved = Math.hypot(pr.x - drag.start.x, pr.y - drag.start.y);
-      if (moved < 30) {
+      if (isClickRelease(pr, drag.start)) {
         pr.x = drag.start.x; pr.y = drag.start.y;
         p.toggleItem(pr);
       } else {
@@ -2278,8 +2418,7 @@ export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement, e?: Mouse
       // Click-vs-drag: a tiny move is a click → open/close (valve.* open_valve/
       // close_valve by state, switch.toggle, or unbound localState flip). A real
       // move relocates the floor pipe (free placement — no wall snap).
-      const moved = Math.hypot(vv.x - drag.start.x, vv.y - drag.start.y);
-      if (moved < 30) {
+      if (isClickRelease(vv, drag.start)) {
         vv.x = drag.start.x; vv.y = drag.start.y;
         p.toggleValve(vv);
       } else {
@@ -2293,8 +2432,7 @@ export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement, e?: Mouse
       // Click-vs-drag: a tiny move is a click → toggle (bound entity or unbound
       // localState). A real move snaps the plate flush to the nearest wall (like
       // a switch, no ganging).
-      const moved = Math.hypot(pg.x - drag.start.x, pg.y - drag.start.y);
-      if (moved < 30) {
+      if (isClickRelease(pg, drag.start)) {
         pg.x = drag.start.x; pg.y = drag.start.y;
         if (pg.allowControl !== false) p.toggleItem(pg);
       } else {
@@ -2309,8 +2447,7 @@ export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement, e?: Mouse
       // Click-vs-drag: a tiny move is a click → toggle the head (bound entity via
       // toggleItem/toggleEntity, or unbound localState flip). A real move relocates
       // the head (free placement — no wall snap).
-      const moved = Math.hypot(sz.x - drag.start.x, sz.y - drag.start.y);
-      if (moved < 30) {
+      if (isClickRelease(sz, drag.start)) {
         sz.x = drag.start.x; sz.y = drag.start.y;
         p.toggleItem(sz);
       } else {
@@ -2383,8 +2520,7 @@ export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement, e?: Mouse
     const arr = drag.fxKind === 'light' ? f.lights : f.switches;
     const it = arr[drag.idx];
     if (it) {
-      const moved = Math.hypot(it.x - drag.start.x, it.y - drag.start.y);
-      if (moved < 30) {
+      if (isClickRelease(it, drag.start)) {
         // Treat as click — restore exact start position; toggle bound entity
         // or (unbound) the item's local control state.
         it.x = drag.start.x; it.y = drag.start.y;
@@ -2421,8 +2557,7 @@ export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement, e?: Mouse
     if (piece) {
       // Stove/oven click-vs-drag: a barely-moved single click toggles the oven
       // door (persistent doorOpen) instead of nudging the piece.
-      const barelyMoved = drag.kind === 'furnMove' &&
-        Math.hypot(piece.x - drag.start.x, piece.y - drag.start.y) < 30;
+      const barelyMoved = drag.kind === 'furnMove' && isClickRelease(piece, drag.start);
       const stoveClick = drag.kind === 'furnMove' && piece.kind === 'stove' && barelyMoved;
       // Curbside bins: a barely-moved click toggles full/empty (bound entity or
       // unbound localState) instead of nudging the piece. The mailbox rides the
@@ -2493,8 +2628,7 @@ export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement, e?: Mouse
     if (door) {
       // Click-vs-drag: tiny movement toggles the door's bound entity (or, when
       // unbound, its local control state).
-      const moved = Math.hypot(door.x - drag.start.x, door.y - drag.start.y);
-      if (moved < 30) {
+      if (isClickRelease(door, drag.start)) {
         door.x = drag.start.x; door.y = drag.start.y;
         p.toggleItem(door);
       } else {
@@ -2513,8 +2647,7 @@ export function onCanvasMouseUp(p: Planner, canvas: HTMLCanvasElement, e?: Mouse
   } else if (drag.kind === 'windowMove') {
     const win = f.windows[drag.idx];
     if (win) {
-      const moved = Math.hypot(win.x - drag.start.x, win.y - drag.start.y);
-      if (moved < 30) {
+      if (isClickRelease(win, drag.start)) {
         win.x = drag.start.x; win.y = drag.start.y;
         p.toggleItem(win);
       } else {
@@ -2692,7 +2825,7 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
   // and never arms the gesture, so the click must still be allowed to place.
   // The `altKey && select` guard also swallows an Alt click that MOVED past the
   // slop (a free-placement drop already handled by mouseup).
-  if (p.tool === 'select' && e.altKey) {
+  if (p.tool === 'select' && e.altKey && !p.editZone) {
     const at = altIdentifyAt(e);
     altPress = null;
     if (at) identifyAt(p, view, at);
@@ -2702,13 +2835,14 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
   // Live aircraft → open the detail card (edit + select). Same low-priority
   // reasoning as the segment tap below: a draggable fixture's click is swallowed
   // by dragJustEnded long before it reaches here.
-  if (p.tool === 'select' && tryOpenFlightInfo(p, canvas, view, mm)) return;
+  // Never while an mmWave zone is being drawn — that click is a zone vertex.
+  if (p.tool === 'select' && !p.editZone && tryOpenFlightInfo(p, canvas, view, mm)) return;
 
   // Valetudo room segment → tap-to-clean (edit + select). Low priority: draggable
   // fixtures start a drag on mousedown, so their click is swallowed by
   // dragJustEnded and never reaches here — the segment tap only fires on a click
   // that hit no draggable item. Only active when the vacuumMap overlay is on.
-  if (p.tool === 'select' && tryVacuumSegmentClean(p, mm)) return;
+  if (p.tool === 'select' && !p.editZone && tryVacuumSegmentClean(p, mm)) return;
 
   if (p.editZone) {
     const sa = p.activeSensor(); if (!sa) return;
@@ -2723,6 +2857,10 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
       const snapped = closing ? snapVertex15(prev, first, local) : snapVertex15(prev, null, local);
       nx = snapped.x; ny = snapped.y;
     }
+    // A double-click (click, click, dblclick-finish) lands the same point twice
+    // — skip a vertex within ~1 mm of the previous one (degenerate edge).
+    const last = verts[verts.length - 1];
+    if (last && Math.hypot(Math.round(nx) - last.x, Math.round(ny) - last.y) <= 1) return;
     verts.push({ x: Math.round(nx), y: Math.round(ny) });
     p.emitConfig();
     return;
@@ -3050,7 +3188,7 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
     // free-form regions.
     const v = { x: snap(mm.x, 10), y: snap(mm.y, 10) };
     if (!p.drawingPresenceZone) p.drawingPresenceZone = { points: [v] };
-    else p.drawingPresenceZone.points.push(v);
+    else pushDistinct(p.drawingPresenceZone.points, v);
     p.emitConfig();
     return;
   }
@@ -3059,7 +3197,7 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
     // a world-mm vertex; double-click / Enter finishes (≥3 pts, capped at 20).
     const v = { x: snap(mm.x, 10), y: snap(mm.y, 10) };
     if (!p.drawingGroundArea) p.drawingGroundArea = { points: [v] };
-    else if (p.drawingGroundArea.points.length < 20) p.drawingGroundArea.points.push(v);
+    else if (p.drawingGroundArea.points.length < 20) pushDistinct(p.drawingGroundArea.points, v);
     p.emitConfig();
     return;
   }
@@ -3069,7 +3207,7 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
     // into a plain path-backed GroundArea polygon.
     const v = { x: snap(mm.x, 10), y: snap(mm.y, 10) };
     if (!p.drawingPath) p.drawingPath = { points: [v] };
-    else if (p.drawingPath.points.length < 40) p.drawingPath.points.push(v);
+    else if (p.drawingPath.points.length < 40) pushDistinct(p.drawingPath.points, v);
     p.emitConfig();
     return;
   }
@@ -3078,7 +3216,7 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
     // world-mm vertex; double-click / Enter finishes (≥3 pts, capped at 20).
     const v = { x: snap(mm.x, 10), y: snap(mm.y, 10) };
     if (!p.drawingPoolArea) p.drawingPoolArea = { points: [v] };
-    else if (p.drawingPoolArea.points.length < 20) p.drawingPoolArea.points.push(v);
+    else if (p.drawingPoolArea.points.length < 20) pushDistinct(p.drawingPoolArea.points, v);
     p.emitConfig();
     return;
   }
@@ -3087,7 +3225,7 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
     // a world-mm vertex; double-click / Enter finishes (≥3 pts, capped at 12).
     const v = { x: snap(mm.x, 10), y: snap(mm.y, 10) };
     if (!p.drawingVoidArea) p.drawingVoidArea = { points: [v] };
-    else if (p.drawingVoidArea.points.length < 12) p.drawingVoidArea.points.push(v);
+    else if (p.drawingVoidArea.points.length < 12) pushDistinct(p.drawingVoidArea.points, v);
     p.emitConfig();
     return;
   }
@@ -3096,7 +3234,7 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
     // click appends a world-mm vertex; double-click / Enter finishes (3–12 pts).
     const v = { x: snap(mm.x, 10), y: snap(mm.y, 10) };
     if (!p.drawingExclusion) p.drawingExclusion = { points: [v] };
-    else if (p.drawingExclusion.points.length < 12) p.drawingExclusion.points.push(v);
+    else if (p.drawingExclusion.points.length < 12) pushDistinct(p.drawingExclusion.points, v);
     p.emitConfig();
     return;
   }
@@ -3119,7 +3257,7 @@ export function onCanvasClick(p: Planner, canvas: HTMLCanvasElement, view: View,
     const prev = pts0 && pts0.length ? pts0[pts0.length - 1] : null;
     const v: Vec2 = resolveWallPoint(p, prev, null, mm, e.altKey);
     if (!p.drawingWall) p.drawingWall = { points: [v] };
-    else p.drawingWall.points.push(v);
+    else pushDistinct(p.drawingWall.points, v);
     p.emitConfig();
     return;
   }
@@ -3496,6 +3634,7 @@ export function onCanvasDblClick(p: Planner, canvas: HTMLCanvasElement, view: Vi
     return;
   }
   if (p.editZone) { finishZoneEdit(p); return; }
+  dedupeDrawLatches(p);
   if (p.tool === 'pzone' && p.drawingPresenceZone) {
     if (p.drawingPresenceZone.points.length >= 3) p.finishPresenceZone();
     else { p.drawingPresenceZone = null; p.emitConfig(); }
@@ -3623,6 +3762,10 @@ export function onCanvasDblClick(p: Planner, canvas: HTMLCanvasElement, view: Vi
     if (wb && !wb.locked) {
       const order: import('./types.js').WallKind[] = ['full', 'half', 'railing', 'invisible'];
       const cur = order.indexOf((wb.kind ?? 'full'));
+      // Fence / hedge kinds sit OUTSIDE the solid-wall cycle: a double-click must
+      // never silently turn a picket fence into a 9 ft wall (the kind picker in
+      // the sidebar is where a fence changes kind).
+      if (cur < 0) return;
       wb.kind = order[(cur + 1) % order.length];
       p.save(); p.emitConfig();
       return;

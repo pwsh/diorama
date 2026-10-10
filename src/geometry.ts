@@ -6,7 +6,7 @@ import type { Vec2, Sensor, BgImage, LightIconKind, FurnitureKind, EnvKind, Wall
   Wall, Ruler, RulerEnd, DoorKind, WindowKind, FloorTexKind, OutdoorArea,
   BgTextRegion, BgRegionShape, BgTrainScenery } from './types.js';
 import { formatEntityValue, formatClock, evalRules, ruleMatches, relTimeText,
-  type HassStateLike, type ClockMode, type ValueRule } from './value-rules.js';
+  type HassStateLike, type ClockMode, type ValueRule, strictNumber } from './value-rules.js';
 // Vehicle model packs (pure, three-free). vehicles.ts imports NOTHING at runtime
 // — in particular it must never import geometry.ts back (that would be a cycle).
 import { vehicleRecipe, vehicleRegistryRev } from './vehicles.js';
@@ -24,16 +24,20 @@ export function snap(v: number, g: number): number {
 }
 
 export function fmtLen(mm: number, imperial: boolean): string {
+  // Round to the DISPLAYED precision (0.1 in / 0.1 cm) BEFORE splitting into
+  // units — rounding each part separately printed 1828 mm as `5' 12.0"` and
+  // 1999.6 mm as `1 m 100.0 cm`.
   if (imperial) {
-    const totIn = mm / MM_PER_IN;
-    if (Math.abs(mm) < 3 * IN_PER_FT * MM_PER_IN) return `${totIn.toFixed(1)} in`;
+    const totIn = Math.round((mm / MM_PER_IN) * 10) / 10;
+    if (Math.abs(totIn) < 3 * IN_PER_FT) return `${totIn.toFixed(1)} in`;
     const ft = Math.trunc(totIn / IN_PER_FT);
-    const inR = Math.abs(totIn - ft * IN_PER_FT);
+    const inR = Math.round(Math.abs(totIn - ft * IN_PER_FT) * 10) / 10;
     return `${ft}' ${inR.toFixed(1)}"`;
   }
-  if (Math.abs(mm) < 1000) return `${(mm / 10).toFixed(1)} cm`;
-  const m = Math.trunc(mm / 1000);
-  const cm = Math.abs(mm - m * 1000) / 10;
+  const r = Math.round(mm);   // whole mm = 0.1 cm
+  if (Math.abs(r) < 1000) return `${(r / 10).toFixed(1)} cm`;
+  const m = Math.trunc(r / 1000);
+  const cm = Math.abs(r - m * 1000) / 10;
   return `${m} m ${cm.toFixed(1)} cm`;
 }
 
@@ -1750,6 +1754,7 @@ export function tempToCelsius(value: number, unit: string | null | undefined): n
   if (!isFinite(value)) return NaN;
   const u = String(unit ?? '').trim().toLowerCase();
   if (u === '°f' || u === 'f' || u === 'fahrenheit') return (value - 32) * 5 / 9;
+  if (u === 'k' || u === 'kelvin') return value - 273.15;
   return value;
 }
 
@@ -1769,7 +1774,12 @@ export function aggregateRoomTemps(
   const acc = new Map<string, { sum: number; n: number }>();
   for (const s of samples) {
     if (!isFinite(s.tempC)) continue;
-    const rm = resolveRoomForPointFuzzy(rooms, loops, s.x, s.y);
+    // A sensor STRICTLY inside some loop belongs to that loop's room or to none —
+    // the 250 mm fuzzy probe exists for points ON a wall line, and applied to an
+    // interior point of an UNNAMED loop it bled that sensor into the neighbour.
+    const rm = loopContaining(loops, s.x, s.y)
+      ? resolveRoomForPoint(rooms, loops, s.x, s.y)
+      : resolveRoomForPointFuzzy(rooms, loops, s.x, s.y);
     if (!rm) continue;
     const a = acc.get(rm.id) ?? { sum: 0, n: 0 };
     a.sum += s.tempC; a.n += 1;
@@ -2449,7 +2459,22 @@ export function segCrossesSolidWall(
   windows: { x: number; y: number; w: number; sill?: number; height?: number }[],
   x0: number, y0: number, x1: number, y1: number,
 ): boolean {
-  const p1 = { x: x0, y: y0 }, p2 = { x: x1, y: y1 };
+  return segCrossesRuns(solidNavRuns(walls, doors, windows), x0, y0, x1, y1);
+}
+
+// The PRECOMPUTE half of segCrossesSolidWall: every nav-solid wall run (the
+// door-excised `navSolids` of each visible segment) as world-mm endpoint
+// pairs. wallCutsForSegment scans every opening per segment, so a caller that
+// tests many segments against an unchanged plan (the robot controller, per
+// step) should build this ONCE per wall/opening change and call
+// `segCrossesRuns` — segCrossesSolidWall is exactly the two composed.
+export interface SolidRunSeg { ax: number; ay: number; bx: number; by: number }
+export function solidNavRuns(
+  walls: { points: Vec2[]; kind?: WallKind }[],
+  doors: { x: number; y: number; w: number; rotation: number }[],
+  windows: { x: number; y: number; w: number; sill?: number; height?: number }[],
+): SolidRunSeg[] {
+  const out: SolidRunSeg[] = [];
   for (const w of walls) {
     if (wallKind(w) === 'invisible') continue;
     const pts = w.points;
@@ -2460,11 +2485,22 @@ export function segCrossesSolidWall(
       const ux = (b.x - a.x) / len, uy = (b.y - a.y) / len;
       const { navSolids } = wallCutsForSegment(a, b, doors, windows);
       for (const s of navSolids) {
-        const sa = { x: a.x + ux * s.t0, y: a.y + uy * s.t0 };
-        const sb = { x: a.x + ux * s.t1, y: a.y + uy * s.t1 };
-        if (segmentsIntersect(p1, p2, sa, sb)) return true;
+        out.push({ ax: a.x + ux * s.t0, ay: a.y + uy * s.t0,
+                   bx: a.x + ux * s.t1, by: a.y + uy * s.t1 });
       }
     }
+  }
+  return out;
+}
+
+// Does the segment (x0,y0)→(x1,y1) cross any precomputed solid run?
+export function segCrossesRuns(runs: readonly SolidRunSeg[],
+                               x0: number, y0: number, x1: number, y1: number): boolean {
+  const p1 = { x: x0, y: y0 }, p2 = { x: x1, y: y1 };
+  const sa = { x: 0, y: 0 }, sb = { x: 0, y: 0 };
+  for (const r of runs) {
+    sa.x = r.ax; sa.y = r.ay; sb.x = r.bx; sb.y = r.by;
+    if (segmentsIntersect(p1, p2, sa, sb)) return true;
   }
   return false;
 }
@@ -2823,7 +2859,9 @@ export function envColor(kind: EnvKind, value: number): string {
 // "21.4 °C" / "612 ppm" / "—" from an HA state envelope.
 export function envValueText(st: { state: string; attributes: Record<string, unknown> } | null): string {
   if (!st || st.state === 'unavailable' || st.state === 'unknown') return '—';
-  const v = parseFloat(st.state);
+  // Only a WHOLLY numeric state is formatted as a number — a digit-prefixed
+  // state ("14:35", "2026-07-20") shows verbatim, the formatEntityValue rule.
+  const v = strictNumber(st.state);
   const unit = String(st.attributes?.unit_of_measurement ?? '').trim();
   if (isNaN(v)) return st.state;
   const num = Math.abs(v) >= 100 ? Math.round(v).toString() : (Math.round(v * 10) / 10).toString();
@@ -3571,11 +3609,29 @@ export function bufferPolyline(centerline: Vec2[], width: number): Vec2[] {
   if (!centerline || centerline.length < 2) return [];
   const n = centerline.length;
   const halfW = Math.max(PATH_MIN_WIDTH, width) / 2;
-  // Unit direction of segment i (points[i] → points[i+1]).
-  const segDir = (i: number): Vec2 => {
+  // Unit direction of segment i (points[i] → points[i+1]). A DEGENERATE segment
+  // (< 1 mm — a double-clicked or duplicated point) has no meaningful direction:
+  // its sub-mm jitter picked an arbitrary one, which mitred into a clamp-4 spike
+  // four ribbon-widths long. It borrows the nearest real segment's direction —
+  // looking BACKWARD for a vertex's incoming side and FORWARD for its outgoing
+  // side — so the join mitres as if the duplicate weren't there. The output
+  // keeps exactly 2n vertices (road-car lanes index it by centerline vertex).
+  const rawDir = (i: number): Vec2 | null => {
     const a = centerline[i], b = centerline[i + 1];
-    const dx = b.x - a.x, dy = b.y - a.y, len = Math.hypot(dx, dy) || 1;
-    return { x: dx / len, y: dy / len };
+    const dx = b.x - a.x, dy = b.y - a.y, len = Math.hypot(dx, dy);
+    return len < 1 ? null : { x: dx / len, y: dy / len };
+  };
+  const segDir = (i: number, forward = true): Vec2 => {
+    const own = rawDir(i);
+    if (own) return own;
+    const order = forward ? [1, -1] : [-1, 1];
+    for (const step of order) {
+      for (let j = i + step; j >= 0 && j < n - 1; j += step) {
+        const d = rawDir(j);
+        if (d) return d;
+      }
+    }
+    return { x: 1, y: 0 };   // every point coincident — any direction
   };
   const left: Vec2[] = [], right: Vec2[] = [];
   for (let i = 0; i < n; i++) {
@@ -3583,9 +3639,9 @@ export function bufferPolyline(centerline: Vec2[], width: number): Vec2[] {
     if (i === 0) {
       const d = segDir(0); mx = -d.y; my = d.x;                 // start cap: seg-0 left normal
     } else if (i === n - 1) {
-      const d = segDir(n - 2); mx = -d.y; my = d.x;             // end cap: last-seg left normal
+      const d = segDir(n - 2, false); mx = -d.y; my = d.x;      // end cap: last-seg left normal
     } else {
-      const d0 = segDir(i - 1), d1 = segDir(i);
+      const d0 = segDir(i - 1, false), d1 = segDir(i, true);
       const n0x = -d0.y, n0y = d0.x, n1x = -d1.y, n1y = d1.x;   // adjacent-edge left normals
       const sx = n0x + n1x, sy = n0y + n1y, slen = Math.hypot(sx, sy);
       if (slen < 1e-6) { mx = n0x; my = n0y; }                  // 180° reversal — use one normal

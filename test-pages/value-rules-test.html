@@ -40,6 +40,24 @@
     add('eq numeric',   ruleMatches({ op: 'eq', value: 10 }, '10.0') === true);
     add('eq string',    ruleMatches({ op: 'eq', value: 'open' }, 'open') === true);
     add('eq string no', ruleMatches({ op: 'eq', value: 'open' }, 'closed') === false);
+    // Strict numeric gate (2026-09 review): a digit-PREFIXED state is not a number.
+    add('gt ignores a clock time "14:35"', ruleMatches({ op: 'gt', value: 10 }, '14:35') === false);
+    add('lt ignores a date "2026-07-20"', ruleMatches({ op: 'lt', value: 99999 }, '2026-07-20') === false);
+    add('between ignores "12 kWh today"', ruleMatches({ op: 'between', value: 0, value2: 100 }, '12 kWh today') === false);
+    add('eq on a date compares as a string', ruleMatches({ op: 'eq', value: '2026-07-20' }, '2026-07-20') === true
+      && ruleMatches({ op: 'eq', value: 2026 }, '2026-07-20') === false);
+    add('numeric ops still accept whitespace / sign / exponent',
+      ruleMatches({ op: 'gt', value: 10 }, ' 11 ') && ruleMatches({ op: 'lt', value: 0 }, '-3.5')
+      && ruleMatches({ op: 'gte', value: 1000 }, '1e3'));
+    // Regex rules: compiled once, bounded.
+    add('regex still matches', ruleMatches({ op: 'regex', value: '^on|off$' }, 'on') === true);
+    add('invalid regex never matches (no throw)', ruleMatches({ op: 'regex', value: '([' }, '([') === false);
+    add('over-long regex pattern never matches', ruleMatches({ op: 'regex', value: 'a'.repeat(201) }, 'a'.repeat(300)) === false);
+    {
+      const t0 = performance.now();
+      for (let i = 0; i < 5000; i++) ruleMatches({ op: 'regex', value: '^(open|closed)$' }, 'open');
+      add('regex compile is cached (5000 evals fast)', performance.now() - t0 < 200, `${(performance.now() - t0).toFixed(1)} ms`);
+    }
     add('neq string',   ruleMatches({ op: 'neq', value: 'open' }, 'closed') === true);
     add('neq equal→no', ruleMatches({ op: 'neq', value: 'open' }, 'open') === false);
     add('between in',   ruleMatches({ op: 'between', value: 10, value2: 20 }, '15') === true);

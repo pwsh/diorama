@@ -206,6 +206,17 @@
   const t3000 = NB.tilesForRadius(40.6782, -73.9442, 3000, 14);
   ok('tilesForRadius 3000 m @z14 → a small tile block (≤ 36)', t3000.length >= 9 && t3000.length <= 36 && t3000.every(t => t.z === 14), t3000.length);
   ok('tilesForRadius 3000 m ⊇ 350 m tiles', t350.every(a => t3000.some(b => b.x === a.x && b.y === a.y)), `${t350.length} ⊂ ${t3000.length}`);
+  // — antimeridian (2026-09 review): the x walk used min..max and, with the west
+  //   edge wrapped to a HIGH x, covered the whole world the wrong way round —
+  //   49 149 tiles for (−17.8, 179.99, 3 km, z14). It must stay a small block that
+  //   straddles x = 2^z−1 → 0, and every tile must be in range.
+  const tAm = NB.tilesForRadius(-17.8, 179.99, 3000, 14);
+  const nZ = 2 ** 14;
+  ok('tilesForRadius at the antimeridian stays small (≤ 36)', tAm.length >= 4 && tAm.length <= 36, tAm.length);
+  ok('tilesForRadius at the antimeridian wraps x (has both 2^z−1 and 0)',
+     tAm.some(t => t.x === nZ - 1) && tAm.some(t => t.x === 0) && tAm.every(t => t.x >= 0 && t.x < nZ), [...new Set(tAm.map(t => t.x))].join(','));
+  const tAmW = NB.tilesForRadius(-17.8, -179.99, 3000, 14);
+  ok('tilesForRadius just west of −180 wraps too', tAmW.length <= 36 && tAmW.some(t => t.x === nZ - 1) && tAmW.some(t => t.x === 0), tAmW.length);
 
   // — align golden (screen-CW rotate about origin, then translate) —
   const aT = NB.alignPlanPoint({ x: 50, y: 20 }, { x: 0, y: 0 }, { dx: 5, dy: -3 });

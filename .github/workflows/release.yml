@@ -14,9 +14,9 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -31,9 +31,9 @@ jobs:
         run: npm run build
 
       - name: Zip dist
-        run: cd dist && zip -r ../diorama.zip .
+        run: cd dist && zip -r ../diorama.zip . -x '*.map'
 
       - name: Upload release asset
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: diorama.zip

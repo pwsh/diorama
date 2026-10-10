@@ -514,29 +514,29 @@ export const FLIGHT_DEFAULT_BEACON = {
 // ── Wildcard matching (§3.1 / §3.2) ────────────────────────────────────────
 // `*` = any run, `?` = exactly one character, case-insensitive. A pattern with
 // NEITHER wildcard is a friendly SUBSTRING match; a pattern with either is
-// matched ANCHORED start-to-end. The pattern is hand-walked and every other
-// character escaped — the user's raw string is NEVER handed to `new RegExp`, so
-// this can never become a second real-regex surface (a user typing `AAL.*`
-// means a literal dot) and a pathological input cannot backtrack.
-const _wcCache = new Map<string, RegExp | null>();
+// matched ANCHORED start-to-end. The user's raw string is NEVER handed to
+// `new RegExp` (a user typing `AAL.*` means a literal dot), and matching is a
+// hand-rolled two-pointer glob walk — NOT a compiled regex: `*a*a*…*b` compiled
+// to `^.*a.*a…b$`, which backtracks exponentially (≈635 ms on a 30-char input)
+// and runs per poll × aircraft × rule. The walk below is O(pattern × text) in
+// the worst case with no allocation per call. Runs of `*` collapse to one.
+function normalizeGlob(pattern: string): string {
+  return pattern.toLowerCase().replace(/\*{2,}/g, '*');
+}
 
-function compileWildcard(pattern: string): RegExp | null {
-  const key = pattern.toLowerCase();
-  const hit = _wcCache.get(key);
-  if (hit !== undefined) return hit;
-  let out = '', hasWildcard = false;
-  for (const ch of key) {
-    if (ch === '*') { out += '.*'; hasWildcard = true; }
-    else if (ch === '?') { out += '.'; hasWildcard = true; }
-    else out += ch.replace(/[.*+?^${}()|[\]\\/-]/g, '\\$&');
+function globWalk(pat: string, text: string): boolean {
+  let p = 0, t = 0, star = -1, mark = 0;
+  const pl = pat.length, tl = text.length;
+  while (t < tl) {
+    // A `*` in the PATTERN is always the wildcard — tested first, so a literal
+    // '*' in the text can't consume it as an ordinary character.
+    if (p < pl && pat[p] === '*') { star = p++; mark = t; }
+    else if (p < pl && (pat[p] === '?' || pat[p] === text[t])) { p++; t++; }
+    else if (star >= 0) { p = star + 1; t = ++mark; }
+    else return false;
   }
-  const body = hasWildcard ? out : `.*${out}.*`;
-  let re: RegExp | null;
-  try { re = new RegExp(`^${body}$`, 'is'); } catch { re = null; }
-  // Bounded implicitly by the rule cap; cheap insurance, not load-bearing (§7).
-  if (_wcCache.size > 512) _wcCache.clear();
-  _wcCache.set(key, re);
-  return re;
+  while (p < pl && pat[p] === '*') p++;
+  return p === pl;
 }
 
 // Does `text` satisfy the user's glob? A blank/absent PATTERN is "any" (true —
@@ -546,8 +546,10 @@ export function globMatch(pattern: string | null | undefined, text: string | nul
   const pat = typeof pattern === 'string' ? pattern.trim() : '';
   if (!pat) return true;
   if (typeof text !== 'string' || text === '') return false;
-  const re = compileWildcard(pat);
-  return re ? re.test(text) : false;
+  const g = normalizeGlob(pat);
+  const lt = text.toLowerCase();
+  if (g.indexOf('*') < 0 && g.indexOf('?') < 0) return lt.includes(g);
+  return globWalk(g, lt);
 }
 
 // AND across every present criterion (§3.3). A null LIVE field fails a numeric
@@ -1217,7 +1219,10 @@ export function flightDisplayAltitudeMm(
 export function flightBearingDistance(
   originLat: number, originLon: number, lat: number, lon: number,
 ): { bearingRad: number; distNm: number } {
-  const east = (lon - originLon) * DEG * Math.cos(originLat * DEG) * EARTH_R_M;
+  // Longitude difference wrapped into [−180, 180): an aircraft 0.1° across the
+  // antimeridian is ~6 nm away, not ~13 000.
+  const dLon = (lon - originLon) - 360 * Math.floor(((lon - originLon) + 180) / 360);
+  const east = dLon * DEG * Math.cos(originLat * DEG) * EARTH_R_M;
   const north = (lat - originLat) * DEG * EARTH_R_M;
   const bearing = Math.atan2(east, north);
   return {

@@ -222,14 +222,23 @@ function contentHash(segments: VacSegment[]): string {
 // Try to turn an MQTT payload string into a ParsedVacMap. Order: plain JSON,
 // then deflate / gzip / deflate-raw decompression (best-effort). Any failure
 // short of a successful parse yields null — never throws.
-export async function decodeMapDataPayload(payloadString: string): Promise<ParsedVacMap | null> {
+//
+// Accepts the raw payload BYTES (preferred — the direct-MQTT bridge supplies
+// them as `payloadBytes`) or a string. A string from the direct bridge is
+// binary-safe by construction (non-UTF-8 payloads arrive one code point per
+// byte, see mqtt-ws.ts payloadToString), so `charCodeAt & 0xff` recovers the
+// exact bytes. NB the HA-relay path hands over whatever HA's JSON event
+// serialization produced; if HA decoded a binary payload lossily there, no
+// client-side step can recover it.
+export async function decodeMapDataPayload(payload: string | Uint8Array): Promise<ParsedVacMap | null> {
+  const isBytes = payload instanceof Uint8Array;
   // 1) Plain JSON (uncompressed sender / test fixtures).
-  const direct = tryParseJson(payloadString);
+  const text = isBytes ? utf8(payload) : payload;
+  const direct = text == null ? null : tryParseJson(text);
   if (direct) { const p = parseValetudoMap(direct); if (p) return p; }
 
-  // 2) Compressed. MQTT delivers bytes; the transport handed us a string, so
-  //    reconstruct the byte view latin1-style (each char is one byte).
-  const bytes = stringToBytes(payloadString);
+  // 2) Compressed.
+  const bytes = isBytes ? payload : stringToBytes(payload);
   const DS = (globalThis as { DecompressionStream?: typeof DecompressionStream }).DecompressionStream;
   if (!DS || !bytes.length) return null;
   for (const fmt of ['deflate', 'gzip', 'deflate-raw'] as const) {
@@ -248,6 +257,10 @@ function tryParseJson(s: string): unknown | null {
   try { return JSON.parse(t); } catch { return null; }
 }
 
+function utf8(b: Uint8Array): string | null {
+  try { return new TextDecoder().decode(b); } catch { return null; }
+}
+
 function stringToBytes(s: string): Uint8Array {
   const out = new Uint8Array(s.length);
   for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i) & 0xff;
@@ -259,8 +272,11 @@ async function inflate(
 ): Promise<string> {
   const stream = new DS(fmt);
   const writer = stream.writable.getWriter();
-  void writer.write(bytes as unknown as BufferSource);
-  void writer.close();
+  // A wrong format makes these writer promises REJECT alongside the reader —
+  // the read loop below surfaces the error; swallow the writer side so it
+  // can't escape as an unhandled rejection on every map message.
+  writer.write(bytes as unknown as BufferSource).catch(() => { /* surfaced via reader */ });
+  writer.close().catch(() => { /* surfaced via reader */ });
   const chunks: Uint8Array[] = [];
   const reader = stream.readable.getReader();
   for (;;) {

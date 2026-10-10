@@ -170,10 +170,22 @@
       stub.inject('frigate/events', evt('new', 'evX', [600, 300, 680, 500]));   // slot0, u=640 v=500
       ok('successor: slot0 evX', camT(p, 0)?.eventId === 'evX', camT(p, 0)?.eventId);
       // A NEW event id near the last position (<2500 mm) reuses the SAME slot
-      // instead of opening slot 1 (Frigate churns event ids for one object).
+      // instead of opening slot 1 (Frigate churns event ids for one object) —
+      // once the predecessor has gone quiet (≥ 1 s without an update).
+      NOW += 1500;
       stub.inject('frigate/events', evt('new', 'evY', [610, 310, 690, 510]));   // u=650 v=510 → ~ (4062,4250)
       ok('successor: slot0 → evY', camT(p, 0)?.eventId === 'evY', camT(p, 0)?.eventId);
       ok('successor: no slot 1 opened', !camT(p, 1), 'ok');
+    }
+
+    // ── two LIVE people standing close: separate slots (no successor steal) ───
+    {
+      const { p, stub } = await makePlanner();
+      stub.inject('frigate/events', evt('new', 'evA', [600, 300, 680, 500]));
+      NOW += 200;   // evA still live (updated < 1 s ago)
+      stub.inject('frigate/events', evt('new', 'evB', [610, 310, 690, 510]));
+      ok('two live: evA keeps slot0', camT(p, 0)?.eventId === 'evA', camT(p, 0)?.eventId);
+      ok('two live: evB gets its own slot', camT(p, 1)?.eventId === 'evB', camT(p, 1)?.eventId);
     }
 
     // ── skips: false_positive, unmatched camera, non-allowlist label ──────────

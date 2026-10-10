@@ -76,6 +76,26 @@ function byFixtureId<T extends { id: unknown }>(
   return arr?.find(x => x.id != null && String(x.id) === id);
 }
 
+// FNV-1a (32-bit) over a string → 8 hex chars. Cheap full-content hash for
+// dirty-key terms that would otherwise be truncated (and so blind to changes
+// past the cut) or embedded whole (a long string rebuilt + compared per tick).
+function fnvHex(str: string): string {
+  let h = 2166136261;
+  for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return (h >>> 0).toString(16);
+}
+// Integer-mm polygon hash (the `${x|0},${y|0}` resolution the point strings in
+// the dirty keys always used), without building the string.
+function pointsHash(pts: readonly { x: number; y: number }[] | undefined): string {
+  if (!pts) return '-';
+  let h = 2166136261;
+  for (const v of pts) {
+    h = Math.imul(h ^ (v.x | 0), 16777619);
+    h = Math.imul(h ^ (v.y | 0), 16777619);
+  }
+  return `${pts.length}.${(h >>> 0).toString(16)}`;
+}
+
 @customElement('diorama-three-view')
 export class ThreeView extends LitElement {
   @property({ attribute: false }) planner!: Planner;
@@ -727,6 +747,33 @@ export class ThreeView extends LitElement {
     this._ro?.disconnect();
     this._renderer?.destroy();
     this._renderer = null;
+    this._resetForReconnect();
+  }
+
+  // Everything below describes what the (now destroyed) renderer ALREADY HAS.
+  // A reattached card builds a FRESH renderer in connectedCallback → _setup, so
+  // every one of these must return to its first-connect value or the new scene
+  // stays empty: the dirty keys would still match and no update* would fire
+  // (weather / bg-text keys carry no configRev, so nothing would ever re-run
+  // them), and the camera would sit at the constructor's default pose because
+  // the boot-pose latch and URL template are already "done".
+  private _resetForReconnect(): void {
+    // Every `_key*` dirty key (reflective, so a key added later can't be missed).
+    const self = this as unknown as Record<string, unknown>;
+    for (const k of Object.keys(self)) {
+      if (k.startsWith('_key') && typeof self[k] === 'string') self[k] = '';
+    }
+    this._lastFloorId = null;          // re-runs the floor-switch hard reset
+    this._lastFloorW = this._lastFloorD = this._lastFloorElev = 0;
+    this._tplPending = true; this._tplStart = 0;
+    this._bootPoseDone = false; this._bootStart = 0;
+    this._bootFramedKey = ''; this._savedProbeKey = ''; this._userPosed = false;
+    this._persistAt = 0; this._persistSig = '';
+    this._simsCamOn = false;           // _setup re-applies the card override
+    this._modelText = null; this._modelLoading = false; this._modelMiss = '';
+    this._bgWindApplied = '';
+    this._memoStore.clear();
+    this._trigPrevOn.clear(); this._actionTrigAt.clear(); this._recentTrigs.length = 0;
   }
 
   private _lastFloorId: string | null = null;
@@ -1110,12 +1157,35 @@ export class ThreeView extends LitElement {
   private _keyCompass = '';
   private _keyWeather = '';
   private _keyBgText = '';
+  // Last wind pushed via setBgWind (`rad|kmh`), so an unchanged wind costs one
+  // string compare per tick.
+  private _bgWindApplied = '';
   private _keyFlights = '';
+  // Per-tick STRUCTURAL key parts (point strings, wall hash, the appliance /
+  // interactive furniture filter) memoized so an idle tick is string compares,
+  // not a rebuild of every polygon string. Valid while configRev, the floor id
+  // and the source array's identity + length all match — every edit path that
+  // changes them bumps configRev (emitConfig); identity + length also catch a
+  // list replaced / grown without one. Cleared on disconnect.
+  private _memoStore = new Map<string, { rev: number; fid: string; arr: unknown; len: number; v: unknown }>();
+  private _memo<T>(slot: string, arr: readonly unknown[] | undefined, build: () => T): T {
+    const p = this.planner, fid = p.store.currentFloorId ?? '';
+    const len = arr ? arr.length : -1;
+    const m = this._memoStore.get(slot);
+    if (m && m.rev === p.configRev && m.fid === fid && m.arr === arr && m.len === len) return m.v as T;
+    const v = build();
+    this._memoStore.set(slot, { rev: p.configRev, fid, arr, len, v });
+    return v;
+  }
   // Tier 2 glass-house transit puppets already triggered (`${personId}:${at}`) so
   // one transit spawns at most one puppet. Runtime-only; grows negligibly.
   private _spawnedPuppets = new Set<string>();
 
   private _tickOnce(): void {
+      // Step targets/robots ONLY when no 2D canvas is mounted to do it (a
+      // 3D-only Lovelace card). With a 2D canvas registered, its RAF is the
+      // single stepper (Planner.stepperViews).
+      if (!(this.planner.stepperViews > 0)) this.planner.advanceFrame(performance.now());
       const r = this._renderer; if (!r || !r.loaded) return;
       const p = this.planner;
       this._applyUrlTemplate();
@@ -1272,8 +1342,18 @@ export class ThreeView extends LitElement {
       // must be part of _keyFloor or the LED / open door wouldn't update on a
       // state change (configRev only bumps on structural edits). Compact hash of
       // each appliance's on/off + any bound fridge door sensor.
-      const applianceKey = f.furniture.map(fu => {
+      // The QUALIFYING set (def resolution + the kind predicates below) is pure
+      // config, so it is resolved once per configRev/floor (_memo) and only the
+      // live state terms run per tick.
+      const applQual = this._memo('applQual', f.furniture, () => f.furniture.filter(fu => {
         const def = resolveFurnitureDef(fu, p.store.customObjects);
+        const hasEvMail = isVehicleKind(fu.kind) || fu.kind === 'ev_charger' ||
+          fu.kind === 'mailbox' || !!fu.evCharger || !!fu.mailCount;
+        const isPlant = isDroopPlant(fu, p.store.customObjects) &&
+          (!!fu.moistureEntity || fu.plantDemoThirsty !== undefined);
+        return !(furnitureCat(def) !== 'appliance' && !isBinKind(fu.kind) && !isSpeakerKind(fu.kind) && !isScreenKind(fu.kind) && !isWetBathKind(fu.kind) && !hasEvMail && !isPlant && !isClimateApplianceKind(fu.kind));
+      }));
+      const applianceKey = applQual.map(fu => {
         // Bins (outdoor cat) also carry a bound/local state (full/empty) that
         // drives the 3D lid pivot inside updateFloor — fold it in too. Home-theater
         // speakers fold their media_player state so the driver pulse (built inside
@@ -1281,8 +1361,6 @@ export class ThreeView extends LitElement {
         // Vehicles (car ghost/solid + EV charge indicator), EV chargers (port LED
         // status + charging pulse), and mailboxes (count badge + flag/lid) also
         // carry bound state that drives their 3D build — fold them in too.
-        const hasEvMail = isVehicleKind(fu.kind) || fu.kind === 'ev_charger' ||
-          fu.kind === 'mailbox' || !!fu.evCharger || !!fu.mailCount;
         // Plant droop (#soil moisture): a bound (or demo-toggled) plant folds its
         // thirsty flip so the 3D foliage rebuild re-seeds the droop target (the ease
         // itself is per-frame). Unbound plants with no demo toggle never qualify.
@@ -1291,7 +1369,7 @@ export class ThreeView extends LitElement {
         // Projection screens are cat 'theater', not appliance, but their bound
         // state DRIVES the 3D build (the ceiling panel's retract target), so
         // they fold into the hash exactly like speakers (isSpeakerKind precedent).
-        if (furnitureCat(def) !== 'appliance' && !isBinKind(fu.kind) && !isSpeakerKind(fu.kind) && !isScreenKind(fu.kind) && !isWetBathKind(fu.kind) && !hasEvMail && !isPlant && !isClimateApplianceKind(fu.kind)) return '';
+        // (Membership is decided by the memoized `applQual` filter above.)
         const on = p.effectiveState(fu)?.state ?? '-';
         const door = fu.doorEntity ? stOf(fu.doorEntity) : '';
         // Per-device power glow (#8): bucket the live power reading to 50 W so the
@@ -1418,7 +1496,11 @@ export class ThreeView extends LitElement {
         `${layers.furniture !== false}|${layers.appliances !== false}|` +
         `${layers.bg !== false}|${layers.walls !== false}|` +
         `${layers.grid !== false}|` +
-        `${layers.labels !== false}|${applianceKey}|${roomOccKey}|${selCustomId}|${areaRoomKey}`;
+        `${layers.labels !== false}|${applianceKey}|${roomOccKey}|${selCustomId}|${areaRoomKey}|` +
+        // POST-MERGE glassHouse / wallCutaway: a card's live `scene3dOverride`
+        // edit changes them WITHOUT a configRev bump, and updateFloor bakes both
+        // (slab/wall/stairs build opacity, cutaway tags).
+        `${!!sc3o?.glassHouse}|${sc3o?.wallCutaway !== false}`;
       if (keyFloor !== this._keyFloor) {
         this._keyFloor = keyFloor;
         // Only copy when an area name actually supplies a label — the untouched
@@ -1578,6 +1660,8 @@ export class ThreeView extends LitElement {
       // Info cards: structural + bound entity reading + color/layer. Clock/date
       // cards carry a static `clk` token (their text repaints per-frame inside
       // the renderer, no rebuild); entity cards fold their live state string.
+      // A `relativeTime` entity card ("5 min ago") likewise re-formats inside
+      // the renderer as the clock moves — only a NEW state rebuilds it here.
       const keyInfo = `${p.configRev}|${p.store.layers2d?.info !== false}|` +
         (f.infoCards ?? []).map(ic =>
           (ic.displayMode ?? 'entity') !== 'entity'
@@ -1627,7 +1711,11 @@ export class ThreeView extends LitElement {
       // hash (count + first-event start bucket) so a refreshed agenda rebuilds
       // the plaque texture. Events come from the Planner poll, not entity state.
       const calList = f.calendarPanels ?? [];
-      const keyCalendar = `${p.configRev}|` + calList.map(cp => {
+      // LOCAL calendar day: the plaque paints a "today" header + relative event
+      // lines, so it must repaint at midnight even when no event changed.
+      let calDay = 0;
+      if (calList.length) { const d = new Date(); calDay = d.getFullYear() * 400 + d.getMonth() * 32 + d.getDate(); }
+      const keyCalendar = `${p.configRev}|${calDay}|` + calList.map(cp => {
         const evs = p.calendarEvents[cp.id] ?? [];
         return `${cp.id}:${Math.round(cp.x)}:${Math.round(cp.y)}:${Math.round(cp.rotation ?? 0)}:` +
           `${(cp.calendarIds ?? []).join('+')}:${evs.length}:${evs[0]?.start ?? '-'}:${evs[0]?.summary ?? '-'}`;
@@ -1722,7 +1810,9 @@ export class ThreeView extends LitElement {
         else if (content === 'weather') tvScreens.push({ id: fu.id, content });
       }
       const screenKey = tvScreens.map(s => s.content === 'news'
-        ? `${s.id}:news:${(s.headlines ?? []).join('¦').slice(0, 120)}`
+        // Hash the FULL headline list (a 120-char truncation left every change
+        // past the first headline or two invisible — the ticker never rebuilt).
+        ? `${s.id}:news:${(s.headlines ?? []).length}:${fnvHex((s.headlines ?? []).join('¦'))}`
         : `${s.id}:weather:${tvWn?.condition ?? '-'}:${typeof tvWn?.tempC === 'number' ? Math.round(tvWn.tempC) : '-'}:${p.forecastDaily?.length ?? 0}:${p.forecastDaily?.[0]?.temperature ?? '-'}`).join('|');
 
       // Now-playing cards (#11): sprites above media_player-bound furniture that
@@ -1817,8 +1907,9 @@ export class ThreeView extends LitElement {
       // Presence zones (#5): structural + bound occupancy state. Rides the zones
       // layer. Rebuild on shape edit / bind / occupancy flip.
       const pzoneList = f.presenceZones ?? [];
-      const keyPzones = `${p.configRev}|` + pzoneList.map(z =>
-        `${z.id}:${z.hidden ? 'h' : ''}:${stOf(z.entity_id)}:${z.points.map(v => `${v.x | 0},${v.y | 0}`).join(';')}`).join('|');
+      const pzStruct = this._memo('pzones', pzoneList, () => pzoneList.map(z =>
+        `${z.id}:${z.hidden ? 'h' : ''}:${z.points.map(v => `${v.x | 0},${v.y | 0}`).join(';')}`).join('|'));
+      const keyPzones = `${p.configRev}|${pzStruct}|` + pzoneList.map(z => stOf(z.entity_id)).join('|');
       if (keyPzones !== this._keyPzones) {
         this._keyPzones = keyPzones;
         r.updatePresenceZones(pzoneList, id => states[id] || null);
@@ -1830,8 +1921,8 @@ export class ThreeView extends LitElement {
       // yard-fill patch is the floor rect minus wall loops — configRev covers a
       // wall/size edit; the wall hash is folded for belt-and-braces).
       const groundList = f.groundAreas ?? [];
-      const wallHash = (f.walls ?? []).map(w =>
-        `${w.kind ?? ''}:${w.points.map(v => `${v.x | 0},${v.y | 0}`).join(',')}`).join(';');
+      const wallHash = this._memo('walls', f.walls, () => fnvHex((f.walls ?? []).map(w =>
+        `${w.kind ?? ''}:${w.points.map(v => `${v.x | 0},${v.y | 0}`).join(',')}`).join(';')));
       // groundLevelMm shifts the yard-fill underlay (the surrounding grade).
       // This is the EFFECTIVE level (user offset − active floor elevation, see
       // the injection point at scMerged) so the yard grade stays welded to the
@@ -1839,8 +1930,12 @@ export class ThreeView extends LitElement {
       // configRev covers a scene3d/elevation edit, the explicit key term
       // documents the dependency and covers a floor switch.
       const groundLevelMm = effGroundMm;
-      const keyGround = `${p.configRev}|${f.yardFill ?? ''}|${f.w | 0}x${f.d | 0}|${wallHash}|${groundLevelMm}|` + groundList.map(g =>
-        `${g.id}:${g.kind}:${g.elevationMm ?? 0}:${g.hidden ? 'h' : ''}:${g.points.map(v => `${v.x | 0},${v.y | 0}`).join(';')}`).join('|');
+      const groundHash = this._memo('ground', groundList, () => fnvHex(groundList.map(g =>
+        `${g.id}:${g.kind}:${g.elevationMm ?? 0}:${g.hidden ? 'h' : ''}:${g.points.map(v => `${v.x | 0},${v.y | 0}`).join(';')}`).join('|')));
+      // glassHouse is the POST-MERGE value (a card override changes it with no
+      // configRev bump; updateGroundAreas bakes the translucent build).
+      const keyGround = `${p.configRev}|${f.yardFill ?? ''}|${f.w | 0}x${f.d | 0}|${wallHash}|${groundLevelMm}|` +
+        `${!!scBase.glassHouse}|${groundHash}`;
       if (keyGround !== this._keyGround) {
         this._keyGround = keyGround;
         r.updateGroundAreas(groundList, f.yardFill, f.w, f.d, f.walls ?? [], !!scBase.glassHouse, groundLevelMm);
@@ -1856,11 +1951,16 @@ export class ThreeView extends LitElement {
       // state every frame), so folding its RAW state in re-keyed the whole basin
       // rebuild on 0.1° sensor chatter for no visual change at all.
       const poolList = f.pools ?? [];
-      const keyPool = `${p.configRev}|` + poolList.map(pl => {
+      // Structural half (geometry / kind / colour) memoized per configRev; the
+      // bound-state half below runs per tick. glassHouse is the POST-MERGE value
+      // (a card override changes it with no configRev bump).
+      const keyPool = `${p.configRev}|${!!scBase.glassHouse}|` + this._memo('pools', poolList, () => fnvHex(poolList.map(pl =>
+        `${pl.id}:${pl.kind}:${pl.hidden ? 'h' : ''}:${pl.depthMm ?? 0}:${pl.raisedMm ?? 0}:${poolWaterColor(pl)}:${pl.points.map(v => `${v.x | 0},${v.y | 0}`).join(';')}`).join('|'))) +
+        '|' + poolList.map(pl => {
         const hs = p.poolHeaterStateOf(pl);
         const pump = p.poolPumpOnOf(pl) ? 1 : 0;
         const litBits = (pl.lightEntities ?? []).map(id => states[id]?.state === 'on' ? 1 : 0).join('');
-        return `${pl.id}:${pl.kind}:${pl.hidden ? 'h' : ''}:${hs}:${pump}:${litBits}:${pl.depthMm ?? 0}:${pl.raisedMm ?? 0}:${poolWaterColor(pl)}:${pl.points.map(v => `${v.x | 0},${v.y | 0}`).join(';')}`;
+        return `${hs}:${pump}:${litBits}`;
       }).join('|');
       if (keyPool !== this._keyPool) {
         this._keyPool = keyPool;
@@ -1875,7 +1975,7 @@ export class ThreeView extends LitElement {
       // Rides the `ground` layer. Also re-folds the ground/terrain hash so a head
       // on a terrace re-grounds when the terrace elevation changes.
       const sprList = f.sprinklerZones ?? [];
-      const keySprinklers = `${p.configRev}|${keyGround}|` + sprList.map(z => {
+      const keySprinklers = `${p.configRev}|${groundLevelMm}|${groundHash}|` + sprList.map(z => {
         const running = sprinklerRunning(p.effectiveState(z));
         return `${z.id}:${Math.round(z.x)}:${Math.round(z.y)}:${sprinklerHeadKind(z)}:` +
           `${sprinklerArcDeg(z)}:${sprinklerRadius(z)}:${Math.round(sprinklerRotation(z))}:${running ? 1 : 0}`;
@@ -1954,10 +2054,16 @@ export class ThreeView extends LitElement {
       const gpsPins = geoOn ? p.gpsPins : [];
       const gpsLandmarks = geoOn ? p.geoLandmarks().filter(l => !l.hidden) : [];
       const geoEvents = geoOn ? p.geoEventPins : [];
+      // A `beyond` pin is CLAMPED to the boundary ring, so its position bucket
+      // barely moves while the "· 3 km NE" label keeps changing — fold a 100 m
+      // distance bucket + a 10° bearing bucket for those pins so the label
+      // actually repaints. Geo events carry their planner-composed label (which
+      // holds the same distance/direction text) for the same reason.
       const keyGps = `${p.configRev}|${geoOn}|` +
-        gpsPins.map(pn => `${pn.personId}:${Math.round(pn.clampedX / 500)}:${Math.round(pn.clampedY / 500)}:${pn.zone}:${pn.stale ? 1 : 0}`).join(',') + '|' +
+        gpsPins.map(pn => `${pn.personId}:${Math.round(pn.clampedX / 500)}:${Math.round(pn.clampedY / 500)}:${pn.zone}:${pn.stale ? 1 : 0}` +
+          (pn.zone === 'beyond' ? `:${Math.round(pn.distanceM / 100)}:${Math.round(pn.bearingDeg / 10)}` : '')).join(',') + '|' +
         gpsLandmarks.map(l => `${l.id}:${Math.round(l.x / 500)}:${Math.round(l.y / 500)}`).join(',') + '|' +
-        geoEvents.map(ev => `${ev.key}:${Math.round(ev.clampedX / 500)}:${Math.round(ev.clampedY / 500)}`).join(',');
+        geoEvents.map(ev => `${ev.key}:${Math.round(ev.clampedX / 500)}:${Math.round(ev.clampedY / 500)}:${ev.label}`).join(',');
       if (keyGps !== this._keyGps) {
         this._keyGps = keyGps;
         const pinsW: GpsPinWorld[] = gpsPins.map(pn => ({
@@ -2044,6 +2150,13 @@ export class ThreeView extends LitElement {
       // for every other config — and still NO configRev, so unrelated churn keeps
       // leaving the rigs alone.
       const bgGroundKey = bgEntries.some(e => e.mode === 'grass') ? bgGroundInkKey(f) : '';
+      // Ground-area ELEVATIONS too (grass entries only): a decal is built at the
+      // terrace height under it (_groundYAt / the area's own elevation), so a
+      // terrace raised or lowered beneath existing ground writing must re-base
+      // it — the ink key above hashes kind + bbox, not height. (groundLevelMm is
+      // already in the key prefix.)
+      const bgGroundElevKey = bgGroundKey
+        ? (f.groundAreas ?? []).map(a => a.elevationMm ?? 0).join(',') : '';
       // A banner entry may tow a VEHICLE-PACK model, whose geometry lives behind
       // the loaded/active pack config — so loading, unloading or deactivating a
       // pack must rebuild the rig. `vehicleRegistryRev()` is the narrow monotonic
@@ -2056,9 +2169,14 @@ export class ThreeView extends LitElement {
       const keyBgText = `${f.id}|${f.w | 0}x${f.d | 0}|${bgStorm ? 's' : '-'}|${groundLevelMm}|${wallHash}|`
         + `${bgTextOn ? 'v' : 'h'}|${bgVehRev}|`
         + bgEntries.map(e => {
+            // Area-bound decal: the bbox fit rect AND the polygon itself (the
+            // decal is a ShapeGeometry OF that polygon — a vertex drag that keeps
+            // the bbox, e.g. moving an interior notch, must still rebuild) AND
+            // the area's own elevation (the decal builds at that height).
             const ga = e.grassArea
               ? `${Math.round(e.grassArea.cx / 100)},${Math.round(e.grassArea.cy / 100)},`
-                + `${Math.round(e.grassArea.w / 100)},${Math.round(e.grassArea.h / 100)}`
+                + `${Math.round(e.grassArea.w / 100)},${Math.round(e.grassArea.h / 100)},`
+                + `${pointsHash(e.grassArea.points)},${e.grassArea.elevationMm ?? 0}`
               : '';
             // aircraft (the banner-plane silhouette) + scale are BUILD-time
             // inputs like maxCars — both must rebuild the rig when they change.
@@ -2078,7 +2196,7 @@ export class ThreeView extends LitElement {
               + `:${e.faceCamera === false ? 'f' : ''}:${e.rotationDeg ?? ''}`
               + `:${e.colorMain ?? ''}:${e.colorDetail ?? ''}`
               + `:${e.bannerBg ?? ''}:${e.bannerText ?? ''}:${e.bannerFrame ?? ''}`
-              + (e.mode === 'grass' ? `:${bgGroundKey}` : '')
+              + (e.mode === 'grass' ? `:${bgGroundKey}:${bgGroundElevKey}` : '')
               // ONE extension point for every LATER bg-text build input (the
               // operating region + trackside scenery today, road vehicles next),
               // so this template stops having to grow. Returns '' for an entry
@@ -2090,6 +2208,18 @@ export class ThreeView extends LitElement {
         this._keyBgText = keyBgText;
         r.updateBgTexts(bgEntries, bgStorm, fx.windBearingPlanRad ?? 0, fx.windKmh,
                         { areas: f.groundAreas, yardFill: f.yardFill });
+      }
+      // Wind is NOT a build input (only the per-frame sky drift reads it), so it
+      // stays out of the key and is pushed straight to the renderer when it
+      // moves. The build above also stores it, so the guard string is derived
+      // from the same two values either way. Stale-chunk safe (optional call).
+      {
+        const wr = fx.windBearingPlanRad ?? 0, wk = fx.windKmh ?? 0;
+        const wSig = `${wr.toFixed(3)}|${wk.toFixed(1)}`;
+        if (wSig !== this._bgWindApplied) {
+          this._bgWindApplied = wSig;
+          r.setBgWind?.(wr, wk);
+        }
       }
 
       // Live aircraft (ADS-B) + the ISS — roadmap P4. Poll data lives on the
@@ -2648,14 +2778,21 @@ export class ThreeView extends LitElement {
         interactive.push({ id: 'S' + sw.id, x: sw.x, y: sw.y, ctrl: 'switch',
           bound: sw.entity_id != null, on: st?.state === 'on' });
       }
-      for (const fu of f.furniture) {
-        const def = resolveFurnitureDef(fu, p.store.customObjects);
-        if (furnitureCat(def) !== 'appliance') continue;   // fridge/stove/dishwasher/washer/dryer/microwave/tv
+      // Appliance filter + front normal are config-only → memoized (_memo).
+      const interFu = this._memo('interFu', f.furniture, () => {
+        const out: { fu: typeof f.furniture[number]; front: { x: number; y: number } | null }[] = [];
+        for (const fu of f.furniture) {
+          const def = resolveFurnitureDef(fu, p.store.customObjects);
+          if (furnitureCat(def) !== 'appliance') continue;   // fridge/stove/dishwasher/washer/dryer/microwave/tv
+          // Oriented pieces carry their functional-front normal so the AI
+          // controller walks up to the FRONT and only reaches from there (a
+          // fridge must not be opened from behind). Symmetric kinds: null.
+          out.push({ fu, front: hasFunctionalFront(def) ? frontVectorPlan(fu.rotation) : null });
+        }
+        return out;
+      });
+      for (const { fu, front } of interFu) {
         if (!p.avatarMayActuate(fu.id)) continue;
-        // Oriented pieces carry their functional-front normal so the AI
-        // controller walks up to the FRONT and only reaches from there (a fridge
-        // must not be opened from behind). Symmetric kinds leave it undefined.
-        const front = hasFunctionalFront(def) ? frontVectorPlan(fu.rotation) : null;
         interactive.push({ id: 'F' + fu.id, x: fu.x, y: fu.y, ctrl: 'media', fkind: furnitureKind(fu),
           bound: fu.entity_id != null, on: entityOn[fu.id] === true,
           ...(front ? { fnx: front.x, fny: front.y } : {}) });
@@ -2682,6 +2819,12 @@ export class ThreeView extends LitElement {
   private _modelText: { floorId: string; rev: number; obj: string; mtl: string | null } | null = null;
   private _modelLoading = false;
   private _keyModel = '';
+  // `${floorId}|${rev}` whose IndexedDB lookup came back EMPTY. The OBJ text is
+  // per-browser (only the placement metadata syncs), so on every OTHER device
+  // `model3d` exists with nothing stored — without this the next tick retried,
+  // i.e. an IDB open/close at frame rate. A new import bumps `rev`, which
+  // changes the key and retries once.
+  private _modelMiss = '';
 
   // Tier 2 glass-house transit puppet trigger. For a FRESH viaLink transit that
   // touches the current floor (either direction), build the puppet spec from the
@@ -2745,15 +2888,18 @@ export class ThreeView extends LitElement {
     const haveText = this._modelText &&
       this._modelText.floorId === f.id && this._modelText.rev === meta.rev;
     if (!haveText) {
-      if (!this._modelLoading) {
+      const missKey = `${f.id}|${meta.rev}`;
+      if (!this._modelLoading && this._modelMiss !== missKey) {
         this._modelLoading = true;
         loadModel(f.id).then(blob => {
           this._modelLoading = false;
           if (blob) {
             this._modelText = { floorId: f.id, rev: meta.rev, obj: blob.obj, mtl: blob.mtl };
             this._keyModel = '';  // force rebuild next tick
+          } else {
+            this._modelMiss = missKey;   // nothing stored on this device — stop asking
           }
-        }).catch(() => { this._modelLoading = false; });
+        }).catch(() => { this._modelLoading = false; this._modelMiss = missKey; });
       }
       return;
     }

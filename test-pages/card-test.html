@@ -226,6 +226,27 @@
     } catch (err) { threeThrew = true; }
     ok('i: 3D card mounts three-view, no sync throw', !threeThrew && !!card3d.querySelector('diorama-three-view'), '');
 
+    // ── (i2) a DETACHED + REATTACHED 3D card rebuilds its scene ───────────────
+    // Regression: reconnect built a FRESH renderer but kept every `_key*` dirty
+    // key (and the floor id / boot-pose latches) from the destroyed one, so no
+    // update* ever fired and the reattached card showed an EMPTY scene.
+    {
+      const tv3 = card3d.querySelector('diorama-three-view');
+      const floorKids = () => tv3?._renderer?._floorGroup?.children?.length ?? 0;
+      await waitFor(() => !!tv3?._renderer?.loaded && floorKids() > 0, 2000);
+      const before = floorKids();
+      ok('i2: 3D card floor group built before detach', before > 0, String(before));
+      const host3 = card3d.parentElement;
+      const oldR = tv3?._renderer;
+      host3.remove();                                   // disconnectedCallback → renderer destroyed
+      await sleep(20);
+      ok('i2: detach destroys the renderer', tv3?._renderer == null, '');
+      stage.appendChild(host3);                         // connectedCallback → fresh renderer
+      await waitFor(() => !!tv3?._renderer?.loaded && tv3._renderer !== oldR && floorKids() > 0, 2000);
+      ok('i2: reattached 3D card builds a NEW renderer', !!tv3?._renderer && tv3._renderer !== oldR, '');
+      ok('i2: reattached 3D card floor group has children again', floorKids() > 0, String(floorKids()));
+    }
+
     // ── (j) `type` survives the visual-editor round-trip ──────────────────────
     // Regression (user-reported): validateCardConfig rebuilt the config without
     // `type`, so every editor edit emitted a type-less config and HA threw

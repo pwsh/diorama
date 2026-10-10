@@ -7,13 +7,13 @@ execution.
 
 ## Dependencies
 
-| Package | At audit | Latest | Decision |
+| Package | At audit | Now (2026-09-26) | Decision |
 |---|---|---|---|
-| vite | 8.0.16 | 8.1.5 | **ACTION** — in-range minor; gated batch with three |
-| three + @types/three | 0.184 | 0.185.1 | **ACTION** — minor, but three lands breaking changes in minors: full renderer-page gate run required |
+| vite | 8.0.16 | 8.3.1 | **DONE** — 8.1.5 (v0.41.0), 8.2.1 (2026-08-19), 8.3.1 (2026-09-26); CI now enforces the three build invariants after every bump |
+| three + @types/three | 0.184 | 0.186.1 / 0.186.0 | **DONE** — 0.185.1 (v0.41.0), 0.186.1 (2026-09-26, no source changes; terrain / flights-render / camera gates re-run green). Still a full renderer-page gate run per minor |
 | typescript | 5.9.3 | 7.0.2 | ~~HOLD 7.x — EVALUATE 6.x~~ **DONE in two steps**: 6.0.3 bridge (v0.42.0, one code fix), then 7.0.2 (2026-07-29, zero changes, typecheck ~6× faster) — the staged path worked exactly as designed |
-| lit / esbuild / gifenc | current | — | No action |
-| CI actions (checkout@v4, setup-node@v4/Node 22, gh-release@v2) | current gen | — | No action |
+| lit / esbuild / gifenc | current | lit 3.3.3 / esbuild 0.28.2 / gifenc unchanged | No action beyond the esbuild patch |
+| CI actions | checkout@v4, setup-node@v4/Node 22, gh-release@v2 | checkout@v5, setup-node@v5 (job still Node 22), action-gh-release@v3 | **DONE 2026-09-26 — forced**: GitHub removed the node20 action runtime on 2026-09-23; all three are `using: node24`. Never pin back |
 
 ## DO ACTION (ranked value : effort)
 
@@ -91,6 +91,14 @@ execution.
   defs weren't resolved (`resolveFurnitureDef` now threaded); inline kind
   lists replaced with `isStairsKind`/`isRiserKind`. FLOORPLANS 399/399
   byte-identical.
+- 2026-09-26: **review batch** (uncommitted at time of writing) — deps above +
+  node24 Actions + a CI "Verify build invariants" step; HA client lifecycle
+  (pending settled on close, subscription replay, `close()`, `Planner.dispose()`,
+  panel/card teardown); `toggleServiceFor` dispatch; screen-px click-vs-drag +
+  universal layer-gated hit tests; binary-safe MQTT + keepalive watchdog;
+  Set-based `_isSlowEntity` + per-detector gating, A* scratch/failure cache,
+  exact-exp eases; commit-on-change numeric inputs; thumbs LRU cap. CLAUDE.md
+  amended in place under "(2026-09-26 review batch)" markers.
 - Noted, unresolved: `FURNITURE_KINDS.birch_tree.color` `#7fbf4d` vs shipped
   foliage `#8fc95a` (possible intentional two-tier); plants-landscaping §8
   TOC anchor mismatch (pre-existing).

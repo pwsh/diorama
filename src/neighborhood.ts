@@ -87,12 +87,19 @@ export function tilesForRadius(lat: number, lon: number, radiusM: number, zoom: 
   const dLon = r / (111320 * Math.max(0.05, Math.cos(clampLat(lat) * DEG)));
   const nw = lonLatToTile(lat + dLat, lon - dLon, zoom);
   const se = lonLatToTile(lat - dLat, lon + dLon, zoom);
-  const minX = Math.min(nw.x, se.x), maxX = Math.max(nw.x, se.x);
+  const n = Math.pow(2, zoom);
+  // Walk x EASTWARD from the west tile to the east tile, modulo 2^z. Near the
+  // antimeridian the west edge wraps to a HIGH x and the east edge to a LOW x;
+  // min/max then spanned the whole world the wrong way round (49 149 tiles for
+  // a 3 km radius at 179.99°E, z14).
+  const countX = (2 * dLon >= 360) ? n : Math.min(n, (((se.x - nw.x) % n) + n) % n + 1);
   const minY = Math.min(nw.y, se.y), maxY = Math.max(nw.y, se.y);
   const out: TileAddr[] = [];
-  for (let x = minX; x <= maxX; x++)
+  for (let k = 0; k < countX; k++) {
+    const x = wrapX(nw.x + k, n);
     for (let y = minY; y <= maxY; y++)
       out.push({ z: zoom, x, y });
+  }
   return out;
 }
 

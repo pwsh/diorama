@@ -1,8 +1,10 @@
 import { LitElement, html, nothing } from 'lit';
 import { property, state } from 'lit/decorators.js';
 import { customElement } from './define.js';
+import { installNumCommit } from './num-commit.js';
 import { CHANGELOG, CHANGELOG_DISPLAY_COUNT } from '../changelog.js';
 import { finishZoneEdit, cancelZoneEdit } from '../canvas-interact.js';
+import { floorContentBbox, GRID_MM } from '../geometry.js';
 import { alarmStateColor, hvacModeColor, climateFeature, CLIMATE_FEATURE, climateTempUnit, fmtTempNum, clampSetpoint, resolvePivotMode, floorsDisplayOrder } from '../geometry.js';
 import { CONDITION_GLYPH, CONDITION_LABEL, tempText, weatherEffectEnabled, worstAlertSeverity } from '../weather.js';
 import type { HaCondition } from '../weather.js';
@@ -33,12 +35,16 @@ import type {
   FlightPoint, FlightGlowRule, FlightGlowPattern, FlightGlowCriteria, FlightSource,
 } from '../flights.js';
 import { aircraftArchetype } from '../aircraft-types.js';
+import { sharedWriteYaml, SHARED_WRITE_COMMAND } from '../shared-config.js';
 import {
   airlineForCallsign, militaryCallsignInfo, spokenCallsign, usMilitaryHexHeuristic,
 } from '../airlines.js';
 import { compass8 } from '../geo.js';
 
 // ── Floor settings modal ─────────────────────────────────────────────────
+// Numeric fields commit on `change`; see num-commit.ts.
+installNumCommit();
+
 @customElement('diorama-floor-modal')
 export class FloorModal extends LitElement {
   @property({ attribute: false }) planner!: Planner;
@@ -70,12 +76,12 @@ export class FloorModal extends LitElement {
             <input type="text" .value=${this._name} @input=${(e: Event) => this._name = (e.target as HTMLInputElement).value}>
           </div>
           <div class="row"><label>Width (mm)</label>
-            <input type="number" min="1000" step="100" .value=${String(this._w)}
-                   @input=${(e: Event) => this._w = parseFloat((e.target as HTMLInputElement).value) || 8000}>
+            <input type="number" min="1000" step="100" .value=${String(this._w)} data-model=${String(this._w)}
+                   @change=${(e: Event) => this._w = parseFloat((e.target as HTMLInputElement).value) || 8000}>
           </div>
           <div class="row"><label>Depth (mm)</label>
-            <input type="number" min="1000" step="100" .value=${String(this._d)}
-                   @input=${(e: Event) => this._d = parseFloat((e.target as HTMLInputElement).value) || 6000}>
+            <input type="number" min="1000" step="100" .value=${String(this._d)} data-model=${String(this._d)}
+                   @change=${(e: Event) => this._d = parseFloat((e.target as HTMLInputElement).value) || 6000}>
           </div>
           <div style="display:flex;gap:6px;margin-top:14px;justify-content:flex-end">
             <button class="btn" @click=${() => this.open = false}>Cancel</button>
@@ -370,6 +376,9 @@ export class EntityPicker extends LitElement {
 // fixtures, an optional bound fan.* entity (power + speed). fan_light fixtures
 // with both bound show both sections; a pure fan fixture shows only the fan
 // section (entityId null).
+const hexToRgbTriple = (v: string): number[] =>
+  [parseInt(v.slice(1, 3), 16), parseInt(v.slice(3, 5), 16), parseInt(v.slice(5, 7), 16)];
+
 @customElement('diorama-light-config')
 export class LightConfig extends LitElement {
   @property({ attribute: false }) planner!: Planner;
@@ -398,9 +407,52 @@ export class LightConfig extends LitElement {
   private _pointerUp = () => { if (this._interacting) { this._interacting = false; this.requestUpdate(); } };
 
   show(entityId: string | null, fanEntityId: string | null = null): void {
+    this._flushLight();   // a pending slider value belongs to the PREVIOUS entity
     this._entityId = entityId ?? '';
     this._fanEntityId = fanEntityId;
     this.open = true;
+  }
+
+  // Slider → light.turn_on THROTTLE. A range fires `input` at pointer-move rate
+  // (60+ Hz); one service call per event floods HA and the bulb's radio (Zigbee
+  // groups visibly lag and replay the whole drag). Leading + trailing edge at
+  // LIGHT_THROTTLE_MS: the first step sends at once, later steps coalesce into
+  // one pending call, and the slider's `change` (release) flushes the final
+  // value immediately. Pending data is keyed to the entity it was captured for.
+  private static readonly LIGHT_THROTTLE_MS = 150;
+  private _lightPending: { entityId: string; data: Record<string, unknown> } | null = null;
+  private _lightTimer: ReturnType<typeof setTimeout> | null = null;
+  private _lightLastSent = -Infinity;
+  private _sendLight(entityId: string, data: Record<string, unknown>): void {
+    this._lightLastSent = performance.now();
+    void this.planner.hass?.callService('light', 'turn_on', { entity_id: entityId, ...data });
+  }
+  private _flushLight(): void {
+    if (this._lightTimer != null) { clearTimeout(this._lightTimer); this._lightTimer = null; }
+    const pend = this._lightPending;
+    this._lightPending = null;
+    if (pend) this._sendLight(pend.entityId, pend.data);
+  }
+  private _queueLight(data: Record<string, unknown>, final = false): void {
+    const entityId = this._entityId;
+    if (!entityId) return;
+    if (this._lightPending && this._lightPending.entityId !== entityId) this._flushLight();
+    // rgb_color and color_temp_kelvin are mutually exclusive in one turn_on
+    // call (HA rejects "two or more values in the same group") — latest wins.
+    const merged: Record<string, unknown> = { ...(this._lightPending?.data ?? {}) };
+    if ('rgb_color' in data) delete merged.color_temp_kelvin;
+    if ('color_temp_kelvin' in data) delete merged.rgb_color;
+    this._lightPending = { entityId, data: { ...merged, ...data } };
+    const wait = LightConfig.LIGHT_THROTTLE_MS - (performance.now() - this._lightLastSent);
+    if (final || wait <= 0) { this._flushLight(); return; }
+    if (this._lightTimer == null) {
+      this._lightTimer = setTimeout(() => { this._lightTimer = null; this._flushLight(); }, wait);
+    }
+  }
+
+  protected override updated(changed: Map<string, unknown>): void {
+    super.updated?.(changed);
+    if (changed.has('open') && !this.open) this._flushLight();
   }
 
   override render() {
@@ -423,8 +475,8 @@ export class LightConfig extends LitElement {
                : Math.round((minK + maxK) / 2);
     const isOn = st?.state === 'on';
     const hex = '#' + curRgb.map(v => Math.max(0, Math.min(255, v)).toString(16).padStart(2, '0')).join('');
-    const call = (data: Record<string, unknown>) =>
-      this.planner.hass?.callService('light', 'turn_on', { entity_id: this._entityId, ...data });
+    const call = (data: Record<string, unknown>) => this._queueLight(data);
+    const commit = (data: Record<string, unknown>) => this._queueLight(data, true);
     const grab = () => { this._interacting = true; };
 
     // Fan section (fan.* entity). percentage 0–100, step 5.
@@ -460,7 +512,8 @@ export class LightConfig extends LitElement {
             ${supportsBri ? html`
               <input type="range" min="1" max="255" .value=${String(curBri)}
                      style="flex:1" @pointerdown=${grab}
-                     @input=${(e: Event) => call({ brightness: parseInt((e.target as HTMLInputElement).value) })}>
+                     @input=${(e: Event) => call({ brightness: parseInt((e.target as HTMLInputElement).value) })}
+                     @change=${(e: Event) => commit({ brightness: parseInt((e.target as HTMLInputElement).value) })}>
               <span style="font-size:11px;font-family:monospace;min-width:40px;text-align:right">
                 ${Math.round(curBri / 255 * 100)}%
               </span>
@@ -471,10 +524,8 @@ export class LightConfig extends LitElement {
             ${supportsRgb ? html`
               <input type="color" .value=${hex}
                      style="width:40px;height:28px;border:none;background:transparent;cursor:pointer;padding:0"
-                     @input=${(e: Event) => {
-                       const v = (e.target as HTMLInputElement).value;
-                       call({ rgb_color: [parseInt(v.slice(1,3), 16), parseInt(v.slice(3,5), 16), parseInt(v.slice(5,7), 16)] });
-                     }}>
+                     @input=${(e: Event) => call({ rgb_color: hexToRgbTriple((e.target as HTMLInputElement).value) })}
+                     @change=${(e: Event) => commit({ rgb_color: hexToRgbTriple((e.target as HTMLInputElement).value) })}>
               <span style="font-size:11px;font-family:monospace">${hex.toUpperCase()}</span>
             ` : html`<span style="font-size:11px;color:var(--text-dim);font-style:italic">not supported</span>`}
           </div>
@@ -483,7 +534,8 @@ export class LightConfig extends LitElement {
             ${supportsTemp ? html`
               <input type="range" min=${minK} max=${maxK} step="50" .value=${String(curK)}
                      style="flex:1" @pointerdown=${grab}
-                     @input=${(e: Event) => call({ color_temp_kelvin: parseInt((e.target as HTMLInputElement).value) })}>
+                     @input=${(e: Event) => call({ color_temp_kelvin: parseInt((e.target as HTMLInputElement).value) })}
+                     @change=${(e: Event) => commit({ color_temp_kelvin: parseInt((e.target as HTMLInputElement).value) })}>
               <span style="font-size:11px;font-family:monospace">${curK} K</span>
             ` : html`<span style="font-size:11px;color:var(--text-dim);font-style:italic">not supported</span>`}
           </div>
@@ -755,13 +807,17 @@ export class ThermostatModal extends LitElement {
     super.disconnectedCallback();
     this.planner.removeEventListener('config', this._tick);
     this.planner.removeEventListener('live', this._tick);
+    this._flushSend();
   }
   private _tick = () => { if (this.open) this.requestUpdate(); };
 
   show(id: string): void {
+    // A setpoint tapped < 400 ms ago is still waiting on its debounce. FLUSH it
+    // (to the thermostat it was tapped on) rather than dropping it — reopening
+    // or switching thermostats must never silently lose the user's last tap.
+    this._flushSend();
     this._id = id;
     this._pend = this._pendLo = this._pendHi = null;
-    if (this._sendTimer) { clearTimeout(this._sendTimer); this._sendTimer = null; }
     this.open = true;
   }
 
@@ -769,22 +825,30 @@ export class ThermostatModal extends LitElement {
     return (this.planner.floor().thermostats ?? []).find(t => t.id === this._id) ?? null;
   }
 
-  // Debounced single-setpoint send (optimistic display holds until reopen).
+  // Debounced setpoint send (optimistic display holds until reopen). The pending
+  // call CAPTURES the thermostat id at tap time, so a flush after show() switched
+  // to another unit still reaches the one the user adjusted.
+  private _sendFn: (() => void) | null = null;
+  private _flushSend(): void {
+    if (this._sendTimer) { clearTimeout(this._sendTimer); this._sendTimer = null; }
+    const fn = this._sendFn;
+    this._sendFn = null;
+    fn?.();
+  }
+  private _debounceSend(fn: () => void): void {
+    if (this._sendTimer) clearTimeout(this._sendTimer);
+    this._sendFn = fn;
+    this._sendTimer = window.setTimeout(() => { this._sendTimer = null; this._flushSend(); }, 400);
+  }
   private _scheduleTemp(temp: number): void {
     this._pend = temp;
-    if (this._sendTimer) clearTimeout(this._sendTimer);
-    this._sendTimer = window.setTimeout(() => {
-      this._sendTimer = null;
-      this.planner.setThermostatTemp(this._id, temp);
-    }, 400);
+    const id = this._id;
+    this._debounceSend(() => this.planner.setThermostatTemp(id, temp));
   }
   private _scheduleRange(lo: number, hi: number): void {
     this._pendLo = lo; this._pendHi = hi;
-    if (this._sendTimer) clearTimeout(this._sendTimer);
-    this._sendTimer = window.setTimeout(() => {
-      this._sendTimer = null;
-      this.planner.setThermostatTemp(this._id, 0, lo, hi);
-    }, 400);
+    const id = this._id;
+    this._debounceSend(() => this.planner.setThermostatTemp(id, 0, lo, hi));
   }
 
   override render() {
@@ -1222,6 +1286,10 @@ export class SettingsDrawer extends LitElement {
   @state() private _sh3dImportFurniture = true;
   @state() private _sh3dWarnings: string[] = [];
   @state() private _sh3dBusy = false;
+  // Shared-configurations sub-block: setup expander + in-flight op label.
+  @state() private _sharedSetupOpen = false;
+  @state() private _sharedBusy: string | null = null;
+  @state() private _sharedMsg: string | null = null;
   // Which pack rows have their member list expanded (runtime-only).
   private _packExpanded = new Set<string>();
   // Same, for the Vehicles tab's pack rows (separate set — the two trees can
@@ -1454,7 +1522,7 @@ export class SettingsDrawer extends LitElement {
             <div class="row" style="align-items:center">
               <label style="font-size:12px;color:var(--text)"
                      title="Records older than this are actively DELETED from the device, not merely hidden.">Keep for (days)</label>
-              <input type="number" min="1" max="365" step="1" .value=${String(p.presenceRetentionDays())}
+              <input type="number" min="1" max="365" step="1" .value=${String(p.presenceRetentionDays())} data-model=${String(p.presenceRetentionDays())}
                      @change=${(e: Event) => {
                        const v = parseFloat((e.target as HTMLInputElement).value);
                        p.setPresenceHistory(c => { c.retentionDays = isFinite(v) ? Math.max(1, Math.min(365, Math.round(v))) : undefined; });
@@ -1569,7 +1637,7 @@ export class SettingsDrawer extends LitElement {
                  title="How many of the cast to generate, in roster order. Some may still fall outside your search radius.">Aircraft</label>
           <input type="number" min="1" max=${String(DEMO_FLEET_MAX)} step="1"
                  data-flight-demo-fleet
-                 .value=${String(fleet)}
+                 .value=${String(fleet)} data-model=${String(fleet)}
                  @change=${(e: Event) => set(f => {
                    const n = numOrUndef((e.target as HTMLInputElement).value, 1, DEMO_FLEET_MAX);
                    f.demo = { ...(f.demo ?? {}), fleet: n ?? DEMO_FLEET_DEFAULT };
@@ -1591,7 +1659,7 @@ export class SettingsDrawer extends LitElement {
           <label style="font-size:12px;color:var(--text);flex:1"
                  title="Rearranges the same cast deterministically. The same seed always gives the same arrangement.">Arrangement seed</label>
           <input type="number" step="1" placeholder="0" data-flight-demo-seed
-                 .value=${demo?.seed != null ? String(demo.seed) : ''}
+                 .value=${demo?.seed != null ? String(demo.seed) : ''} data-model=${demo?.seed != null ? String(demo.seed) : ''}
                  @change=${(e: Event) => set(f => {
                    const raw = (e.target as HTMLInputElement).value.trim();
                    const n = parseInt(raw, 10);
@@ -1613,11 +1681,11 @@ export class SettingsDrawer extends LitElement {
           <div class="row" style="align-items:center">
             <label style="font-size:12px;color:var(--text);flex:1">Synthetic location</label>
             <input type="number" step="0.0001" placeholder="lat" data-flight-demo-lat
-                   .value=${demo?.lat != null ? String(demo.lat) : ''}
+                   .value=${demo?.lat != null ? String(demo.lat) : ''} data-model=${demo?.lat != null ? String(demo.lat) : ''}
                    @change=${(e: Event) => setCoord('lat', (e.target as HTMLInputElement).value)}
                    style="width:80px">
             <input type="number" step="0.0001" placeholder="lon" data-flight-demo-lon
-                   .value=${demo?.lon != null ? String(demo.lon) : ''}
+                   .value=${demo?.lon != null ? String(demo.lon) : ''} data-model=${demo?.lon != null ? String(demo.lon) : ''}
                    @change=${(e: Event) => setCoord('lon', (e.target as HTMLInputElement).value)}
                    style="width:80px">
           </div>` : nothing}
@@ -1850,14 +1918,14 @@ export class SettingsDrawer extends LitElement {
 
             <div class="row" style="align-items:center;margin-top:4px">
               <label style="font-size:12px;color:var(--text);flex:1" title="Search + display radius around home.">Radius (nm)</label>
-              <input type="number" min="5" max="100" step="5" .value=${String(cfg.radiusNm ?? FLIGHTS_DEFAULT_RADIUS_NM)}
+              <input type="number" min="5" max="100" step="5" .value=${String(cfg.radiusNm ?? FLIGHTS_DEFAULT_RADIUS_NM)} data-model=${String(cfg.radiusNm ?? FLIGHTS_DEFAULT_RADIUS_NM)}
                      @change=${(e: Event) => set(f => { f.radiusNm = numOrUndef((e.target as HTMLInputElement).value, 5, 100) ?? FLIGHTS_DEFAULT_RADIUS_NM; })}
                      style="width:80px">
             </div>
             <div class="row" style="align-items:center">
               <label style="font-size:12px;color:var(--text);flex:1" title="How far out, in scene metres, an aircraft sitting at exactly the search radius is drawn. The whole shell scales together — models grow with it, so apparent sizes stay the same.">Draw radius (m)</label>
               <input type="number" min="60" max="1000" step="10"
-                     .value=${String(cfg.shellRadiusM ?? FLIGHT_SHELL_DEFAULT_RADIUS_M)}
+                     .value=${String(cfg.shellRadiusM ?? FLIGHT_SHELL_DEFAULT_RADIUS_M)} data-model=${String(cfg.shellRadiusM ?? FLIGHT_SHELL_DEFAULT_RADIUS_M)}
                      @change=${(e: Event) => set(f => {
                        // setFlights clamps 60..1000 + normalizes the default to undefined.
                        f.shellRadiusM = numOrUndef((e.target as HTMLInputElement).value, 60, 1000)
@@ -1872,7 +1940,7 @@ export class SettingsDrawer extends LitElement {
               <label style="font-size:12px;color:var(--text);flex:1"
                      title="Multiplies the display HEIGHT only (0.2–2, default 1). The horizontal shell is untouched, so traffic drops toward the horizon without moving any closer to the house. Aircraft can never be lowered onto the property — an absolute clearance floor is applied after the scale.">Height scale ×</label>
               <input type="number" min="0.2" max="2" step="0.1"
-                     .value=${String(cfg.verticalScale ?? 1)}
+                     .value=${String(cfg.verticalScale ?? 1)} data-model=${String(cfg.verticalScale ?? 1)}
                      @change=${(e: Event) => set(f => {
                        const v = Number((e.target as HTMLInputElement).value);
                        // setFlights clamps 0.2..2 + normalizes 1 → undefined.
@@ -1886,7 +1954,7 @@ export class SettingsDrawer extends LitElement {
             <div class="row" style="align-items:center">
               <label style="font-size:12px;color:var(--text);flex:1" title="Poll cadence. The default is source-aware: 60 s for OpenSky (which meters access in credits), 8 s otherwise.">Poll (s)</label>
               <input type="number" min="5" max="60" step="1"
-                     .value=${String(cfg.pollSeconds ?? flightDefaultPollSeconds(source))}
+                     .value=${String(cfg.pollSeconds ?? flightDefaultPollSeconds(source))} data-model=${String(cfg.pollSeconds ?? flightDefaultPollSeconds(source))}
                      @change=${(e: Event) => set(f => {
                        f.pollSeconds = numOrUndef((e.target as HTMLInputElement).value, 5, 60)
                          ?? flightDefaultPollSeconds(source);
@@ -1896,14 +1964,14 @@ export class SettingsDrawer extends LitElement {
             <div class="row" style="align-items:center">
               <label style="font-size:12px;color:var(--text);flex:1" title="Blank = no filter.">Min altitude (ft)</label>
               <input type="number" min="0" max="60000" step="500" placeholder="off"
-                     .value=${cfg.minAltFt != null ? String(cfg.minAltFt) : ''}
+                     .value=${cfg.minAltFt != null ? String(cfg.minAltFt) : ''} data-model=${cfg.minAltFt != null ? String(cfg.minAltFt) : ''}
                      @change=${(e: Event) => set(f => { f.minAltFt = numOrUndef((e.target as HTMLInputElement).value, 0, 60000); })}
                      style="width:80px">
             </div>
             <div class="row" style="align-items:center">
               <label style="font-size:12px;color:var(--text);flex:1" title="Blank = no filter.">Max altitude (ft)</label>
               <input type="number" min="0" max="60000" step="500" placeholder="off"
-                     .value=${cfg.maxAltFt != null ? String(cfg.maxAltFt) : ''}
+                     .value=${cfg.maxAltFt != null ? String(cfg.maxAltFt) : ''} data-model=${cfg.maxAltFt != null ? String(cfg.maxAltFt) : ''}
                      @change=${(e: Event) => set(f => { f.maxAltFt = numOrUndef((e.target as HTMLInputElement).value, 0, 60000); })}
                      style="width:80px">
             </div>
@@ -1983,7 +2051,7 @@ export class SettingsDrawer extends LitElement {
               <label style="font-size:12px;color:var(--text);flex:1"
                      title="Size multiplier for every aircraft model (0.5–4, default 1). Composed with the distance-compensated growth curve, so nearby and rim aircraft keep their relative sizes — this just makes the whole fleet read bigger from a zoomed-out camera.">Model size ×</label>
               <input type="number" min="0.5" max="4" step="0.1"
-                     .value=${String(cfg.modelScale ?? 1)}
+                     .value=${String(cfg.modelScale ?? 1)} data-model=${String(cfg.modelScale ?? 1)}
                      @change=${(e: Event) => set(f => {
                        const v = Number((e.target as HTMLInputElement).value);
                        // setFlights clamps + normalizes 1 → undefined.
@@ -2005,7 +2073,7 @@ export class SettingsDrawer extends LitElement {
                 <label style="font-size:12px;color:var(--text);flex:1"
                        title="Warn when an aircraft passes below this altitude within 3 nm. Blank = off.">Low overflight (ft)</label>
                 <input type="number" min="0" max="20000" step="250" placeholder="off"
-                       .value=${cfg.alerts?.lowAltFt != null ? String(cfg.alerts.lowAltFt) : ''}
+                       .value=${cfg.alerts?.lowAltFt != null ? String(cfg.alerts.lowAltFt) : ''} data-model=${cfg.alerts?.lowAltFt != null ? String(cfg.alerts.lowAltFt) : ''}
                        @change=${(e: Event) => set(f => {
                          if (!f.alerts) f.alerts = {};
                          f.alerts.lowAltFt = numOrUndef((e.target as HTMLInputElement).value, 0, 20000);
@@ -2144,12 +2212,12 @@ export class SettingsDrawer extends LitElement {
       <div class="row" style="align-items:center;margin:0">
         <label style="font-size:11px;color:var(--text-dim);flex:1">${label}</label>
         <input type="number" data-glow-field=${lo} min="0" max=${max} step=${step} placeholder="min"
-               .value=${r.criteria[lo] != null ? String(r.criteria[lo]) : ''}
+               .value=${r.criteria[lo] != null ? String(r.criteria[lo]) : ''} data-model=${r.criteria[lo] != null ? String(r.criteria[lo]) : ''}
                @change=${(e: Event) => edit(r.id, x => {
                  x.criteria[lo] = numOr((e.target as HTMLInputElement).value, 0, max); })}
                style="width:62px">
         <input type="number" data-glow-field=${hi} min="0" max=${max} step=${step} placeholder="max"
-               .value=${r.criteria[hi] != null ? String(r.criteria[hi]) : ''}
+               .value=${r.criteria[hi] != null ? String(r.criteria[hi]) : ''} data-model=${r.criteria[hi] != null ? String(r.criteria[hi]) : ''}
                @change=${(e: Event) => edit(r.id, x => {
                  x.criteria[hi] = numOr((e.target as HTMLInputElement).value, 0, max); })}
                style="width:62px;margin-left:4px">
@@ -2347,7 +2415,7 @@ export class SettingsDrawer extends LitElement {
               </div>` : nothing}
             <div class="row" style="align-items:center">
               <label style="font-size:12px;color:var(--text)" title="Fetch radius around your calibrated address (metres). Up to 3 km — the 3D camera widens its view distance to match.">Radius (m)</label>
-              <input type="number" min="100" max="3000" step="50" .value=${String(cfg.radiusM ?? 350)}
+              <input type="number" min="100" max="3000" step="50" .value=${String(cfg.radiusM ?? 350)} data-model=${String(cfg.radiusM ?? 350)}
                      @change=${(e: Event) => set(n => { const v = parseFloat((e.target as HTMLInputElement).value); n.radiusM = isFinite(v) ? Math.max(100, Math.min(3000, v)) : 350; })}
                      style="width:80px">
             </div>
@@ -2512,6 +2580,12 @@ export class SettingsDrawer extends LitElement {
       if (!p.store.scene3d) p.store.scene3d = { preset: 'night' };
       mut(); p.save(); p.emitConfig();
     };
+    // Range sliders preview on `input` (repaint, no save) and commit once on
+    // `change`, so a whole slider drag is ONE undo step.
+    const preview = (mut: () => void) => {
+      if (!p.store.scene3d) p.store.scene3d = { preset: 'night' };
+      mut(); p.emitConfig();
+    };
     const check = (label: string, checked: boolean, on: (v: boolean) => void, title = '') => html`
       <div class="row"><label title=${title}>${label}</label>
         <input type="checkbox" .checked=${checked}
@@ -2595,7 +2669,7 @@ export class SettingsDrawer extends LitElement {
       <div class="row" title="Height of the SURROUNDINGS (backdrop grid, neighborhood overlay, yard fill) relative to the floor slab. Negative = ground below a raised foundation.">
         <label>Ground level (mm)</label>
         <input type="number" step="50" min="-10000" max="10000" style="width:80px"
-               .value=${String(sc.groundLevelMm ?? 0)}
+               .value=${String(sc.groundLevelMm ?? 0)} data-model=${String(sc.groundLevelMm ?? 0)}
                @change=${(e: Event) => upd(() => {
                  const n = Number((e.target as HTMLInputElement).value);
                  const v = isFinite(n) ? Math.max(-10000, Math.min(10000, Math.round(n))) : 0;
@@ -2670,7 +2744,8 @@ export class SettingsDrawer extends LitElement {
         <div class="row"><label title="Vertical field of view in degrees (default 50)">Vertical FOV</label>
           <input type="range" min="10" max="120" step="1" style="flex:1"
                  .value=${String(sc.fovV ?? 50)}
-                 @input=${(e: Event) => upd(() => { p.store.scene3d!.fovV = Number((e.target as HTMLInputElement).value); })}>
+                 @input=${(e: Event) => preview(() => { p.store.scene3d!.fovV = Number((e.target as HTMLInputElement).value); })}
+                 @change=${() => p.save()}>
           <span style="width:34px;text-align:right;font-size:10px">${sc.fovV ?? 50}°</span>
         </div>
         ${check('Custom horizontal FOV', sc.fovH != null,
@@ -2680,7 +2755,8 @@ export class SettingsDrawer extends LitElement {
           <div class="row"><label title="Horizontal field of view in degrees">Horizontal FOV</label>
             <input type="range" min="10" max="150" step="1" style="flex:1"
                    .value=${String(sc.fovH ?? 70)}
-                   @input=${(e: Event) => upd(() => { p.store.scene3d!.fovH = Number((e.target as HTMLInputElement).value); })}>
+                   @input=${(e: Event) => preview(() => { p.store.scene3d!.fovH = Number((e.target as HTMLInputElement).value); })}
+                 @change=${() => p.save()}>
             <span style="width:34px;text-align:right;font-size:10px">${sc.fovH ?? 70}°</span>
           </div>
           <div style="font-size:10px;color:var(--text-dim);line-height:1.3;margin:2px 0 4px">
@@ -2839,7 +2915,7 @@ export class SettingsDrawer extends LitElement {
           <label title="Compass bearing (° CW from true north) that plan-up (+Y) faces — the same convention as the GPS/Geo north setting">
             Manual bearing (°)</label>
           <input type="number" min="0" max="359.9" step="0.1" style="width:70px;text-align:right"
-                 .value=${String(c?.manualNorthDeg ?? '')}
+                 .value=${String(c?.manualNorthDeg ?? '')} data-model=${String(c?.manualNorthDeg ?? '')}
                  @change=${(e: Event) => {
                    const v = parseFloat((e.target as HTMLInputElement).value);
                    set(x => { x.manualNorthDeg = isFinite(v) ? ((v % 360) + 360) % 360 : undefined; });
@@ -2859,13 +2935,13 @@ export class SettingsDrawer extends LitElement {
         <div class="row" style="gap:6px;margin-bottom:2px">
           <span style="font-size:11px">Custom offset (px)</span>
           <span style="color:var(--text-dim);font-size:11px">x</span>
-          <input type="number" style="width:56px" .value=${String(c?.custom?.x ?? '')}
+          <input type="number" style="width:56px" .value=${String(c?.custom?.x ?? '')} data-model=${String(c?.custom?.x ?? '')}
                  @change=${(e: Event) => {
                    const v = Math.round(Number((e.target as HTMLInputElement).value));
                    set(x => { x.custom = { x: isFinite(v) ? v : 0, y: x.custom?.y ?? 0 }; });
                  }}>
           <span style="color:var(--text-dim);font-size:11px">y</span>
-          <input type="number" style="width:56px" .value=${String(c?.custom?.y ?? '')}
+          <input type="number" style="width:56px" .value=${String(c?.custom?.y ?? '')} data-model=${String(c?.custom?.y ?? '')}
                  @change=${(e: Event) => {
                    const v = Math.round(Number((e.target as HTMLInputElement).value));
                    set(x => { x.custom = { x: x.custom?.x ?? 0, y: isFinite(v) ? v : 0 }; });
@@ -2882,7 +2958,7 @@ export class SettingsDrawer extends LitElement {
           <label>North icon size</label>
           <input type="number" min="0.5" max="4" step="0.1" style="width:64px"
                  ?disabled=${c?.showNorthMarker !== true}
-                 .value=${String(c?.markerScale ?? 1)}
+                 .value=${String(c?.markerScale ?? 1)} data-model=${String(c?.markerScale ?? 1)}
                  @change=${(e: Event) => {
                    const v = Number((e.target as HTMLInputElement).value);
                    set(x => { x.markerScale = isFinite(v) ? Math.max(0.5, Math.min(4, v)) : 1; });
@@ -2909,7 +2985,7 @@ export class SettingsDrawer extends LitElement {
     };
     const unit = imp ? '°F' : '°C';
     const num = (val: number, on: (n: number) => void) => html`
-      <input type="number" step="0.5" .value=${String(toDisp(val))}
+      <input type="number" step="0.5" .value=${String(toDisp(val))} data-model=${String(toDisp(val))}
              style="width:60px;text-align:right"
              @change=${(e: Event) => {
                const n = parseFloat((e.target as HTMLInputElement).value);
@@ -3093,7 +3169,7 @@ export class SettingsDrawer extends LitElement {
       <div class="row" style="margin-top:2px">
         <label title=${title}>${label}</label>
         <input type="number" step=${step} style="width:84px"
-               .value=${get() == null ? '' : String(Math.round(get()!))}
+               .value=${get() == null ? '' : String(Math.round(get()!))} data-model=${get() == null ? '' : String(Math.round(get()!))}
                @change=${(ev: Event) => upd(() => {
                  const raw = (ev.target as HTMLInputElement).value.trim();
                  const v = Number(raw);
@@ -3167,7 +3243,7 @@ export class SettingsDrawer extends LitElement {
         <div class="row" style="margin-top:2px">
           <label title=${title}>${label}</label>
           <input type="number" min="0" max=${max} step="1" style="width:64px"
-                 .value=${String(sc?.[key] ?? 0)}
+                 .value=${String(sc?.[key] ?? 0)} data-model=${String(sc?.[key] ?? 0)}
                  @change=${(ev: Event) => upd(() => {
                    const v = Math.round(Number((ev.target as HTMLInputElement).value));
                    const n = isFinite(v) ? Math.max(0, Math.min(max, v)) : 0;
@@ -3246,7 +3322,7 @@ export class SettingsDrawer extends LitElement {
         <div class="row" style="margin-top:2px">
           <label title="How many cars share the road (1–6). They spread evenly around one out-and-back drive cycle, so the gap between them stays the same even while one is turning round. A short road fits fewer, and the count is capped so cars never overlap.">Cars</label>
           <input type="number" min="1" max="6" step="1" style="width:64px"
-                 .value=${String(e.roadCars ?? 2)}
+                 .value=${String(e.roadCars ?? 2)} data-model=${String(e.roadCars ?? 2)}
                  @change=${(ev: Event) => upd(() => {
                    const v = Math.round(Number((ev.target as HTMLInputElement).value));
                    e.roadCars = isFinite(v) ? Math.min(6, Math.max(1, v)) : 2;
@@ -3308,7 +3384,7 @@ export class SettingsDrawer extends LitElement {
           ${e.mode === 'train' ? html`
             <div class="row" style="margin-top:2px"><label title="Cap on the number of message cars">Max cars</label>
               <input type="number" min="2" max="12" step="1" style="width:64px"
-                     .value=${String(e.maxCars ?? 8)}
+                     .value=${String(e.maxCars ?? 8)} data-model=${String(e.maxCars ?? 8)}
                      @change=${(ev: Event) => upd(() => {
                        const v = Math.round(Number((ev.target as HTMLInputElement).value));
                        e.maxCars = isFinite(v) ? Math.min(12, Math.max(2, v)) : 8;
@@ -3332,7 +3408,7 @@ export class SettingsDrawer extends LitElement {
           <div class="row" style="margin-top:2px">
             <label title="Size multiplier for this entry's model (0.5–5, default 1). The flight path, train loop and text stay put — only the model gets bigger, which reads better from a zoomed-out camera.">Model size ×</label>
             <input type="number" min="0.5" max="5" step="0.1" style="width:64px"
-                   .value=${String(e.scale ?? 1)}
+                   .value=${String(e.scale ?? 1)} data-model=${String(e.scale ?? 1)}
                    @change=${(ev: Event) => upd(() => {
                      const v = Number((ev.target as HTMLInputElement).value);
                      const n = isFinite(v) && v > 0 ? Math.min(5, Math.max(0.5, v)) : 1;
@@ -3371,7 +3447,7 @@ export class SettingsDrawer extends LitElement {
               <div class="row" style="margin-top:2px">
                 <label title="Fixed rotation of the writing, in degrees. 0° puts the top of the text toward the top of the 2D plan; increasing values turn it clockwise on screen.">Rotation (°)</label>
                 <input type="number" step="5" style="width:72px" placeholder="0"
-                       .value=${e.rotationDeg == null ? '' : String(e.rotationDeg)}
+                       .value=${e.rotationDeg == null ? '' : String(e.rotationDeg)} data-model=${e.rotationDeg == null ? '' : String(e.rotationDeg)}
                        @change=${(ev: Event) => upd(() => {
                          // Blank clears to undefined (= 0°, the renderer's default);
                          // any finite number — including an explicit 0 — is stored
@@ -3459,7 +3535,7 @@ export class SettingsDrawer extends LitElement {
     const countInput = (label: string, key: 'hourly' | 'daily', max: number) => html`
       <label class="row" style="padding:1px 0"><span style="flex:1;font-size:11px">${label}</span>
         <input type="number" min="0" max=${max} style="width:56px"
-               .value=${String(w?.chipContent?.[key] ?? 0)}
+               .value=${String(w?.chipContent?.[key] ?? 0)} data-model=${String(w?.chipContent?.[key] ?? 0)}
                @change=${(e: Event) => {
                  const raw = Math.floor(Number((e.target as HTMLInputElement).value));
                  const v = Math.max(0, Math.min(max, isFinite(raw) ? raw : 0));
@@ -3475,13 +3551,13 @@ export class SettingsDrawer extends LitElement {
       <div class="row" style="gap:6px;margin-bottom:2px">
         <span style="font-size:11px">Custom offset (px)</span>
         <span style="color:var(--text-dim);font-size:11px">x</span>
-        <input type="number" style="width:56px" .value=${String(w?.chipCustom?.x ?? '')}
+        <input type="number" style="width:56px" .value=${String(w?.chipCustom?.x ?? '')} data-model=${String(w?.chipCustom?.x ?? '')}
                @change=${(e: Event) => {
                  const v = Math.round(Number((e.target as HTMLInputElement).value));
                  set(x => { x.chipCustom = { x: isFinite(v) ? v : 0, y: x.chipCustom?.y ?? 0 }; });
                }}>
         <span style="color:var(--text-dim);font-size:11px">y</span>
-        <input type="number" style="width:56px" .value=${String(w?.chipCustom?.y ?? '')}
+        <input type="number" style="width:56px" .value=${String(w?.chipCustom?.y ?? '')} data-model=${String(w?.chipCustom?.y ?? '')}
                @change=${(e: Event) => {
                  const v = Math.round(Number((e.target as HTMLInputElement).value));
                  set(x => { x.chipCustom = { x: x.chipCustom?.x ?? 0, y: isFinite(v) ? v : 0 }; });
@@ -3532,7 +3608,7 @@ export class SettingsDrawer extends LitElement {
       <div class="row"><label>${label}</label>
         <input type="number" step=${String(step)} placeholder=${ph}
                style="width:76px;text-align:right"
-               .value=${cur == null ? '' : String(cur)}
+               .value=${cur == null ? '' : String(cur)} data-model=${cur == null ? '' : String(cur)}
                @change=${(e: Event) => {
                  const raw = (e.target as HTMLInputElement).value.trim();
                  const n = parseFloat(raw);
@@ -3547,7 +3623,7 @@ export class SettingsDrawer extends LitElement {
       <div class="row"><label>${label} (${unit})</label>
         <input type="number" step="0.5" placeholder=${phC}
                style="width:76px;text-align:right"
-               .value=${curC == null ? '' : String(toDisp(curC))}
+               .value=${curC == null ? '' : String(toDisp(curC))} data-model=${curC == null ? '' : String(toDisp(curC))}
                @change=${(e: Event) => {
                  const raw = (e.target as HTMLInputElement).value.trim();
                  const n = parseFloat(raw);
@@ -3859,9 +3935,27 @@ export class SettingsDrawer extends LitElement {
     const p = this.planner;
     const floors = p.store.floors;
     const only = floors.length <= 1;
-    const commit = (f: Floor, name: string, w: number, d: number) =>
-      p.saveFloorEdit(f.id, name.trim() || 'Floor', Math.max(1000, Math.round(w) || f.w),
-                      Math.max(1000, Math.round(d) || f.d));
+    // A shrink must not strand content outside the plan: clamp against the
+    // content bbox + one grid step of margin — the canvas edge drag's rule
+    // (resolveFloorEdgeDrag). The rect is anchored at the origin and typing W/D
+    // moves only the right/top edges, so the far extents are what bind; the
+    // minimum is rounded UP to the grid so the stored size stays on-grid.
+    const minFor = (f: Floor) => {
+      const bb = floorContentBbox(f);
+      const up = (v: number) => Math.ceil((v + GRID_MM) / GRID_MM) * GRID_MM;
+      return { w: Math.max(1000, bb ? up(bb.maxX) : 0), d: Math.max(1000, bb ? up(bb.maxY) : 0) };
+    };
+    const commit = (f: Floor, name: string, w: number, d: number) => {
+      const min = minFor(f);
+      const rw = Math.round(w), rd = Math.round(d);
+      const nw = Number.isFinite(rw) && rw > 0 ? rw : f.w;
+      const nd = Number.isFinite(rd) && rd > 0 ? rd : f.d;
+      // Clamp only the dimension actually being edited — a rename must never
+      // silently resize a floor that already sits below the content minimum.
+      p.saveFloorEdit(f.id, name.trim() || 'Floor',
+                      nw === f.w ? f.w : Math.max(min.w, nw),
+                      nd === f.d ? f.d : Math.max(min.d, nd));
+    };
     return html`
       <h3 style="font-size:12px;margin:0 0 8px">Floors</h3>
       <div data-floors-block style="display:flex;flex-direction:column;gap:6px;margin-bottom:8px">
@@ -3875,13 +3969,13 @@ export class SettingsDrawer extends LitElement {
                    style="flex:1 1 auto;min-width:60px;padding:3px 5px;background:#0c0c14;
                           border:1px solid var(--border);border-radius:3px;color:var(--text);font-size:12px"
                    @change=${(e: Event) => commit(f, (e.target as HTMLInputElement).value, f.w, f.d)}>
-            <input type="number" data-floor-w-for=${f.id} min="1000" step="100" .value=${String(Math.round(f.w))}
+            <input type="number" data-floor-w-for=${f.id} min="1000" step="100" .value=${String(Math.round(f.w))} data-model=${String(Math.round(f.w))}
                    title="Width (mm)"
                    style="width:74px;flex:0 0 auto;padding:3px 5px;background:#0c0c14;text-align:right;
                           border:1px solid var(--border);border-radius:3px;color:var(--text);font-size:11px"
                    @change=${(e: Event) => commit(f, f.name, Number((e.target as HTMLInputElement).value), f.d)}>
             <span style="color:var(--text-dim);font-size:11px">×</span>
-            <input type="number" data-floor-d-for=${f.id} min="1000" step="100" .value=${String(Math.round(f.d))}
+            <input type="number" data-floor-d-for=${f.id} min="1000" step="100" .value=${String(Math.round(f.d))} data-model=${String(Math.round(f.d))}
                    title="Depth (mm)"
                    style="width:74px;flex:0 0 auto;padding:3px 5px;background:#0c0c14;text-align:right;
                           border:1px solid var(--border);border-radius:3px;color:var(--text);font-size:11px"
@@ -3925,14 +4019,19 @@ export class SettingsDrawer extends LitElement {
     const configs = p.listConfigs();
     const activeId = p.activeConfigId;
     const savedAt = p.lastSavedAt;
-    const only = configs.length <= 1;
+    // Delete counts only THIS user's own configs (shared ones are unshared, not
+    // deleted), and never applies to a shared config.
+    const only = (p.configIndex?.configs.length ?? configs.length) <= 1;
+    const activeShared = p.isSharedConfig(activeId);
+    const delOff = only || activeShared;
     return html`
       ${this._floorsBlock()}
       <h3 style="font-size:12px;margin:0 0 8px">Configurations</h3>
       <select style="width:100%;margin-bottom:8px" @change=${this._onSelectConfig}
               title="Switch the active configuration">
         ${configs.length
-          ? configs.map(c => html`<option value=${c.id} ?selected=${c.id === activeId}>${c.name}</option>`)
+          ? configs.map(c => html`<option value=${c.id} ?selected=${c.id === activeId}
+              data-shared=${c.shared ? '1' : '0'}>${c.name}${c.shared ? ' (shared)' : ''}</option>`)
           : html`<option>Default</option>`}
       </select>
       <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px">
@@ -3944,11 +4043,13 @@ export class SettingsDrawer extends LitElement {
       <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px">
         <button class="btn" style="flex:1;min-width:80px" @click=${this._exportConfig}>Export</button>
         <button class="btn" style="flex:1;min-width:80px" @click=${this._importConfig}>Import</button>
-        <button class="btn" style="flex:1;min-width:80px" ?disabled=${only}
-                title=${only ? 'The only configuration cannot be deleted' : 'Delete this configuration'}
+        <button class="btn" style="flex:1;min-width:80px" ?disabled=${delOff}
+                title=${activeShared ? 'Shared configurations are unshared, not deleted'
+                  : only ? 'The only configuration cannot be deleted' : 'Delete this configuration'}
                 @click=${this._deleteConfig}>Delete</button>
       </div>
       ${savedAt ? html`<div style="font-size:10px;color:var(--text-dim)">Last saved ${this._agoText(savedAt)}</div>` : nothing}
+      ${this._sharedBlock()}
 
       <h3 style="font-size:12px;margin:14px 0 6px">Import Sweet Home 3D (.sh3d)</h3>
       <button class="btn" style="width:100%;margin-bottom:6px" ?disabled=${this._sh3dBusy}
@@ -3997,6 +4098,89 @@ export class SettingsDrawer extends LitElement {
         browser's local storage and are re-imported per device.
       </div>
     `;
+  }
+
+  // ── Shared configurations (Settings ▸ Floor Plan) ──────────────────────
+  // Publishes a configuration to <config>/www/diorama/shared/ so EVERY Home
+  // Assistant user sees it (user_data is per user). Writes go through a
+  // shell_command the admin pastes; the YAML shown is generated by the SAME
+  // module that builds the service data (src/shared-config.ts).
+  private _sharedBlock() {
+    const p = this.planner;
+    if (!p.sharingAvailable) return nothing;   // offline / not connected: inert
+    const yaml = sharedWriteYaml();
+    const st = p.sharedStatus;
+    const statusText = st === 'needs-command'
+      ? 'Write command not configured — paste the YAML below'
+      : st === 'ok' ? 'Shared storage OK'
+      : st === 'error' ? (p.sharedLastError ?? 'Shared write failed')
+      : 'Not tested yet — use Test write after adding the YAML';
+    const statusColor = st === 'ok' ? '#69f0ae' : st === 'unknown' ? 'var(--text-dim)' : '#fb8c00';
+    const configs = p.listConfigs();
+    const busy = this._sharedBusy;
+    const run = async (label: string, fn: () => Promise<{ ok: boolean; error?: string }>, done: string) => {
+      this._sharedBusy = label; this._sharedMsg = null;
+      try {
+        const r = await fn();
+        this._sharedMsg = r.ok ? done : (r.error ?? 'Failed.');
+      } finally { this._sharedBusy = null; }
+    };
+    return html`
+      <div data-shared-block style="margin-top:12px;border-top:1px solid var(--border);padding-top:8px">
+        <h3 style="font-size:12px;margin:0 0 4px">Shared configurations</h3>
+        <div data-shared-status style="font-size:11px;color:${statusColor};margin-bottom:6px;line-height:1.35">
+          ${statusText}${st !== 'error' && p.sharedLastError ? html` · ${p.sharedLastError}` : nothing}
+        </div>
+        <div style="font-size:10px;color:var(--text-dim);line-height:1.35;margin-bottom:6px">
+          Configurations are stored per Home Assistant user. Sharing one publishes it
+          to every user (a kiosk tablet account, a family member) — they pick it from
+          the list above, and edits sync both ways.
+        </div>
+        ${configs.map(c => html`
+          <div class="row" style="align-items:center;gap:6px;padding:2px 0" data-shared-row=${c.id}>
+            <span style="flex:1;min-width:0;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+              ${c.name}${c.shared ? html` <span style="font-size:9px;padding:0 5px;border-radius:8px;
+                background:#123047;color:#90caf9" title=${c.sharedBy ? `Shared by ${c.sharedBy}` : 'Shared'}>shared</span>` : nothing}
+            </span>
+            ${c.shared
+              ? html`<button class="btn" data-shared-unshare style="padding:1px 8px;font-size:11px"
+                  ?disabled=${!!busy || !p.canUnshare(c.id)}
+                  title=${p.canUnshare(c.id) ? 'Stop sharing: copy it back into your own configurations'
+                    : 'Only an administrator or the user who shared it can unshare it'}
+                  @click=${() => {
+                    if (!confirm(`Stop sharing "${c.name}"? It is copied back into YOUR configurations; other users lose it from their list. The shared file stays on disk (unused) — delete it from www/diorama/shared/ by hand if you like.`)) return;
+                    void run('unshare', () => p.unshareConfig(c.id), `"${c.name}" is no longer shared.`);
+                  }}>Unshare</button>`
+              : html`<button class="btn" data-shared-share style="padding:1px 8px;font-size:11px"
+                  ?disabled=${!!busy || st === 'needs-command'}
+                  title=${st === 'needs-command' ? 'Add the write command (Setup below) first' : 'Publish to every Home Assistant user'}
+                  @click=${() => void run('share', () => p.shareConfig(c.id), `"${c.name}" is now shared.`)}>Share</button>`}
+          </div>`)}
+        <div class="row" style="align-items:center;gap:6px;margin-top:6px">
+          <button class="btn" data-shared-test ?disabled=${!!busy}
+                  @click=${() => void run('test', () => p.testSharedWrite(), 'Test write OK — shared storage works.')}>
+            ${busy === 'test' ? 'Testing…' : 'Test write'}</button>
+          <button class="btn" data-shared-setup-toggle
+                  @click=${() => { this._sharedSetupOpen = !this._sharedSetupOpen; }}>
+            ${this._sharedSetupOpen ? '▾' : '▸'} Setup</button>
+        </div>
+        ${busy && busy !== 'test' ? html`<div style="font-size:10px;color:var(--text-dim);margin-top:3px">Writing…</div>` : nothing}
+        ${this._sharedMsg ? html`<div data-shared-msg style="font-size:10px;color:var(--text-dim);margin-top:3px">${this._sharedMsg}</div>` : nothing}
+        ${this._sharedSetupOpen ? html`
+          <div style="font-size:10px;color:var(--text-dim);line-height:1.4;margin:6px 0 4px">
+            Paste this into <code>configuration.yaml</code> and <strong>restart Home Assistant</strong>.
+            It lets the panel write <code>www/diorama/shared/</code>; everyone reads it through
+            <code>/local/</code>. Any HA user who can call
+            <code>shell_command.${SHARED_WRITE_COMMAND}</code> can edit shared plans — Home
+            Assistant's own service permissions govern that.
+          </div>
+          <pre data-shared-yaml style="margin:0 0 4px;padding:6px 7px;border-radius:4px;border:1px solid var(--border);
+                      background:#0b0e12;color:var(--text);font-size:10px;line-height:1.4;
+                      white-space:pre;overflow:auto;max-height:220px;user-select:text">${yaml}</pre>
+          <button class="btn" data-shared-yaml-copy
+                  @click=${() => { void navigator.clipboard?.writeText(yaml); }}>⧉ Copy YAML</button>
+        ` : nothing}
+      </div>`;
   }
 
   private _onSelectConfig = (e: Event) => {

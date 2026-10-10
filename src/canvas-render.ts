@@ -77,7 +77,7 @@ import {
 // the combined canvas bundle.
 export { flightFieldText, flightLabelLines };
 import type { Planner } from './planner.js';
-import type { Vec2, LightIconKind, Furniture, ObjectRecipe, RecipePrimitive, HassState, FloorTexKind, RobotFixture, Floor, Window as WindowType } from './types.js';
+import type { Vec2, LightIconKind, Furniture, ObjectRecipe, RecipePrimitive, HassState, FloorTexKind, RobotFixture, Floor, Wall, Window as WindowType } from './types.js';
 
 // ── `objectLabels` layer (absent = ON) ──────────────────────────────────────
 // Gates NAME / caption text on fixtures and structural items — door + window
@@ -397,7 +397,19 @@ function drawInsertHandles(ctx: CanvasRenderingContext2D, view: View,
 export function drawAll(ctx: CanvasRenderingContext2D, p: Planner, view: View,
                         bgImg: HTMLImageElement | null): void {
   const c = ctx.canvas;
+  // Start every frame from a known context state: a painter that threw last
+  // frame (caught in canvas-2d) may have left a transform / alpha behind.
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.globalAlpha = 1;
   ctx.clearRect(0, 0, c.width, c.height);
+  // Screen-extent pick maps are cleared HERE, outside every layer gate, so a
+  // hidden layer publishes nothing and its items are untappable (the
+  // flightHitPx / roomLabelHalfPx rule — the per-painter clears only ran when
+  // the painter itself ran, leaving last-visible extents behind).
+  envChipHalfPx.clear();
+  infoCardHalfPx.clear();
+  actionButtonHalfPx.clear();
+  pruneIdCaches(p);
   // 2D layer flags (store.layers2d). Absent flag = layer on, except
   // `activity` which defaults off — so an old store renders the classic
   // full view. Doors / windows always draw (placed relative to walls but
@@ -480,7 +492,7 @@ export function drawAll(ctx: CanvasRenderingContext2D, p: Planner, view: View,
     drawAllZones(ctx, p, view);
     drawActiveOverlay(ctx, p, view);
   }
-  drawBgEditOverlay(ctx, p, view, bgImg);
+  if (on(L.bg)) drawBgEditOverlay(ctx, p, view, bgImg);
   if (on(L.targets)) drawTargets(ctx, p, view);
   if (on(L.targets)) drawBlePeople(ctx, p, view);
   if (on(L.targets)) drawCamTargets(ctx, p, view);
@@ -3574,6 +3586,51 @@ function drawCameraAlertCard(
 // draw-time alpha, never a re-tint). Evicted per robot when its rev advances.
 const _vacTintCache = new Map<string, HTMLCanvasElement>();
 
+// ── Per-id module caches: prune on config change ──────────────────────────
+// `_sink2dFill`, `_leakAlarmStart` and `_vacTintCache` are keyed by item id and
+// only ever pruned for items that are still drawn, so a DELETED sink / leak
+// sensor / vacuum left its entry behind forever. A cheap sweep on each
+// configRev change (deletes always bump it) drops every entry whose id no
+// longer exists anywhere in the store.
+let _pruneRev = -1;
+function pruneIdCaches(p: Planner): void {
+  if (p.configRev === _pruneRev) return;
+  _pruneRev = p.configRev;
+  const furn = new Set<string>(), safety = new Set<string>();
+  for (const f of p.store.floors) {
+    for (const fu of f.furniture ?? []) furn.add(fu.id);
+    for (const s of f.safetySensors ?? []) safety.add(s.id);
+  }
+  for (const k of _sink2dFill.keys()) if (!furn.has(k)) _sink2dFill.delete(k);
+  for (const k of _leakAlarmStart.keys()) if (!safety.has(k)) _leakAlarmStart.delete(k);
+  for (const k of _vacTintCache.keys()) {
+    // Key `<robotId>:<rev>:<segId>` — the robot id may itself contain ':' so the
+    // rev is the second-to-last field.
+    const parts = k.split(':');
+    const rev = Number(parts[parts.length - 2]);
+    const robotId = parts.slice(0, -2).join(':');
+    const map = p.vacuumMaps?.[robotId];
+    if (!map || (p.vacuumMapRev?.[robotId] ?? 0) !== rev ||
+        !map.segments.some(s => `${robotId}:${rev}:${s.id}` === k)) _vacTintCache.delete(k);
+  }
+}
+
+// Custom-object / vehicle recipes paint their parts bottom-up by vertical
+// centre. The sort ran per piece per FRAME; cache the order per primitive-array
+// identity (vehicle recipes are memoized; custom recipes are store objects),
+// guarded by a cheap numeric signature so an in-place edit of a part's size /
+// position re-sorts.
+const _recipeOrder = new WeakMap<RecipePrimitive[], { sig: number; order: number[] }>();
+function recipePaintOrder(prims: RecipePrimitive[], vmid: (pr: RecipePrimitive) => number): number[] {
+  let sig = prims.length;
+  for (let i = 0; i < prims.length; i++) sig = (sig * 31 + Math.round(vmid(prims[i]) * 8) + i) | 0;
+  const hit = _recipeOrder.get(prims);
+  if (hit && hit.sig === sig) return hit.order;
+  const order = prims.map((_, i) => i).sort((i, j) => vmid(prims[i]) - vmid(prims[j]));
+  _recipeOrder.set(prims, { sig, order });
+  return order;
+}
+
 function _vacSegTint(robotId: string, rev: number, seg: VacSegment, segIdx: number): HTMLCanvasElement {
   const key = `${robotId}:${rev}:${seg.id}`;
   const hit = _vacTintCache.get(key);
@@ -4392,8 +4449,7 @@ function floorPatternTile(ctx: CanvasRenderingContext2D,
 // identity consistent across painters within a frame.
 let _loopCacheKey = '';
 let _loopCacheVal: Vec2[][] = [];
-function floorLoops(f: Floor): Vec2[][] {
-  const walls = f.walls ?? [];
+function wallGeomHash(walls: Wall[]): number {
   let h = 2166136261;
   for (const w of walls) {
     const pts = w.points;
@@ -4403,12 +4459,62 @@ function floorLoops(f: Floor): Vec2[][] {
       h = Math.imul(h ^ Math.round(pt.y), 16777619);
     }
   }
-  const key = `${f.id}|${walls.length}|${h >>> 0}`;
+  return h >>> 0;
+}
+function floorLoops(f: Floor): Vec2[][] {
+  const walls = f.walls ?? [];
+  const key = `${f.id}|${walls.length}|${wallGeomHash(walls)}`;
   if (key !== _loopCacheKey) {
     _loopCacheKey = key;
     _loopCacheVal = closedWallLoops(walls);
   }
   return _loopCacheVal;
+}
+
+// ── Shared wall-cut cache (2D) ────────────────────────────────────────────
+// drawWalls needs each segment's SOLID sub-intervals (doors / windows excised)
+// every frame; wallCutsForSegment scans every opening per segment, so a big
+// plan paid segments × openings per frame for a result that only changes when a
+// wall or an opening moves. Single-slot, keyed exactly like floorLoops plus a
+// cheap hash of the door / window geometry the cut reads (live drags mutate
+// without save(), so configRev would go stale). Per wall id → per segment.
+type SolidRun = { t0: number; t1: number };
+let _cutCacheKey = '';
+let _cutCacheVal = new Map<string, SolidRun[][]>();
+function openingGeomHash(f: Floor): number {
+  let h = 2166136261;
+  const mix = (v: number) => { h = Math.imul(h ^ Math.round(v * 10), 16777619); };
+  const kindMix = (k: string | undefined) => {
+    const s = k ?? '';
+    for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619);
+    h = Math.imul(h ^ 0x7c, 16777619);
+  };
+  for (const d of f.doors ?? []) {
+    mix(d.x); mix(d.y); mix(d.w); mix(d.rotation ?? 0); kindMix(d.kind); kindMix(d.hinge);
+    mix(d.garageHeight ?? 0);
+  }
+  h = Math.imul(h ^ 0x5eed, 16777619);
+  for (const w of f.windows ?? []) {
+    mix(w.x); mix(w.y); mix(w.w); mix(w.sill ?? -1); mix(w.height ?? -1); kindMix(w.kind);
+  }
+  return h >>> 0;
+}
+export function wallSolidRuns(f: Floor): Map<string, SolidRun[][]> {
+  const walls = f.walls ?? [];
+  const key = `${f.id}|${walls.length}|${wallGeomHash(walls)}|${(f.doors ?? []).length}|${(f.windows ?? []).length}|${openingGeomHash(f)}`;
+  if (key !== _cutCacheKey) {
+    _cutCacheKey = key;
+    const out = new Map<string, SolidRun[][]>();
+    for (const w of walls) {
+      const segs: SolidRun[][] = [];
+      for (let i = 0; i < w.points.length - 1; i++) {
+        segs.push(wallCutsForSegment(w.points[i], w.points[i + 1], f.doors ?? [], f.windows ?? []).solids);
+      }
+      out.set(w.id, segs);
+    }
+    _cutCacheVal = out;
+  }
+  return _cutCacheVal;
 }
 
 // `region` (px, optional) narrows the painted area — the per-room path clips to
@@ -4603,9 +4709,12 @@ function drawWalls(ctx: CanvasRenderingContext2D, p: Planner, view: View): void 
   const dpr = window.devicePixelRatio || 1;
   const f = p.floor();
   const wallW = Math.max(4, 80 * view.scale);
+  const isEdit = p.uiMode === 'edit';
+  const cuts = wallSolidRuns(f);
   ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.setLineDash([]);
   for (const w of f.walls) {
     if (w.points.length < 2) continue;
+    const segSolids = cuts.get(w.id);
     const kind = wallKind(w);
     ctx.setLineDash([]);
     if (kind === 'half') { ctx.strokeStyle = '#93a2b4'; ctx.lineWidth = wallW * 0.75; }
@@ -4622,7 +4731,8 @@ function drawWalls(ctx: CanvasRenderingContext2D, p: Planner, view: View): void 
     // stroke only the solid sub-intervals.
     for (let i = 0; i < w.points.length - 1; i++) {
       const A = w.points[i], B = w.points[i + 1];
-      const { solids } = wallCutsForSegment(A, B, f.doors ?? [], f.windows ?? []);
+      const solids = segSolids?.[i]
+        ?? wallCutsForSegment(A, B, f.doors ?? [], f.windows ?? []).solids;
       const dxs = B.x - A.x, dys = B.y - A.y;
       const L = Math.hypot(dxs, dys) || 1;
       const ux = dxs / L, uy = dys / L;
@@ -4634,7 +4744,10 @@ function drawWalls(ctx: CanvasRenderingContext2D, p: Planner, view: View): void 
       // A run's decorative marks must respect the SAME cut intervals the base
       // stroke does — running the balusters / pickets / mesh hatch through a
       // gate's span made the gap invisible (the line broke, the slats didn't).
-      const inSolid = (t: number) => solids.some(sv => t >= sv.t0 && t <= sv.t1);
+      const inSolid = (t: number) => {
+        for (const sv of solids) if (t >= sv.t0 && t <= sv.t1) return true;
+        return false;
+      };
       // Railings get baluster tick marks across the line.
       if (kind === 'railing') {
         const tickHalf = Math.max(3, wallW * 0.45);
@@ -4686,8 +4799,9 @@ function drawWalls(ctx: CanvasRenderingContext2D, p: Planner, view: View): void 
       }
     }
     ctx.setLineDash([]);
-    // Locked walls draw no vertex anchors (nothing is draggable).
-    if (!w.locked) {
+    // Locked walls draw no vertex anchors (nothing is draggable) — and no mode
+    // but edit draws them at all (kiosk / view / dashboard cards stay clean).
+    if (!w.locked && isEdit) {
       ctx.fillStyle = '#64b5f6'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 1;
       for (const v of w.points) {
         const pt = mmToPx(view, v.x, v.y);
@@ -4897,7 +5011,7 @@ function drawDoors(ctx: CanvasRenderingContext2D, p: Planner, view: View): void 
     };
     // Endpoint handle (drag to rotate) — hidden when locked.
     const endHandle = (px: { x: number; y: number }) => {
-      if (d.locked) return;
+      if (d.locked || p.uiMode !== 'edit') return;
       ctx.fillStyle = '#ffb74d'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 1;
       ctx.beginPath(); ctx.arc(px.x, px.y, 5 * dpr, 0, 2 * Math.PI); ctx.fill(); ctx.stroke();
     };
@@ -5139,8 +5253,8 @@ function drawDoors(ctx: CanvasRenderingContext2D, p: Planner, view: View): void 
       // Low-battery badge for the lock (locks are commonly battery-powered).
       if (d.lockEntity) drawBatteryBadge(ctx, p, d.lockEntity, hinge.x + 9 * dpr, hinge.y - 11 * dpr);
     }
-    // Endpoint handle (drag to rotate) — hidden when locked
-    if (!d.locked) {
+    // Endpoint handle (drag to rotate) — hidden when locked / outside edit mode
+    if (!d.locked && p.uiMode === 'edit') {
       ctx.fillStyle = '#ffb74d'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 1;
       ctx.beginPath(); ctx.arc(endPt.x, endPt.y, 5 * dpr, 0, 2 * Math.PI);
       ctx.fill(); ctx.stroke();
@@ -5339,8 +5453,8 @@ function drawWindows(ctx: CanvasRenderingContext2D, p: Planner, view: View): voi
       ctx.lineTo(tick.bx, tick.by);
       ctx.stroke(); ctx.setLineDash([]);
     }
-    // End handles (drag to rotate) — hidden when locked
-    if (!w.locked) {
+    // End handles (drag to rotate) — hidden when locked, and outside edit mode
+    if (!w.locked && p.uiMode === 'edit') {
       ctx.fillStyle = '#ffb74d'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 1;
       for (const ep of [a, b]) {
         ctx.beginPath(); ctx.arc(ep.x, ep.y, 4 * dpr, 0, 2 * Math.PI);
@@ -5537,8 +5651,15 @@ function drawFurniture(ctx: CanvasRenderingContext2D, p: Planner, view: View,
       if (mc?.flagEntity) mailFlagUp = p.effectiveState({ entity_id: mc.flagEntity })?.state === 'on';
       else mailFlagUp = piece.localState === 'on' || piece.localState === 'playing';
     }
+    // EV charger port LED follows the RESOLVED status (the 3D port-glow rule:
+    // bound statusEntity → evStatusOf; unbound → idle) — it used to be a fixed
+    // green, i.e. "charging" on every charger in the house.
+    const evColor = piece.kind === 'ev_charger'
+      ? evStatusColor(evStatusOf(piece.evCharger?.statusEntity
+          ? p.hass?.states?.[piece.evCharger.statusEntity]?.state : null))
+      : undefined;
     drawFurniturePrimitiveLocal(ctx, piece, halfW, halfH, customObjects, binFull,
-                                { ghost: vehicleGhost, mailFlagUp, mailLidOpen });
+                                { ghost: vehicleGhost, mailFlagUp, mailLidOpen, evColor });
     // Sink running water: a blue basin tint ∝ an eased fill level + animated flow
     // ticks at the faucet while the sink runs (bound entity / unbound localState
     // on). Fill eases here on the RAF `now` clock (2D has no renderer state), so
@@ -5835,8 +5956,9 @@ function drawFurniture(ctx: CanvasRenderingContext2D, p: Planner, view: View,
       }
     }
     // Corner handles drawn at rotation-aware world positions so resize stays
-    // grabbable when the piece is rotated. Locked pieces show none.
-    if (!piece.locked) {
+    // grabbable when the piece is rotated. Locked pieces show none, and only
+    // edit mode draws them (kiosk / view / cards can't resize anything).
+    if (!piece.locked && isEdit) {
       ctx.fillStyle = '#64b5f6'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 1;
       for (const c of furnitureCorners(piece)) {
         const px = mmToPx(view, c.x, c.y);
@@ -5905,7 +6027,7 @@ export function drawFurniturePrimitiveLocal(
   halfH: number,
   customObjects?: ObjectRecipe[],
   binFull = false,
-  extra?: { ghost?: boolean; mailFlagUp?: boolean; mailLidOpen?: boolean },
+  extra?: { ghost?: boolean; mailFlagUp?: boolean; mailLidOpen?: boolean; evColor?: string },
 ): void {
   const kind = furnitureKind(piece);
   const x = -halfW, y = -halfH, w = halfW * 2, h = halfH * 2;
@@ -5949,7 +6071,7 @@ export function drawFurniturePrimitiveLocal(
         : b / 2;                       // box / cone: height is size[1]
       return pr.pos[1] + hh;
     };
-    const order = prims.map((_, i) => i).sort((i, j) => vmid(prims[i]) - vmid(prims[j]));
+    const order = recipePaintOrder(prims, vmid);
     ctx.lineWidth = 1;
     for (const idx of order) {
       const pr = prims[idx];
@@ -7158,8 +7280,8 @@ export function drawFurniturePrimitiveLocal(
       // Head unit (brighter band near the top/back).
       ctx.fillStyle = 'rgba(70,74,80,0.85)';
       ctx.fillRect(x + 2, y + 2, w - 4, h * 0.42);
-      // LED / port dot on the front-center.
-      ctx.fillStyle = '#00e676';
+      // LED / port dot on the front-center, coloured by the resolved status.
+      ctx.fillStyle = extra?.evColor ?? evStatusColor('idle');
       ctx.beginPath(); ctx.arc(0, y + h * 0.62, Math.max(3, Math.min(halfW, halfH) * 0.28), 0, 2 * Math.PI); ctx.fill();
       // Coiled-cable doodle: two nested arcs off the -X side.
       ctx.strokeStyle = '#20242a'; ctx.lineWidth = 1.5;
@@ -7365,8 +7487,13 @@ function drawFixtures(ctx: CanvasRenderingContext2D, p: Planner, view: View,
     const kind = lightIconKind(l);
     let r = 255, g = 230, b = 180;
     if ((kind === 'fireplace' || isFirepitKind(kind)) && isOn) {
-      // Hearth / fire pit always glows warm; flicker tint via mild noise.
-      const f1 = 0.85 + Math.random() * 0.15;
+      // Hearth / fire pit always glows warm. Flicker is a smooth sum of two
+      // incommensurate sines (the drawFireplace2D idiom) — a per-frame
+      // Math.random() tint strobed at the display refresh rate. Phase is keyed
+      // off the fixture position so two hearths don't pulse in lockstep.
+      const ft = performance.now() / 1000;
+      const ph = (l.x * 0.0013 + l.y * 0.0007) % (2 * Math.PI);
+      const f1 = 0.925 + 0.045 * Math.sin(ft * 5.3 + ph) + 0.03 * Math.sin(ft * 8.7 + ph * 1.7);
       r = Math.round(255 * f1); g = Math.round(120 * f1); b = Math.round(40 * f1);
     } else if (rgb && isOn) [r, g, b] = rgb;
     else if (kelvin && isOn) {
@@ -7743,7 +7870,7 @@ function drawBgEditOverlay(ctx: CanvasRenderingContext2D, p: Planner, view: View
   const bg = f.bg;
   if (!bg || bg.visible === false || !bg.dataUrl || bg.locked) return;
   if (!bgImg || !bgImg.complete) return;
-  if (p.tool !== 'select') return;
+  if (p.uiMode !== 'edit' || p.tool !== 'select') return;   // an authoring frame
   const corners = [
     bgLocalToWorld(bg, -bg.w / 2, -bg.h / 2),
     bgLocalToWorld(bg,  bg.w / 2, -bg.h / 2),

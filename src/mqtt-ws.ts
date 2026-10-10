@@ -40,6 +40,11 @@ export function encodeRemainingLength(len: number): number[] {
 
 // Push a length-prefixed UTF-8 string (2-byte big-endian length + bytes).
 function pushString(arr: number[], bytes: Uint8Array): void {
+  // The length prefix is 16 bits; masking a longer string would silently
+  // corrupt the packet (and every packet after it on the stream).
+  if (bytes.length > 0xffff) {
+    throw new RangeError(`MQTT string too long (${bytes.length} bytes, max 65535)`);
+  }
   arr.push((bytes.length >> 8) & 0xff, bytes.length & 0xff);
   for (let i = 0; i < bytes.length; i++) arr.push(bytes[i]);
 }
@@ -251,6 +256,40 @@ export function matchTopicFilter(filter: string, topic: string): boolean {
   return f.length === t.length;                    // all levels consumed exactly
 }
 
+// ── Payload → string (binary-safe) ───────────────────────────────────────────
+// Consumers get a STRING payload (the bridge's `payloadString`), but MQTT
+// payloads are bytes: Frigate/Valetudo status topics are UTF-8 JSON/text while
+// Valetudo's `MapData/map-data` is zlib-deflated BINARY. A plain UTF-8 decode
+// replaces every invalid sequence with U+FFFD, irreversibly destroying binary
+// (the map could then never be inflated). So: decode as UTF-8 when the bytes
+// ARE valid UTF-8 (text keeps its non-ASCII characters intact), otherwise map
+// each byte to the code point of the same value — a lossless "binary string"
+// that valetudo-map.ts reverses with `charCodeAt(i) & 0xff`. Deliberately NOT
+// TextDecoder('latin1'): the WHATWG 'latin1' label is windows-1252, which remaps
+// 0x80–0x9F to other code points and would corrupt those bytes.
+// (A zlib stream starts 0x78 0x9c/0xda/0x01 — never valid UTF-8, so it always
+// takes the byte path.)
+let _strictUtf8: TextDecoder | null = null;
+export function payloadToString(bytes: Uint8Array): string {
+  try {
+    _strictUtf8 ??= new TextDecoder('utf-8', { fatal: true });
+    return _strictUtf8.decode(bytes);
+  } catch {
+    return bytesToBinaryString(bytes);
+  }
+}
+
+// Byte-for-byte string (code point i = byte value). Chunked so a multi-MB map
+// payload never blows the argument-count limit of String.fromCharCode.
+export function bytesToBinaryString(bytes: Uint8Array): string {
+  const CHUNK = 0x8000;
+  let out = '';
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    out += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK) as unknown as number[]);
+  }
+  return out;
+}
+
 // ── Browser client over native WebSocket (Path B transport) ─────────────────
 
 export type MqttStatus = 'connecting' | 'up' | 'error' | 'closed';
@@ -265,6 +304,8 @@ export interface MqttWsOptions {
   // Injectable WebSocket constructor (native default). The bridge test passes a
   // scripted fake here; production leaves it undefined → global WebSocket.
   WebSocketCtor?: typeof WebSocket;
+  // Injectable clock for the keepalive watchdog (test hook; default Date.now).
+  now?: () => number;
 }
 
 // Minimal MQTT-over-WebSocket client. QoS 0, clean session. Handshake +
@@ -280,15 +321,25 @@ export class MqttWsClient {
   private _connectTimer: ReturnType<typeof setTimeout> | null = null;
   private _connectResolve: (() => void) | undefined;
   private _connectReject: ((e: Error) => void) | undefined;
-  private _onMessage: ((m: { topic: string; payload: string }) => void) | undefined;
+  // `payload` is the binary-safe string (see payloadToString); `payloadBytes` is
+  // the raw PUBLISH payload for consumers that want bytes.
+  private _onMessage: ((m: { topic: string; payload: string; payloadBytes: Uint8Array }) => void) | undefined;
   private _onStatus: ((s: MqttStatus) => void) | undefined;
   private _status: MqttStatus = 'connecting';
-  private _dec = new TextDecoder();
   private _closed = false;
+  // Keepalive watchdog: timestamp of the last inbound byte. A half-open TCP
+  // path (NAT drop, sleeping Wi-Fi AP) never fires onclose, so without this the
+  // client would sit 'up' forever while receiving nothing.
+  private _lastRxAt = 0;
+  // Injectable clock (test hook) — Date.now by default.
+  private _now: () => number;
 
-  constructor(opts: MqttWsOptions) { this._opts = opts; }
+  constructor(opts: MqttWsOptions) {
+    this._opts = opts;
+    this._now = opts.now ?? (() => Date.now());
+  }
 
-  onMessage(cb: (m: { topic: string; payload: string }) => void): void { this._onMessage = cb; }
+  onMessage(cb: (m: { topic: string; payload: string; payloadBytes: Uint8Array }) => void): void { this._onMessage = cb; }
   onStatus(cb: (s: MqttStatus) => void): void { this._onStatus = cb; }
   get status(): MqttStatus { return this._status; }
 
@@ -347,9 +398,17 @@ export class MqttWsClient {
 
   // ── internals ──
   private _onWsData(data: unknown): void {
-    const chunk = data instanceof Uint8Array
-      ? data
-      : new Uint8Array(data as ArrayBuffer);
+    this._lastRxAt = this._now();
+    // Brokers send binary frames, but a TEXT frame must not be silently turned
+    // into an empty buffer (`new Uint8Array(string)` is length 0).
+    let chunk: Uint8Array;
+    if (typeof data === 'string') chunk = new TextEncoder().encode(data);
+    else if (data instanceof Uint8Array) chunk = data;
+    else if (data instanceof ArrayBuffer) chunk = new Uint8Array(data);
+    else if (ArrayBuffer.isView(data)) {
+      const v = data as ArrayBufferView;
+      chunk = new Uint8Array(v.buffer, v.byteOffset, v.byteLength);
+    } else return;   // Blob etc. — binaryType is 'arraybuffer', so unexpected
     // Append to the rx carry-over, decode whole packets, keep the partial rest.
     const merged = new Uint8Array(this._rx.length + chunk.length);
     merged.set(this._rx, 0);
@@ -372,7 +431,7 @@ export class MqttWsClient {
         }
         break;
       case 'publish':
-        try { this._onMessage?.({ topic: p.topic, payload: this._dec.decode(p.payload) }); }
+        try { this._onMessage?.({ topic: p.topic, payload: payloadToString(p.payload), payloadBytes: p.payload }); }
         catch { /* consumer threw — never break the socket loop */ }
         break;
       case 'pingresp':
@@ -399,7 +458,18 @@ export class MqttWsClient {
     const ka = this._opts.keepalive ?? 60;
     if (ka <= 0) return;
     this._clearKeepalive();
-    this._keepaliveTimer = setInterval(() => this._send(encodePingReq()), ka * 1000);
+    this._lastRxAt = this._now();
+    this._keepaliveTimer = setInterval(() => this._keepaliveTick(ka), ka * 1000);
+  }
+  // Each tick: if nothing at all (not even the PINGRESP to the previous tick's
+  // PINGREQ) arrived for 1.5 keepalive periods, the link is dead — fail it so
+  // the bridge's reconnect loop takes over. Otherwise ping again.
+  private _keepaliveTick(ka: number): void {
+    if (this._now() - this._lastRxAt > 1.5 * ka * 1000) {
+      this._fail(new Error('keepalive timeout'));
+      return;
+    }
+    this._send(encodePingReq());
   }
   private _fail(err: Error): void {
     this._clearTimers();

@@ -81,6 +81,23 @@
   // picture: no movement (rotation.x == 0, z == 0) even when "open"
   { const p = paneMeshes(g(4))[0]; ok('picture_static', Math.abs(p.rotation.x) < 1e-6 && Math.abs(p.position.z) < 1e-6, `rx=${p.rotation.x} z=${p.position.z}`); }
 
+  // === 2b. A window bound to a COVER (2026-09 renderer review) =============
+  // The sash used to test `state === 'on'` while the glass tint read
+  // doorOpenFraction, so a cover.* window (state 'open' / a position) tinted
+  // but never moved. It now moves PROPORTIONALLY to the cover's fraction.
+  {
+    const coverWins = [0, 1].map(i => ({ id: 'wcv' + i, x: 1100 + i * 1500, y: wallY, w: 1400,
+      rotation: 0, entity_id: 'cover.w' + i, kind: 'single' }));
+    const st = { 'cover.w0': { state: 'open', attributes: {} },
+                 'cover.w1': { state: 'open', attributes: { current_position: 50 } } };
+    r.updateFloor(mkFloor(coverWins), scene3d);
+    r.updateDoorsWindows([], coverWins, id => st[id] || null);
+    const full = paneMeshes(r._doorGroup.children[0])[0].rotation.x;
+    const half = paneMeshes(r._doorGroup.children[1])[0].rotation.x;
+    ok('cover_window_opens', Math.abs(full + Math.PI / 6) < 1e-6, full.toFixed(3));
+    ok('cover_window_proportional', Math.abs(half - full / 2) < 1e-6, `${half.toFixed(3)} vs ${full.toFixed(3)}`);
+  }
+
   // === 3. Custom sill/height moves glass + wall cut boxes ===================
   const custom = [{ id: 'cust', x: 4000, y: wallY, w: 1600, rotation: 0, entity_id: null, kind: 'single', sill: 400, height: 1400 }];
   r.updateFloor(mkFloor(custom), scene3d);

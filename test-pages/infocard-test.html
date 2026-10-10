@@ -94,6 +94,22 @@
   assert('minute flip → repaint (15:05)', rig('ic4').lastText === '15:05', rig('ic4').lastText);
   assert('texture re-uploaded on repaint (version bumped)', rig('ic4').tex.version > ver0, `v0=${ver0} v=${rig('ic4').tex.version}`);
 
+  // ── relativeTime entity card re-formats as the clock moves ───────────────
+  // Regression: a "5 min ago" card froze in 3D — the entity state never
+  // changes, so _keyInfo never rebuilt it. It now repaints like a clock card.
+  const tsIso = new Date(2026, 0, 5, 15, 0, 0).toISOString();
+  const relCard = { id: 'ic5', x: 3500, y: 3000, mount: 'wall', displayMode: 'entity',
+    entity_id: 'sensor.last_seen', billboard: true, format: { relativeTime: true } };
+  const relStates = { 'sensor.last_seen': { state: tsIso, attributes: { device_class: 'timestamp' }, entity_id: 'sensor.last_seen' } };
+  r.updateInfoCards([relCard, tempCard], sp(relStates), undefined, { now: new Date(2026, 0, 5, 15, 4, 0) });
+  const relBefore = rig('ic5').lastText, relVer0 = rig('ic5').tex.version;
+  assert('relativeTime card flagged for per-frame repaint', !!rig('ic5').relTime);
+  assert('plain entity card is NOT flagged relTime (negative control)', !rig('ic1').relTime);
+  r._advanceInfoCards(new Date(2026, 0, 5, 16, 30, 0));
+  assert('relativeTime text moves with the clock (no rebuild)', rig('ic5').lastText !== relBefore,
+    `${relBefore} → ${rig('ic5').lastText}`);
+  assert('relativeTime repaint re-uploads the texture', rig('ic5').tex.version > relVer0);
+
   // ── layer flag hides + drops from render ─────────────────────────────────
   r.updateInfoCards([tempCard, clockCard], sp({ 'sensor.temp': { state: '21', attributes: {}, entity_id: 'sensor.temp' } }), { info: false }, { now: new Date() });
   assert('layer info:false → nothing built', grpN() === 0 && r._infoRigs.length === 0, `n=${grpN()}`);

@@ -160,7 +160,12 @@ export interface Sh3dConvertOptions {
 // SPECIFIC entries before the generic ones (coffee table before table). Tested
 // against `name` + `catalogId`, both lower-cased. Unmatched pieces are SKIPPED
 // (no blocks) so we never spam the plan with mystery boxes.
-const FURNITURE_KEYWORDS: [RegExp, FurnitureKind][] = [
+// Every keyword is matched at a WORD START (no letter/digit before it): plain
+// substring matching read "orange" as a range (stove) and "woven" as an oven.
+// Short words that are common word PREFIXES also require a word end (plural s
+// allowed). CamelCase catalog ids ("eTeks#kitchenCabinet") are split into words
+// before matching (see mapFurnitureKind), so word-start matching still sees them.
+const FURNITURE_KEYWORDS_RAW: [RegExp, FurnitureKind][] = [
   [/coffee\s*table|table\s*basse/, 'coffee_table'],
   [/night\s*stand|bedside|table\s*de\s*(nuit|chevet)/, 'nightstand'],
   [/dining\s*table|kitchen\s*table|table\b|table\s*à?\s*manger/, 'table'],
@@ -180,23 +185,33 @@ const FURNITURE_KEYWORDS: [RegExp, FurnitureKind][] = [
   [/cabinet|cupboard|placard/, 'cabinet'],
   [/refriger|fridge|réfrig|frigo/, 'fridge'],
   [/dish\s*washer|lave.?vaisselle/, 'dishwasher'],
-  [/stove|oven|range|cooktop|cuisinière|four\b/, 'stove'],
+  [/stove|ovens?(?![a-z\u00e0-\u00ff])|ranges?(?![a-z\u00e0-\u00ff])|cooktop|cuisinière|four\b/, 'stove'],
   [/microwave|micro.?onde/, 'microwave'],
   [/washer|washing\s*machine|lave.?linge/, 'washer'],
   [/dryer|sèche.?linge/, 'dryer'],
   [/television|\btv\b|téléviseur/, 'tv'],
   [/toilet|\bwc\b|water\s*closet|toilette/, 'toilet'],
-  [/bath\s*tub|bathtub|\btub\b|baignoire/, 'bathtub'],
+  [/bath\s*tub|bathtub|tubs?(?![a-z\u00e0-\u00ff])|baignoire/, 'bathtub'],
   [/shower|douche/, 'shower'],
   [/sink|wash\s*basin|basin|lavatory|lavabo|évier/, 'sink'],
-  [/rug|carpet|tapis/, 'rug'],
+  [/rugs?(?![a-z\u00e0-\u00ff])|carpet|tapis/, 'rug'],
   [/\bplant|flower|plante/, 'plant'],
   [/wardrobe|cabinet/, 'cabinet'],
   [/\bcar\b|vehicle|voiture/, 'car'],
 ];
+const FURNITURE_KEYWORDS: [RegExp, FurnitureKind][] = FURNITURE_KEYWORDS_RAW.map(
+  ([re, kind]) => [new RegExp(`(?<![\\p{L}\\p{N}])(?:${re.source})`, 'u'), kind]);
+
+// camelCase / letter-digit boundaries → spaces, so "kitchenCabinet120" reads as
+// "kitchen cabinet 120" for the word-start keyword match.
+function splitWords(s: string): string {
+  return s.replace(/([\p{Ll}\p{N}])(\p{Lu})/gu, '$1 $2')
+          .replace(/(\p{L})(\p{N})/gu, '$1 $2')
+          .replace(/(\p{N})(\p{L})/gu, '$1 $2');
+}
 
 function mapFurnitureKind(name: string, catalogId: string): FurnitureKind | null {
-  const hay = `${name} ${catalogId}`.toLowerCase();
+  const hay = `${splitWords(name)} ${splitWords(catalogId)}`.toLowerCase();
   for (const [re, kind] of FURNITURE_KEYWORDS) if (re.test(hay)) return kind;
   return null;
 }

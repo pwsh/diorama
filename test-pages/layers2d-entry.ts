@@ -20,11 +20,19 @@ export { Planner } from './planner.js';
 // which needs the document-level shared CSS the app normally injects.
 export { injectSharedStyles } from './styles.js';
 export { drawAll, computeView, mmToPx, fixtureCaption } from './canvas-render.js';
-export { hitDoor, hitWindow, openingsVisible } from './canvas-hit.js';
+export {
+  hitDoor, hitWindow, openingsVisible,
+  // §10 — every fixture hit test honours its painter's layer gate.
+  hitFixture, hitSensor, hitMotionSensor, hitEnvSensor, hitInfoCard, hitActionButton,
+  hitPlug, hitSafetySensor, hitFurniture, hitWall, hitBgBody,
+} from './canvas-hit.js';
+export { onCanvasClick } from './canvas-interact.js';
 export {
   LAYER_DEFS, LAYER_CATS, SIMPLE_LAYERS, DEFAULT_OFF_LAYERS,
   layerIsOn, layerDefsByCat,
 } from './layer-defs.js';
+// Sidebar-org §N pins the strict rule-operand parse (the value-rules gate).
+export { ruleValueFromText } from './ui/sidebar.js';
 import './ui/sidebar.js';
 import './ui/modals.js';
 import './ui/canvas-2d.js';

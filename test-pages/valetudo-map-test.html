@@ -90,6 +90,30 @@
   ok('decode_plainjson', decoded && decoded.segments.length === 2);
   ok('decode_garbage', (await decodeMapDataPayload('not json at all')) === null);
 
+  // === 4b. Compressed (zlib) payload — as BYTES and as the direct bridge's
+  // binary-safe string; a failed inflate must not leak unhandled rejections.
+  let unhandled = 0;
+  const onUnhandled = () => { unhandled++; };
+  window.addEventListener('unhandledrejection', onUnhandled);
+  const zbytes = await (async () => {
+    const cs = new CompressionStream('deflate');
+    const w = cs.writable.getWriter();
+    w.write(new TextEncoder().encode(JSON.stringify(fixture))); w.close();
+    return new Uint8Array(await new Response(cs.readable).arrayBuffer());
+  })();
+  const fromBytes = await decodeMapDataPayload(zbytes);
+  ok('decode_zlib_bytes', fromBytes && fromBytes.segments.length === 2);
+  let bin = ''; for (const b of zbytes) bin += String.fromCharCode(b);
+  const fromBinStr = await decodeMapDataPayload(bin);
+  ok('decode_zlib_binary_string', fromBinStr && fromBinStr.segments.length === 2);
+  // Negative control: the pre-fix transport (lossy UTF-8 decode) can't be inflated.
+  const lossy = new TextDecoder().decode(zbytes);
+  ok('decode_zlib_lossy_utf8_fails', (await decodeMapDataPayload(lossy)) === null);
+  ok('decode_garbage_bytes', (await decodeMapDataPayload(Uint8Array.from([1, 2, 3, 250]))) === null);
+  await new Promise(r => setTimeout(r, 50));
+  window.removeEventListener('unhandledrejection', onUnhandled);
+  ok('decode_no_unhandled_rejections', unhandled === 0, `unhandled=${unhandled}`);
+
   // === 5. Publish payload shape (recorded via a fake bridge) =============
   const sent = [];
   const fakeBridge = { publish: (t, p) => sent.push({ t, p }) };

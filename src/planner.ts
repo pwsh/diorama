@@ -2,9 +2,9 @@ import { HassClient, type HaApi, type ForecastRecord,
          type HaFloorReg, type HaAreaReg } from './ha-client.js';
 import { parseHeadlines, type CalEvent } from './surfaces.js';
 import { SensorDiscovery } from './sensor-discovery.js';
-import { loadStore, saveStore, newId, repairFloor, defaultStore,
+import { loadStore, saveStore, newId, repairFloor, defaultStore, STORE_KEY,
          cfgBodyKey, loadConfigsCache, saveConfigsCache } from './storage.js';
-import { slugToName, normMac, localToWorld, segCrossesSolidWall, mowerSweepWaypoints,
+import { slugToName, normMac, localToWorld, segmentsIntersect, wallKind, wallCutsForSegment, mowerSweepWaypoints,
          MOWER_KINEMATICS, MOWER_ROW_MM, MOWER_CONTAINMENT, stepBicycle,
          mowerWaypointReached, wrapAngle, buildingWallLoops, pointInAnyLoop,
          nearestPointOutsideLoops, pointInPolygon, doorSpanCenter,
@@ -21,6 +21,10 @@ import { slugToName, normMac, localToWorld, segCrossesSolidWall, mowerSweepWaypo
          type LockGlyphState, type RoomTemp, type TempSample,
          type BicycleState } from './geometry.js';
 import { solveHomography, applyHomography } from './homography.js';
+import { SHARED_WRITE_COMMAND, SHARED_INDEX_NAME, SHARED_PROBE_NAME, SHARED_MAX_CHUNKS,
+         sharedChunkPlan, sharedWriteServiceData, sharedUrl, parseSharedIndex, sharedConfigIdOk,
+         upsertSharedIndex, removeFromSharedIndex, sharedErrorIsMissingService,
+         type SharedIndex, type SharedIndexEntry } from './shared-config.js';
 import { loadKeybinds, saveKeybinds, type KeybindAction, type KeybindMap } from './keybinds.js';
 import { viewCenterFitsFloor as _viewCenterFitsFloor,
          browserViewStorage, loadView2d, saveView2d } from './view-persist.js';
@@ -132,9 +136,11 @@ import {
   HOUR_MS, accumulateSample, hourBucket, historyKey, historyKeysForRange,
   makePresenceRecord, presenceGridCols, presenceGridRows, presenceMaxSeconds,
   sumPresenceRecords, type PresenceCellMap,
+  presenceCellCenter, presenceCellIndex, parseHistoryKey, decodePresenceCells, accumulateDwell,
 } from './mmwave-history.js';
 import {
   mergePresenceRecord, getPresenceRecords, sweepPresenceHistory, clearPresenceHistory,
+  listPresenceKeys, putPresenceRecord,
 } from './history-store.js';
 import {
   fetchOpenMeteo, fetchOpenMeteoForecast, geocodeZip, resolveWeatherEntity, deriveFromSensors,
@@ -415,6 +421,54 @@ export interface RobotPosInfo {
   headingDeg: number | null;       // reported heading (plan frame, ° CCW from +X), when known
 }
 
+// FNV-1a over a floor's wall geometry (points + kinds). Cheap enough to run per
+// call (a few hundred numbers), so wall-derived caches stay correct even across
+// a live vertex drag that mutates walls without a save()/configRev bump.
+function fnvMix(h: number, v: number): number {
+  return Math.imul(h ^ (Math.round(v * 16) | 0), 16777619);
+}
+function fnvStr(h: number, s: string): number {
+  for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619);
+  return h;
+}
+function wallsHash(walls: { points: Vec2[]; kind?: string }[]): number {
+  let h = 2166136261;
+  for (const w of walls) {
+    h = fnvStr(h, w.kind ?? 'full');
+    h = fnvMix(h, w.points.length);
+    for (const p of w.points) { h = fnvMix(h, p.x); h = fnvMix(h, p.y); }
+  }
+  return h >>> 0;
+}
+function openingsHash(doors: { x: number; y: number; w: number; rotation: number; kind?: string }[],
+                      windows: { x: number; y: number; w: number }[]): number {
+  let h = 2166136261;
+  for (const d of doors) { h = fnvMix(h, d.x); h = fnvMix(h, d.y); h = fnvMix(h, d.w); h = fnvMix(h, d.rotation || 0); h = fnvStr(h, d.kind ?? ''); }
+  h = fnvMix(h, -1);
+  for (const w of windows) { h = fnvMix(h, w.x); h = fnvMix(h, w.y); h = fnvMix(h, w.w); }
+  return h >>> 0;
+}
+
+// Current-floor fixture lists whose bound ids feed Planner._ifaceIds.
+const IFACE_ARRAY_KEYS = [
+  'envSensors', 'infoCards', 'actionButtons', 'lights', 'furniture', 'doors', 'windows',
+  'alarmPanels', 'calendarPanels', 'thermostats', 'safetySensors', 'alertBeacons', 'rooms',
+  'robots', 'presenceZones', 'cameras', 'projectors', 'valves', 'plugs', 'flagpoles', 'pools',
+] as const;
+
+const SLOW_ARRAY_KEYS = [...IFACE_ARRAY_KEYS, 'sensors', 'switches', 'motionSensors', 'sprinklerZones'] as const;
+
+// Current-floor-scoped id sets consulted per state_changed (see
+// Planner._ifaceIds).
+interface IfaceIds {
+  cfg: Set<string>;      // non-number/switch config-path ids (the _isSlowEntity ladder)
+  door: Set<string>;     // Door.doorbellEntity
+  cam: Set<string>;      // CameraFixture.alertEntity
+  appl: Set<string>;     // appliance job entities (jobStateEntity ?? own entity for job kinds)
+  cal: Set<string>;      // wall-calendar calendar ids
+  weather: Set<string>;  // local weather SOURCE ids (entity / station sensors)
+}
+
 // Unbound-toilet flush window (ms). Slightly longer than the renderer's 4 s
 // one-shot so the animation always completes before localState clears.
 export const TOILET_FLUSH_MS = 4300;
@@ -423,6 +477,48 @@ export const TOILET_FLUSH_MS = 4300;
 // item is off-limits to the avatar-interaction system for this long. See
 // Planner.avatarMayActuate / toggleItem for the full rationale.
 export const USER_TOGGLE_IMMUNITY_MS = 600_000;   // 10 min
+
+// Domains whose entities are READ-ONLY state (a door/window/bin/sink bound to a
+// binary_sensor is a display binding) — toggleEntity must never call
+// `<domain>.toggle` on them (HA rejects binary_sensor.toggle etc.).
+const READ_ONLY_TOGGLE_DOMAINS = new Set([
+  'binary_sensor', 'sensor', 'event', 'device_tracker', 'person', 'zone', 'sun',
+  'weather', 'calendar', 'image', 'alarm_control_panel',
+]);
+// Domains that genuinely expose a `<domain>.toggle` service.
+const NATIVE_TOGGLE_DOMAINS = new Set([
+  'light', 'switch', 'fan', 'media_player', 'cover', 'climate', 'humidifier',
+  'siren', 'valve', 'input_boolean', 'remote', 'automation', 'script', 'group',
+]);
+
+// The service a "toggle this bound entity" click should call, picked by domain
+// (and, for domains without a toggle service, by the entity's CURRENT state —
+// never a blind toggle). null = read-only / nothing to do. Pure + exported for
+// tests. Unknown domains fall back to the generic `homeassistant.toggle`.
+export function toggleServiceFor(entityId: string, state: string | null):
+    { domain: string; service: string } | null {
+  const dot = entityId.indexOf('.');
+  const domain = dot > 0 ? entityId.slice(0, dot) : '';
+  if (!domain) return null;
+  if (READ_ONLY_TOGGLE_DOMAINS.has(domain)) return null;
+  if (NATIVE_TOGGLE_DOMAINS.has(domain)) return { domain, service: 'toggle' };
+  switch (domain) {
+    case 'lock':
+      return { domain, service: (state === 'locked' || state === 'locking' || state === 'jammed') ? 'unlock' : 'lock' };
+    case 'water_heater':
+      return { domain, service: state === 'off' ? 'turn_on' : 'turn_off' };
+    case 'button': case 'input_button':
+      return { domain, service: 'press' };
+    case 'scene':
+      return { domain, service: 'turn_on' };
+    case 'vacuum':
+      return { domain, service: (state === 'cleaning' || state === 'on') ? 'return_to_base' : 'start' };
+    case 'lawn_mower':
+      return { domain, service: state === 'mowing' ? 'dock' : 'start_mowing' };
+    default:
+      return { domain: 'homeassistant', service: 'toggle' };
+  }
+}
 
 // Sentinel for Planner.placingRoomId meaning "create a new room at the next
 // canvas click" (vs an existing room id = re-place that room's anchor).
@@ -589,10 +685,23 @@ export class Planner extends EventTarget {
   disc = new SensorDiscovery();
 
   // Config-channel membership for `number.*` / `switch.*` entities (perf). See
-  // _slowIds() / _rebuildSlowIds() — rebuilt lazily whenever configRev moves.
+  // _slowIds() / _rebuildSlowIds() — rebuilt lazily whenever `_storeRev` moves.
   private _slowIdSet: Set<string> | null = null;
   private _slowIdPrefixes: string[] = [];
   private _slowIdsRev = -1;
+  // STORE revision: bumped ONLY where bindings can change — save() (the store
+  // mutation choke point), _applyLoadedStore, bindSensor. NOT configRev: every
+  // emitConfig bumps that (incl. each bound number./switch. state change), which
+  // used to rebuild the membership sets on nearly every such event.
+  private _storeRev = 0;
+  // Current-floor-scoped "interesting id" sets for the per-event detectors +
+  // the non-number/switch config-path rules (see _ifaceIds). Keyed on
+  // `${_storeRev}|${currentFloorId}` (several rules are current-floor-only).
+  private _iface: IfaceIds | null = null;
+  private _ifaceKey = '';
+  private _ifaceGen = 0;        // bumped on every rebuild
+  private _ifaceRefs: unknown[] = [];   // structural fingerprint (array identities + lengths)
+  private _detSeededGen = -1;   // _ifaceGen the detectors last ran a FULL (seeding) pass for
 
   // Per-bound-sensor live state, keyed by sensor.id
   discBy: Record<string, DiscoveredDevice> = {};
@@ -790,13 +899,8 @@ export class Planner extends EventTarget {
   // robot moves consistently whether or not the 3D view was ever opened. See
   // RobotState / stepRobots below.
   robotStates: Record<string, RobotState> = {};
-  // Cached mower sweep waypoints, keyed by floor id + configRev (walls change).
-  private _robotWpCache: { key: string; wps: Vec2[] } | null = null;
-  // Cached BUILDING loops (the mower's no-go interiors), same key. A wall vertex
-  // DRAG mutates points without save(), so this can be one gesture stale — the
-  // mower drifting a few mm against a wall being dragged is harmless, and the
-  // release bumps configRev.
-  private _mowerLoopCache: { key: string; loops: Vec2[][] } | null = null;
+  // (Mower sweep waypoints + BUILDING loops are cached per floor on the WALL
+  // GEOMETRY HASH — see _wallLoopEntry — so a live vertex drag is never stale.)
 
   // Active person (sidebar People list expansion). Runtime only.
   activePersonId: string | null = null;
@@ -1009,6 +1113,7 @@ export class Planner extends EventTarget {
   private static readonly CAM_LABELS = ['person', 'dog', 'cat', 'car'];
   private static readonly CAM_SLOTS = 3;              // max tracked objects per camera/label
   private static readonly CAM_MATCH_MM = 2500;        // nearest-position successor match radius
+  private static readonly CAM_SUCCESSOR_STALE_MS = 1000;   // a nearby slot must be this quiet to be a successor
   private static readonly CAM_RETIRE_MS = 8000;       // release a slot after this long without an update
 
   // ── Neighborhood overlay (OpenFreeMap — Wave 1 data layer) ─────────────────
@@ -1321,6 +1426,13 @@ export class Planner extends EventTarget {
   constructor() {
     super();
     this.store = loadStore();
+    // Seed the active config id from the cached registry index so a pre-load
+    // save (before HA's index arrives) targets the RIGHT config body instead of
+    // the 'default' placeholder.
+    try {
+      const ci = loadConfigsCache();
+      if (ci && typeof ci.activeId === 'string' && ci.activeId) this.activeConfigId = ci.activeId;
+    } catch { /* no cache — keep the placeholder */ }
     this.showDetails = this.store.showDetails === true;
     this.useRawTargets = this.store.useRawTargets === true;
     // Seed the avatar-pack registry config from the (cached) store so the very
@@ -1337,24 +1449,31 @@ export class Planner extends EventTarget {
     if (!this.store.activeSensorId) return null;
     return this.floor().sensors.find(s => s.id === this.store.activeSensorId) || null;
   }
-  save(): void {
+  // `opts.undo === false` persists WITHOUT recording an undo step — for pure
+  // selection / view state that happens to live in the Store (the active mmWave
+  // sensor, the current floor). Recording those made no-op undo steps AND
+  // cleared the redo stack on every floor switch / sensor click.
+  save(opts?: { undo?: boolean }): void {
+    // Any persisted mutation may have changed a BINDING, so invalidate the
+    // store-derived membership sets (_slowIds + the detector interest sets).
+    // save() is THE store-mutation choke point, so pinning it here means a
+    // setter that only saves can never leave a new binding on the live path.
+    // Bumped even outside edit mode (cheap; kiosk never binds anything).
+    this._storeRev++;
     // Kiosk / view-only modes never persist anything — a wall tablet must
     // not write its runtime view tweaks (or anything else) back to HA or
     // even its own localStorage cache.
     if (this.uiMode !== 'edit') return;
-    // Any persisted mutation may have changed a BINDING, so invalidate the
-    // config-channel membership set (_slowIds). Belt-and-braces: virtually
-    // every binding edit also emitConfig()s (which the rev guard catches), but
-    // save() is THE store-mutation choke point, so pinning it here means a
-    // setter that only saves can never leave a new binding on the live path.
-    // Rebuilding is a cheap store sweep and save() is a user-edit cadence.
-    this._slowIdsRev = -1;
     // Undo history: record the pre-mutation baseline before persisting. Cheap
     // no-op when nothing changed since the last snapshot (identical serialize).
-    this._pushUndoSnapshot();
+    // The ONE serialization is reused for the local cache write below.
+    const json = opts?.undo === false ? this._rebaselineSelection() : this._pushUndoSnapshot();
+    // Shared configs: a recent local edit holds off reloading another user's
+    // newer version over it (refreshSharedIndex's 5 s rule).
+    if (!this._suppressHaSave) this._lastLocalEditAt = Date.now();
     // Local cache (diorama:store:v1) is the ACTIVE config body — written
     // immediately so it survives reload / paints instantly next load.
-    saveStore(this.store);
+    try { localStorage.setItem(STORE_KEY, json); } catch { /* ignore */ }
     // HA is the source of truth: debounce a push so rapid edits (drag, slider)
     // don't hammer the WS. Skip while applying an HA payload to avoid a save
     // loop right after fetching.
@@ -1372,6 +1491,9 @@ export class Planner extends EventTarget {
   private async _flushSave(): Promise<void> {
     if (!this.hass) return;
     const id = this.activeConfigId;
+    // A SHARED active config persists to the shared files, never to this
+    // user's user_data (another HA user may be the one who created it).
+    if (this.isSharedConfig(id)) { await this._flushShared(id); return; }
     try {
       await this.hass.setUserData(cfgBodyKey(id), this.store);
       const meta = this.configIndex?.configs.find(c => c.id === id);
@@ -1392,14 +1514,34 @@ export class Planner extends EventTarget {
   // Push the last-known baseline onto the undo stack when the store changed.
   // Called from save() (edit-mode only). Coalesces identical serializations so
   // repeated save()s within one mutation, or unchanged saves, don't stack.
-  private _pushUndoSnapshot(): void {
+  // Returns the current store serialization (reused by save()).
+  private _pushUndoSnapshot(): string {
     const cur = JSON.stringify(this.store);
-    if (this._lastSnapshotJson === null) { this._lastSnapshotJson = cur; return; }
-    if (cur === this._lastSnapshotJson) return;   // no net change
+    if (this._lastSnapshotJson === null) { this._lastSnapshotJson = cur; return cur; }
+    if (cur === this._lastSnapshotJson) return cur;   // no net change
     this._undoStack.push(this._lastSnapshotJson);
     this._redoStack = [];                          // a fresh edit invalidates redo
     this._lastSnapshotJson = cur;
     this._trimUndoStacks();
+    return cur;
+  }
+
+  // save({undo:false}) path: fold ONLY the selection/view fields (current floor,
+  // active sensor) into the undo baseline without pushing a step, so the next
+  // real edit doesn't record a phantom "selection changed" undo entry. Any other
+  // (unsaved) difference stays un-absorbed and is still captured by the next
+  // normal save(). Returns the current store serialization.
+  private _rebaselineSelection(): string {
+    const cur = JSON.stringify(this.store);
+    if (this._lastSnapshotJson === null) { this._lastSnapshotJson = cur; return cur; }
+    if (cur === this._lastSnapshotJson) return cur;
+    try {
+      const b = JSON.parse(this._lastSnapshotJson) as Store;
+      b.currentFloorId = this.store.currentFloorId;
+      b.activeSensorId = this.store.activeSensorId;
+      this._lastSnapshotJson = JSON.stringify(b);
+    } catch { /* keep the old baseline */ }
+    return cur;
   }
 
   // Enforce the entry cap (50) and total-byte cap (~8 MB) — drop oldest first.
@@ -1447,9 +1589,33 @@ export class Planner extends EventTarget {
   // context (floor if still present, tool, pan/zoom) — only transient
   // drag/edit state and selections are cleared. Persists to HA (debounced) but
   // never pushes a new undo snapshot (baseline is set to the applied store).
+  // Per-subsystem signatures of the config each background integration reads.
+  // _applyHistorySnapshot compares before/after and restarts ONLY what changed
+  // (an undo of a furniture nudge must not tear down the MQTT bridge, re-poll
+  // calendars, or null the weather forecast arrays).
+  private _integrationSigs(): Record<'mqtt' | 'weather' | 'alerts' | 'nbhd' | 'flights' | 'presence' | 'calendars', string> {
+    const st = this.store;
+    const j = (v: unknown): string => JSON.stringify(v ?? null);
+    const cal = new Set<string>();
+    for (const f of st.floors ?? []) for (const c of f.calendarPanels ?? []) for (const id of c.calendarIds ?? []) cal.add(id);
+    const geo = j(st.geo);
+    return {
+      mqtt: j(st.mqttBridge),
+      weather: j(st.weather),
+      alerts: j(st.alerts),
+      // The neighborhood overlay is positioned by the geo fit.
+      nbhd: j(st.neighborhood) + '|' + geo,
+      // The flight observer origin chain reads the geo fit, then weather lat/lon.
+      flights: j(st.flights) + '|' + geo + '|' + j([st.weather?.lat, st.weather?.lon]),
+      presence: j(st.presenceHistory),
+      calendars: [...cal].sort().join('\x00'),
+    };
+  }
+
   private _applyHistorySnapshot(json: string): void {
     let remote: Store;
     try { remote = JSON.parse(json) as Store; } catch { return; }
+    const before = this._integrationSigs();
     this._suppressHaSave = true;
     try {
       this.store = this._normalizeStore(remote, this.store.currentFloorId);
@@ -1465,16 +1631,29 @@ export class Planner extends EventTarget {
     } finally {
       this._suppressHaSave = false;
     }
-    this._reconfigureWeather();
-    this._calendarInited = true;
-    this._startCalendarPoll();
-    this._mqttInited = true;
-    void this._reconfigureMqtt();
-    if (this._alertInited) this._reconfigureAlertCenter();
+    // Reconfigure ONLY the integrations whose config the undo/redo actually
+    // changed (before/after signature compare).
+    this._reconfigureChangedIntegrations(before);
     // Persist the restored store to HA (debounced). save() sees the baseline
     // == current, so it won't record a fresh undo snapshot for the undo itself.
     this.save();
     this.emitConfig();
+  }
+
+  // Restart only the integrations whose config signature moved since `before`
+  // (shared by undo/redo and the shared-config remote reload).
+  private _reconfigureChangedIntegrations(before: ReturnType<Planner['_integrationSigs']>): void {
+    const after = this._integrationSigs();
+    if (before.weather !== after.weather) this._reconfigureWeather();
+    if (before.calendars !== after.calendars) { this._calendarInited = true; this._startCalendarPoll(); }
+    if (before.mqtt !== after.mqtt) { this._mqttInited = true; void this._reconfigureMqtt(); }
+    if (before.alerts !== after.alerts && this._alertInited) this._reconfigureAlertCenter();
+    if (before.nbhd !== after.nbhd) void this._reconfigureNeighborhood();
+    if (before.flights !== after.flights) { this._flightsInited = true; void this._reconfigureFlights(); }
+    if (before.presence !== after.presence) { this._presInited = true; this._reconfigurePresenceHistory(); }
+    // Undo/redo can restore a camera calibration — (re)arm the Frigate feed if
+    // the bridge is up (idempotent; also retires a stale topic).
+    if (this._mqttBridge) this.ensureFrigateSub();
   }
 
   // Clear per-item selections + transient drag/edit/drawing state (used by undo/
@@ -1694,6 +1873,7 @@ export class Planner extends EventTarget {
   // Shared wiring for both modes. Native panel mode passes a
   // HassPanelAdapter riding HA frontend's authenticated connection.
   connectWith(api: HaApi): void {
+    if (this._disposed) return;   // torn down — never restart timers / polls
     this.hass = api;
     this.hass.onConn(s => { this.conn = s; this.emitConn(); });
     this.hass.onState((states, changedId) => this._onStates(states, changedId));
@@ -1716,13 +1896,76 @@ export class Planner extends EventTarget {
     // tabs); a fresh get_states resyncs everything cheaply.
     if (typeof document !== 'undefined' && !this._visListenerBound) {
       this._visListenerBound = true;
-      document.addEventListener('visibilitychange', () => {
+      this._visHandler = () => {
         if (document.visibilityState === 'visible' && this.hass) {
           this.hass.refreshStates().catch(err =>
             console.warn('visibility refreshStates failed:', err));
+          // Pick up another HA user's shared-config edit on resume.
+          if (this.configIndex) void this.refreshSharedIndex();
         }
-      });
+      };
+      document.addEventListener('visibilitychange', this._visHandler);
     }
+  }
+
+  private _visHandler: (() => void) | null = null;
+  private _disposed = false;
+
+  // Tear the planner down: stop every timer / poll / subscription it owns, stop
+  // the MQTT bridge, drop the listeners it registered, flush a pending HA save,
+  // and close the HA connection. IDEMPOTENT (a second call is a no-op). Called
+  // by the app / panel / card hosts when their element is torn down for good —
+  // previously a remounted panel left the old planner's intervals running
+  // forever (weather / calendar / flights polls, the fusion tick, presence
+  // recorder …) against a dead connection.
+  dispose(): void {
+    if (this._disposed) return;
+    this._disposed = true;
+    // Pending debounced HA save: send it NOW. _flushSave issues the body write
+    // synchronously (its first await is inside setUserData), so the message is
+    // on the socket before close() below; the follow-up index write is best
+    // effort. The local cache was already written by save().
+    if (this._haSaveTimer) {
+      clearTimeout(this._haSaveTimer); this._haSaveTimer = null;
+      try { void this._flushSave(); } catch { /* best effort */ }
+    }
+    const ci = (t: ReturnType<typeof setInterval> | null): void => { if (t) clearInterval(t); };
+    const ct = (t: ReturnType<typeof setTimeout> | null | undefined): void => { if (t) clearTimeout(t); };
+    ci(this._fusionTimer); this._fusionTimer = null;
+    ci(this._calendarTimer); this._calendarTimer = null;
+    ci(this._weatherTimer); this._weatherTimer = null;
+    ci(this._weatherFcTimer); this._weatherFcTimer = null;
+    ci(this._flightsTimer); this._flightsTimer = null;
+    ci(this._issTimer); this._issTimer = null;
+    ci(this._sharedTimer); this._sharedTimer = null;
+    for (const t of this._retrySyncTimers) ct(t);
+    this._retrySyncTimers = [];
+    for (const k of Object.keys(this._toiletFlushTimers)) ct(this._toiletFlushTimers[k]);
+    this._toiletFlushTimers = {};
+    for (const k of Object.keys(this._bleSolveTimers)) ct(this._bleSolveTimers[k]);
+    this._bleSolveTimers = {};
+    for (const rec of [this.zoneWriteTimer, this.objWriteTimer]) {
+      for (const k of Object.keys(rec)) for (const t of rec[k] ?? []) ct(t);
+    }
+    ct(this._presRemapTimer); this._presRemapTimer = null;
+    this._clearGeoCalibTimer();
+    // Alert Center: notification subscription + Repairs poll (bumps the
+    // generation so a still-pending subscribe resolves into its own unsub).
+    this._stopAlertCenter();
+    // Presence recorder: sample / flush / sweep timers + its visibility and
+    // pagehide listeners. Un-flushed samples are dropped (as on disable).
+    this._stopPresenceHistory();
+    // Any in-flight neighborhood / MQTT reconfigure is superseded.
+    this._nbhdRunId++;
+    this._mqttGen++;
+    if (this._mqttBridge) { try { this._mqttBridge.stop(); } catch { /* ignore */ } this._mqttBridge = null; }
+    if (this._visHandler && typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', this._visHandler);
+    }
+    this._visHandler = null;
+    this._visListenerBound = false;
+    const hass = this.hass;
+    try { hass?.close?.(); } catch { /* ignore */ }
   }
 
   // ── Avatar packs ──────────────────────────────────────────────────────────
@@ -1943,10 +2186,17 @@ export class Planner extends EventTarget {
       if (!this.discBy[s.id]) this.discBy[s.id] = this.disc.discoverForDevice(states, s.deviceSlug);
       this.ensureLiveState(s.id);
     }
+    // Detector gating (perf): each detector skips an event whose entity it does
+    // not watch. The FIRST event after the watched sets change (store edit /
+    // floor switch) runs every detector in full so new bindings seed silently,
+    // exactly as a full refresh does.
+    const ifc = this._ifaceIds();
+    const detId = this._detSeededGen === this._ifaceGen ? changedId : undefined;
+    this._detSeededGen = this._ifaceGen;
     this._syncOccupancy(states);
-    this._detectDoorbells(states);
-    this._detectCameraAlerts(states);
-    this._detectApplianceEvents(states);
+    this._detectDoorbells(states, detId);
+    this._detectCameraAlerts(states, detId);
+    this._detectApplianceEvents(states, detId);
 
     // BLE trilateration (live path only): record fresh per-scanner distances and
     // re-solve on new samples. A full refresh (changedId undefined) re-reads
@@ -1954,14 +2204,18 @@ export class Planner extends EventTarget {
     // follows Bermuda's ~0.1 Hz push rate — never per frame.
     if (this.store.bermudaEnabled !== false && Object.keys(this.bleEntityMap).length) {
       if (changedId === undefined) {
+        // Full refresh: stamp each sample with the state's OWN last_updated —
+        // Date.now() made a distance HA last reported minutes ago look fresh.
         for (const eid of Object.keys(this.bleEntityMap))
-          if (states[eid]) this._recordBleSample(eid);
+          if (states[eid]) this._recordBleSample(eid, states[eid].last_updated);
         this._solveBle();
         this._fuseIdentities();
       } else if (this.bleEntityMap[changedId]) {
         this._recordBleSample(changedId);
-        this._solveBle();
-        this._fuseIdentities();
+        // Re-solve ONLY the device this sample belongs to, throttled to ~1 Hz
+        // per device (trailing edge) — Bermuda pushes one entity per scanner
+        // per device, so the old re-solve-everything-per-sample multiplied out.
+        this._scheduleBleSolve(this.bleEntityMap[changedId].deviceKey);
       }
     }
 
@@ -1975,7 +2229,7 @@ export class Planner extends EventTarget {
     // (these entities are slow-classified) repaints the chip + sidebar.
     const w = this.store.weather;
     if (w && w.source !== 'openmeteo') {
-      if (changedId === undefined || this._weatherEntityIds().includes(changedId)) {
+      if (changedId === undefined || ifc.weather.has(changedId)) {
         this._recomputeLocalWeather(states);
       }
     }
@@ -1989,7 +2243,9 @@ export class Planner extends EventTarget {
     // Weather "moment" detection (rain/severe/alert onset → house-wide event
     // bubbles). Idempotent: no-op when nothing transitioned. Runs after both
     // recomputes above so it sees the fresh condition + alert list.
-    this._detectWeatherEvents();
+    // Gated: weatherNow / weatherAlerts only change on the recomputes above, so
+    // an unrelated entity's event cannot produce a transition.
+    if (detId === undefined || ifc.weather.has(detId) || detId === alertId) this._detectWeatherEvents();
     // One-time weather setup on the first full state load (starts the Open-Meteo
     // poll if that source is configured in the local cache). _loadFromHa may
     // replace the config afterward and re-runs _reconfigureWeather itself.
@@ -2005,8 +2261,7 @@ export class Planner extends EventTarget {
     }
     // A bound calendar entity flipping on↔off is a cheap nudge to re-poll the
     // full agenda sooner than the timer (a new/ended event just changed state).
-    if (changedId !== undefined && (this.floor().calendarPanels ?? [])
-        .some(c => (c.calendarIds ?? []).includes(changedId))) {
+    if (changedId !== undefined && ifc.cal.has(changedId)) {
       void this._refreshCalendars();
     }
     // One-time presence-history recorder start on the first full load (mirrors
@@ -2050,15 +2305,22 @@ export class Planner extends EventTarget {
 
     const slow = changedId === undefined || this._isSlowEntity(changedId);
     if (!slow) return;
+    // One-time first-full-load work runs BEFORE the mmWave sync-blocked early
+    // return: a drag / zone edit in flight during connect used to postpone the
+    // authoritative HA config load (and the BLE / battery scans) until the NEXT
+    // full refresh, which might be a tab-refocus away.
+    if (changedId === undefined) this._firstFullLoadOnce();
     if (this.mmwaveSyncBlocked()) return;
 
     this._runFullSync(states);
+  }
 
+  private _firstFullLoadOnce(): void {
     // After the first state load, schedule a couple of follow-up syncs.
     // ESPHome can trickle entities in after `get_states` returned, so the
     // initial discovery may be incomplete. Retries cover that window without
     // requiring the user to click on the sensor to force it.
-    if (!this._initialSyncDone && changedId === undefined) {
+    if (!this._initialSyncDone) {
       this._initialSyncDone = true;
       for (const ms of [500, 2000, 5000]) {
         this._retrySyncTimers.push(setTimeout(() => {
@@ -2075,7 +2337,7 @@ export class Planner extends EventTarget {
     // sidebar click when the house is already set up (people bound / proxies
     // placed). scanBermuda rebuilds bleEntityMap; the next state event onward
     // records samples + solves. Cheap, guarded to run once.
-    if (!this._bleAutoScanned && changedId === undefined && this.store.bermudaEnabled !== false) {
+    if (!this._bleAutoScanned && this.store.bermudaEnabled !== false) {
       this._bleAutoScanned = true;
       const wantsBle = (this.store.people ?? []).some(p => p.bermudaDeviceId)
         || this.store.floors.some(fl => (fl.bleProxies ?? []).length > 0);
@@ -2084,7 +2346,7 @@ export class Planner extends EventTarget {
 
     // One-time battery-sibling registry scan (first full state snapshot). Cheap;
     // batteryFor() no-ops gracefully until it lands.
-    if (!this._batteryRegLoaded && changedId === undefined) void this.scanBatteryRegistry();
+    if (!this._batteryRegLoaded) void this.scanBatteryRegistry();
   }
 
   // Pull the persisted config registry from HA (source of truth). Runs once,
@@ -2111,11 +2373,26 @@ export class Planner extends EventTarget {
     if (!index || !Array.isArray(index.configs) || index.configs.length === 0) {
       index = await this._migrateLegacy();
     }
-    if (!index.configs.some(c => c.id === index!.activeId)) index.activeId = index.configs[0].id;
+    // Shared configurations (www/diorama/shared/) — fetched BEFORE the active id
+    // is validated, because the last-active config may be a shared one this
+    // user has no user_data entry for. Inert offline / unreachable.
+    await this._refreshSharedIndexOnly();
+    if (!index.configs.some(c => c.id === index!.activeId) && !this.isSharedConfig(index.activeId)) {
+      index.activeId = index.configs[0].id;
+    }
     this.configIndex = index;
     this.activeConfigId = index.activeId;
     saveConfigsCache(index);
-    const body = await this._loadBody(index.activeId);
+    let body = await this._loadBody(index.activeId);
+    if (!body && this.isSharedConfig(index.activeId) && !index.configs.some(c => c.id === index!.activeId)) {
+      // A shared-only active config whose file can't be read right now: fall
+      // back to this user's first own config rather than seeding a blank body.
+      index.activeId = index.configs[0].id;
+      this.activeConfigId = index.activeId;
+      saveConfigsCache(index);
+      body = await this._loadBody(index.activeId);
+    }
+    this._startSharedPoll();
     if (body) {
       this._applyLoadedStore(body);
     } else {
@@ -2149,6 +2426,10 @@ export class Planner extends EventTarget {
   // active id (that's the one diorama:store:v1 mirrors). null if nowhere.
   private async _loadBody(id: string): Promise<Store | null> {
     if (!this.hass) return null;
+    if (this.isSharedConfig(id)) {
+      const sb = await this._fetchSharedBody(id);
+      if (sb) { this._activeSharedAt = sb.updatedAt; return sb.store; }
+    }
     const remote = await this.hass.getUserData<Store>(cfgBodyKey(id));
     if (remote && Array.isArray(remote.floors) && remote.floors.length > 0) return remote;
     if (id === this.activeConfigId) {
@@ -2171,6 +2452,13 @@ export class Planner extends EventTarget {
   // cache, reconfigures weather, and emits config. Suppresses save-back while
   // applying so the fresh payload isn't immediately pushed back.
   private _applyLoadedStore(remote: Store): void {
+    if (this._disposed) return;   // torn down — never restart timers / polls
+    // A debounced save queued BEFORE this load (an edit made against the local
+    // cache while HA was still loading, or against the old config) must not
+    // fire afterwards and push the stale pre-load body over the fresh one.
+    // Every registry-op caller already flushes deliberately before getting here.
+    if (this._haSaveTimer) { clearTimeout(this._haSaveTimer); this._haSaveTimer = null; }
+    this._storeRev++;   // a whole new store — every binding-derived set is stale
     this._suppressHaSave = true;
     try {
       // Prefer the loaded store's own current floor (a fresh load / switch).
@@ -2281,6 +2569,14 @@ export class Planner extends EventTarget {
   // store's own current floor). Pure — sets nothing on `this`.
   private _normalizeStore(remote: Store, preferFloorId: string | null): Store {
     const floors = remote.floors.map(f => repairFloor(f));
+    // An unbound toilet's localState 'on' is a ~4 s FLUSH one-shot, never a
+    // sustained state — if a save landed mid-flush the store carries a stale
+    // 'on'. Never restore one (it would otherwise read as a flush in progress).
+    for (const fl of floors) {
+      for (const fu of fl.furniture ?? []) {
+        if (fu.localState === 'on' && !fu.entity_id && furnitureKind(fu) === 'toilet') fu.localState = 'off';
+      }
+    }
     const currentFloorId = preferFloorId && floors.some(f => f.id === preferFloorId)
       ? preferFloorId : floors[0].id;
     return {
@@ -2307,6 +2603,10 @@ export class Planner extends EventTarget {
       weather:        remote.weather        ?? undefined,
       geo:            remote.geo            ?? undefined,
       mqttBridge:     remote.mqttBridge     ?? undefined,
+      // Alert Center config (source toggles / severity floor / showInKiosk).
+      // Was MISSING from this list — the whole block silently reset on every
+      // load / undo / config switch / import.
+      alerts:         remote.alerts         ?? undefined,
       neighborhood:   remote.neighborhood   ?? undefined,
       flights:        remote.flights        ?? undefined,
       avatarPacks:    remote.avatarPacks    ?? undefined,
@@ -2380,15 +2680,38 @@ export class Planner extends EventTarget {
   // All mutating ops are edit-mode-only (guarded like save()). Kiosk/view can't
   // reach them (settings tabs are edit-only) but the guard is belt-and-braces.
 
+  // The MERGED view: this user's own configs (user_data) + every shared config
+  // (www/diorama/shared/index.json). A shared id this user also owns is listed
+  // once, marked shared, with the shared name/updatedAt. The persisted per-user
+  // index never carries shared entries (see ConfigMeta).
   listConfigs(): ConfigMeta[] {
-    return this.configIndex ? this.configIndex.configs.map(c => ({ ...c })) : [];
+    if (!this.configIndex) return [];
+    const shared = new Map((this._sharedIndex?.configs ?? []).map(c => [c.id, c] as const));
+    const out: ConfigMeta[] = this.configIndex.configs.map(c => {
+      const sh = shared.get(c.id);
+      if (!sh) return { ...c };
+      shared.delete(c.id);
+      return { id: c.id, name: sh.name, updatedAt: sh.updatedAt, shared: true,
+               ...(sh.sharedBy ? { sharedBy: sh.sharedBy } : {}) };
+    });
+    for (const sh of shared.values()) {
+      out.push({ id: sh.id, name: sh.name, updatedAt: sh.updatedAt, shared: true,
+                 ...(sh.sharedBy ? { sharedBy: sh.sharedBy } : {}) });
+    }
+    // The active config always appears (e.g. a shared one another user just
+    // unshared, still open here until the user switches away).
+    if (!out.some(c => c.id === this.activeConfigId)) {
+      out.push({ id: this.activeConfigId, name: this._activeNameHint ?? this.activeConfigId, updatedAt: 0 });
+    }
+    return out;
   }
   get lastSavedAt(): number | null { return this._lastSavedAt; }
 
   private _newConfigId(name: string): string {
     const slug = (name || 'config').toLowerCase().replace(/[^a-z0-9]+/g, '-')
       .replace(/^-+|-+$/g, '').slice(0, 24) || 'config';
-    const taken = new Set((this.configIndex?.configs ?? []).map(c => c.id));
+    const taken = new Set([...(this.configIndex?.configs ?? []), ...(this._sharedIndex?.configs ?? [])]
+      .map(c => c.id));
     let id = slug + '-' + Math.random().toString(36).slice(2, 7);
     while (taken.has(id)) id = slug + '-' + Math.random().toString(36).slice(2, 7);
     return id;
@@ -2408,11 +2731,19 @@ export class Planner extends EventTarget {
   async switchConfig(id: string): Promise<void> {
     if (this.uiMode !== 'edit' || !this.configIndex) return;
     if (id === this.activeConfigId) return;
-    if (!this.configIndex.configs.some(c => c.id === id)) return;
+    if (!this._hasConfig(id)) return;
     // Flush any pending save of the CURRENT config first so its edits aren't
     // lost AND don't land on the new body (the debounce uses activeConfigId).
     if (this._haSaveTimer) { clearTimeout(this._haSaveTimer); this._haSaveTimer = null; await this._flushSave(); }
-    const body = await this._loadBody(id) ?? defaultStore();
+    const loaded = await this._loadBody(id);
+    // A shared config whose file can't be read must NOT fall back to a blank
+    // store — the next save would publish that blank over everyone's plan.
+    if (!loaded && this.isSharedConfig(id)) {
+      this.sharedLastError = 'Could not read the shared configuration file — not switched.';
+      this.emitConfig();
+      return;
+    }
+    const body = loaded ?? defaultStore();
     this.activeConfigId = id;
     this.configIndex.activeId = id;
     saveConfigsCache(this.configIndex);
@@ -2487,8 +2818,14 @@ export class Planner extends EventTarget {
 
   async renameConfig(id: string, name: string): Promise<void> {
     if (this.uiMode !== 'edit' || !this.configIndex) return;
+    const sh = this._sharedIndex?.configs.find(c => c.id === id);
+    if (sh && name) {
+      // Shared: the name lives in the shared index (updatedAt unchanged — the
+      // body didn't change, so other clients must not reload for a rename).
+      await this._writeSharedIndexEntry({ ...sh, name }, false);
+    }
     const meta = this.configIndex.configs.find(c => c.id === id);
-    if (!meta) return;
+    if (!meta) { if (sh) this.emitConfig(); return; }
     meta.name = name || meta.name;
     meta.updatedAt = Date.now();
     saveConfigsCache(this.configIndex);
@@ -2503,6 +2840,7 @@ export class Planner extends EventTarget {
     if (this.uiMode !== 'edit' || !this.configIndex) return;
     if (this.configIndex.configs.length <= 1) return;   // never delete the last one
     if (!this.configIndex.configs.some(c => c.id === id)) return;
+    if (this.isSharedConfig(id)) return;   // unshare first (deleting would orphan everyone's copy)
     const wasActive = id === this.activeConfigId;
     if (wasActive && this._haSaveTimer) { clearTimeout(this._haSaveTimer); this._haSaveTimer = null; }
     try { await this.hass?.setUserData(cfgBodyKey(id), {}); } catch { /* best effort */ }
@@ -2526,8 +2864,14 @@ export class Planner extends EventTarget {
   // pulls the user-imported avatar pack bodies from IndexedDB so an import on a
   // fresh browser is self-contained.
   async exportConfig(): Promise<DioramaEnvelope> {
-    const store = JSON.parse(JSON.stringify(this.store)) as Store;
     const name = this.listConfigs().find(c => c.id === this.activeConfigId)?.name ?? 'Diorama';
+    return this._buildEnvelope(name, this.store);
+  }
+
+  // The export envelope for `store` under `name` — ALSO the shared-file format,
+  // so a shared `<id>.json` is importable by hand.
+  private async _buildEnvelope(name: string, src: Store): Promise<DioramaEnvelope> {
+    const store = JSON.parse(JSON.stringify(src)) as Store;
     let userAvatarPacks: AvatarPackDef[] | undefined;
     try {
       const defs: AvatarPackDef[] = [];
@@ -2564,6 +2908,18 @@ export class Planner extends EventTarget {
     } else {
       return { ok: false, error: 'Not a Diorama export (no floors).' };
     }
+    // Validate BEFORE writing anything: `{"floors":[]}` used to pass the shape
+    // check, write a body + index entry, and only then throw inside
+    // _normalizeStore (floors[0].id) — leaving a broken config in the registry.
+    if (store.floors.length === 0 || !store.floors.every(f => f && typeof f === 'object')) {
+      return { ok: false, error: 'Not a Diorama export (no floors).' };
+    }
+    try { this._normalizeStore(JSON.parse(JSON.stringify(store)) as Store, null); }
+    catch (err) { return { ok: false, error: 'Invalid Diorama export: ' + (err as Error).message }; }
+    // Flush the CURRENT config's pending save onto the OLD body before
+    // switching — every other switch path does this (the debounce keys off
+    // activeConfigId, so an unflushed edit would otherwise be lost).
+    if (this._haSaveTimer) { clearTimeout(this._haSaveTimer); this._haSaveTimer = null; await this._flushSave(); }
     if (userPacks) await this._importUserPacks(userPacks);
     const id = this._newConfigId(name);
     const clone = JSON.parse(JSON.stringify(store)) as Store;
@@ -2592,6 +2948,354 @@ export class Planner extends EventTarget {
         console.warn('avatar pack import failed:', err);
       }
     }
+  }
+
+  // ── Shared configurations (www/diorama/shared/ — see src/shared-config.ts) ──
+  // READS: plain same-origin fetches of /local/diorama/shared/*.json (every HA
+  // user can read them). WRITES: a user-pasted `shell_command`, in base64
+  // chunks (the 128 KiB argv cap), atomically replaced by the script. Inert
+  // offline (LocalApi) and before a connection exists. The per-user user_data
+  // index never carries shared entries — listConfigs() merges at read time.
+  static readonly SHARED_POLL_MS = 120_000;
+  // 'unknown' = no write attempted yet this session (the command may or may not
+  // exist); 'needs-command' = HA said the service doesn't exist.
+  sharedStatus: 'unknown' | 'ok' | 'needs-command' | 'error' = 'unknown';
+  sharedLastError: string | null = null;
+  private _sharedIndex: SharedIndex | null = null;
+  private _sharedTimer: ReturnType<typeof setInterval> | null = null;
+  // updatedAt of the shared version the ACTIVE config was loaded from / last
+  // written as. A shared index stamp that differs = another user's edit.
+  private _activeSharedAt = 0;
+  private _lastLocalEditAt = 0;
+  private _activeNameHint: string | null = null;
+  // Shared writes are SERIALIZED: two overlapping flushes of the same file
+  // would interleave chunks (the script then rejects the sequence).
+  private _sharedChain: Promise<unknown> = Promise.resolve();
+  private _sharedBusy = 0;
+
+  get sharingAvailable(): boolean {
+    return !!this.hass && !this.isOffline && !this._disposed
+      && typeof globalThis.fetch === 'function';
+  }
+  isSharedConfig(id: string): boolean {
+    return !!this._sharedIndex?.configs.some(c => c.id === id);
+  }
+  private _hasConfig(id: string): boolean {
+    return !!this.configIndex?.configs.some(c => c.id === id) || this.isSharedConfig(id);
+  }
+  // Unshare permission: admins (or unknown — the standalone client can't tell;
+  // HA's own service permissions still apply), or the user who owns a copy of
+  // it in their own registry (i.e. the one who shared it).
+  canUnshare(id: string): boolean {
+    if (!this.isSharedConfig(id)) return false;
+    if (this.configIndex?.configs.some(c => c.id === id)) return true;
+    return this.hass?.isAdmin?.() !== false;
+  }
+
+  private _setSharedStatus(st: Planner['sharedStatus'], err: string | null = null): void {
+    const changed = st !== this.sharedStatus || err !== this.sharedLastError;
+    this.sharedStatus = st;
+    this.sharedLastError = err;
+    if (changed) this.emitConfig();
+  }
+
+  private _startSharedPoll(): void {
+    if (this._sharedTimer || !this.sharingAvailable || typeof setInterval === 'undefined') return;
+    this._sharedTimer = setInterval(() => { void this.refreshSharedIndex(); }, Planner.SHARED_POLL_MS);
+  }
+
+  // GET one shared file. 'missing' = 404 OR a non-JSON 200 (HA answers an
+  // unknown /local path with its frontend shell on some installs).
+  private async _fetchShared(name: string, v: string | number):
+    Promise<{ status: 'ok'; json: unknown } | { status: 'missing' } | { status: 'fail'; error: string }> {
+    if (!this.sharingAvailable) return { status: 'fail', error: 'offline' };
+    const ac = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const t = ac ? setTimeout(() => ac.abort(), 10_000) : null;
+    try {
+      const r = await globalThis.fetch(sharedUrl(this.haBaseUrl, name, v),
+        { cache: 'no-store', credentials: 'same-origin', ...(ac ? { signal: ac.signal } : {}) });
+      if (r.status === 404) return { status: 'missing' };
+      if (!r.ok) return { status: 'fail', error: `HTTP ${r.status}` };
+      const text = await r.text();
+      try { return { status: 'ok', json: JSON.parse(text) }; }
+      catch { return { status: 'missing' }; }
+    } catch (err) {
+      return { status: 'fail', error: (err as Error)?.message || String(err) };
+    } finally { if (t) clearTimeout(t); }
+  }
+
+  // Fresh shared index: parsed index, empty when none exists yet, null when the
+  // fetch itself failed (callers keep what they had).
+  private async _fetchSharedIndex(): Promise<SharedIndex | null> {
+    const r = await this._fetchShared(SHARED_INDEX_NAME, Date.now());
+    if (r.status === 'fail') return null;
+    return r.status === 'ok' ? parseSharedIndex(r.json) : { version: 1, configs: [] };
+  }
+
+  private async _fetchSharedBody(id: string): Promise<{ store: Store; updatedAt: number } | null> {
+    const e = this._sharedIndex?.configs.find(c => c.id === id);
+    if (!e) return null;
+    const r = await this._fetchShared(id, e.updatedAt);
+    if (r.status !== 'ok') return null;
+    const env = r.json as Record<string, unknown> | null;
+    const store = (env && env.diorama === 2 && env.store ? env.store : env) as Store | null;
+    if (!store || !Array.isArray(store.floors) || store.floors.length === 0) return null;
+    // The envelope carries the sharer's user-imported avatar packs — register
+    // them here so a reader on another device sees the same avatars.
+    if (env && Array.isArray(env.userAvatarPacks)) await this._importUserPacks(env.userAvatarPacks as unknown[]);
+    return { store, updatedAt: e.updatedAt };
+  }
+
+  private _sharedSig(idx: SharedIndex | null): string {
+    return idx ? idx.configs.map(c => `${c.id}|${c.name}|${c.updatedAt}`).sort().join(';') : '-';
+  }
+  private async _refreshSharedIndexOnly(): Promise<boolean> {
+    if (!this.sharingAvailable) return false;
+    const idx = await this._fetchSharedIndex();
+    if (!idx) return false;
+    const changed = this._sharedSig(idx) !== this._sharedSig(this._sharedIndex);
+    const prev = this._sharedIndex?.configs.find(c => c.id === this.activeConfigId);
+    if (prev) this._activeNameHint = prev.name;
+    this._sharedIndex = idx;
+    return changed;
+  }
+
+  // Re-read the shared index (load, every SHARED_POLL_MS, tab resume). When the
+  // ACTIVE config is shared and its stamp moved (another user saved it), reload
+  // its body — unless this tab has a pending/in-flight write or a local edit in
+  // the last 5 s (last-writer-wins; never clobber the user mid-edit).
+  async refreshSharedIndex(): Promise<void> {
+    if (!this.configIndex || !this.sharingAvailable) return;
+    const changed = await this._refreshSharedIndexOnly();
+    const e = this._sharedIndex?.configs.find(c => c.id === this.activeConfigId);
+    const editing = this._haSaveTimer !== null || this._sharedBusy > 0
+      || Date.now() - this._lastLocalEditAt < 5000 || !!this.drag || !!this.editZone;
+    if (e && e.updatedAt !== this._activeSharedAt && !editing) {
+      const sb = await this._fetchSharedBody(e.id);
+      // Re-check: the user may have switched / edited while the body loaded.
+      if (sb && this.activeConfigId === e.id && this._haSaveTimer === null && this._sharedBusy === 0
+          && Date.now() - this._lastLocalEditAt >= 5000) {
+        this._activeSharedAt = sb.updatedAt;
+        this._applyRemoteSharedBody(sb.store);
+        return;   // _applyRemoteSharedBody emitted
+      }
+    }
+    if (changed) this.emitConfig();
+  }
+
+  // Swap in another user's newer version of the active shared config, keeping
+  // the view (floor, pan/zoom, tool) like an undo does. Undo history RESETS
+  // (the stacks describe a store that no longer exists). Never writes back.
+  private _applyRemoteSharedBody(remote: Store): void {
+    if (this._disposed) return;
+    const before = this._integrationSigs();
+    this._storeRev++;
+    this._suppressHaSave = true;
+    try {
+      this.store = this._normalizeStore(remote, this.store.currentFloorId);
+      setAvatarPacksConfig(this.store.avatarPacks);
+      setVehiclePacksConfig(this.store.vehiclePacks);
+      void this._hydrateAvatarPacks();
+      void this._hydrateVehiclePacks();
+      this._clearTransientSelection();
+      this.showDetails = this.store.showDetails === true;
+      this.useRawTargets = this.store.useRawTargets === true;
+      saveStore(this.store);
+    } finally {
+      this._suppressHaSave = false;
+    }
+    this._reconfigureChangedIntegrations(before);
+    this._resetUndoHistory();
+    this.emitConfig();
+  }
+
+  // Serialize one shared-write job behind any in flight.
+  private _sharedJob<T>(fn: () => Promise<T>): Promise<T> {
+    this._sharedBusy++;
+    const run = this._sharedChain.then(fn, fn);
+    this._sharedChain = run.catch(() => undefined);
+    return run.finally(() => { this._sharedBusy--; });
+  }
+
+  // Write one shared file (`name`.json = json) through the chunked
+  // shell_command. Sets sharedStatus on failure. Returns success.
+  private async _sharedWriteFile(name: string, json: string): Promise<boolean> {
+    if (!this.hass || !this.sharingAvailable) return false;
+    const { chunks } = sharedChunkPlan(json);
+    if (chunks.length > SHARED_MAX_CHUNKS) {
+      this._setSharedStatus('error', `Configuration too large to share (${chunks.length} chunks).`);
+      return false;
+    }
+    for (let i = 0; i < chunks.length; i++) {
+      const res = await this.hass.callService('shell_command', SHARED_WRITE_COMMAND,
+        sharedWriteServiceData(name, i, chunks.length, chunks[i]));
+      if (!res || !res.success) {
+        const err = res?.error as { message?: unknown } | undefined;
+        if (sharedErrorIsMissingService(err)) {
+          this._setSharedStatus('needs-command',
+            `shell_command.${SHARED_WRITE_COMMAND} is not configured.`);
+        } else {
+          const msg = typeof err?.message === 'string' ? err.message : JSON.stringify(err ?? 'no response');
+          this._setSharedStatus('error', `Shared write failed: ${msg}`);
+        }
+        return false;
+      }
+    }
+    return true;
+  }
+
+  // Read-modify-write the shared index with one entry upserted (or removed when
+  // `entry` is a string id). Re-reads first so other users' entries survive;
+  // then VERIFIES by reading back — HA reports a shell_command that exited
+  // non-zero as a success, so the read-back is the only honest confirmation.
+  private async _writeSharedIndexEntry(entry: SharedIndexEntry | string, verify = true): Promise<boolean> {
+    return this._sharedJob(async () => {
+      const cur = await this._fetchSharedIndex();
+      if (!cur) { this._setSharedStatus('error', 'Could not read the shared index.'); return false; }
+      const next = typeof entry === 'string' ? removeFromSharedIndex(cur, entry) : upsertSharedIndex(cur, entry);
+      if (!await this._sharedWriteFile(SHARED_INDEX_NAME, JSON.stringify(next))) return false;
+      if (verify) {
+        const back = await this._fetchSharedIndex();
+        const want = typeof entry === 'string' ? undefined : entry;
+        const got = back?.configs.find(c => c.id === (typeof entry === 'string' ? entry : entry.id));
+        const okBack = !!back && (want ? !!got && got.updatedAt === want.updatedAt && got.name === want.name : !got);
+        if (!okBack) {
+          this._setSharedStatus('error', 'Home Assistant accepted the write but the file did not change — '
+            + 'check the HA log for shell_command errors (is www/ writable, and did it exist when HA started?).');
+          return false;
+        }
+        this._sharedIndex = back;
+      } else {
+        this._sharedIndex = next;
+      }
+      this._setSharedStatus('ok', null);
+      return true;
+    });
+  }
+
+  private _userNameOrUndef(): string | undefined {
+    try { return this.hass?.userName?.() || undefined; } catch { return undefined; }
+  }
+
+  // Publish `store` as shared config `id` (body, then index). Returns the new
+  // updatedAt stamp, or 0 on failure.
+  private async _publishShared(id: string, name: string, store: Store, sharedBy?: string): Promise<number> {
+    const env = await this._buildEnvelope(name, store);
+    const okBody = await this._sharedJob(() => this._sharedWriteFile(id, JSON.stringify(env)));
+    if (!okBody) return 0;
+    const at = Date.now();
+    const ok = await this._writeSharedIndexEntry({ id, name, updatedAt: at, ...(sharedBy ? { sharedBy } : {}) });
+    return ok ? at : 0;
+  }
+
+  // _flushSave for a shared active config. The active-body localStorage cache
+  // (written by save()) keeps the edit if this fails.
+  private async _flushShared(id: string): Promise<void> {
+    const e = this._sharedIndex?.configs.find(c => c.id === id);
+    const at = await this._publishShared(id, e?.name ?? id, this.store, e?.sharedBy);
+    if (at && this.activeConfigId === id) { this._activeSharedAt = at; this._lastSavedAt = at; }
+    if (at) this.emitConfig();
+  }
+
+  // Publish one of THIS user's configs to every HA user. The user_data copy is
+  // kept (it becomes the owner record + the unshare fallback) but is no longer
+  // written while shared.
+  async shareConfig(id: string): Promise<{ ok: boolean; id?: string; error?: string }> {
+    if (this.uiMode !== 'edit' || !this.configIndex) return { ok: false, error: 'Editing disabled.' };
+    if (!this.sharingAvailable) return { ok: false, error: 'Sharing needs a Home Assistant connection.' };
+    const meta = this.configIndex.configs.find(c => c.id === id);
+    if (!meta) return { ok: false, error: 'Unknown configuration.' };
+    if (this.isSharedConfig(id)) return { ok: true, id };
+    // Every user's FIRST config is id 'default' (migration), so publishing it
+    // under that id would collide with — and shadow — every other user's own
+    // Default. Such an id (or one that isn't a valid file name) is re-keyed to
+    // a fresh unique id in this user's registry first.
+    if (id === 'default' || !sharedConfigIdOk(id)) {
+      id = await this._rekeyLocalConfig(id);
+    }
+    let store: Store | null;
+    if (id === this.activeConfigId) {
+      if (this._haSaveTimer) { clearTimeout(this._haSaveTimer); this._haSaveTimer = null; await this._flushSave(); }
+      store = this.store;
+    } else {
+      store = await this.hass!.getUserData<Store>(cfgBodyKey(id));
+      if (!store || !Array.isArray(store.floors) || !store.floors.length) store = null;
+    }
+    if (!store) return { ok: false, error: 'Could not read that configuration.' };
+    const at = await this._publishShared(id, meta.name, store, this._userNameOrUndef());
+    if (!at) return { ok: false, error: this.sharedLastError ?? 'Shared write failed.' };
+    if (id === this.activeConfigId) { this._activeSharedAt = at; this._lastSavedAt = at; }
+    this.emitConfig();
+    return { ok: true, id };
+  }
+
+  // Move one of this user's configs to a new id (body + index entry + active
+  // id); the old body is tombstoned. Returns the new id.
+  private async _rekeyLocalConfig(oldId: string): Promise<string> {
+    const ci = this.configIndex!;
+    const meta = ci.configs.find(c => c.id === oldId)!;
+    if (oldId === this.activeConfigId && this._haSaveTimer) {
+      clearTimeout(this._haSaveTimer); this._haSaveTimer = null; await this._flushSave();
+    }
+    const newId = this._newConfigId(meta.name);
+    const body = oldId === this.activeConfigId ? this.store : await this.hass!.getUserData<Store>(cfgBodyKey(oldId));
+    if (body) await this._writeBody(newId, JSON.parse(JSON.stringify(body)) as Store);
+    meta.id = newId;
+    if (ci.activeId === oldId) ci.activeId = newId;
+    if (this.activeConfigId === oldId) this.activeConfigId = newId;
+    saveConfigsCache(ci);
+    await this.hass?.setUserData(Planner.INDEX_KEY, ci);
+    try { await this.hass?.setUserData(cfgBodyKey(oldId), {}); } catch { /* best effort */ }
+    return newId;
+  }
+
+  // Stop sharing: copy the shared body back into THIS user's user_data under
+  // the same id (adding a registry entry if they didn't have one), then drop it
+  // from the shared index. The `<id>.json` file stays on disk as an orphan
+  // (the write command can only create/replace files, never delete).
+  async unshareConfig(id: string): Promise<{ ok: boolean; error?: string }> {
+    if (this.uiMode !== 'edit' || !this.configIndex) return { ok: false, error: 'Editing disabled.' };
+    if (!this.isSharedConfig(id)) return { ok: false, error: 'Not a shared configuration.' };
+    if (!this.canUnshare(id)) return { ok: false, error: 'Only an administrator or the user who shared it can unshare it.' };
+    const e = this._sharedIndex!.configs.find(c => c.id === id)!;
+    let store: Store | null = null;
+    if (id === this.activeConfigId) {
+      if (this._haSaveTimer) { clearTimeout(this._haSaveTimer); this._haSaveTimer = null; await this._flushSave(); }
+      store = this.store;
+    } else {
+      store = (await this._fetchSharedBody(id))?.store ?? null;
+    }
+    if (!store) return { ok: false, error: 'Could not read the shared configuration file.' };
+    await this._writeBody(id, JSON.parse(JSON.stringify(store)) as Store);
+    const meta = this.configIndex.configs.find(c => c.id === id);
+    if (meta) { meta.name = e.name; meta.updatedAt = Date.now(); }
+    else this.configIndex.configs.push({ id, name: e.name, updatedAt: Date.now() });
+    saveConfigsCache(this.configIndex);
+    await this.hass?.setUserData(Planner.INDEX_KEY, this.configIndex);
+    const ok = await this._writeSharedIndexEntry(id);
+    if (id === this.activeConfigId) this._activeSharedAt = 0;
+    this.emitConfig();
+    return ok ? { ok: true } : { ok: false, error: this.sharedLastError ?? 'Could not update the shared index.' };
+  }
+
+  // Settings "Test write": write a probe file and read it back over /local/.
+  async testSharedWrite(): Promise<{ ok: boolean; error?: string }> {
+    if (!this.sharingAvailable) return { ok: false, error: 'Sharing needs a Home Assistant connection.' };
+    const token = Math.random().toString(36).slice(2, 10);
+    const ok = await this._sharedJob(() =>
+      this._sharedWriteFile(SHARED_PROBE_NAME, JSON.stringify({ probe: token, at: Date.now() })));
+    if (!ok) return { ok: false, error: this.sharedLastError ?? 'Write failed.' };
+    const back = await this._fetchShared(SHARED_PROBE_NAME, Date.now());
+    if (back.status !== 'ok' || (back.json as { probe?: unknown } | null)?.probe !== token) {
+      const err = back.status === 'fail'
+        ? `Wrote the probe but could not read it back (${back.error}).`
+        : 'Home Assistant accepted the write but the file did not appear — check the HA log for '
+          + 'shell_command errors, and that www/ existed when HA started (or /local/ is not served).';
+      this._setSharedStatus('error', err);
+      return { ok: false, error: err };
+    }
+    this._setSharedStatus('ok', null);
+    return { ok: true };
   }
 
   private _runFullSync(states: Record<string, HassState>): void {
@@ -2635,12 +3339,128 @@ export class Planner extends EventTarget {
   // config-path events, and discovery completion emits config too). Must never
   // itself emitConfig — it only reads.
   private _slowIds(): Set<string> {
-    if (this._slowIdSet === null || this._slowIdsRev !== this.configRev) this._rebuildSlowIds();
+    if (this._slowIdSet === null || this._slowIdsRev !== this._storeRev || !this._slowRefsMatch()) this._rebuildSlowIds();
     return this._slowIdSet!;
   }
 
+  // Structural fingerprint for the ALL-floors number/switch set (array
+  // identities + lengths), so a fixture list replaced / grown without save()
+  // still invalidates. Only consulted on number./switch. events.
+  private _slowRefs: unknown[] = [];
+  private _slowRefsNow(): unknown[] {
+    const st = this.store;
+    const out: unknown[] = [st.floors, st.floors?.length, st.people, st.people?.length, st.weather,
+      st.scene3d, st.flights, st.bgTexts, st.bgTexts?.length, st.geo];
+    for (const fl of st.floors ?? []) {
+      const f = fl as unknown as Record<string, unknown>;
+      out.push(f);
+      for (const k of SLOW_ARRAY_KEYS) { const a = f[k] as unknown[] | undefined; out.push(a, a?.length); }
+    }
+    return out;
+  }
+  private _slowRefsMatch(): boolean {
+    const now = this._slowRefsNow();
+    const r = this._slowRefs;
+    if (now.length !== r.length) return false;
+    for (let i = 0; i < now.length; i++) if (now[i] !== r[i]) return false;
+    return true;
+  }
+
+  // Current-floor-scoped id sets (perf, _onStates runs ~500×/s with three
+  // LD2450s): `cfg` = every non-number/switch id the config-path ladder in
+  // _isSlowEntity used to find with ~30 `.some` scans per event; the rest are
+  // the ids each per-event detector actually reads, so a state change for any
+  // OTHER entity skips that detector entirely. Rebuilt lazily when the store
+  // revision or the current floor moves. Never emits.
+  private _ifaceIds(): IfaceIds {
+    const key = `${this._storeRev}|${this.store.currentFloorId}`;
+    // Belt-and-braces structural fingerprint: array identities + lengths of
+    // every watched fixture list (current floor) + the store-level sources. A
+    // fixture list REPLACED or grown without a save() (direct mutation) still
+    // invalidates. Allocation-free compare; ~30 reads per event.
+    if (this._iface && this._ifaceKey === key && this._ifaceRefsMatch()) return this._iface;
+    this._ifaceKey = key;
+    this._ifaceGen++;
+    this._ifaceRefs = this._ifaceRefsNow();
+    const cfg = new Set<string>(), door = new Set<string>(), cam = new Set<string>();
+    const appl = new Set<string>(), cal = new Set<string>(), weather = new Set<string>();
+    const add = (s: Set<string>, v: string | null | undefined): void => { if (v) s.add(v); };
+    const st = this.store;
+    const f: Partial<Floor> = this.floor() ?? {};
+    if (st.flights?.source === 'entity') add(cfg, st.flights.entityId);
+    for (const e of f.envSensors ?? []) add(cfg, e.entity_id);
+    for (const c of f.infoCards ?? []) add(cfg, c.entity_id);
+    for (const b of f.actionButtons ?? []) add(cfg, b.entity_id);
+    for (const l of f.lights ?? []) add(cfg, l.logic?.entityId);
+    for (const fu of f.furniture ?? []) {
+      add(cfg, fu.doorEntity); add(cfg, fu.tempEntity); add(cfg, fu.jobStateEntity);
+      add(cfg, fu.moistureEntity); add(cfg, fu.evCharger?.statusEntity); add(cfg, fu.evCharger?.powerEntity);
+      add(cfg, fu.mailCount?.countEntity); add(cfg, fu.mailCount?.flagEntity);
+      add(cfg, fu.newsEntity); add(cfg, fu.biasLight?.entityId);
+      if (fu.rack) {
+        for (const x of fu.rack.problemEntities ?? []) add(cfg, x);
+        add(cfg, fu.rack.cpuEntity); add(cfg, fu.rack.tempEntity);
+      }
+      add(appl, fu.jobStateEntity ?? this._autoJobEntity(fu));
+    }
+    for (const d of f.doors ?? []) { add(cfg, d.lockEntity); add(door, d.doorbellEntity); }
+    for (const w of f.windows ?? []) add(cfg, w.curtain?.entityId);
+    for (const a of f.alarmPanels ?? []) add(cfg, a.entity_id);
+    for (const c of f.calendarPanels ?? []) for (const id of c.calendarIds ?? []) { add(cfg, id); add(cal, id); }
+    for (const t of f.thermostats ?? []) add(cfg, t.entity_id);
+    for (const s of f.safetySensors ?? []) add(cfg, s.entity_id);
+    for (const b of f.alertBeacons ?? []) add(cfg, b.entity_id);
+    for (const rm of f.rooms ?? []) add(cfg, rm.occupancyEntity);
+    for (const r of f.robots ?? []) {
+      add(cfg, r.entity_id); add(cfg, r.trackerEntity); add(cfg, r.latEntity);
+      add(cfg, r.lonEntity); add(cfg, r.progressEntity);
+    }
+    for (const z of f.presenceZones ?? []) add(cfg, z.entity_id);
+    for (const c of f.cameras ?? []) { add(cfg, c.entity_id); add(cfg, c.alertEntity); add(cam, c.alertEntity); }
+    for (const pr of f.projectors ?? []) add(cfg, pr.entity_id);
+    for (const v of f.valves ?? []) add(cfg, v.entity_id);
+    for (const pl of f.plugs ?? []) add(cfg, pl.entity_id);
+    for (const fp of f.flagpoles ?? []) add(cfg, fp.entityId);
+    for (const pl of f.pools ?? []) {
+      add(cfg, pl.heaterEntity); add(cfg, pl.pumpEntity);
+      for (const x of pl.lightEntities ?? []) add(cfg, x);
+      add(cfg, pl.waterTempEntity); add(cfg, pl.phEntity); add(cfg, pl.orpEntity); add(cfg, pl.saltEntity);
+    }
+    for (const pe of st.people ?? []) { add(cfg, pe.haPersonId); add(cfg, pe.gpsTrackerId); }
+    add(cfg, st.weather?.alerts?.entityId);
+    for (const e of st.bgTexts ?? []) add(cfg, e.entityId);
+    for (const id of this._weatherEntityIds()) { add(cfg, id); add(weather, id); }
+    this._iface = { cfg, door, cam, appl, cal, weather };
+    return this._iface;
+  }
+
+  private _ifaceRefsNow(): unknown[] {
+    const f = this.floor() as unknown as Record<string, unknown> | undefined;
+    const st = this.store;
+    const out: unknown[] = [f, st.people, st.people?.length, st.bgTexts, st.bgTexts?.length, st.weather, st.flights];
+    for (const k of IFACE_ARRAY_KEYS) {
+      const a = f?.[k] as unknown[] | undefined;
+      out.push(a, a?.length);
+    }
+    return out;
+  }
+  private _ifaceRefsMatch(): boolean {
+    const r = this._ifaceRefs;
+    const f = this.floor() as unknown as Record<string, unknown> | undefined;
+    const st = this.store;
+    if (r[0] !== f || r[1] !== st.people || r[2] !== st.people?.length || r[3] !== st.bgTexts
+        || r[4] !== st.bgTexts?.length || r[5] !== st.weather || r[6] !== st.flights) return false;
+    let i = 7;
+    for (const k of IFACE_ARRAY_KEYS) {
+      const a = f?.[k] as unknown[] | undefined;
+      if (r[i++] !== a || r[i++] !== a?.length) return false;
+    }
+    return true;
+  }
+
   private _rebuildSlowIds(): void {
-    this._slowIdsRev = this.configRev;
+    this._slowIdsRev = this._storeRev;
+    this._slowRefs = this._slowRefsNow();
     const set = new Set<string>();
     const pre: string[] = [];
     const add = (v: string | null | undefined): void => { if (v) set.add(v); };
@@ -2720,6 +3540,18 @@ export class Planner extends EventTarget {
       // legitimately be in either domain and is caught above via the set.)
       return false;
     }
+    // Every non-number/switch config-path rule — documented one by one below
+    // (the reference ladder) — is now ONE Set lookup built by _ifaceIds()
+    // from exactly the same sources, so a state_changed burst no longer runs
+    // ~30 `.some` scans + a fresh array per event.
+    return this._ifaceIds().cfg.has(id);
+  }
+
+  // REFERENCE LADDER — no longer on the hot path. It documents what
+  // _ifaceIds().cfg contains and why, and is kept callable so a test can
+  // assert the Set agrees with it (non-number/switch ids only). Keep in sync.
+  _isSlowEntityLadder(id: string): boolean {
+    if (!id) return false;
     // The 'entity' flight source's bound rest-sensor proxy: config-path so the
     // sidebar status + the renderer dirty key repaint when a new aircraft list
     // lands. Scoped to that ONE configured id, and only while that source is
@@ -3028,7 +3860,10 @@ export class Planner extends EventTarget {
   // reconnect — the _trigPrevOn idiom). binary_sensor only rings on activation
   // (new state 'on'); unavailable/unknown transitions update the seed but never
   // ring. Rings are pruned > 8 s and capped at 8. Cheap no-op with no doorbells.
-  private _detectDoorbells(states: Record<string, HassState>): void {
+  private _detectDoorbells(states: Record<string, HassState>, changedId?: string): void {
+    // changedId given → skip unless it is a watched doorbell (other doors'
+    // states are unchanged, so the full loop below would be a no-op for them).
+    if (changedId !== undefined && !this._ifaceIds().door.has(changedId)) return;
     const f = this.floor();
     const now = Date.now();
     for (const d of f.doors) {
@@ -3054,13 +3889,20 @@ export class Planner extends EventTarget {
   // current-floor camera's alertEntity was 'on' so the snapshot card + FOV pulse
   // can linger CAMERA_ALERT_LINGER_MS after the sensor clears. Cheap no-op with
   // no cameras / no alert bindings.
-  private _detectCameraAlerts(states: Record<string, HassState>): void {
+  private _detectCameraAlerts(states: Record<string, HassState>, changedId?: string): void {
+    if (changedId !== undefined && !this._ifaceIds().cam.has(changedId)) return;
     const now = Date.now();
     for (const cam of this.floor().cameras ?? []) {
       if (!cam.alertEntity) continue;
-      if (states[cam.alertEntity]?.state === 'on') this._camAlertLastOn[cam.id] = now;
+      const on = states[cam.alertEntity]?.state === 'on';
+      // Stamp while on AND on the on→off edge: with per-entity gating this
+      // detector only runs when the alert entity itself changes, so the linger
+      // must count from when it turned OFF (as the per-event stamping used to).
+      if (on || this._camAlertWasOn[cam.id]) this._camAlertLastOn[cam.id] = now;
+      this._camAlertWasOn[cam.id] = on;
     }
   }
+  private _camAlertWasOn: Record<string, boolean> = {};
 
   // Appliance "job finished" detection (LIVE path; mirrors _detectDoorbells).
   // Fires a household event when a bound appliance leaves a RUNNING state for a
@@ -3068,9 +3910,12 @@ export class Planner extends EventTarget {
   // never fires. Watches Furniture.jobStateEntity when bound (Home Connect
   // operation_state, a `running` binary_sensor, or a *_program_finished event
   // sensor), else the appliance's own entity_id for job-capable kinds
-  // (dishwasher/washer/dryer). Done value = jobDoneValue, defaulting to 'finished'
-  // when jobStateEntity is bound / any non-running terminal in the auto mode.
-  private _detectApplianceEvents(states: Record<string, HassState>): void {
+  // (dishwasher/washer/dryer). Done value = jobDoneValue, defaulting BY DOMAIN
+  // when jobStateEntity is bound ('off' for a binary_sensor, 'finished' for an
+  // operation_state sensor; an event.* fires on any change — see below) / any
+  // non-running terminal in the auto mode.
+  private _detectApplianceEvents(states: Record<string, HassState>, changedId?: string): void {
+    if (changedId !== undefined && !this._ifaceIds().appl.has(changedId)) return;
     const now = Date.now();
     for (const fu of this.floor().furniture) {
       const eid = fu.jobStateEntity ?? this._autoJobEntity(fu);
@@ -3079,6 +3924,17 @@ export class Planner extends EventTarget {
       if (cur == null || cur === 'unavailable' || cur === 'unknown') continue;
       const prev = this._jobStatePrev[fu.id];
       this._jobStatePrev[fu.id] = cur;
+      // An event.* "program finished" entity: its state is the timestamp of the
+      // last firing, so it is never "running" — the event ITSELF is the done
+      // signal. Any genuine change after the silent seed fires (the ≥5 min
+      // guard exists to filter on/off blips of STATE entities; an event entity
+      // only fires when HA says a program finished).
+      if (eid.startsWith('event.')) {
+        if (prev === undefined || prev === cur) continue;
+        if (fu.jobDoneValue != null && (states[eid]?.attributes as Record<string, unknown> | undefined)?.event_type !== fu.jobDoneValue) continue;
+        this.householdEvents.push({ furnitureId: fu.id, kind: applianceEventKind(fu), at: now });
+        continue;
+      }
       const running = APPLIANCE_RUNNING_STATES.has(cur);
       if (running && this._jobRunStart[fu.id] == null) this._jobRunStart[fu.id] = now;
       if (prev === undefined || prev === cur) continue;          // seed / no change
@@ -3087,7 +3943,12 @@ export class Planner extends EventTarget {
       if (APPLIANCE_PAUSE_STATES.has(cur)) continue;              // pause keeps the run alive (don't clear)
       // A real terminal (finished / off / cancelled). Fire only when it matches
       // the done value (defaulted for jobStateEntity mode; any terminal in auto).
-      const doneVal = fu.jobDoneValue ?? (fu.jobStateEntity ? 'finished' : null);
+      // Done-value default follows the bound entity's DOMAIN: a `running`
+      // binary_sensor ends 'off' (the old blanket 'finished' default meant it
+      // could never fire); an operation_state sensor ends 'finished'. The auto
+      // mode (own entity) accepts any non-running terminal.
+      const doneVal = fu.jobDoneValue
+        ?? (fu.jobStateEntity ? (eid.startsWith('binary_sensor.') ? 'off' : 'finished') : null);
       const started = this._jobRunStart[fu.id];
       delete this._jobRunStart[fu.id];                            // run over (finished or cancelled)
       if (doneVal != null && cur !== doneVal) continue;           // stopped, but not the "done" state
@@ -3387,6 +4248,7 @@ export class Planner extends EventTarget {
     const s = f.sensors.find(x => x.id === sensorId);
     if (!s) return;
     s.deviceSlug = deviceSlug;
+    this._storeRev++;   // new device slug → new number./switch. prefix rule
     // Wipe stale per-sensor live state from the previous binding so old
     // zones/objects from another device don't bleed across.
     delete this.discBy[sensorId];
@@ -3410,13 +4272,13 @@ export class Planner extends EventTarget {
       this._runFullSyncForSensor(s, this.hass.states);
       // Retries cover the case where the device is still publishing entities.
       for (const ms of [500, 2000, 5000]) {
-        setTimeout(() => {
-          if (!this.hass) return;
+        this._retrySyncTimers.push(setTimeout(() => {
+          if (!this.hass || this._disposed) return;
           const cur = this.floor().sensors.find(x => x.id === sensorId);
           if (!cur || cur.deviceSlug !== deviceSlug) return;  // user re-bound elsewhere
           this.disc.invalidate();
           this._runFullSyncForSensor(cur, this.hass.states);
-        }, ms);
+        }, ms));
       }
     }
     this.emitConfig();
@@ -3694,7 +4556,7 @@ export class Planner extends EventTarget {
     // live-state slots exist the moment one becomes active so hit tests and
     // renderers can rely on them.
     if (this.store.activeSensorId) this.ensureLiveState(this.store.activeSensorId);
-    this.save();
+    this.save({ undo: false });   // selection only — persisted, but never an undo step
     if (this.store.activeSensorId) {
       const s = this.activeSensor();
       if (s && s.deviceSlug && this.hass) {
@@ -3900,6 +4762,7 @@ export class Planner extends EventTarget {
   // Only starts once a connection exists (guarded by _alertInited at the call
   // sites). A disabled center tears the subscription + poll down.
   private _reconfigureAlertCenter(): void {
+    if (this._disposed) return;   // torn down — never restart timers / polls
     this._stopAlertCenter();
     if (!this.hass || !alertCenterEnabled(this.store.alerts)) {
       this.notifications = []; this.repairIssues = [];
@@ -3908,7 +4771,14 @@ export class Planner extends EventTarget {
     this._startAlertCenter();
   }
 
+  // Generation token for the notification subscription: a reconfigure landing
+  // before subscribePersistentNotifications resolves used to leak the earlier
+  // subscription (its late unsub overwrote nothing useful). A late resolution
+  // whose generation is stale now unsubscribes itself.
+  private _alertGen = 0;
+
   private _stopAlertCenter(): void {
+    this._alertGen++;
     if (this._alertNotifUnsub) { try { this._alertNotifUnsub(); } catch { /* ignore */ } this._alertNotifUnsub = null; }
     if (this._alertRepairsTimer) { clearInterval(this._alertRepairsTimer); this._alertRepairsTimer = null; }
   }
@@ -3922,7 +4792,9 @@ export class Planner extends EventTarget {
     // Persistent notifications: live WS subscription (non-admin-safe). Maintain a
     // dict from the current/added/updated/removed deltas; repaint on each change.
     const map = new Map<string, HaNotification>();
+    const gen = ++this._alertGen;
     hass.subscribePersistentNotifications(u => {
+      if (gen !== this._alertGen) return;   // a superseded subscription — ignore its deltas
       if (u.type === 'current') {
         map.clear();
         for (const [id, n] of Object.entries(u.notifications)) map.set(id, this._normNotif(id, n));
@@ -3934,7 +4806,10 @@ export class Planner extends EventTarget {
       }
       this.notifications = [...map.values()];
       this.emitConfig();   // repaints the bell badge + drawer; new alert pulses the bell
-    }).then(unsub => { this._alertNotifUnsub = unsub; })
+    }).then(unsub => {
+      if (gen !== this._alertGen) { try { unsub(); } catch { /* ignore */ } return; }
+      this._alertNotifUnsub = unsub;
+    })
       .catch(() => { /* never throws (clients swallow); belt-and-braces */ });
     // Repairs: no WS push exists — poll on a modest interval (minutes). A non-
     // admin user's list_issues errors → the client returns [], clearing the list.
@@ -4660,10 +5535,23 @@ export class Planner extends EventTarget {
   geoFit(): { transform: GeoTransform; landmarks: GeoLandmark[] } | null {
     const cal = this.geoLandmarks().filter(
       l => l.lat != null && l.lon != null && !l.pendingPlace && !l.excluded);
-    if (cal.length === 0) return null;
+    if (cal.length === 0) { this._geoFitMemo = null; return null; }
+    // Memoized on the exact fit inputs (the calibrated landmark identities +
+    // positions + northDeg) — NOT configRev: the 2D frame alone asks for the
+    // fit 5+ times (GPS pins, geo events, recorded pins, compass, …). The
+    // landmark ARRAY is part of the result, so its object identities are keyed
+    // too (a replaced landmark object re-fits even if its numbers match).
+    let sig = String(this.store.geo?.northDeg ?? '');
+    for (const l of cal) sig += `|${l.id}:${l.x}:${l.y}:${l.lat}:${l.lon}`;
+    const m = this._geoFitMemo;
+    if (m && m.sig === sig && m.result.landmarks.length === cal.length
+        && m.result.landmarks.every((l, i) => l === cal[i])) return m.result;
     const pairs: GeoPair[] = cal.map(l => ({ x: l.x, y: l.y, lat: l.lat!, lon: l.lon! }));
-    return { transform: fitGeoTransform(pairs, this.store.geo?.northDeg), landmarks: cal };
+    const result = { transform: fitGeoTransform(pairs, this.store.geo?.northDeg), landmarks: cal };
+    this._geoFitMemo = { sig, result };
+    return result;
   }
+  private _geoFitMemo: { sig: string; result: { transform: GeoTransform; landmarks: GeoLandmark[] } } | null = null;
 
   // Resolve the GPS device pins for rendering (Feature G, phase G2). For each
   // Store.people entry with a GPS source (person.* entity preferred, else the
@@ -4718,7 +5606,7 @@ export class Planner extends EventTarget {
     const f = this.floor();
     const rooms = f.rooms ?? [];
     if (!rooms.length) return [];
-    const loops = closedWallLoops(f.walls ?? []);
+    const loops = this.wallLoops(f);
     if (!loops.length) return [];
     const states = this.hass?.states;
     const samples: TempSample[] = [];
@@ -5524,14 +6412,35 @@ export class Planner extends EventTarget {
   // Record a live BLE range sample (called from _onStates for mapped entities).
   // Bermuda reports meters (with unit attrs) → mm via stateMm. Live-path only —
   // never routed through the config channel (would churn the sidebar).
-  private _recordBleSample(entityId: string): void {
+  private _recordBleSample(entityId: string, lastUpdated?: string): void {
     const link = this.bleEntityMap[entityId];
     if (!link) return;
     const mm = this.stateMm(entityId, 1000);   // default native→mm = meters
     if (!isFinite(mm) || mm < 0) return;
     let bucket = this.bleSamples[link.deviceKey];
     if (!bucket) bucket = this.bleSamples[link.deviceKey] = {};
-    bucket[link.scannerMac] = { mm, at: Date.now() };
+    const now = Date.now();
+    const lu = lastUpdated ? Date.parse(lastUpdated) : NaN;
+    bucket[link.scannerMac] = { mm, at: isFinite(lu) && lu <= now ? lu : now };
+  }
+
+  // Per-device BLE solve throttle (~1 Hz, leading + trailing edge).
+  private static readonly BLE_SOLVE_MIN_MS = 1000;
+  private _bleSolveAt: Record<string, number> = {};
+  private _bleSolveTimers: Record<string, ReturnType<typeof setTimeout>> = {};
+
+  private _scheduleBleSolve(deviceKey: string): void {
+    if (this._bleSolveTimers[deviceKey]) return;   // a trailing solve is already queued
+    const wait = (this._bleSolveAt[deviceKey] ?? -Infinity) + Planner.BLE_SOLVE_MIN_MS - Date.now();
+    const run = (): void => {
+      delete this._bleSolveTimers[deviceKey];
+      if (this._disposed) return;
+      this._bleSolveAt[deviceKey] = Date.now();
+      this._solveBle(deviceKey);
+      this._fuseIdentities();
+    };
+    if (wait <= 0) run();
+    else this._bleSolveTimers[deviceKey] = setTimeout(run, wait);
   }
 
   // Solve every tracked device's position from its fresh per-scanner distances.
@@ -5540,14 +6449,20 @@ export class Planner extends EventTarget {
   // with the best (lowest weighted RMS) fix. Event-driven (~0.1 Hz, on new
   // samples), never per frame. Feeds a per-device lerp slot so the 2D dot and
   // 3D rig read one smoothed source.
-  private _solveBle(): void {
+  // `onlyKey` limits the solve to ONE device (the live per-sample path);
+  // omitted = every device (full refresh / scan).
+  private _solveBle(onlyKey?: string): void {
     if (!this.bermuda) return;
     const now = Date.now();
     const STALE = Planner.BLE_STALE_MS;
     // scannerMac → proxy fixture {x,y} per floor, so a device's scanner samples
     // map to plan positions. Built once per solve (cheap: few proxies).
+    const solved = new Set<string>();
     for (const dev of this.bermuda.devices) {
       const deviceKey = this.bleDeviceKey(dev);
+      if (onlyKey !== undefined && deviceKey !== onlyKey) continue;
+      solved.add(deviceKey);
+      if (onlyKey === undefined) this._bleSolveAt[deviceKey] = now;
       const samples = this.bleSamples[deviceKey];
       if (!samples) continue;
       // scannerMac → proxyId from this device's links.
@@ -5611,7 +6526,9 @@ export class Planner extends EventTarget {
       }
     }
     // Tier 2: watch for identified people changing floors → commit transits.
-    this._watchFloorTransits();
+    // Only the devices solved THIS call advance their hysteresis counters (a
+    // per-device solve must not count as a "solve" for everyone else).
+    this._watchFloorTransits(now, onlyKey === undefined ? undefined : solved);
   }
 
   // ── Cross-floor transits (Tier 2) ─────────────────────────────────────────
@@ -5620,7 +6537,7 @@ export class Planner extends EventTarget {
   // linked stair. Allocation-light (runs on the LIVE solve path): a handful of
   // people, no per-call arrays beyond a couple of small maps. Cheap no-op when
   // no person carries a Bermuda device.
-  private _watchFloorTransits(now = Date.now()): void {
+  private _watchFloorTransits(now = Date.now(), onlyKeys?: Set<string>): void {
     const people = this.store.people;
     if (!people || !people.some(pe => pe.bermudaDeviceId)) return;
     // deviceId → deviceKey (so a person's bermudaDeviceId finds its solve).
@@ -5633,6 +6550,7 @@ export class Planner extends EventTarget {
     for (const pe of people) {
       if (!pe.bermudaDeviceId) continue;
       const deviceKey = keyOfDevice[pe.bermudaDeviceId];
+      if (onlyKeys && (!deviceKey || !onlyKeys.has(deviceKey))) continue;   // not re-solved this call
       const sol = deviceKey ? this.bleSolves[deviceKey] : undefined;
       if (!sol) continue;                         // no live solve — nothing to track
       const newFloor = sol.floorId;
@@ -6004,6 +6922,7 @@ export class Planner extends EventTarget {
   // Idempotent — clears any existing timer first. No-op'd naturally when the
   // floor has no calendar panels (the fetch loops over an empty set).
   private _startCalendarPoll(): void {
+    if (this._disposed) return;   // torn down — never restart timers / polls
     if (this._calendarTimer) { clearInterval(this._calendarTimer); this._calendarTimer = null; }
     void this._refreshCalendars();
     this._calendarTimer = setInterval(() => void this._refreshCalendars(), Planner.CALENDAR_POLL_MS);
@@ -6049,12 +6968,17 @@ export class Planner extends EventTarget {
   // (Re)apply the current weather source: (re)start or stop the Open-Meteo
   // timer, or recompute a local source from current states. Idempotent.
   private _reconfigureWeather(): void {
+    if (this._disposed) return;   // torn down — never restart timers / polls
     if (this._weatherTimer) { clearInterval(this._weatherTimer); this._weatherTimer = null; }
     if (this._weatherFcTimer) { clearInterval(this._weatherFcTimer); this._weatherFcTimer = null; }
     // Forecast state is source-specific — drop it so a source switch can't leak
     // the previous entity's forecast onto a new one.
     this._fcCond = undefined; this._fcRainSoon = undefined;
     this.forecastDaily = null; this.forecastHourly = null;
+    // A different source's condition is not a weather CHANGE — re-seed the
+    // moment detector silently (else a source switch fired a spurious
+    // rain_start / severe_weather bubble).
+    this._prevWeatherCondition = undefined;
     const w = this.store.weather;
     if (!w) { this.weatherNow = null; this.weatherAlerts = []; return; }
     if (w.source === 'openmeteo') {
@@ -6163,6 +7087,38 @@ export class Planner extends EventTarget {
     if (this._mqttBridge) this._mqttBridge.subscribe(filter, cb);
   }
 
+  private _mqttGen = 0;
+  // The consumer subscription entries Diorama itself registered (Frigate events,
+  // Valetudo map/status), tracked so a topic/namespace change can retire them.
+  private _frigateSubEntry: { filter: string; cb: (m: { topic: string; payloadString: string }) => void } | null = null;
+  private _vacSubEntries: Array<{ filter: string; cb: (m: { topic: string; payloadString: string }) => void }> = [];
+
+  private _frigateTopic(): string {
+    return (this.store.mqttBridge?.frigateTopic || 'frigate') + '/events';
+  }
+  private _valetudoNs(): string {
+    return (this.store.mqttBridge?.valetudoNs || 'valetudo').replace(/\/+$/, '');
+  }
+
+  // Drop Frigate / Valetudo subscription entries whose topic no longer matches
+  // the config (the bridge only ever REPLAYS _mqttSubs, so removing them from
+  // the list is enough once the bridge restarts — which every config change
+  // does via setMqttBridge → _reconfigureMqtt).
+  private _pruneStaleConsumerSubs(): void {
+    const drop = new Set<unknown>();
+    if (this._frigateSubEntry && this._frigateSubEntry.filter !== this._frigateTopic()) {
+      drop.add(this._frigateSubEntry);
+      this._frigateSubEntry = null;
+      this._frigateSubscribed = false;
+    }
+    if (this._vacSubNs !== null && this._vacSubNs !== this._valetudoNs()) {
+      for (const e of this._vacSubEntries) drop.add(e);
+      this._vacSubEntries = [];
+      this._vacSubNs = null;
+    }
+    if (drop.size) this._mqttSubs = this._mqttSubs.filter(s => !drop.has(s));
+  }
+
   // Publish a payload on a topic through the active bridge. Fire-and-forget +
   // no-op when the bridge is down (write side of tap-to-clean etc.).
   mqttPublish(topic: string, payload: string, retain = false): void {
@@ -6173,6 +7129,11 @@ export class Planner extends EventTarget {
   // Inert when mode off/absent or offline. Dynamic-imports mqtt-bridge.js so the
   // transport stays out of the startup chunk. Idempotent (stop then start).
   private async _reconfigureMqtt(): Promise<void> {
+    if (this._disposed) return;
+    // Generation token: two overlapping calls both passed the stop step while
+    // awaiting the dynamic import and each started a bridge (two live WS / MQTT
+    // sessions, double-delivered messages). Only the LATEST call may start one.
+    const gen = ++this._mqttGen;
     if (this._mqttBridge) { try { this._mqttBridge.stop(); } catch { /* ignore */ } this._mqttBridge = null; }
     this._mqttStatus = 'idle';
     const cfg = this.store.mqttBridge;
@@ -6180,17 +7141,23 @@ export class Planner extends EventTarget {
     if (mode === 'off' || this.isOffline || !this.hass) { this.emitConfig(); return; }
     try {
       const { startBridge } = await import('./mqtt-bridge.js');
+      if (gen !== this._mqttGen || this._disposed) return;   // superseded while importing
       // The config may have changed (or the bridge been torn down) during the
       // async import — re-check before wiring anything up.
       if ((this.store.mqttBridge?.mode ?? 'off') !== mode || this.isOffline || !this.hass) {
         this.emitConfig(); return;
       }
+      if (this._mqttBridge) { try { (this._mqttBridge as BridgeHandle).stop(); } catch { /* ignore */ } this._mqttBridge = null; }
       const bridge = startBridge(
         { mode, brokerHost: cfg!.brokerHost, brokerPort: cfg!.brokerPort, useTls: cfg!.useTls },
         this.hass,
-        { onStatus: (s) => { this._mqttStatus = s; this.emitConfig(); } },
+        { onStatus: (s) => { if (gen === this._mqttGen) { this._mqttStatus = s; this.emitConfig(); } } },
       );
       this._mqttBridge = bridge;
+      // A changed frigateTopic / valetudoNs leaves the OLD consumer filters in
+      // the replay list — drop them before replaying (ensure* below re-adds the
+      // current ones).
+      this._pruneStaleConsumerSubs();
       // Replay every registered subscription onto the fresh bridge.
       for (const s of this._mqttSubs) bridge.subscribe(s.filter, s.cb);
       this.ensureFrigateSub();
@@ -6285,12 +7252,106 @@ export class Planner extends EventTarget {
   async clearPresenceHistoryData(): Promise<boolean> {
     this._presAccum.clear();
     this._presLastSampleAt = 0;
+    // Erase wins over any pending plan-move remap of that same history.
+    this._presXf.clear(); this._presHeld = [];
+    if (this._presRemapTimer) { clearTimeout(this._presRemapTimer); this._presRemapTimer = null; }
     const ok = await clearPresenceHistory();
     this.presenceHeat = null;
     this._presHeatKey = '';
     this.presenceHistoryRev++;
     this.emitConfig();
     return ok;
+  }
+
+  // ── Presence history vs plan moves ────────────────────────────────────────
+  // Stored records are in ABSOLUTE floor mm (cell = floor(x/200), floor(y/200)).
+  // translateFloorContent / rotateFloorContent move the sensors, so without a
+  // remap the heat-map would drift off the rooms it was recorded in. Each move
+  // QUEUES a point transform for that floor (a floor-edge drag translates on
+  // every mousemove, so the IndexedDB rewrite is debounced) and HOLDS the
+  // floor's un-flushed samples (they are in the pre-move frame; samples taken
+  // after the move are already in the new frame). The remap then rewrites every
+  // stored record of that floor through the composed transforms onto the floor's
+  // CURRENT grid (a rotation lands each cell centre in its nearest cell), merges
+  // the held samples back through the transforms that post-date them, and only
+  // then lets flushes resume. Cells mapped off the rect are dropped (the
+  // recorder drops out-of-rect samples for the same reason).
+  private _presXf = new Map<string, Array<(x: number, y: number) => { x: number; y: number }>>();
+  private _presHeld: Array<{
+    entry: { floorId: string; bucket: number; cols: number; rows: number; map: PresenceCellMap };
+    from: number;
+  }> = [];
+  private _presRemapTimer: ReturnType<typeof setTimeout> | null = null;
+  private _presRemapBusy = false;
+  private static readonly PRESENCE_REMAP_DEBOUNCE_MS = 1500;
+
+  private _queuePresenceRemap(floorId: string, fn: (x: number, y: number) => { x: number; y: number }): void {
+    if (!this.presenceHistoryEnabled()) return;
+    const q = this._presXf.get(floorId) ?? [];
+    for (const [k, e] of this._presAccum) {
+      if (e.floorId !== floorId) continue;
+      if (e.map.size) this._presHeld.push({ entry: e, from: q.length });
+      this._presAccum.delete(k);
+    }
+    q.push(fn);
+    this._presXf.set(floorId, q);
+    if (this._presRemapTimer) clearTimeout(this._presRemapTimer);
+    this._presRemapTimer = setTimeout(() => {
+      this._presRemapTimer = null;
+      void this._runPresenceRemap();
+    }, Planner.PRESENCE_REMAP_DEBOUNCE_MS);
+  }
+
+  /** Apply every queued plan-move transform to the stored presence history. */
+  async _runPresenceRemap(): Promise<void> {
+    if (this._presRemapBusy) {
+      if (!this._presRemapTimer) {
+        this._presRemapTimer = setTimeout(() => { this._presRemapTimer = null; void this._runPresenceRemap(); }, 250);
+      }
+      return;
+    }
+    if (!this._presXf.size) return;
+    this._presRemapBusy = true;
+    const xf = this._presXf; this._presXf = new Map();
+    const held = this._presHeld; this._presHeld = [];
+    try {
+      const keys = await listPresenceKeys();
+      for (const [floorId, q] of xf) {
+        const fl = this.store.floors.find(x => x.id === floorId);
+        if (!fl) continue;
+        const cols = presenceGridCols(fl.w), rows = presenceGridRows(fl.d);
+        const remap = (map: PresenceCellMap, fromCols: number, fromRows: number, from: number): PresenceCellMap => {
+          const out: PresenceCellMap = new Map();
+          for (const [i, s] of map) {
+            const c = presenceCellCenter(i, fromCols, fromRows);
+            if (!c) continue;
+            let p = c;
+            for (let k = from; k < q.length; k++) p = q[k](p.x, p.y);
+            const idx = presenceCellIndex(p.x, p.y, fl.w, fl.d);
+            if (idx >= 0) accumulateDwell(out, idx, s);
+          }
+          return out;
+        };
+        const fkeys = keys.filter(k => parseHistoryKey(k)?.floorId === floorId);
+        const recs = await getPresenceRecords(fkeys);
+        for (const r of recs) {
+          const m = remap(decodePresenceCells(r), r.cols, r.rows, 0);
+          await putPresenceRecord(makePresenceRecord(floorId, r.bucket, m, cols, rows, r.updatedAt));
+        }
+        for (const h of held) {
+          if (h.entry.floorId !== floorId) continue;
+          const m = remap(h.entry.map, h.entry.cols, h.entry.rows, h.from);
+          if (m.size) await mergePresenceRecord(makePresenceRecord(floorId, h.entry.bucket, m, cols, rows, Date.now()));
+        }
+      }
+    } catch {
+      /* IDB unavailable — the history simply stays in the old frame */
+    } finally {
+      this._presRemapBusy = false;
+    }
+    this.presenceHistoryRev++;
+    this._presHeatKey = '';
+    if (!this._disposed) void this.refreshPresenceHeat();
   }
 
   /**
@@ -6370,6 +7431,10 @@ export class Planner extends EventTarget {
    * cross-tab leader election (BroadcastChannel / Web Locks), which is deferred.
    */
   async flushPresenceHistory(nowMs: number): Promise<number> {
+    // A plan-move remap is pending / running: new-frame deltas must not merge
+    // into records that are still in the old frame. Keep the accumulator —
+    // the next flush (the remap itself does not flush) writes it.
+    if (this._presRemapBusy || this._presXf.size) return 0;
     const entries = [...this._presAccum.values()].filter(e => e.map.size > 0);
     this._presAccum.clear();
     if (entries.length === 0) return 0;
@@ -6435,6 +7500,7 @@ export class Planner extends EventTarget {
    * for a target that has not moved.
    */
   private _reconfigurePresenceHistory(): void {
+    if (this._disposed) return;   // torn down — never restart timers / polls
     this._stopPresenceHistory();
     if (!this.presenceHistoryEnabled()) {
       // Un-flushed samples are DROPPED, not written: a user switching recording
@@ -6443,6 +7509,8 @@ export class Planner extends EventTarget {
       // which is the privacy-preferring side of the trade.
       this._presAccum.clear();
       this._presLastSampleAt = 0;
+      this._presXf.clear(); this._presHeld = [];
+      if (this._presRemapTimer) { clearTimeout(this._presRemapTimer); this._presRemapTimer = null; }
       return;
     }
     this._presSampleTimer = setInterval(() => this.presenceSampleTick(Date.now()), PRESENCE_SAMPLE_MS);
@@ -6512,6 +7580,7 @@ export class Planner extends EventTarget {
   // is fully isolated in try/catch — a fetch failure never throws into the tick
   // path, it just leaves that tile's data absent (weather.ts fetchOpenMeteo idiom).
   private async _reconfigureNeighborhood(): Promise<void> {
+    if (this._disposed) return;   // torn down — never restart timers / polls
     const runId = ++this._nbhdRunId;
     const cfg = this.store.neighborhood;
     if (!cfg?.enabled || this.isOffline) { this.neighborhoodData = null; this.emitConfig(); return; }
@@ -6739,6 +7808,7 @@ export class Planner extends EventTarget {
   // mode is deliberately NOT a gate: "offline" means no HA backend, not no
   // internet (the Open-Meteo precedent).
   private async _reconfigureFlights(): Promise<void> {
+    if (this._disposed) return;   // torn down — never restart timers / polls
     if (this._flightsTimer) { clearInterval(this._flightsTimer); this._flightsTimer = null; }
     if (this._issTimer) { clearInterval(this._issTimer); this._issTimer = null; }
 
@@ -6973,9 +8043,10 @@ export class Planner extends EventTarget {
         || now - (a.createdAt ? Date.parse(a.createdAt) : 0) < Planner.FLIGHT_ALERT_TTL_MS);
 
     if (cfg?.enabled) {
-      const push = (a: PanelAlert, cooldownMs: number): void => {
+      // Returns true when the alert actually FIRED (past its cooldown).
+      const push = (a: PanelAlert, cooldownMs: number): boolean => {
         const last = this._flightAlertAt.get(a.id) ?? 0;
-        if (now - last < cooldownMs) return;
+        if (now - last < cooldownMs) return false;
         this._flightAlertAt.set(a.id, now);
         // A push past the cooldown is a genuinely NEW event, so re-arm an id the
         // user dismissed earlier (ids are stable per hex — without this, one
@@ -6983,6 +8054,7 @@ export class Planner extends EventTarget {
         this._flightAlertDismissed.delete(a.id);
         this.flightAlerts = this.flightAlerts.filter(x => x.id !== a.id);
         this.flightAlerts.push(a);
+        return true;
       };
 
       const lowAlt = cfg.alerts?.lowAltFt;
@@ -7039,7 +8111,7 @@ export class Planner extends EventTarget {
         // filter alone would fire for anything low anywhere in a 30 nm circle).
         if (typeof lowAlt === 'number' && isFinite(lowAlt)
           && fp.altFt < lowAlt && (fp.distNm ?? 99) <= Planner.FLIGHT_LOW_DIST_NM) {
-          push({
+          const fired = push({
             id: `flight:low:${fp.hex}`,
             source: 'flight',
             severity: 'warning',
@@ -7049,9 +8121,14 @@ export class Planner extends EventTarget {
             dismissible: true,
           }, Planner.FLIGHT_LOW_COOLDOWN_MS);
           // A low flyover is also a house-wide "moment" — avatars glance up
-          // (the weather-event precedent: no fixture anchor, x/y null).
-          this.householdEvents.push({ furnitureId: null, kind: 'flyover', at: now });
-          this._pruneEvents(now);
+          // (the weather-event precedent: no fixture anchor, x/y null). Only
+          // when the alert genuinely FIRED: pushing on every poll re-added a
+          // flyover every 8 s per low aircraft and evicted real appliance /
+          // weather moments from the 8-entry event list.
+          if (fired) {
+            this.householdEvents.push({ furnitureId: null, kind: 'flyover', at: now });
+            this._pruneEvents(now);
+          }
         }
         // Watch list: uppercase callsign PREFIX or an exact hex match. Entries
         // are normalized to uppercase on save, but re-upper here so a
@@ -7190,12 +8267,18 @@ export class Planner extends EventTarget {
   ensureVacuumSubs(): void {
     const cfg = this.store.mqttBridge;
     if (!cfg || (cfg.mode ?? 'off') === 'off') return;
-    const ns = (cfg.valetudoNs || 'valetudo').replace(/\/+$/, '');
+    const ns = this._valetudoNs();
     if (this._vacSubNs === ns) return;   // already registered for this namespace
+    // Namespace changed without a bridge restart in between: retire the old
+    // filters from the replay list first (the running bridge still carries
+    // them until its next restart — harmless: their topics no longer resolve).
+    if (this._vacSubNs !== null) this._pruneStaleConsumerSubs();
     this._vacSubNs = ns;
+    const n0 = this._mqttSubs.length;
     this.mqttSubscribe(`${ns}/+/MapData/map-data`, m => { void this._onVacMapData(m.topic, m.payloadString); });
     this.mqttSubscribe(`${ns}/+/StatusStateAttribute/value`, m => this._onVacStatus(m.topic, 'value', m.payloadString));
     this.mqttSubscribe(`${ns}/+/StatusStateAttribute/flag`, m => this._onVacStatus(m.topic, 'flag', m.payloadString));
+    this._vacSubEntries = this._mqttSubs.slice(n0);
   }
 
   // Resolve a `<ns>/<id>/…` topic's identifier segment → the RobotFixture (across
@@ -7276,6 +8359,9 @@ export class Planner extends EventTarget {
   // Called from _reconfigureMqtt (bridge start), the full-state load, and the
   // sidebar after a calibration edit — cheap no-op once subscribed.
   ensureFrigateSub(): void {
+    // A changed frigateTopic retires the old filter so the new one registers.
+    if (this._frigateSubscribed && this._frigateSubEntry
+        && this._frigateSubEntry.filter !== this._frigateTopic()) this._pruneStaleConsumerSubs();
     if (this._frigateSubscribed) return;
     if ((this.store.mqttBridge?.mode ?? 'off') === 'off' || this.isOffline) return;
     // Any enabled-floor camera with ≥4 calibration points that actually solve?
@@ -7286,9 +8372,10 @@ export class Planner extends EventTarget {
       if (ready) break;
     }
     if (!ready) return;
-    const topic = (this.store.mqttBridge?.frigateTopic || 'frigate') + '/events';
+    const topic = this._frigateTopic();
     this._frigateSubscribed = true;
     this.mqttSubscribe(topic, m => this._onFrigateEvent(m.payloadString));
+    this._frigateSubEntry = this._mqttSubs[this._mqttSubs.length - 1];
   }
 
   // Memoized ground-plane homography for a camera. Re-solves only when the
@@ -7356,7 +8443,11 @@ export class Planner extends EventTarget {
     const idxFor = (): number | null => {
       // 1) exact event-id match — keep the same slot for this tracked object.
       // 2) nearest existing slot within CAM_MATCH_MM — successor match across the
-      //    event-id churn of Frigate's new/update/end lifecycle.
+      //    event-id churn of Frigate's new/update/end lifecycle — but ONLY a slot
+      //    whose (different) event has gone quiet for CAM_SUCCESSOR_STALE_MS: a
+      //    slot still being updated by another LIVE event is a second person
+      //    standing nearby, not a predecessor (two people used to collapse into
+      //    one slot and flicker between their positions).
       // 3) first free slot.
       // 4) full + no near match → drop (leave existing tracks intact).
       let free = -1, nearest = -1, nearestD = Planner.CAM_MATCH_MM;
@@ -7364,6 +8455,9 @@ export class Planner extends EventTarget {
         const t = this.camTargets[`${prefix}_${i}`];
         if (!t) { if (free < 0) free = i; continue; }
         if (eventId && t.eventId === eventId) return i;
+        const liveOther = eventId != null && t.eventId != null && t.eventId !== eventId
+          && now - t.updatedAt < Planner.CAM_SUCCESSOR_STALE_MS;
+        if (liveOther) continue;
         const d = Math.hypot(t.x - proj.x, t.y - proj.y);
         if (d < nearestD) { nearestD = d; nearest = i; }
       }
@@ -7601,10 +8695,16 @@ export class Planner extends EventTarget {
   toggleEntity(entity_id: string | null | undefined): void {
     if (this.uiMode === 'view') return;  // visualization only — no control
     if (!this.hass || !entity_id) return;
-    const dot = entity_id.indexOf('.');
-    const domain = dot > 0 ? entity_id.slice(0, dot) : '';
-    // homeassistant.toggle is a generic fallback for any toggleable entity.
-    this.hass.callService(domain || 'homeassistant', 'toggle', { entity_id });
+    const call = toggleServiceFor(entity_id, this.hass.states?.[entity_id]?.state ?? null);
+    if (!call) return;   // read-only domain (binary_sensor / sensor / event / …) — nothing to toggle
+    // Fire-and-forget; a rejected service call (entity gone, service missing)
+    // must never surface as an unhandled rejection.
+    try {
+      const pr = this.hass.callService(call.domain, call.service, { entity_id }) as unknown;
+      if (pr && typeof (pr as Promise<unknown>).catch === 'function') {
+        (pr as Promise<unknown>).catch(err => console.warn(`${call.domain}.${call.service} failed:`, err));
+      }
+    } catch (err) { console.warn(`${call.domain}.${call.service} failed:`, err); }
   }
 
   // Effective state for an interactive item (light / switch / door / window /
@@ -7661,17 +8761,33 @@ export class Planner extends EventTarget {
     // alone drives the 3D rebuild + 2D repaint. Re-clicking mid-flush is a no-op
     // (the timer owns the window) rather than an early cancel.
     if (item.kind === 'toilet') {
-      if (item.localState === 'on') return;
-      item.localState = 'on';
-      this.emitConfig();
       const key = item.id ?? '';
-      const prev = this._toiletFlushTimers[key];
-      if (prev) clearTimeout(prev);
-      this._toiletFlushTimers[key] = setTimeout(() => {
-        delete this._toiletFlushTimers[key];
+      // In-flight is tracked by the RUNTIME timer, never by the (persistable)
+      // localState: a save() landing mid-flush can write 'on' into the store,
+      // and gating on localState then left a reloaded toilet un-flushable
+      // forever. A stored 'on' with no timer is stale → flushable.
+      if (this._toiletFlushTimers[key]) return;   // re-click mid-flush: no-op
+      const startFlush = (): void => {
+        item.localState = 'on';
+        this.emitConfig();
+        this._toiletFlushTimers[key] = setTimeout(() => {
+          delete this._toiletFlushTimers[key];
+          item.localState = 'off';
+          this.emitConfig();
+        }, TOILET_FLUSH_MS);
+      };
+      if (item.localState === 'on') {
+        // Stale persisted 'on': drop to 'off' first so the renderer sees a real
+        // RISING edge, then start the flush a few frames later.
         item.localState = 'off';
         this.emitConfig();
-      }, TOILET_FLUSH_MS);
+        this._toiletFlushTimers[key] = setTimeout(() => {
+          delete this._toiletFlushTimers[key];
+          startFlush();
+        }, 80);
+        return;
+      }
+      startFlush();
       return;
     }
     const on = item.localState === 'on' || item.localState === 'playing';
@@ -7826,7 +8942,7 @@ export class Planner extends EventTarget {
   // interactive fixture); kiosk fires (the whole point of a control kiosk — like
   // alarm/lock/robot, "no write-back" refers to Diorama's OWN store, not HA
   // services). `confirm` → a browser confirm() before firing. Unbound / no target
-  // → still animate (flip localState 'on' pulse) so a standalone button reacts.
+  // → still animate (the actionPressFx transient) so a standalone button reacts.
   // No save()/emitConfig — pressing mutates no persisted fixture state.
   fireAction(btn: ActionButton, skipConfirm = false): void {
     if (this.uiMode === 'view') return;
@@ -7878,9 +8994,9 @@ export class Planner extends EventTarget {
         svc(btn.domain, btn.service, { ...(btn.entity_id ? { entity_id: btn.entity_id } : {}), ...data });
         break;
     }
-    // Unbound / no dispatch target → still give a standalone tactile pulse so the
-    // button reads as "pressed" without any HA binding (session-only in kiosk).
-    if (!btn.entity_id && kind !== 'custom') { btn.localState = 'on'; }
+    // Unbound / no dispatch target: the standalone tactile pulse is the
+    // actionPressFx transient pushed above. (This used to ALSO write
+    // `btn.localState = 'on'` — a permanent, persisted flag nothing read.)
   }
 
   // Parse an ActionButton.serviceData JSON string into a flat data object.
@@ -7920,6 +9036,8 @@ export class Planner extends EventTarget {
   translateFloorContent(dx: number, dy: number): void {
     if (dx === 0 && dy === 0) return;
     const f = this.floor();
+    // Stored presence history is in absolute floor mm — move it with the plan.
+    this._queuePresenceRemap(f.id, (x, y) => ({ x: x + dx, y: y + dy }));
     for (const w of f.walls) w.points = w.points.map(p => ({ x: p.x + dx, y: p.y + dy }));
     for (const it of f.furniture) { it.x += dx; it.y += dy; }
     for (const it of f.lights) { it.x += dx; it.y += dy; }
@@ -7933,8 +9051,24 @@ export class Planner extends EventTarget {
     for (const it of f.thermostats ?? []) { it.x += dx; it.y += dy; }
     for (const it of f.safetySensors ?? []) { it.x += dx; it.y += dy; }
     for (const it of f.alertBeacons ?? []) { it.x += dx; it.y += dy; }
-    for (const it of f.robots ?? []) { it.x += dx; it.y += dy; }
-    for (const it of f.cameras ?? []) { it.x += dx; it.y += dy; }
+    for (const it of f.robots ?? []) {
+      it.x += dx; it.y += dy;
+      // Vacuum map→plan calibration offset is a WORLD point (world = R·S·raw +
+      // offset) — it must ride the frame change exactly as rotateFloorContent
+      // rotates it. The mower's posOffset is a GPS trim DELTA (the fix moves
+      // with the translated landmarks), so it stays put.
+      if (it.kind !== 'mower' && (it.posOffsetX != null || it.posOffsetY != null
+          || it.posRotDeg != null || it.posScale != null)) {
+        it.posOffsetX = (it.posOffsetX ?? 0) + dx;
+        it.posOffsetY = (it.posOffsetY ?? 0) + dy;
+      }
+    }
+    for (const it of f.cameras ?? []) {
+      it.x += dx; it.y += dy;
+      // Ground-plane homography correspondences: the PLAN side moves with the
+      // frame; the image-pixel side (u,v) is untouched.
+      if (it.camCalib?.points) for (const pt of it.camCalib.points) { pt.x += dx; pt.y += dy; }
+    }
     for (const it of f.projectors ?? []) { it.x += dx; it.y += dy; }
     for (const it of f.valves ?? []) { it.x += dx; it.y += dy; }
     for (const it of f.sprinklerZones ?? []) { it.x += dx; it.y += dy; }
@@ -8005,6 +9139,9 @@ export class Planner extends EventTarget {
     // Bump a screen-CW heading/rotation field (0 = +Y world) by +phi, normalized.
     const norm = (d: number) => ((d % 360) + 360) % 360;
     const bump = (it: { rotation?: number }) => { it.rotation = norm((it.rotation ?? 0) + phi); };
+    // Stored presence history is in absolute floor mm — rotate it with the plan
+    // (queued BEFORE the grow-translate below so the transforms compose in order).
+    this._queuePresenceRemap(f.id, (x, y) => rotPointDeg(x, y, cx, cy, phi));
 
     for (const w of f.walls) w.points = w.points.map(p => rotPointDeg(p.x, p.y, cx, cy, phi));
     for (const it of f.furniture) { rot(it); bump(it); }
@@ -8158,12 +9295,39 @@ export class Planner extends EventTarget {
       this.viewCenter = null;
       this.zoom = 1;
     }
-    // Clear in-flight interactions
+    // Clear in-flight interactions + every per-floor transient latch (these
+    // all reference ids / points on the OLD floor).
     this.drag = null;
     this.editZone = null;
     this.drawingWall = null;
-    this.save();
+    this.drawingExclusion = null;
+    this.activeAlertBeaconId = null;
+    this.selectedVertex = null;
+    this.identifyFx = null;
+    this.alignGuides = [];
+    this.alignPool = null;
+    this.placingRoomId = null;   // rooms are per-floor (geo landmarks are store-level — that latch stays)
+    this.placingCamCalibId = null;
+    this.pendingCamCalibUV = null;
+    // Radar lerp slots of sensors on OTHER floors are no longer refreshed by
+    // updateLerpGoals (current-floor only) — deactivate them so identity fusion
+    // (which gathers every floor's radar targets) can't match a frozen phantom.
+    this._deactivateOffFloorLerps();
+    this.save({ undo: false });   // view state only — persisted, never an undo step
     this.emitConfig();
+  }
+
+  // Deactivate every mmWave lerp slot whose sensor is not on the current floor.
+  private _deactivateOffFloorLerps(): void {
+    const cur = new Set(this.floor().sensors.map(s => s.id));
+    for (const f of this.store.floors) {
+      if (f.id === this.store.currentFloorId) continue;
+      for (const s of f.sensors) {
+        if (cur.has(s.id)) continue;
+        const lerp = this.lerpBy[s.id];
+        if (lerp) for (const sl of lerp) sl.active = false;
+      }
+    }
   }
 
   saveFloorEdit(editingId: string | null, name: string, w: number, d: number): void {
@@ -8291,6 +9455,39 @@ export class Planner extends EventTarget {
     }
   }
 
+  // THE per-frame simulation step. Every mounted view (each <diorama-canvas-2d>
+  // RAF AND each <diorama-three-view> tick) calls this with its frame
+  // timestamp; the planner computes dt from ITS OWN last-advanced time and
+  // no-ops a repeat of the same timestamp. So a 3D-only Lovelace card still
+  // steps radar targets + robots, and two 2D cards (or 2D + 3D) sharing one
+  // planner no longer step the springs/robots twice per frame. dt is clamped
+  // ≤ 0.1 s (tab resume / GC stall); the first call uses one 60 fps frame.
+  // stepLerp / stepRobots stay public (tests drive them directly).
+  private _lastAdvanceMs: number | null = null;
+  // How many mounted 2D canvases are driving the simulation from their RAF.
+  // <diorama-canvas-2d> increments this in connectedCallback and decrements it
+  // in disconnectedCallback (clamped ≥ 0). While ≥ 1 the 2D RAF OWNS the
+  // per-frame step and <diorama-three-view> does NOT call advanceFrame — so
+  // there is exactly one stepper per planner. A 3D-only Lovelace card (0 2D
+  // canvases) steps from its own tick. Runtime-only. Test harnesses that seed
+  // `lerpBy` directly (no fake hass target entities) set this to 1 to stand in
+  // for the always-mounted 2D canvas of the real app, so the 3D tick doesn't
+  // re-derive (and deactivate) their hand-seeded slots via updateLerpGoals.
+  stepperViews = 0;
+  advanceFrame(nowMs: number): void {
+    if (!isFinite(nowMs)) return;
+    const last = this._lastAdvanceMs;
+    if (last !== null && nowMs === last) return;          // same frame, another view
+    // Two views on the same RAF frame get the SAME timestamp (the no-op above);
+    // a view calling with an OLDER stamp than the last advance (a different
+    // clock origin or a late callback) must not step backwards.
+    if (last !== null && nowMs < last) return;
+    const dt = last === null ? 0.016 : Math.min(0.1, (nowMs - last) / 1000);
+    this._lastAdvanceMs = nowMs;
+    this.stepLerp(dt);
+    this.stepRobots(dt);
+  }
+
   stepLerp(dt: number): void {
     this.updateLerpGoals();
     // Critically damped spring toward the latest HA goal. HA pushes LD2450
@@ -8405,7 +9602,59 @@ export class Planner extends EventTarget {
   // and railings block exactly like house walls, matching the avatar nav
   // rasterizer.
   private _segCrossesWall(f: Floor, x0: number, y0: number, x1: number, y1: number): boolean {
-    return segCrossesSolidWall(f.walls, f.doors ?? [], f.windows ?? [], x0, y0, x1, y1);
+    // Same semantics as geometry.segCrossesSolidWall, but the nav-solid runs
+    // (wallCutsForSegment per segment — the expensive part) are precomputed
+    // once per wall + opening geometry instead of on every probe.
+    const solids = this._navSolidRuns(f);
+    const p1 = { x: x0, y: y0 }, p2 = { x: x1, y: y1 };
+    for (const s of solids) if (segmentsIntersect(p1, p2, s.a, s.b)) return true;
+    return false;
+  }
+
+  private _navSolidCache = new Map<string, { key: string; runs: { a: Vec2; b: Vec2 }[] }>();
+  private _navSolidRuns(f: Floor): { a: Vec2; b: Vec2 }[] {
+    const doors = f.doors ?? [], windows = f.windows ?? [];
+    const key = `${f.walls.length}|${wallsHash(f.walls)}|${doors.length}|${windows.length}|${openingsHash(doors, windows)}`;
+    const hit = this._navSolidCache.get(f.id);
+    if (hit && hit.key === key) return hit.runs;
+    const runs: { a: Vec2; b: Vec2 }[] = [];
+    for (const w of f.walls) {
+      if (wallKind(w) === 'invisible') continue;
+      const pts = w.points;
+      for (let i = 0; i + 1 < pts.length; i++) {
+        const a = pts[i], b = pts[i + 1];
+        const len = Math.hypot(b.x - a.x, b.y - a.y);
+        if (len < 1) continue;
+        const ux = (b.x - a.x) / len, uy = (b.y - a.y) / len;
+        const { navSolids } = wallCutsForSegment(a, b, doors, windows);
+        for (const s of navSolids) {
+          runs.push({
+            a: { x: a.x + ux * s.t0, y: a.y + uy * s.t0 },
+            b: { x: a.x + ux * s.t1, y: a.y + uy * s.t1 },
+          });
+        }
+      }
+    }
+    this._navSolidCache.set(f.id, { key, runs });
+    return runs;
+  }
+
+  // Closed wall loops (all loops, and the BUILDING subset that excludes fence /
+  // hedge / railing loops) per floor, keyed on the wall-geometry hash — NOT
+  // configRev (every emitConfig bumps that, and a live vertex drag mutates the
+  // walls without one). Shared by roomHeatmap (every 2D frame while the layer is
+  // on) and the mower containment / sweep code.
+  private _wallLoopCache = new Map<string, { key: string; loops?: Vec2[][]; building?: Vec2[][]; wps?: Vec2[] }>();
+  private _wallLoopEntry(f: Floor): { key: string; loops?: Vec2[][]; building?: Vec2[][]; wps?: Vec2[] } {
+    const walls = f.walls ?? [];
+    const key = `${walls.length}|${wallsHash(walls)}|${f.w}x${f.d}`;
+    let e = this._wallLoopCache.get(f.id);
+    if (!e || e.key !== key) { e = { key }; this._wallLoopCache.set(f.id, e); }
+    return e;
+  }
+  wallLoops(f: Floor): Vec2[][] {
+    const e = this._wallLoopEntry(f);
+    return e.loops ??= closedWallLoops(f.walls ?? []);
   }
 
   // ── Mower outdoor containment ─────────────────────────────────────────────
@@ -8414,11 +9663,8 @@ export class Planner extends EventTarget {
   // they still block as solid runs through _segCrossesWall, so the fence contains
   // the mower and a GATE is the only way across. Cached per (floor, configRev).
   private _buildingLoops(f: Floor): Vec2[][] {
-    const key = `${f.id}:${this.configRev}`;
-    if (this._mowerLoopCache?.key === key) return this._mowerLoopCache.loops;
-    const loops = buildingWallLoops(f.walls);
-    this._mowerLoopCache = { key, loops };
-    return loops;
+    const e = this._wallLoopEntry(f);
+    return e.building ??= buildingWallLoops(f.walls);
   }
 
   // Would moving from `prev` to `next` put the mower somewhere it may not be?
@@ -8645,13 +9891,11 @@ export class Planner extends EventTarget {
   // floor rect but OUTSIDE every closed wall loop, ordered boustrophedon. Cached
   // per (floor, configRev). Empty → the caller orbits an ellipse ring.
   private _mowerWaypoints(f: Floor): Vec2[] {
-    const key = `${f.id}:${this.configRev}`;
-    if (this._robotWpCache?.key === key) return this._robotWpCache.wps;
     // Row pitch = MOWER_ROW_MM (≥ 2·turn radius) so the car-like row-end U-turn
     // fits as one continuous arc; the along-row cell pitch keeps its default.
-    const wps = mowerSweepWaypoints(f.walls, f.w, f.d, 800, 300, MOWER_ROW_MM);
-    this._robotWpCache = { key, wps };
-    return wps;
+    // Cached on the wall-geometry hash + floor rect (see _wallLoopEntry).
+    const e = this._wallLoopEntry(f);
+    return e.wps ??= mowerSweepWaypoints(f.walls, f.w, f.d, 800, 300, MOWER_ROW_MM);
   }
 
   // GPS position for a bound mower (tracker attrs or a lat/lon sensor pair),
@@ -8903,7 +10147,7 @@ export class Planner extends EventTarget {
     // Routing across the DOCK's room alone was not enough: a mower can end up
     // inside ANY room — walls drawn/closed around it while it stands there (the
     // `wasInside` forgiveness legitimately keeps it moving) or a fast GPS chase
-    // crossing a line a wall is being dragged onto (_mowerLoopCache is one drag
+    // crossing a line a wall is being dragged onto (the loop cache used to be one drag
     // gesture stale by design). Once in, with no doorway routing, it has only
     // the greedy escape fan, which deadlocks against walls — the exact failure
     // class the dock router was built for. Measured on a real 19-room plan:

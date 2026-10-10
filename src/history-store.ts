@@ -53,17 +53,24 @@ function openDb(): Promise<IDBDatabase> {
   });
 }
 
+// Open → run → ALWAYS close, including when the transaction rejects. A
+// close() skipped on the error path leaks the connection for the page's
+// lifetime (and blocks any future onupgradeneeded version change).
+async function withDb<T>(fn: (db: IDBDatabase) => Promise<T>): Promise<T> {
+  const db = await openDb();
+  try { return await fn(db); } finally { db.close(); }
+}
+
 /** Overwrite the record for one (floorId, hourBucket). Returns false on failure. */
 export async function putPresenceRecord(rec: PresenceRecord): Promise<boolean> {
   try {
-    const db = await openDb();
-    await new Promise<void>((resolve, reject) => {
+    await withDb(db => new Promise<void>((resolve, reject) => {
       const tx = db.transaction(STORE, 'readwrite');
       tx.objectStore(STORE).put(rec, historyKey(rec.floorId, rec.bucket));
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
-    });
-    db.close();
+      tx.onabort = () => reject(tx.error);
+    }));
     return true;
   } catch {
     return false;
@@ -77,8 +84,7 @@ export async function putPresenceRecord(rec: PresenceRecord): Promise<boolean> {
  */
 export async function mergePresenceRecord(delta: PresenceRecord): Promise<boolean> {
   try {
-    const db = await openDb();
-    await new Promise<void>((resolve, reject) => {
+    await withDb(db => new Promise<void>((resolve, reject) => {
       const tx = db.transaction(STORE, 'readwrite');
       const os = tx.objectStore(STORE);
       const key = historyKey(delta.floorId, delta.bucket);
@@ -89,8 +95,8 @@ export async function mergePresenceRecord(delta: PresenceRecord): Promise<boolea
       };
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
-    });
-    db.close();
+      tx.onabort = () => reject(tx.error);
+    }));
     return true;
   } catch {
     return false;
@@ -100,14 +106,12 @@ export async function mergePresenceRecord(delta: PresenceRecord): Promise<boolea
 /** One record, or null on a miss / any failure. */
 export async function getPresenceRecord(key: string): Promise<PresenceRecord | null> {
   try {
-    const db = await openDb();
-    const out = await new Promise<PresenceRecord | null>((resolve, reject) => {
+    const out = await withDb(db => new Promise<PresenceRecord | null>((resolve, reject) => {
       const tx = db.transaction(STORE, 'readonly');
       const req = tx.objectStore(STORE).get(key);
       req.onsuccess = () => resolve((req.result as PresenceRecord) ?? null);
       req.onerror = () => reject(req.error);
-    });
-    db.close();
+    }));
     return out;
   } catch {
     return null;
@@ -122,8 +126,7 @@ export async function getPresenceRecord(key: string): Promise<PresenceRecord | n
 export async function getPresenceRecords(keys: readonly string[]): Promise<PresenceRecord[]> {
   if (!keys || keys.length === 0) return [];
   try {
-    const db = await openDb();
-    const out = await new Promise<PresenceRecord[]>((resolve, reject) => {
+    const out = await withDb(db => new Promise<PresenceRecord[]>((resolve, reject) => {
       const tx = db.transaction(STORE, 'readonly');
       const os = tx.objectStore(STORE);
       const reqs = keys.map(k => os.get(k));
@@ -136,8 +139,8 @@ export async function getPresenceRecords(keys: readonly string[]): Promise<Prese
         resolve(recs);
       };
       tx.onerror = () => reject(tx.error);
-    });
-    db.close();
+      tx.onabort = () => reject(tx.error);
+    }));
     return out;
   } catch {
     return [];
@@ -147,14 +150,12 @@ export async function getPresenceRecords(keys: readonly string[]): Promise<Prese
 /** Every stored key. [] on any failure. */
 export async function listPresenceKeys(): Promise<string[]> {
   try {
-    const db = await openDb();
-    const out = await new Promise<string[]>((resolve, reject) => {
+    const out = await withDb(db => new Promise<string[]>((resolve, reject) => {
       const tx = db.transaction(STORE, 'readonly');
       const req = tx.objectStore(STORE).getAllKeys();
       req.onsuccess = () => resolve((req.result as IDBValidKey[]).map(k => String(k)));
       req.onerror = () => reject(req.error);
-    });
-    db.close();
+    }));
     return out;
   } catch {
     return [];
@@ -164,14 +165,13 @@ export async function listPresenceKeys(): Promise<string[]> {
 /** Delete one record. Returns false on failure. */
 export async function deletePresenceRecord(key: string): Promise<boolean> {
   try {
-    const db = await openDb();
-    await new Promise<void>((resolve, reject) => {
+    await withDb(db => new Promise<void>((resolve, reject) => {
       const tx = db.transaction(STORE, 'readwrite');
       tx.objectStore(STORE).delete(key);
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
-    });
-    db.close();
+      tx.onabort = () => reject(tx.error);
+    }));
     return true;
   } catch {
     return false;
@@ -194,15 +194,14 @@ export async function sweepPresenceHistory(
     const keys = await listPresenceKeys();
     const doomed = expiredHistoryKeys(keys, nowMs, retentionDays);
     if (doomed.length === 0) return 0;
-    const db = await openDb();
-    await new Promise<void>((resolve, reject) => {
+    await withDb(db => new Promise<void>((resolve, reject) => {
       const tx = db.transaction(STORE, 'readwrite');
       const os = tx.objectStore(STORE);
       for (const k of doomed) os.delete(k);
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
-    });
-    db.close();
+      tx.onabort = () => reject(tx.error);
+    }));
     return doomed.length;
   } catch {
     return 0;
@@ -215,14 +214,13 @@ export async function sweepPresenceHistory(
  */
 export async function clearPresenceHistory(): Promise<boolean> {
   try {
-    const db = await openDb();
-    await new Promise<void>((resolve, reject) => {
+    await withDb(db => new Promise<void>((resolve, reject) => {
       const tx = db.transaction(STORE, 'readwrite');
       tx.objectStore(STORE).clear();
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
-    });
-    db.close();
+      tx.onabort = () => reject(tx.error);
+    }));
     return true;
   } catch {
     return false;

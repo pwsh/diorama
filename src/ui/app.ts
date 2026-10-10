@@ -226,7 +226,23 @@ export class App extends LitElement {
     });
   }
 
+  // Retire the current Planner before a (re)launch replaces it — every connect
+  // attempt from the auth screen used to leak a whole Planner + a HassClient
+  // that kept reconnecting forever. dispose() stops its timers/subscriptions
+  // and closes its HaApi; optional-chained so an older Planner build without
+  // it still works (close the client directly as the fallback).
+  private _disposePlanner(): void {
+    const old = this._planner as (Planner & { dispose?: () => void }) | null;
+    if (!old) return;
+    this._planner = null;
+    try {
+      if (typeof old.dispose === 'function') old.dispose();
+      else old.hass?.close?.();
+    } catch (err) { console.warn('[diorama] planner dispose failed:', err); }
+  }
+
   private _launch(url: string, token: string): void {
+    this._disposePlanner();
     this._planner = new Planner();
     try { (window as unknown as { __dioramaPlanner?: Planner }).__dioramaPlanner = this._planner; } catch { /* ignore */ }
     this._planner.viewPersist = true;   // device-local viewport retention (see adoptPlanner)
@@ -248,6 +264,7 @@ export class App extends LitElement {
   // run with no HA (localStorage-backed user_data). Mirrors the panel-mode
   // adoption path (connectWith + immediate connected UI, no auth flash).
   private _launchOffline(): void {
+    this._disposePlanner();
     this._planner = new Planner();
     try { (window as unknown as { __dioramaPlanner?: Planner }).__dioramaPlanner = this._planner; } catch { /* ignore */ }
     this._planner.viewPersist = true;   // device-local viewport retention (see adoptPlanner)

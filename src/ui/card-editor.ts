@@ -48,7 +48,16 @@ export class DioramaCardEditor extends LitElement {
     this.requestUpdate();
   }
 
-  override connectedCallback(): void { super.connectedCallback(); injectSharedStyles(this); }
+  override connectedCallback(): void {
+    super.connectedCallback();
+    injectSharedStyles(this);
+    // HA detaches and re-attaches the editor (dialog re-open, config-panel
+    // re-layout). disconnectedCallback drops the listener, and `set hass` only
+    // subscribes on the FIRST planner adoption — so re-subscribe here, or a
+    // re-attached editor never repaints when the store loads. add/remove with the
+    // same bound function is idempotent, so a first connect before hass is safe.
+    this._planner?.addEventListener('config', this._onCfg);
+  }
   override disconnectedCallback(): void {
     super.disconnectedCallback();
     this._planner?.removeEventListener('config', this._onCfg);

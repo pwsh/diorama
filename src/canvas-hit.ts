@@ -3,7 +3,9 @@ import { switchSize, distMM, pointToSeg, transformVerts, centroid, localToWorld,
          furnitureCorners, furnitureLocalToWorld, doorEndpoint,
          doorOpenDeltaDeg, doorOpenFraction, isDoubleLeafDoorKind, windowEndpoints, pointInPolygon, resolveRulerEnds, SPRINKLER_DEFAULTS, FLAGPOLE_DEFAULTS, ROBOT_DEFAULTS,
          lightIconKind, isFirepitKind, FIREPIT_SIZE_MM,
-         midpointHandles } from './geometry.js';
+         midpointHandles, resolveFurnitureDef } from './geometry.js';
+import { layerIsOn } from './layer-defs.js';
+import type { Layers2D } from './types.js';
 import type { Planner } from './planner.js';
 import type { Vec2, Wall, Sensor, Furniture, BgImage, MotionSensor, EnvSensor, BleProxy, AlarmPanel, CalendarPanel, ThermostatFixture, SafetySensor, AlertBeacon, RobotFixture, CameraFixture, ProjectorFixture, ValveFixture, PlugFixture, SprinklerZone, FlagpoleFixture, SolarPanel, PresenceZone, InfoCard, ActionButton, Door, Window as WindowType, Floor, Ruler } from './types.js';
 import { SOLAR_DEFAULTS } from './solar.js';
@@ -13,8 +15,29 @@ import { envChipHalfPx, infoCardHalfPx, actionButtonHalfPx, flightHitPx, roomLab
          insertHandleMinLenMm, insertHandlesEnabled, POLY_CAPS, type View } from './canvas-render.js';
 import { vacMapAffine, vacWorldToPixel, vacSegHasPixel } from './valetudo-map.js';
 
+// Canvas-px hit radius, converted to mm. The 12 px is in CSS px and multiplied
+// by devicePixelRatio (the canvas backing store is dpr-scaled, and view.scale is
+// canvas-px per mm), so a DPR-2 tablet gets the same physical target as a
+// desktop — the lock / door-end / floor-edge tests already did this.
 export function hitPx(view: View): number {
-  return Math.max(60, 12 / Math.max(view.scale, 1e-9));
+  const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
+  return Math.max(60, (12 * dpr) / Math.max(view.scale, 1e-9));
+}
+
+// ── Layer gates ────────────────────────────────────────────────────────────────
+// Hidden = untappable. Every hit test below is paired with the SAME layer key its
+// painter is gated on in `drawAll` (the openingsVisible / robots rule), so a
+// kiosk on the "Simple floorplan" preset can never toggle a real light by tapping
+// empty-looking floor, and a hidden layer never grabs an edit-mode press first.
+// 3D gets this for free (the raycast roots only include visible groups).
+export function layerVisible(p: Planner, k: keyof Layers2D): boolean {
+  return layerIsOn(p.store.layers2d, k);
+}
+
+// Furniture splits across two layers by category, exactly as drawFurniture does.
+export function furnitureVisible(p: Planner, piece: Furniture): boolean {
+  const isAppliance = (resolveFurnitureDef(piece, p.store.customObjects).cat ?? 'furniture') === 'appliance';
+  return layerVisible(p, isAppliance ? 'appliances' : 'furniture');
 }
 
 // Tap-to-clean hit: which Valetudo room segment (if any) sits under the world
@@ -60,6 +83,7 @@ export function hitFloorEdge(f: Floor, view: View, mm: Vec2): FloorEdge | null {
 }
 
 export function hitSensor(p: Planner, view: View, mm: Vec2): Sensor | null {
+  if (!layerVisible(p, 'sensors')) return null;
   const f = p.floor();
   for (let i = f.sensors.length - 1; i >= 0; i--)
     if (distMM(f.sensors[i], mm) < hitPx(view) * 1.5) return f.sensors[i];
@@ -67,6 +91,7 @@ export function hitSensor(p: Planner, view: View, mm: Vec2): Sensor | null {
 }
 
 export function hitSensorRotateHandle(p: Planner, view: View, mm: Vec2): Sensor | null {
+  if (!layerVisible(p, 'sensors')) return null;
   const sa = p.activeSensor(); if (!sa || sa.locked) return null;
   const dpr = window.devicePixelRatio || 1;
   const rPx = 34 * dpr;
@@ -77,6 +102,7 @@ export function hitSensorRotateHandle(p: Planner, view: View, mm: Vec2): Sensor 
 }
 
 export function hitWallVert(p: Planner, view: View, mm: Vec2): { wall: Wall; idx: number } | null {
+  if (!layerVisible(p, 'walls')) return null;
   const f = p.floor();
   const h = hitPx(view);
   // Locked walls expose no vertex anchors (they aren't drawn either).
@@ -89,6 +115,7 @@ export function hitWallVert(p: Planner, view: View, mm: Vec2): { wall: Wall; idx
 }
 
 export function hitWall(p: Planner, mm: Vec2): Wall | null {
+  if (!layerVisible(p, 'walls')) return null;
   const f = p.floor();
   for (const w of f.walls)
     for (let i = 0; i < w.points.length - 1; i++)
@@ -101,6 +128,7 @@ export function hitFurniture(p: Planner, mm: Vec2): { item: Furniture; idx: numb
   const f = p.floor();
   for (let i = f.furniture.length - 1; i >= 0; i--) {
     const piece = f.furniture[i];
+    if (!furnitureVisible(p, piece)) continue;
     const lp = furnitureWorldToLocal(piece.rotation, mm.x - piece.x, mm.y - piece.y);
     if (Math.abs(lp.x) < piece.w / 2 && Math.abs(lp.y) < piece.h / 2)
       return { item: piece, idx: i };
@@ -115,6 +143,7 @@ export function hitFurnitureCorner(p: Planner, view: View, mm: Vec2): FurnCorner
   for (let i = 0; i < f.furniture.length; i++) {
     const piece = f.furniture[i];
     if (piece.locked) continue;  // no anchors on locked pieces
+    if (!furnitureVisible(p, piece)) continue;
     // Corner positions account for piece.rotation so anchors stay grabbable
     // for rotated pieces too. Anchor is the OPPOSITE corner in world coords.
     const corners = furnitureCorners(piece);
@@ -153,7 +182,8 @@ export function hitFixture(p: Planner, mm: Vec2, hitMM: number): FixtureHit | nu
   const f = p.floor();
   let best: FixtureHit | null = null;
   let bd = (hitMM || 300) ** 2;
-  for (let i = 0; i < f.lights.length; i++) {
+  const lightsOn = layerVisible(p, 'lights'), switchesOn = layerVisible(p, 'switches');
+  for (let i = 0; lightsOn && i < f.lights.length; i++) {
     const l = f.lights[i];
     const d2 = (l.x - mm.x) ** 2 + (l.y - mm.y) ** 2;
     // Fire pits draw a real-scale FIREPIT_SIZE_MM footprint, so the whole basin
@@ -163,7 +193,7 @@ export function hitFixture(p: Planner, mm: Vec2, hitMM: number): FixtureHit | nu
       ? Math.max(bd, (FIREPIT_SIZE_MM / 2) ** 2) : bd;
     if (d2 < r2 && (best === null || d2 < bd)) { bd = d2; best = { kind: 'light', idx: i }; }
   }
-  for (let i = 0; i < f.switches.length; i++) {
+  for (let i = 0; switchesOn && i < f.switches.length; i++) {
     const sw = f.switches[i];
     const d2 = (sw.x - mm.x) ** 2 + (sw.y - mm.y) ** 2;
     // Oversized plates stay clickable across their whole face.
@@ -182,8 +212,9 @@ export interface VertOrZoneHit {
 }
 export function hitVertexOrZone(p: Planner, view: View, mm: Vec2): VertOrZoneHit | null {
   const sa = p.activeSensor(); if (!sa) return null;
-  const vHit = Math.max(30, 10 / Math.max(view.scale, 1e-9));
-  const cHit = Math.max(50, 14 / Math.max(view.scale, 1e-9));
+  const dpr = window.devicePixelRatio || 1;
+  const vHit = Math.max(30, (10 * dpr) / Math.max(view.scale, 1e-9));
+  const cHit = Math.max(50, (14 * dpr) / Math.max(view.scale, 1e-9));
   const check = (zoneArr: { vertices: Vec2[] }[], expanded: Set<number>,
                  prefix: 'iz' | 'fz'): VertOrZoneHit | null => {
     for (let zi = 0; zi < zoneArr.length; zi++) {
@@ -215,7 +246,7 @@ export interface ObjectHit { oi: number; startObj: Vec2; }
 export function hitObject(p: Planner, view: View, mm: Vec2): ObjectHit | null {
   const sa = p.activeSensor(); if (!sa) return null;
   const objs = p.objectsBy[sa.id]; if (!objs) return null;
-  const hit = Math.max(150, 25 / Math.max(view.scale, 1e-9));
+  const hit = Math.max(150, (25 * (window.devicePixelRatio || 1)) / Math.max(view.scale, 1e-9));
   for (let oi = 0; oi < objs.length; oi++) {
     const o = objs[oi]; if (!o.enabled) continue;
     const wp = localToWorld(sa, o.x, o.y);
@@ -232,7 +263,7 @@ export function hitObjectRadiusHandle(p: Planner, view: View, mm: Vec2): ObjectR
   if (eo === undefined || eo < 0) return null;
   const o = objs[eo]; if (!o?.enabled) return null;
   const wp = localToWorld(sa, o.x + o.radius, o.y);
-  const hit = Math.max(100, 15 / Math.max(view.scale, 1e-9));
+  const hit = Math.max(100, (15 * (window.devicePixelRatio || 1)) / Math.max(view.scale, 1e-9));
   return distMM(mm, wp) < hit ? { oi: eo, startR: o.radius, startMm: mm } : null;
 }
 
@@ -249,7 +280,7 @@ export function openingsVisible(p: Planner): boolean {
 export function hitDoor(p: Planner, view: View, mm: Vec2): { door: Door; idx: number } | null {
   if (!openingsVisible(p)) return null;
   const f = p.floor();
-  const tol = Math.max(80, 10 / Math.max(view.scale, 1e-9));
+  const tol = Math.max(80, (10 * (window.devicePixelRatio || 1)) / Math.max(view.scale, 1e-9));
   for (let i = f.doors.length - 1; i >= 0; i--) {
     const d = f.doors[i];
     // The CLOSED span is ALWAYS a valid target — an open door draws a dashed
@@ -264,16 +295,19 @@ export function hitDoor(p: Planner, view: View, mm: Vec2): { door: Door; idx: nu
     // `localState` and a cover reporting a partial position both put their
     // swung panel where it is DRAWN — and therefore where it is hittable.
     // Reading `states[entity_id]` raw here bypassed both.
-    const isOpen = doorOpenFraction(p.effectiveState(d)) > 0.02;
+    const frac = doorOpenFraction(p.effectiveState(d));
+    const isOpen = frac > 0.02;
     if (!isOpen) continue;
     const kind = d.kind ?? 'swing';
     if (isDoubleLeafDoorKind(kind)) {
       // Two half-width leaves swung to the same side: A about (x, y) at canvas
       // −90°, B about the span endpoint at +90° off its (rotation+180) closed
-      // direction — mirrors the 3D leaves and the 2D arcs.
-      const a = doorEndpoint({ x: d.x, y: d.y, w: d.w / 2, rotation: d.rotation }, -90);
+      // direction — mirrors the 3D leaves and the 2D arcs. The 2D leaves are
+      // drawn at the PARTIAL angle (±90·frac), so the hit follows the glyph.
+      const fr = Math.min(1, Math.max(0, frac));
+      const a = doorEndpoint({ x: d.x, y: d.y, w: d.w / 2, rotation: d.rotation }, -90 * fr);
       if (pointToSeg(mm.x, mm.y, d.x, d.y, a.x, a.y) < tol) return { door: d, idx: i };
-      const b = doorEndpoint({ x: closed.x, y: closed.y, w: d.w / 2, rotation: d.rotation + 180 }, +90);
+      const b = doorEndpoint({ x: closed.x, y: closed.y, w: d.w / 2, rotation: d.rotation + 180 }, +90 * fr);
       if (pointToSeg(mm.x, mm.y, closed.x, closed.y, b.x, b.y) < tol) return { door: d, idx: i };
     } else if (kind === 'swing' || kind === 'gate') {
       const end = doorEndpoint(d, doorOpenDeltaDeg(d));
@@ -333,7 +367,7 @@ export function hitDoorEnd(p: Planner, view: View, mm: Vec2): { door: Door; idx:
 export function hitWindow(p: Planner, view: View, mm: Vec2): { win: WindowType; idx: number } | null {
   if (!openingsVisible(p)) return null;
   const f = p.floor();
-  const tol = Math.max(80, 10 / Math.max(view.scale, 1e-9));
+  const tol = Math.max(80, (10 * (window.devicePixelRatio || 1)) / Math.max(view.scale, 1e-9));
   for (let i = f.windows.length - 1; i >= 0; i--) {
     const w = f.windows[i];
     const ends = windowEndpoints(w);
@@ -384,6 +418,7 @@ export function hitWindowEnd(p: Planner, view: View, mm: Vec2):
 }
 
 export function hitMotionSensor(p: Planner, view: View, mm: Vec2): MotionSensor | null {
+  if (!layerVisible(p, 'motion')) return null;
   const f = p.floor();
   const h = hitPx(view) * 1.4;
   for (let i = f.motionSensors.length - 1; i >= 0; i--) {
@@ -393,6 +428,7 @@ export function hitMotionSensor(p: Planner, view: View, mm: Vec2): MotionSensor 
 }
 
 export function hitBleProxy(p: Planner, view: View, mm: Vec2): BleProxy | null {
+  if (!layerVisible(p, 'sensors')) return null;
   const f = p.floor();
   const h = hitPx(view) * 1.4;
   const list = f.bleProxies ?? [];
@@ -404,6 +440,7 @@ export function hitBleProxy(p: Planner, view: View, mm: Vec2): BleProxy | null {
 }
 
 export function hitAlarmPanel(p: Planner, view: View, mm: Vec2): AlarmPanel | null {
+  if (!layerVisible(p, 'sensors')) return null;
   const f = p.floor();
   const h = hitPx(view) * 1.4;
   const list = f.alarmPanels ?? [];
@@ -414,6 +451,7 @@ export function hitAlarmPanel(p: Planner, view: View, mm: Vec2): AlarmPanel | nu
 }
 
 export function hitCalendarPanel(p: Planner, view: View, mm: Vec2): CalendarPanel | null {
+  if (!layerVisible(p, 'sensors')) return null;
   const f = p.floor();
   const h = hitPx(view) * 1.4;
   const list = f.calendarPanels ?? [];
@@ -424,6 +462,7 @@ export function hitCalendarPanel(p: Planner, view: View, mm: Vec2): CalendarPane
 }
 
 export function hitThermostat(p: Planner, view: View, mm: Vec2): ThermostatFixture | null {
+  if (!layerVisible(p, 'sensors')) return null;
   const f = p.floor();
   const h = hitPx(view) * 1.4;
   const list = f.thermostats ?? [];
@@ -434,6 +473,7 @@ export function hitThermostat(p: Planner, view: View, mm: Vec2): ThermostatFixtu
 }
 
 export function hitValve(p: Planner, view: View, mm: Vec2): ValveFixture | null {
+  if (!layerVisible(p, 'sensors')) return null;
   const f = p.floor();
   const h = hitPx(view) * 1.8;
   const list = f.valves ?? [];
@@ -447,6 +487,7 @@ export function hitValve(p: Planner, view: View, mm: Vec2): ValveFixture | null 
 // placement). The running spray wedge is NOT clickable (clicking toggles the
 // head, not the water). A fixed-mm floor keeps a tiny head clickable when zoomed out.
 export function hitSprinklerZone(p: Planner, view: View, mm: Vec2): SprinklerZone | null {
+  if (!layerVisible(p, 'ground')) return null;
   const f = p.floor();
   const h = Math.max(hitPx(view) * 1.2, SPRINKLER_DEFAULTS.hitRadiusMm);
   const list = f.sprinklerZones ?? [];
@@ -458,6 +499,7 @@ export function hitSprinklerZone(p: Planner, view: View, mm: Vec2): SprinklerZon
 
 // Flagpole — point-in-circle on the base (free placement, small hit radius).
 export function hitFlagpole(p: Planner, view: View, mm: Vec2): FlagpoleFixture | null {
+  if (!layerVisible(p, 'furniture')) return null;
   const f = p.floor();
   const h = Math.max(hitPx(view) * 1.3, FLAGPOLE_DEFAULTS.hitRadiusMm);
   const list = f.flagpoles ?? [];
@@ -471,6 +513,7 @@ export function hitFlagpole(p: Planner, view: View, mm: Vec2): FlagpoleFixture |
 // Solar panel — point-in-circle on the pedestal base (free placement). The
 // tilting array itself is non-interactive; the base is the handle.
 export function hitSolarPanel(p: Planner, view: View, mm: Vec2): SolarPanel | null {
+  if (!layerVisible(p, 'sensors')) return null;
   const f = p.floor();
   const h = Math.max(hitPx(view) * 1.3, SOLAR_DEFAULTS.hitRadiusMm);
   const list = f.solarPanels ?? [];
@@ -482,6 +525,7 @@ export function hitSolarPanel(p: Planner, view: View, mm: Vec2): SolarPanel | nu
 }
 
 export function hitPlug(p: Planner, view: View, mm: Vec2): PlugFixture | null {
+  if (!layerVisible(p, 'switches')) return null;
   const f = p.floor();
   const h = hitPx(view) * 1.4;
   const list = f.plugs ?? [];
@@ -492,6 +536,7 @@ export function hitPlug(p: Planner, view: View, mm: Vec2): PlugFixture | null {
 }
 
 export function hitActionButton(p: Planner, view: View, mm: Vec2): ActionButton | null {
+  if (!layerVisible(p, 'switches')) return null;
   const f = p.floor();
   const list = f.actionButtons ?? [];
   const fallback = hitPx(view) * 1.6;
@@ -512,6 +557,7 @@ export function hitActionButton(p: Planner, view: View, mm: Vec2): ActionButton 
 }
 
 export function hitSafetySensor(p: Planner, view: View, mm: Vec2): SafetySensor | null {
+  if (!layerVisible(p, 'sensors')) return null;
   const f = p.floor();
   const h = hitPx(view) * 1.4;
   const list = f.safetySensors ?? [];
@@ -522,6 +568,7 @@ export function hitSafetySensor(p: Planner, view: View, mm: Vec2): SafetySensor 
 }
 
 export function hitAlertBeacon(p: Planner, view: View, mm: Vec2): AlertBeacon | null {
+  if (!layerVisible(p, 'sensors')) return null;
   const f = p.floor();
   const h = hitPx(view) * 1.4;
   const list = f.alertBeacons ?? [];
@@ -592,6 +639,7 @@ export function hitFlight(p: Planner, view: View, mm: Vec2): string | null {
 }
 
 export function hitCamera(p: Planner, view: View, mm: Vec2): CameraFixture | null {
+  if (!layerVisible(p, 'sensors')) return null;
   const f = p.floor();
   const h = hitPx(view) * 1.4;
   const list = f.cameras ?? [];
@@ -604,6 +652,7 @@ export function hitCamera(p: Planner, view: View, mm: Vec2): CameraFixture | nul
 
 // Orange rotate handle for the active camera (mirrors the motion-sensor handle).
 export function hitCameraRotateHandle(p: Planner, view: View, mm: Vec2): CameraFixture | null {
+  if (!layerVisible(p, 'sensors')) return null;
   const id = p.activeCameraId; if (!id) return null;
   const c = (p.floor().cameras ?? []).find(x => x.id === id);
   if (!c || c.locked) return null;
@@ -617,6 +666,7 @@ export function hitCameraRotateHandle(p: Planner, view: View, mm: Vec2): CameraF
 
 // Projector fixture hit (small point fixture, like a BLE proxy / camera body).
 export function hitProjector(p: Planner, view: View, mm: Vec2): ProjectorFixture | null {
+  if (!layerVisible(p, 'sensors')) return null;
   const f = p.floor();
   const h = hitPx(view) * 1.4;
   const list = f.projectors ?? [];
@@ -766,6 +816,7 @@ function insertHitIn(pts: Vec2[], closed: boolean, view: View, mm: Vec2): Insert
 // anchors. Walls have no vertex cap.
 export function hitWallVertInsert(p: Planner, view: View, mm: Vec2): { wall: Wall; at: InsertHit } | null {
   if (!insertHandlesEnabled(p)) return null;
+  if (!layerVisible(p, 'walls')) return null;
   for (const w of p.floor().walls) {
     if (w.locked) continue;
     const at = insertHitIn(w.points, false, view, mm);
@@ -888,6 +939,7 @@ export function hitRulerBody(p: Planner, view: View, mm: Vec2): Ruler | null {
 }
 
 export function hitEnvSensor(p: Planner, view: View, mm: Vec2): EnvSensor | null {
+  if (!layerVisible(p, 'env')) return null;
   const f = p.floor();
   const fallback = hitPx(view) * 2;
   for (let i = f.envSensors.length - 1; i >= 0; i--) {
@@ -906,6 +958,7 @@ export function hitEnvSensor(p: Planner, view: View, mm: Vec2): EnvSensor | null
 }
 
 export function hitInfoCard(p: Planner, view: View, mm: Vec2): InfoCard | null {
+  if (!layerVisible(p, 'info')) return null;
   const f = p.floor();
   const list = f.infoCards ?? [];
   const fallback = hitPx(view) * 2;
@@ -927,6 +980,7 @@ export function hitInfoCard(p: Planner, view: View, mm: Vec2): InfoCard | null {
 
 // Orange dot on the selected chip's right edge — drag to scale the chip.
 export function hitEnvResizeHandle(p: Planner, view: View, mm: Vec2): EnvSensor | null {
+  if (!layerVisible(p, 'env')) return null;
   const id = p.activeEnvId; if (!id) return null;
   const e = p.floor().envSensors.find(x => x.id === id);
   if (!e || e.locked) return null;
@@ -938,6 +992,7 @@ export function hitEnvResizeHandle(p: Planner, view: View, mm: Vec2): EnvSensor 
 }
 
 export function hitMotionRotateHandle(p: Planner, view: View, mm: Vec2): MotionSensor | null {
+  if (!layerVisible(p, 'motion')) return null;
   const id = p.activeMotionId; if (!id) return null;
   const m = p.floor().motionSensors.find(x => x.id === id);
   if (!m || m.fov >= 359.99 || m.locked) return null;
@@ -950,6 +1005,9 @@ export function hitMotionRotateHandle(p: Planner, view: View, mm: Vec2): MotionS
 }
 
 export function bgEditable(p: Planner): BgImage | null {
+  // Hidden `bg` layer = the image isn't drawn, so its body/corners must not grab
+  // a press either (the layer-gate rule above).
+  if (!layerVisible(p, 'bg')) return null;
   const bg = p.floor().bg;
   return (bg && bg.visible !== false && bg.dataUrl && !bg.locked) ? bg : null;
 }
@@ -957,7 +1015,7 @@ export function bgEditable(p: Planner): BgImage | null {
 export interface BgCornerHit { sx: number; sy: number; }
 export function hitBgCorner(p: Planner, view: View, mm: Vec2): BgCornerHit | null {
   const bg = bgEditable(p); if (!bg) return null;
-  const hit = Math.max(80, 12 / Math.max(view.scale, 1e-9));
+  const hit = Math.max(80, (12 * (window.devicePixelRatio || 1)) / Math.max(view.scale, 1e-9));
   const signs: [number, number][] = [[-1, -1], [1, -1], [1, 1], [-1, 1]];
   for (const [sx, sy] of signs) {
     const wp = bgLocalToWorld(bg, sx * bg.w / 2, sy * bg.h / 2);

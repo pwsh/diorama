@@ -80,6 +80,11 @@ interface InfoCardRig {
   flash: boolean;                   // a matched rule flagged flash → pulse per frame
   clock: boolean;                   // clock/date mode → repaint on text change per frame
   imperial: boolean;
+  // Entity card whose format is `relativeTime` ("5 min ago"): the TEXT moves
+  // with the clock while the entity state stays put, so it repaints like a
+  // clock card (re-formatted from the build-time state snapshot, throttled to
+  // once a second). A rule `label` pins the text, so such cards opt out.
+  relTime?: { st: HassState | null; nextMs: number };
 }
 
 // Persistent action-button rig (batch DC-B). Built under _keyActions; the cap
@@ -103,7 +108,7 @@ interface RobotRig {
   progressGroup: THREE.Group;       // toggled visible on/off by source presence
   progressMats: THREE.MeshToonMaterial[]; // ordered fill segments (strip L→R / ring CW)
 }
-import { wallCutsForSegment, WINDOW_DEFAULTS, isBayWindowKind, windowSillMm, windowGlassHMm, bayProjectSign, bayPlan, closedWallLoops, wallSegmentInLoops, doorSpanCenter, wallKind, WALL_KINDS, furnitureLocalToWorld, furnitureWorldToLocal, pointInPolygon as pip, centroid, loopContaining, clampPointToLoop, resolveRoomForPoint, roomLabel, roomsByLoop, roomFloorLook, intersectLoopWithRect, clipVoidToLoop, polygonArea, heatmapColor, groundAreaSkirtBase, poolWaterColor, poolDepthMm, poolRaisedMm, poolHeaterState, poolPumpOn, poolLightOn, poolRimY, poolBasinFloorY, poolWaterSurfaceY, POOL_COPING_COLOR, POOL_HEAT_GLOW, type RoomTemp } from './geometry.js';
+import { segCrossesSolidWall, isTableSeatKind, wallCutsForSegment, WINDOW_DEFAULTS, isBayWindowKind, windowSillMm, windowGlassHMm, bayProjectSign, bayPlan, closedWallLoops, wallSegmentInLoops, doorSpanCenter, wallKind, WALL_KINDS, furnitureLocalToWorld, furnitureWorldToLocal, pointInPolygon as pip, centroid, loopContaining, clampPointToLoop, resolveRoomForPoint, roomLabel, roomsByLoop, roomFloorLook, intersectLoopWithRect, clipVoidToLoop, polygonArea, heatmapColor, groundAreaSkirtBase, poolWaterColor, poolDepthMm, poolRaisedMm, poolHeaterState, poolPumpOn, poolLightOn, poolRimY, poolBasinFloorY, poolWaterSurfaceY, POOL_COPING_COLOR, POOL_HEAT_GLOW, type RoomTemp } from './geometry.js';
 import { visibilityToFogDensity, moonPhaseFraction, uvBand, type WeatherNow } from './weather.js';
 // mmWave presence-history ramp + normalization. mmwave-history.ts is PURE and
 // zero-import (the avatars.ts / flights.ts shared-chunk family), so importing it
@@ -170,6 +175,12 @@ const _THP_UP = new THREE.Vector3(0, 1, 0);
 const _THP_X = new THREE.Vector3(1, 0, 0);
 // Reused scratch for the locked-pivot rigid rotation (`_applyPivotRotate`) —
 // zero allocation per pointermove.
+// Quadruped trot legs [FL, FR, BL, BR]: phase sign + front/back (see _applyQuadPose).
+const QUAD_LEG_SIGN: readonly number[] = [1, -1, -1, 1];
+const QUAD_LEG_FRONT: readonly boolean[] = [true, true, false, false];
+// Sims-cam 45° azimuth glide rate (1/s): matches the old 0.2-per-frame step at
+// 60 fps, but frame-rate independent (see `_animate`).
+const SNAP_AZ_K = -60 * Math.log(0.8);
 // Cursor-zoom scratch (see `_installCursorZoom`) — zero per-wheel allocation.
 const _czDir = new THREE.Vector3();
 const _czQ = new THREE.Vector3();
@@ -595,6 +606,11 @@ interface SitSpot {
   // register one per usable cushion run), each independently claimable so two
   // avatars never settle onto the same cushion.
   id: string;
+  // The owning FURNITURE id, stored at registration. Consumers used to recover it
+  // by `id.split(':')[0]`, which mis-parses any furniture id containing ':'
+  // (and allocated per rig per frame). Absent for non-furniture seats (the bay
+  // window bench).
+  furnitureId?: string;
   x: number; z: number; seatY: number; facing: number; r: number;
   // Front-only entry (seating v2): `frontNx/frontNz` is the scene-XZ unit vector
   // pointing OUT the functional front of the seat (where a person approaches
@@ -809,7 +825,8 @@ interface BgRoad {
 // across a rebuild by construction.
 interface BgPhase {
   angle?: number;      // aircraft orbit angle (rad)
-  skyPhase?: number;   // skywriting drift + twinkle clock (s)
+  skyPhase?: number;   // skywriting twinkle clock (s)
+  skyDrift?: number;   // skywriting drift phase (rad, accumulated — see _advanceBgSky)
   trainS?: number;     // train engine arc position (mm along the loop)
   wheelRot?: number;   // train wheel spin (rad) — cosmetic continuity
   roadS?: number;      // road lead-car position on the drive cycle (mm)
@@ -821,7 +838,7 @@ interface BgRig {
   // (see BgGrassArea below for the ground-writing "fit to area" payload)
   ph?: BgPhase;                             // persistent phase slot (written back each frame)
   // sky
-  sky?: THREE.Sprite; skyBaseX?: number; skyPhase?: number;
+  sky?: THREE.Sprite; skyBaseX?: number; skyPhase?: number; skyDrift?: number;
   // aircraft (banner plane + chopper)
   asm?: THREE.Group;
   prop?: THREE.Object3D;                    // plane prop OR chopper main rotor (= props[0])
@@ -2480,6 +2497,9 @@ export class ThreeDRenderer {
   private _pivotHalfD = 0;
   private _zoomToCursor = false;
   private _appliedZoomToCursor: boolean | null = null;
+  // The window-level capture `wheel` listener (see `_installCursorZoom`) —
+  // kept so `destroy()` can remove it.
+  private _cursorZoomHandler: ((e: WheelEvent) => void) | null = null;
   // Custom locked+free rotate gesture state (see `_installPivotRotate`).
   // `_pivotPointers` tracks every pointer down on the canvas so a second finger
   // can abandon the gesture to OrbitControls' 2-finger dolly/pan.
@@ -2764,6 +2784,9 @@ export class ThreeDRenderer {
   private _moonOffsetCur = new THREE.Vector3(0, 14000, 0);
   private _sunWantOpacity = 0; private _sunOpacityCur = 0;
   private _moonWantOpacity = 0; private _moonOpacityCur = 0;
+  // Peak moon opacity for the current weather (overcast dims it) — kept so the
+  // 60 s real-sky recompute can re-derive visibility without a weather rebuild.
+  private _moonPeakOpacity = 1;
   private _skyStormDir = new THREE.Vector2(1, 0); // upwind (scene x,z) for horizon darkening
 
   // ── Astronomically-correct catalog sky (constellations + planets) ──────────
@@ -3146,6 +3169,7 @@ export class ThreeDRenderer {
   }[] = [];
   private _swingBlend: Record<string, number> = {};
   private _swingOffset: Record<string, { dx: number; dy: number; dz: number }> = {};
+  private _swingOcc = new Set<string>();   // _advanceSwings scratch
   // Mailbox flag arms (furniture-polish batch). The flag rests DOWN (pole
   // horizontal, panel hanging) and rises STRAIGHT UP when the outgoing-mail
   // signal (mailCount.flagEntity 'on') fires. Eased 0→1 (down→up) blend keyed by
@@ -3563,11 +3587,32 @@ export class ThreeDRenderer {
     // element in an iframe (its own time origin), and it is what a headless
     // click harness hits on its first tap.
     let downX = 0, downY = 0, downT = 0, lastTapT = -Infinity, downTouch = false;
+    // Multi-touch invalidation: a tap is ONE pointer down and the SAME pointer
+    // up. Without this, lifting the second finger of a pinch that happened to
+    // land near the first finger's down point passed the slop/time gate and
+    // toggled whatever was under it. `tapId` = the candidate's pointerId, or
+    // null once invalidated; `tapPointers` counts pointers currently down.
+    const tapPointers = new Set<number>();
+    let tapId: number | null = null;
     dom.addEventListener('pointerdown', e => {
+      // A PRIMARY pointer starts a fresh gesture (the first finger with no other
+      // touch active, or any mouse/pen press) — clear stale ids so a pointerup
+      // that never reached us can't wedge the gate shut.
+      if (e.isPrimary) tapPointers.clear();
+      tapPointers.add(e.pointerId);
+      if (tapPointers.size > 1) { tapId = null; return; }
+      tapId = e.pointerId;
       downX = e.clientX; downY = e.clientY; downT = e.timeStamp;
       downTouch = e.pointerType === 'touch';
     });
+    dom.addEventListener('pointercancel', e => {
+      tapPointers.delete(e.pointerId);
+      if (tapId === e.pointerId) tapId = null;
+    });
     dom.addEventListener('pointerup', e => {
+      tapPointers.delete(e.pointerId);
+      if (tapId === null || tapId !== e.pointerId) return;
+      tapId = null;
       const touch = downTouch || e.pointerType === 'touch';
       const maxMs = touch ? TAP_MAX_MS_TOUCH : TAP_MAX_MS_MOUSE;
       const maxPx = touch ? TAP_SLOP_PX_TOUCH : TAP_SLOP_PX_MOUSE;
@@ -3584,17 +3629,17 @@ export class ThreeDRenderer {
         // kind 'flight'), so a second tap should re-open the card, not be eaten.
         const near = this._raycastFlightNear(
           e.clientX, e.clientY, touch ? FLIGHT_PICK_PX_TOUCH : FLIGHT_PICK_PX_MOUSE);
-        if (near) { this._onFixtureClick?.(near); lastTapT = 0; return; }
+        if (near) { this._onFixtureClick?.(near); lastTapT = -Infinity; return; }
         // Low-priority: only when no fixture was under the cursor, try the
         // Valetudo room-map overlay (tap-to-clean).
         const seg = this._raycastVacSeg(e.clientX, e.clientY);
         if (seg) this._onVacSegClick?.(seg);
-        lastTapT = 0; return;
+        lastTapT = -Infinity; return;
       }
       const now = e.timeStamp;
       if (now - lastTapT < 350) {
         this._onFixtureDblClick?.(hit);
-        lastTapT = 0;
+        lastTapT = -Infinity;   // see the seed comment above — never 0
       } else {
         this._onFixtureClick?.(hit);
         lastTapT = now;
@@ -3791,9 +3836,24 @@ export class ThreeDRenderer {
       const m = o as Partial<THREE.Mesh> & THREE.Object3D;
       m.geometry?.dispose();
       const mat = m.material;
-      if (Array.isArray(mat)) mat.forEach(mm => mm.dispose());
-      else if (mat) mat.dispose();
+      if (Array.isArray(mat)) mat.forEach(mm => { if (!this._isSharedMaterial(mm)) mm.dispose(); });
+      else if (mat && !this._isSharedMaterial(mat)) mat.dispose();
     });
+  }
+
+  // Renderer-lifetime shared materials (the outline-shell material every shell
+  // in EVERY group shares, the front-arrow decal material) must never be freed
+  // by a per-group rebuild: disposing one releases its GL program, so the very
+  // next frame recompiles it — a visible hitch on every dirty-key rebuild (and
+  // the rebuilt group was rarely the only user). Freed only in destroy().
+  // The two built-ins are matched by IDENTITY, deliberately not by a
+  // `userData.shared` tag: Material.clone() copies userData, and both are cloned
+  // for per-rig / per-model fades that MUST be freed with their owner. Any other
+  // renderer-lifetime material can opt out with `userData.shared = true` (never
+  // clone one of those).
+  private _isSharedMaterial(mat: THREE.Material): boolean {
+    return mat === this._outlineMaterial || mat === this._frontArrowMat ||
+      mat.userData?.shared === true;
   }
 
   // Empty a group AND dispose every child's resources. Use this everywhere
@@ -4257,7 +4317,7 @@ export class ThreeDRenderer {
   clearTransientGroups(): void {
     for (const g of [
       this._floorGroup, this._doorGroup, this._modelGroup, this._zoneGroup, this._haloGroup,
-      this._sensorGroup, this._motionGroup, this._infoGroup, this._actionGroup, this._bleGroup, this._alarmGroup, this._calendarGroup, this._thermoGroup,
+      this._sensorGroup, this._motionGroup, this._envGroup, this._infoGroup, this._actionGroup, this._bleGroup, this._alarmGroup, this._calendarGroup, this._thermoGroup,
       this._safetyGroup, this._alertGroup, this._robotGroup, this._robotRigGroup, this._cameraGroup, this._projGroup, this._valveGroup, this._plugGroup, this._camAlertGroup, this._pzoneGroup,
       this._groundGroup, this._poolGroup, this._sprinklerGroup, this._flagpoleGroup, this._solarGroup, this._heatmapGroup,
       this._lightGroup, this._switchGroup, this._targetGroup, this._ghostGroup,
@@ -4722,8 +4782,9 @@ export class ThreeDRenderer {
     else if (src === 'flights') this._frustumReqFlights = v;
     else this._frustumReqBgText = v;
     const n = this._frustumReqNbhd, f = this._frustumReqFlights, b = this._frustumReqBgText;
-    let eff: number | null = null;
-    for (const x of [n, f, b]) if (x != null) eff = eff == null ? x : Math.max(eff, x);
+    let eff: number | null = n;
+    if (f != null) eff = eff == null ? f : Math.max(eff, f);
+    if (b != null) eff = eff == null ? b : Math.max(eff, b);
     this._applyFrustumForRange(eff, n);
   }
 
@@ -4859,7 +4920,10 @@ export class ThreeDRenderer {
   // Does the point lie inside some closed wall loop (i.e. indoors)? Distinct
   // from !_outdoors, which also reports "indoors" for a floor with NO loops.
   private _insideWallLoop(wx: number, wy: number): boolean {
-    return this._wallLoops.some(lp => pip(wx, wy, lp));
+    // Plain loop (no per-call closure — this runs per rig/car per frame).
+    const loops = this._wallLoops;
+    for (let i = 0; i < loops.length; i++) if (pip(wx, wy, loops[i])) return true;
+    return false;
   }
 
   // Vertical base (mm) for ONE wall segment a→b of kind `kind`, against the
@@ -4991,6 +5055,13 @@ export class ThreeDRenderer {
         this._hemi.intensity = 0.25;
         this._sun.color.set(0xdfe6ff); this._sun.intensity = 0.45;
         this._sun.position.set(3000, 8000, 3000);
+    }
+    // Storm-brewing darkening in flight (or easing out): its captured base tint
+    // is what _advanceWeather copies back into the background every frame, so
+    // re-capture it from the NEW preset — otherwise a preset flip mid-storm was
+    // silently overwritten with the old preset's colour until the storm cleared.
+    if (this._stormBaseBg && this._scene.background instanceof THREE.Color) {
+      this._stormBaseBg.copy(this._scene.background);
     }
     // Phase 3: retarget the sky dome colors on a preset flip (auto lighting
     // modes). Only when the sky is already built — _init calls this before the
@@ -5514,25 +5585,27 @@ export class ThreeDRenderer {
         this._mat({ color: 0xffcf40, metalness: 0.7, roughness: 0.3, emissive: 0x201800, emissiveIntensity: 0.2 }));
       finial.position.y = H + 30 * sc;
       grp.add(finial);
-      // Flag cloth: a centered plane, offset so its HOIST edge sits on the pole
-      // and the FLY extends +X. TWO FrontSide planes sharing ONE geometry + one
-      // canvas texture (back rotated π, un-mirrored — the banner technique) so
-      // the design reads correctly from both flanks. Segments 12×6 for a smooth
-      // wave. One shared geometry → one buffer mutation ripples both faces.
+      // Flag cloth: a plane offset so its HOIST edge sits on the pole and the
+      // FLY extends +X — ONE DoubleSide mesh. (The banner technique — a second
+      // FrontSide plane rotated π — is only right for a plane CENTRED on its
+      // origin: rotating this hoist-anchored plane π about Y swung the back face
+      // to the pole's OTHER side, so the cloth visibly jumped across the pole as
+      // the camera orbited.) From behind the design reads mirrored, exactly as
+      // a real printed flag does. Segments 12×6 for a smooth wave; the ripple
+      // mutates this one buffer in place. Flat unlit MeshBasicMaterial — so no
+      // vertex normals are needed (and none are recomputed per frame).
       const fw = FLAGPOLE_DEFAULTS.flagW * sc, fh = FLAGPOLE_DEFAULTS.flagH * sc;
       const geo = new THREE.PlaneGeometry(fw, fh, 12, 6);
       geo.translate(fw / 2, 0, 0);   // hoist edge at local x=0, fly at +fw
       const base32 = new Float32Array((geo.attributes.position as THREE.BufferAttribute).array);
       const tex = this._flagTexture(fp.flag ?? 'usa');
-      const mat = new THREE.MeshBasicMaterial({ map: tex, side: THREE.FrontSide, fog: false });
-      const front = new THREE.Mesh(geo, mat);
-      front.position.z = 2 * sc; front.userData.outlineSkip = true;
-      const back = new THREE.Mesh(geo, mat);   // SHARES geo + material (one map)
-      back.rotation.y = Math.PI; back.position.z = -2 * sc; back.userData.outlineSkip = true;
-      // Assembly holds both faces; its Y position is the eased hoist. The pivot
+      const mat = new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide, fog: false });
+      const cloth = new THREE.Mesh(geo, mat);
+      cloth.userData.outlineSkip = true;
+      // Assembly holds the cloth; its Y position is the eased hoist. The pivot
       // sits at the flag's TOP so the cloth hangs below it.
       const assembly = new THREE.Group();
-      assembly.add(front); assembly.add(back);
+      assembly.add(cloth);
       grp.add(assembly);
       this._flagpoleGroup.add(grp);
       // Hoist travel: flag TOP rides between just-below-finial (full) and near
@@ -5590,7 +5663,6 @@ export class ThreeDRenderer {
         arr[i * 3 + 2] = z;
       }
       pos.needsUpdate = true;
-      rig.geo.computeVertexNormals();
     }
   }
 
@@ -6384,6 +6456,7 @@ export class ThreeDRenderer {
     }
     const tex = new THREE.CanvasTexture(cv);
     tex.flipY = false;                      // UVs authored top-left origin (matches the raster)
+    tex.colorSpace = THREE.SRGBColorSpace;   // canvas-painted sRGB colours (untagged = washed out)
     tex.magFilter = THREE.LinearFilter;     // dwell is a continuous field — smooth reads better than blocky
     tex.minFilter = THREE.LinearFilter;
     tex.generateMipmaps = false;
@@ -6475,6 +6548,7 @@ export class ThreeDRenderer {
     }
     const tex = new THREE.CanvasTexture(cv);
     tex.flipY = false;                       // UVs authored top-left origin (matches the raster)
+    tex.colorSpace = THREE.SRGBColorSpace;   // canvas-painted sRGB colours (untagged = washed out)
     tex.magFilter = THREE.NearestFilter;     // crisp room cells, no blur
     tex.minFilter = THREE.NearestFilter;
     tex.generateMipmaps = false;
@@ -7767,8 +7841,15 @@ export class ThreeDRenderer {
         if (hostActivity === 'eat_at_table' || hostActivity === 'work_at_desk') {
           // Seat authored as its own eat/work surface (custom recipe) — the top
           // is this piece's own def.ht. No host clamp (own footprint).
-          hostTopY = def.ht + (fu.elevation ?? 0);
-        } else if (!hostActivity) {
+          // Same frame as `seatY` (which carries furnGY): the top follows the
+          // piece's own outdoor grade offset.
+          hostTopY = def.ht + (fu.elevation ?? 0) + furnGY;
+        } else if (!hostActivity && isTableSeatKind(fu.kind)) {
+          // `isTableSeatKind` + the wall probe mirror the editor's
+          // `seatBelongsToTable` capture (canvas-interact): a toilet / swingset's
+          // `seat` exists only for the piece itself, and a table on the far
+          // side of a solid wall (doorways OPAQUE — the empty doors/windows
+          // arrays are deliberate) is not the table this seat is "at".
           for (const host of f.furniture) {
             if (host === fu) continue;
             const hdef = resolveFurnitureDef(host, customObjects);
@@ -7776,8 +7857,17 @@ export class ThreeDRenderer {
             if (ha !== 'eat_at_table' && ha !== 'work_at_desk') continue;
             const l = furnitureWorldToLocal(host.rotation, fu.x - host.x, fu.y - host.y);
             if (Math.abs(l.x) <= host.w / 2 + 400 && Math.abs(l.y) <= host.h / 2 + 400) {
+              if (f.walls.length &&
+                  segCrossesSolidWall(f.walls, [], [], host.x, host.y, fu.x, fu.y)) continue;
               hostActivity = ha;
-              hostTopY = hdef.ht + (host.elevation ?? 0);
+              // The host's OWN grade offset, not the chair's: seatY carries the
+              // chair's furnGY, so a picnic table on a −600 mm yard grade used to
+              // report its top 600 mm too high (arms reached into thin air and the
+              // seat lift floated the rig) — and on a raised terrace the arms went
+              // through the slab.
+              const hostGY = HOUSE_MOUNTED_FURNITURE_KINDS.has(host.kind ?? '')
+                ? 0 : this._itemGroundY(host.x, host.y);
+              hostTopY = hdef.ht + (host.elevation ?? 0) + hostGY;
               hostRef = { x: host.x, y: host.y, w: host.w, h: host.h, rotation: host.rotation };
               break;
             }
@@ -7872,7 +7962,7 @@ export class ThreeDRenderer {
           // (the front edge sits SEAT_FRONT_INSET in front of the hip).
           const APPROACH = 350 + SEAT_FRONT_INSET;
           this._sitSpots.push({
-            id: `${fu.id}:${i}`,
+            id: `${fu.id}:${i}`, furnitureId: fu.id,
             x: sx, z: sz, seatY: seatH + (fu.elevation ?? 0) + furnGY,
             facing, r,
             frontNx: fNx, frontNz: fNz,
@@ -9106,14 +9196,55 @@ export class ThreeDRenderer {
   // 8-connected A* over the nav grid (no corner cutting: a diagonal step needs
   // both shared orthogonal cells free; octile heuristic). Returns the cell-index
   // path start→goal, or null if unreachable within the explored-node cap.
+  // A* scratch, reused across calls (keyed on grid size N). The old code
+  // allocated a Float64Array + Int32Array + Uint8Array of N per call; on a big
+  // plot (~74k cells) with a replan every frame that was ~1 MB of garbage per rig
+  // per frame. Validity is by GENERATION stamp, so a call never has to clear the
+  // arrays: `g[i]`/`came[i]` count only when `seen[i] === gen`, and a cell is
+  // closed when `closed[i] === gen`.
+  private _asN = 0;
+  private _asGen = 0;
+  private _asG: Float64Array = new Float64Array(0);
+  private _asCame: Int32Array = new Int32Array(0);
+  private _asSeen: Uint32Array = new Uint32Array(0);
+  private _asClosed: Uint32Array = new Uint32Array(0);
+  private _asHeapIdx: number[] = [];
+  private _asHeapF: number[] = [];
+  // (navCell, goalCell) pairs A* recently failed on → retry-after time (s).
+  // Scoped to one nav revision (a rebuilt grid invalidates every entry).
+  private _aStarFail = new Map<number, number>();
+  private _aStarFailRev = -1;
+
   private _aStar(start: number, goal: number): number[] | null {
     const n = this._nav!;
-    const { nx, ny, blocked } = n;
+    const { nx, ny, blocked, region, regionSize } = n;
     const N = nx * ny;
     if (start === goal) return [start];
-    const g = new Float64Array(N).fill(Infinity);
-    const came = new Int32Array(N).fill(-1);
-    const closed = new Uint8Array(N);
+    // Different connectivity regions ⇒ provably unreachable. Answer at once
+    // instead of expanding the whole start region to find out.
+    // (A blocked goal can never be entered — the old search reached the same null
+    // only after exhausting its cap. A blocked START keeps the old behaviour: the
+    // search still steps off it into free neighbours, so no region shortcut.)
+    if (blocked[goal]) return null;
+    if (!blocked[start] && region[start] !== region[goal]) return null;
+    if (this._asN !== N) {
+      this._asN = N; this._asGen = 0;
+      this._asG = new Float64Array(N); this._asCame = new Int32Array(N);
+      this._asSeen = new Uint32Array(N); this._asClosed = new Uint32Array(N);
+    }
+    if (++this._asGen >= 0xffffffff) {           // stamp wrap: reset once in ~4e9 calls
+      this._asSeen.fill(0); this._asClosed.fill(0); this._asGen = 1;
+    }
+    const gen = this._asGen;
+    const g = this._asG, came = this._asCame, seen = this._asSeen, closed = this._asClosed;
+    // Node cap. Start and goal share a region here, so a path EXISTS and the only
+    // failure mode is the cap. A fixed 4000 was far below the region size on a
+    // large plot (a 32×52 m yard is ~74k cells), so a detour around the house
+    // "failed" and the caller straight-seeked through the walls. Scale with the
+    // region (never more than it has cells), floor 4000.
+    const cap = blocked[start]
+      ? Math.max(4000, N >> 2)
+      : Math.max(4000, Math.min(regionSize[region[start]] ?? N, N));
     const SQRT2 = Math.SQRT2, D2 = SQRT2 - 2;
     const gx = goal % nx, gy = (goal / nx) | 0;
     const heur = (idx: number) => {
@@ -9122,16 +9253,16 @@ export class ThreeDRenderer {
       return (ax + ay) + D2 * Math.min(ax, ay);
     };
     // Binary min-heap keyed on f = g + h.
-    const heapIdx: number[] = [];
-    const heapF: number[] = [];
+    const heapIdx = this._asHeapIdx, heapF = this._asHeapF;
+    heapIdx.length = 0; heapF.length = 0;
     const push = (idx: number, f: number) => {
       heapIdx.push(idx); heapF.push(f);
       let c = heapIdx.length - 1;
       while (c > 0) {
         const par = (c - 1) >> 1;
         if (heapF[par] <= heapF[c]) break;
-        [heapF[par], heapF[c]] = [heapF[c], heapF[par]];
-        [heapIdx[par], heapIdx[c]] = [heapIdx[c], heapIdx[par]];
+        const tf = heapF[par]; heapF[par] = heapF[c]; heapF[c] = tf;
+        const ti = heapIdx[par]; heapIdx[par] = heapIdx[c]; heapIdx[c] = ti;
         c = par;
       }
     };
@@ -9146,13 +9277,13 @@ export class ThreeDRenderer {
         if (l < len && heapF[l] < heapF[s]) s = l;
         if (r < len && heapF[r] < heapF[s]) s = r;
         if (s === c) break;
-        [heapF[s], heapF[c]] = [heapF[c], heapF[s]];
-        [heapIdx[s], heapIdx[c]] = [heapIdx[c], heapIdx[s]];
+        const tf = heapF[s]; heapF[s] = heapF[c]; heapF[c] = tf;
+        const ti = heapIdx[s]; heapIdx[s] = heapIdx[c]; heapIdx[c] = ti;
         c = s;
       }
       return top;
     };
-    g[start] = 0;
+    seen[start] = gen; g[start] = 0; came[start] = -1;
     push(start, heur(start));
     let expanded = 0;
     while (heapIdx.length) {
@@ -9161,27 +9292,29 @@ export class ThreeDRenderer {
         const path: number[] = [];
         for (let i = goal; i >= 0; i = came[i]) path.push(i);
         path.reverse();
+        heapIdx.length = 0; heapF.length = 0;
         return path;
       }
-      if (closed[cur]) continue;
-      closed[cur] = 1;
-      if (++expanded > 4000) return null;
+      if (closed[cur] === gen) continue;
+      closed[cur] = gen;
+      if (++expanded > cap) { heapIdx.length = 0; heapF.length = 0; return null; }
       const cx = cur % nx, cy = (cur / nx) | 0;
+      const gc = g[cur];
       for (let dy = -1; dy <= 1; dy++) {
         for (let dx = -1; dx <= 1; dx++) {
           if (dx === 0 && dy === 0) continue;
           const ncx = cx + dx, ncy = cy + dy;
           if (ncx < 0 || ncy < 0 || ncx >= nx || ncy >= ny) continue;
           const ni = ncy * nx + ncx;
-          if (blocked[ni] || closed[ni]) continue;
+          if (blocked[ni] || closed[ni] === gen) continue;
           if (dx !== 0 && dy !== 0) {
             // No corner cutting: both shared orthogonals must be free.
             if (blocked[cy * nx + ncx] || blocked[ncy * nx + cx]) continue;
           }
           const step = (dx !== 0 && dy !== 0) ? SQRT2 : 1;
-          const ng = g[cur] + step;
-          if (ng < g[ni]) {
-            g[ni] = ng; came[ni] = cur;
+          const ng = gc + step;
+          if (seen[ni] !== gen || ng < g[ni]) {
+            seen[ni] = gen; g[ni] = ng; came[ni] = cur;
             push(ni, ng + heur(ni));
           }
         }
@@ -9269,14 +9402,29 @@ export class ThreeDRenderer {
         this._fw / 2 - h.path[0].x, h.path[0].z + this._fd / 2);
     if (!reusable) {
       const navCell = this._nearestFreeCell(this._cellIdxOf(navWx, navWy));
-      const cells = this._aStar(navCell, goalCell);
+      // Failure backoff: an unreachable (start, goal) pair is remembered for
+      // ~1 s so a rig facing a goal it cannot reach does not re-run the search
+      // EVERY frame (it used to, at up to the full node cap per rig per frame).
+      const failKey = navCell * 4294967296 + goalCell;   // exact for N < 2^32
+      const nowS = performance.now() / 1000;
+      const failUntil = nav.rev === this._aStarFailRev ? this._aStarFail.get(failKey) : undefined;
+      const cells = (failUntil !== undefined && failUntil > nowS) ? null : this._aStar(navCell, goalCell);
       if (cells && cells.length > 1) {
         h.path = this._stringPull(cells, goalScene);
         h.pathRev = nav.rev; h.goalCell = goalCell;
       } else {
-        // Unreachable within the node cap → straight seek fallback.
+        if (failUntil === undefined || failUntil <= nowS) {
+          if (this._aStarFailRev !== nav.rev) { this._aStarFail.clear(); this._aStarFailRev = nav.rev; }
+          if (this._aStarFail.size > 256) this._aStarFail.clear();
+          this._aStarFail.set(failKey, nowS + 1);
+        }
+        // Unreachable. The old fallback straight-seeked the carrot at the goal,
+        // i.e. walked the figure THROUGH the walls between them. Hold the carrot
+        // instead and just let the spring settle: the region-mismatch stuck
+        // detector (updateTargets' `stuckT`) owns genuinely stranded rigs, and a
+        // goal that becomes reachable is re-planned on the next backoff expiry.
         h.path = null; h.pathRev = -1; h.goalCell = goalCell;
-        this._seek(h, null, goalScene, dt, rawSpeedMms);
+        this._springNav(h, dt);
         return;
       }
     }
@@ -9474,10 +9622,14 @@ export class ThreeDRenderer {
     const shadeMat = this._mat({ color: 0xcdc4b4, roughness: 0.9, metalness: 0.0, side: THREE.DoubleSide });
     for (const w of windows) {
       const st = itemState(w, stateOf);
-      const isOpen = st?.state === 'on';
       // Window open fraction (0 closed .. 1 open): binary → 0/1; a cover-bound
-      // window interpolates. Drives glass clarity (fresh-air read when ajar).
+      // window interpolates. Drives glass clarity (fresh-air read when ajar) AND
+      // the sash motion, proportionally. `isOpen` used to be `state === 'on'`,
+      // so a window bound to a `cover.*` (state 'open' / a position) tinted its
+      // glass but never moved its sash.
       const openFrac = doorOpenFraction(st);
+      const sashF = Math.max(0, Math.min(1, openFrac));
+      const isOpen = sashF > 0.02;
       const kind = w.kind ?? 'single';
       const bayKind = isBayWindowKind(kind);
       const sill = windowSillMm(w);        // bottom of glass (bay defaults lower)
@@ -9555,7 +9707,7 @@ export class ThreeDRenderer {
           const sashH = glassH / 2 - 20;
           const upper = glass(W, sashH); upper.position.set(0, cy + glassH / 4 + 10, 12);
           const lower = glass(W, sashH); lower.position.set(0, cy - glassH / 4 - 10, -12);
-          if (isOpen) lower.position.y = upper.position.y;  // raised behind the upper sash
+          if (isOpen) lower.position.y += (upper.position.y - lower.position.y) * sashF;  // raised behind the upper sash
           const rail = bar(W + 6, 46); rail.position.set(0, cy, 0);
           grp.add(upper, lower, rail);
           break;
@@ -9572,7 +9724,7 @@ export class ThreeDRenderer {
             const leaf = glass(leafW, glassH);
             leaf.position.set(-side * leafW / 2, 0, 0);    // extends inward toward the mullion
             hinge.add(leaf);
-            if (isOpen) hinge.rotation.y = side * (Math.PI / 5);  // swing outward
+            if (isOpen) hinge.rotation.y = side * (Math.PI / 5) * sashF;  // swing outward
             grp.add(hinge);
           }
           break;
@@ -9583,7 +9735,7 @@ export class ThreeDRenderer {
           const sashW = W / 2;
           const left = glass(sashW, glassH); left.position.set(-sashW / 2, cy, 12);
           const right = glass(sashW, glassH);
-          right.position.set(isOpen ? -sashW / 2 : sashW / 2, cy, -12);  // slides behind `left`
+          right.position.set(sashW / 2 - sashW * (isOpen ? sashF : 0), cy, -12);  // slides behind `left`
           const mull = bar(40, glassH); mull.position.set(0, cy, 0);
           grp.add(left, right, mull);
           break;
@@ -9636,8 +9788,8 @@ export class ThreeDRenderer {
             // bay when open, exactly like the `single` kind's sash. The angled
             // returns are fixed glazing.
             if (i === 0 && isOpen) {
-              pane.rotation.x = -s * Math.PI / 7;
-              pane.position.z = D + s * PANE_T * 1.4;
+              pane.rotation.x = -s * Math.PI / 7 * sashF;
+              pane.position.z = D + s * PANE_T * 1.4 * sashF;
             }
           });
           // Vertical corner posts at the two wall junctions + the two bay corners.
@@ -9672,7 +9824,7 @@ export class ThreeDRenderer {
         }
         default: {  // 'single' — legacy one pane; tilts outward when open
           const p = glass(W, glassH); p.position.set(0, cy, 0);
-          if (isOpen) { p.rotation.x = -Math.PI / 6; p.position.z = PANE_T; }
+          if (isOpen) { p.rotation.x = -Math.PI / 6 * sashF; p.position.z = PANE_T * sashF; }
           grp.add(p);
           break;
         }
@@ -11731,9 +11883,15 @@ export class ThreeDRenderer {
         addBox(W, soilH, D, soil, 0, soilH / 2, 0);
         const stem = this._mat({ color: 0x2f6d2a, roughness: 0.9 });
         const petals = [0xe23b6d, 0xf2c53d, 0xe07be0, 0xffffff, 0xff8c42];
+        // Stalk layout seeded from the piece id (mulberry32 via _rndFrom). This
+        // builder reruns on every _keyFloor rebuild, and Math.random() here made
+        // the flowers jump to new spots on each one (the house rule: no bare
+        // Math.random in a dirty-key builder). Ids are stable, so the bed now
+        // looks identical across rebuilds and the droop pivots land where they were.
+        const flowerRng = { rng: this._hashStr(`flower_bed:${fu.id ?? `${fu.x},${fu.y}`}`) };
         for (let i = 0; i < 6; i++) {
-          const fx = (Math.random() - 0.5) * W * 0.8;
-          const fz = (Math.random() - 0.5) * D * 0.7;
+          const fx = (this._rndFrom(flowerRng) - 0.5) * W * 0.8;
+          const fz = (this._rndFrom(flowerRng) - 0.5) * D * 0.7;
           const fh = Math.max(60, HT - soilH);
           // Stem + flower on a pivot anchored at soil level so the droop bends the
           // whole stalk outward+down (see _advancePlantDroop) rather than sliding it.
@@ -15664,7 +15822,8 @@ export class ThreeDRenderer {
   // ticker's existing CanvasTexture at ~12 Hz with an advanced scroll offset,
   // rotating headlines every 10 s. Weather cards are static (skipped).
   private _advanceTvScreens(nowS: number): void {
-    for (const id of Object.keys(this._tvScreens)) {
+    // for…in (not Object.keys) — no per-frame array when there are no screens.
+    for (const id in this._tvScreens) {
       const s = this._tvScreens[id];
       if (s.content !== 'news' || !s.headlines.length) continue;
       // Throttle repaint to ~12 Hz (canvas text draw is cheap but not free).
@@ -15789,9 +15948,12 @@ export class ThreeDRenderer {
         obj = m;
       }
       this._infoGroup.add(obj);
+      const relTime = mode === 'entity' && !dim && !!ic.format?.relativeTime && hit.label == null
+        ? { st: st ?? null, nextMs: 0 } : undefined;
       this._infoRigs.push({
         card: ic, obj, tex, cv, lastText: dim ? 'unbound' : (label || '—'),
         lastColor: colorHex, flash: !!hit.flash, clock: mode !== 'entity', imperial,
+        ...(relTime ? { relTime } : {}),
       });
     }
   }
@@ -15834,6 +15996,19 @@ export class ThreeDRenderer {
           rig.lastText = text;
           this._paintInfoCanvas(rig.cv, text, rig.lastColor, false);
           rig.tex.needsUpdate = true;
+        }
+      } else if (rig.relTime) {
+        // Relative-time entity card: same text-flip repaint, off the state the
+        // card was built with (a NEW state rebuilds under _keyInfo anyway).
+        const ms = now.getTime();
+        if (ms >= rig.relTime.nextMs) {
+          rig.relTime.nextMs = ms + 1000;
+          const text = infoCardText(rig.card, rig.relTime.st, { now, imperial: rig.imperial }) || '—';
+          if (text !== rig.lastText) {
+            rig.lastText = text;
+            this._paintInfoCanvas(rig.cv, text, rig.lastColor, false);
+            rig.tex.needsUpdate = true;
+          }
         }
       }
       if (rig.flash) {
@@ -16077,8 +16252,14 @@ export class ThreeDRenderer {
     // a texture twice is otherwise harmless but the shared-map contract must not
     // rely on that — track seen maps and dispose each exactly once.
     const seen = new Set<THREE.Texture>();
+    // Belt-and-braces identity guard: never free a renderer-lifetime shared map
+    // even if a sprite forgot its `sharedMap` tag (a freed shared texture is
+    // re-uploaded black / empty on its next use).
+    const shared = (t: THREE.Texture): boolean =>
+      t === this._privRT?.texture || t === this._blurTexStand || t === this._blurTexSit ||
+      t === this._sparkleTex || t === this._beaconGlowTex || t === this._blobTex;
     const free = (t?: THREE.Texture | null) => {
-      if (t && !seen.has(t)) { seen.add(t); t.dispose(); }
+      if (t && !seen.has(t) && !shared(t)) { seen.add(t); t.dispose(); }
     };
     g.traverse(o => {
       const s = o as THREE.Sprite;
@@ -16252,6 +16433,17 @@ export class ThreeDRenderer {
     this._bgBannerProp = banRig?.prop ?? null;
     this._bgBannerRadius = banRig?.radius ?? 0;
     this._bgGrassInfo = grsRig?.grass ?? null;
+  }
+
+  // Per-tick wind for the background-text rigs WITHOUT a rebuild. The wind is
+  // consumed only by the per-frame advance (sky drift speed + direction), never
+  // by a builder, so three-view pushes changes here (guarded by last-applied
+  // values) instead of folding wind into `_keyBgText` — a rebuild would reset
+  // the scenery / gate phase for nothing. The accumulated drift phase makes a
+  // wind change alter only the drift RATE from where the sprite is.
+  setBgWind(windRad: number, windKmh: number): void {
+    this._bgWindRad = isFinite(windRad) ? windRad : 0;
+    this._bgWindKmh = isFinite(windKmh) ? windKmh : 0;
   }
 
   // Legacy single-entry signature — forwards to updateBgTexts. Kept so the
@@ -18022,6 +18214,9 @@ export class ThreeDRenderer {
   }
 
   // Sample the train loop at arc-length s → scene position + unit tangent.
+  // Returns a SHARED scratch pose (the `_roadPose` idiom) — every caller consumes
+  // it immediately; never hold the reference across another call.
+  private _trainPose = { x: 0, z: 0, tx: 0, tz: 0 };
   private _sampleTrainLoop(t: BgTrain, s: number): { x: number; z: number; tx: number; tz: number } {
     const total = t.total || 1;
     const d = ((s % total) + total) % total;
@@ -18032,7 +18227,9 @@ export class ThreeDRenderer {
     const f = (d - cum[j]) / segLen;
     const a = pts[j], b = pts[j + 1];
     const dx = b.x - a.x, dz = b.z - a.z, L = Math.hypot(dx, dz) || 1;
-    return { x: a.x + dx * f, z: a.z + dz * f, tx: dx / L, tz: dz / L };
+    const o = this._trainPose;
+    o.x = a.x + dx * f; o.z = a.z + dz * f; o.tx = dx / L; o.tz = dz / L;
+    return o;
   }
 
   // Place every vehicle on the loop from the engine arc position `s`, each car a
@@ -18470,7 +18667,11 @@ export class ThreeDRenderer {
     if (!ph) return;
     const nowS = performance.now() / 1000;
     if (rig.mode === 'sky') {
-      if (ph.skyPhase != null) { rig.skyPhase = ph.skyPhase; this._advanceBgSky(rig, 0); }
+      if (ph.skyPhase != null) {
+        rig.skyPhase = ph.skyPhase;
+        if (ph.skyDrift != null) rig.skyDrift = ph.skyDrift;
+        this._advanceBgSky(rig, 0);
+      }
     } else if (rig.mode === 'banner' || rig.mode === 'chopper') {
       if (ph.angle != null) { rig.angle = ph.angle; this._advanceBgAircraft(rig, 0, nowS); }
     } else if (rig.mode === 'road' && rig.road) {
@@ -18580,10 +18781,18 @@ export class ThreeDRenderer {
     const amp = Math.max(1500, this._fw * 0.3);
     const speed = 40 + this._bgWindKmh * 6;                 // mm/s, wind-scaled
     const dir = Math.cos(this._bgWindRad) >= 0 ? 1 : -1;
-    spr.position.x = (rig.skyBaseX ?? 0) + Math.sin(ph * speed / amp) * amp * dir;
+    // ACCUMULATED drift phase. The old `sin(clock · speed / amp)` multiplied the
+    // whole elapsed clock by the CURRENT wind speed, so any wind change (every
+    // rebuild re-reads it) jumped the argument by clock·Δspeed/amp and teleported
+    // the sprite across the sky. Integrating the rate instead makes a wind change
+    // change only how fast it drifts from where it IS. Seeded (first frame) from
+    // the old formula so a fresh rig starts exactly where it used to.
+    if (rig.skyDrift == null) rig.skyDrift = ph * speed / amp * dir;
+    else rig.skyDrift += dt * speed / amp * dir;
+    spr.position.x = (rig.skyBaseX ?? 0) + Math.sin(rig.skyDrift) * amp;
     (spr.material as THREE.SpriteMaterial).opacity =
       0.72 + 0.2 * (0.5 + 0.5 * Math.sin(ph * 1.3));
-    if (rig.ph) rig.ph.skyPhase = ph;
+    if (rig.ph) { rig.ph.skyPhase = ph; rig.ph.skyDrift = rig.skyDrift; }
   }
 
   // Banner plane + news chopper: slow orbit; the assembly yaws so its nose
@@ -19240,6 +19449,7 @@ export class ThreeDRenderer {
     spr.userData.outlineSkip = true;
     spr.userData.sharedMap = true;              // _beaconGlowTex is renderer-lifetime
     spr.userData.vaporFlash = true;
+    spr.userData.fusHalfW = M.fusHalfW;         // read per frame by _advanceFlightViz
     rig.asm.add(spr);
     rig.vapor = spr;
     rig.vaporT = FLIGHT_VAPOR_S;
@@ -19408,10 +19618,11 @@ export class ThreeDRenderer {
       } else {
         const e = 1 - rig.vaporT / FLIGHT_VAPOR_S;                // 0 → 1 over its life
         const env = Math.sin(Math.PI * e);                        // spike, then decay
-        const M = this._flightArchetypeMetrics(rig.archetype);
+        // Fuselage half-width stashed at spawn (_startFlightVapor) — the
+        // metrics builder allocates a fresh object per call.
+        const hw = rig.vapor.userData.fusHalfW as number;
         (rig.vapor.material as THREE.SpriteMaterial).opacity = 0.85 * env * fade;
-        rig.vapor.scale.set(M.fusHalfW * 5 * (1 + 0.9 * e),
-                            M.fusHalfW * 3.4 * (1 + 0.9 * e), 1);
+        rig.vapor.scale.set(hw * 5 * (1 + 0.9 * e), hw * 3.4 * (1 + 0.9 * e), 1);
       }
     }
   }
@@ -20714,9 +20925,10 @@ export class ThreeDRenderer {
     // shown only when actually above the horizon at night — the moon is NOT
     // always up. DECORATIVE MODE: the honest az+180 approximation at a pleasant
     // fixed elevation arc (unchanged legacy behavior).
+    this._moonPeakOpacity = 1 - 0.6 * overcast;
     if (this._skyRealMode) {
       this._moonWantOpacity = (this._skyVisible && this._preset === 'night' && this._moonRealAlt > 0.01)
-        ? (1 - 0.6 * overcast) : 0;
+        ? this._moonPeakOpacity : 0;
     } else {
       this._moonWantOpacity = (this._skyVisible && this._preset === 'night')
         ? (1 - 0.6 * overcast) : 0;
@@ -20836,6 +21048,16 @@ export class ThreeDRenderer {
       pl.rotation.x = -Math.PI / 2;    // lay flat
       pl.position.set(i === 0 ? 0 : w * 0.3, 220 + i * 140, 0);
       pl.renderOrder = 2;
+      // A tile copy one span to the −X side (shares geo + material). Each plane
+      // is exactly one span wide, so a lone plane wrapping across ±span left the
+      // floor bare for half of every drift cycle; with the pair wrapped into
+      // [0, span) the two tiles always cover [−span/2, +span/2] and the wrap
+      // jump (by exactly one span) swaps two identical tiles — invisible. Local
+      // X of the flat plane is world X, so the child offset needs no rotation.
+      const tile = new THREE.Mesh(geo, mat);
+      tile.position.set(-w, 0, 0);
+      tile.renderOrder = 2;
+      pl.add(tile);
       this._weatherGroup.add(pl);
       this._weatherFogPlanes.push(pl);
     }
@@ -21455,6 +21677,14 @@ export class ThreeDRenderer {
     const m = moonAltAz(epochMs, obs.lat, obs.lon);
     this._moonRealAlt = m.altRad;
     this._skyScenePos(m.altRad, m.azRad, R_MOON, this._moonRealDir);
+    // Re-derive the visibility target from the NEW altitude. The target used to
+    // be set only on a weather rebuild, so on a quiet night the moon kept its
+    // old visibility across moonrise / moonset until something else rebuilt —
+    // i.e. it could sit visible below the horizon or never rise.
+    if (this._skyRealMode) {
+      this._moonWantOpacity = (this._skyVisible && this._preset === 'night' && this._moonRealAlt > 0.01)
+        ? this._moonPeakOpacity : 0;
+    }
   }
 
   // Overcast amount 0..1 from condition + cloud coverage (greys/darkens the
@@ -21522,7 +21752,7 @@ export class ThreeDRenderer {
       const fog = this._scene.fog as THREE.FogExp2 | null;
       if (fog && (fog as { isFogExp2?: boolean }).isFogExp2) {
         // Ease the AUTHORED density (source of truth) toward the target over ~2 s.
-        this._fogEased += (this._fogTarget - this._fogEased) * Math.min(1, dt / 2);
+        this._fogEased += (this._fogTarget - this._fogEased) * (1 - Math.exp(-dt / 2));
         // Below ~1e-5 the exponential fog is visually zero over any house-scale
         // distance — null it out cleanly rather than asymptote forever. Gate the
         // teardown on the EASED value (never the zoom-scaled applied value below),
@@ -21554,17 +21784,17 @@ export class ThreeDRenderer {
     // sky direction (τ ≈ 2 s). Runs even when the group is hidden — the sun light
     // lives outside _weatherGroup. Cleared target → leave the preset placement.
     if (this._sun && this._weatherSunTarget) {
-      const k = Math.min(1, dt / 2);
+      const k = 1 - Math.exp(-dt / 2);   // exact first-order ease (frame-rate independent)
       this._sun.position.lerp(this._weatherSunTarget, k);
     }
 
     // Storm-brewing sky darkening (W3): ease the background between the captured
     // preset tint and a darkened copy. Only touches background while easing.
-    this._stormDarkAmt += ((this._stormDark ? 1 : 0) - this._stormDarkAmt) * Math.min(1, dt / 2.5);
+    this._stormDarkAmt += ((this._stormDark ? 1 : 0) - this._stormDarkAmt) * (1 - Math.exp(-dt / 2.5));
     if (this._scene && this._stormBaseBg && this._scene.background instanceof THREE.Color) {
       if (this._stormDarkAmt > 0.002) {
-        const dark = this._stormBaseBg.clone().multiplyScalar(0.82);
-        this._scene.background.copy(this._stormBaseBg).lerp(dark, this._stormDarkAmt);
+        // lerp(base, base·0.82, amt) ≡ base·(1 − 0.18·amt) — no per-frame clone.
+        this._scene.background.copy(this._stormBaseBg).multiplyScalar(1 - 0.18 * this._stormDarkAmt);
       } else if (!this._stormDark) {
         this._scene.background.copy(this._stormBaseBg);
         this._stormBaseBg = null;
@@ -21594,7 +21824,7 @@ export class ThreeDRenderer {
     // than popping. Zero allocation.
     if (this._alertPulseLight) {
       const want = this._alertPulseSeverity ? 1 : 0;
-      this._alertPulseAmt += (want - this._alertPulseAmt) * Math.min(1, dt / 1.5);
+      this._alertPulseAmt += (want - this._alertPulseAmt) * (1 - Math.exp(-dt / 1.5));
       const cfg = this._alertPulseCfg;
       if (cfg && this._alertPulseAmt > 0.001) {
         this._alertPulsePhase += dt;
@@ -21609,7 +21839,7 @@ export class ThreeDRenderer {
     // the sky is lighting-adjacent, gated only on its own skyBackdrop flag).
     // Zero allocation: persistent Color/Vector3/uniform objects mutated in place.
     if (this._skyBuilt) {
-      const k = Math.min(1, dt / 2);               // τ ≈ 2 s color / dayness ease
+      const k = 1 - Math.exp(-dt / 2);             // τ = 2 s color / dayness ease (exact, fps-independent)
       this._skyTopCur.lerp(this._skyTopTarget, k);
       this._skyBotCur.lerp(this._skyBotTarget, k);
       // Real catalog sky: recompute alt/az every 60 s of wall time (stars drift
@@ -21705,8 +21935,10 @@ export class ThreeDRenderer {
     for (let i = 0; i < this._weatherFogPlanes.length; i++) {
       const pl = this._weatherFogPlanes[i];
       pl.position.x += (i % 2 === 0 ? 1 : -1) * 200 * dt;   // 200 mm/s
-      if (pl.position.x > span) pl.position.x -= 2 * span;
-      else if (pl.position.x < -span) pl.position.x += 2 * span;
+      // Wrap into [0, span): the plane + its −span tile then always cover the
+      // floor (see the tile note in the builder).
+      if (pl.position.x >= span) pl.position.x -= span;
+      else if (pl.position.x < 0) pl.position.x += span;
     }
 
     // Wind gust envelope (W3): every 6–14 s a 1.5 s burst doubles the horizontal
@@ -23283,15 +23515,23 @@ export class ThreeDRenderer {
   // fresh; the whole map is dropped whenever `_wallLoops` is rebuilt
   // (updateFloor) or torn down (clearTransientGroups), so a wall edit can never
   // leave a stale room behind.
-  private _confineLoops: Record<string, Vec2[] | null> = {};
+  //
+  // SINGLE SLOT PER SENSOR: keyed by the sensor id (the target key minus its
+  // `_<slot>` suffix) and holding the one rounded position it was resolved at.
+  // Keying by position alone added an entry for every millimetre a sensor was
+  // dragged through, for the life of the floor.
+  private _confineLoops: Record<string, { sx: number; sy: number; lp: Vec2[] | null }> = {};
 
   private _confineLoopFor(t: TargetWorld): Vec2[] | null {
     if (!t.confine || !Number.isFinite(t.srcX) || !Number.isFinite(t.srcY)) return null;
-    const k = `${Math.round(t.srcX!)}:${Math.round(t.srcY!)}`;
-    const hit = this._confineLoops[k];
-    if (hit !== undefined) return hit;
+    const sx = Math.round(t.srcX!), sy = Math.round(t.srcY!);
+    const key = t.key ?? '';
+    const us = key.lastIndexOf('_');
+    const sid = us > 0 ? key.slice(0, us) : key;
+    const hit = this._confineLoops[sid];
+    if (hit && hit.sx === sx && hit.sy === sy) return hit.lp;
     const lp = loopContaining(this._wallLoops, t.srcX!, t.srcY!);
-    this._confineLoops[k] = lp;
+    this._confineLoops[sid] = { sx, sy, lp };
     return lp;
   }
 
@@ -24875,6 +25115,9 @@ export class ThreeDRenderer {
             h.fidgetKind = pick; h.fidgetT = 0;
             h.fidgetDur = (IDLE_FIDGET_DUR[pick] ?? 2.2) + Math.random() * 0.5;
             h.fidgetLog.push(pick);
+            // Instrumentation only — bounded, or a long-lived roamer grows it
+            // for the life of the page (one entry every 8–20 s, forever).
+            if (h.fidgetLog.length > 32) h.fidgetLog.shift();
           }
         }
       } else if (h.fidgetKind) {
@@ -24999,12 +25242,19 @@ export class ThreeDRenderer {
       // device the AI controller walked the rig up to (a brief "flip the switch"
       // gesture). Independent of the idle-fidget gate; advanced here (the single
       // increment site). A trapezoid envelope ramps it in/out over ~0.3 s.
-      if (h.reachT >= 0 && !propActive) {
+      // The CLOCK advances (and expires) whether or not a prop is held — only the
+      // arm pose yields to the prop. Gating the advance on `!propActive` left
+      // `reachT` stuck at 0 forever for a rig holding a prop (e.g. an umbrella in
+      // the rain) that walked up to a device, and since facing prefers
+      // `reachT >= 0` it then stared at that device for good.
+      if (h.reachT >= 0) {
         h.reachT += dt;
         const D = h.reachDur, tt = h.reachT;
-        const env = tt < 0.3 ? tt / 0.3 : (tt > D - 0.3 ? Math.max(0, (D - tt) / 0.3) : 1);
-        rSh = rSh * (1 - env) + 1.75 * env;   // arm swings up-forward
-        rEl = rEl * (1 - env) + 0.35 * env;   // nearly straight, hand toward the device
+        if (!propActive) {
+          const env = tt < 0.3 ? tt / 0.3 : (tt > D - 0.3 ? Math.max(0, (D - tt) / 0.3) : 1);
+          rSh = rSh * (1 - env) + 1.75 * env;   // arm swings up-forward
+          rEl = rEl * (1 - env) + 0.35 * env;   // nearly straight, hand toward the device
+        }
         if (h.reachT >= D) h.reachT = -1;     // done → inactive
       }
 
@@ -25275,6 +25525,11 @@ export class ThreeDRenderer {
           });
           h.blurSprite = new THREE.Sprite(mat);
           h.blurSprite.userData.outlineSkip = true;
+          // Its map is ALWAYS a renderer-lifetime shared texture (the privacy
+          // mosaic render target or a blur silhouette) — opt out of the
+          // `_disposeSpriteMaps` sweep, or a floor switch frees them and every
+          // later privacy mosaic renders black.
+          h.blurSprite.userData.sharedMap = true;
           h.group.add(h.blurSprite);
         }
         const spr = h.blurSprite;
@@ -25396,8 +25651,7 @@ export class ThreeDRenderer {
     // ── Mutual separation: keep crossing pedestrians from overlapping. For each
     // eligible pair closer than 380 mm in nav space, push both apart along the
     // pair axis by half the overlap (capped at SEP_RATE_MMS each). Applied to the
-    // CARROT (so it persists) plus a velocity impulse into the position spring;
-    // the trailing loop re-commits nav to the rendered x/z.
+    // CARROT (so it persists) plus a velocity impulse into the position spring.
     const SEP = 380;
     for (let i = 0; i < movers.length; i++) {
       for (let j = i + 1; j < movers.length; j++) {
@@ -25436,10 +25690,12 @@ export class ThreeDRenderer {
         b.nvx -= ddx * aSep; b.nvz -= ddz * aSep;
       }
     }
-    for (const m of movers) {
-      m.h.group.position.x = m.h.navX;
-      m.h.group.position.z = m.h.navZ;
-    }
+    // NB there is deliberately NO trailing "re-commit group.position = nav" pass
+    // here any more. Separation writes only the carrot + the spring velocity,
+    // never nav, so for a pure walker (sit/act/lie all 0) that pass was a no-op —
+    // and for a mover whose sit/act/lie blend was in (0, 0.3) it DISCARDED the
+    // eased blend toward the seat/approach point this frame, a visible sideways
+    // pop just as a figure began to sit, lie, or use a device.
 
     // ── "Real position" markers (Sensor.showRealPositions) ──────────────────
     // A small glowing ball at each flagged radar target's RAW report. The rig
@@ -25812,13 +26068,16 @@ export class ThreeDRenderer {
   // engagement (flush after use). While the countdown runs the bowl water
   // swirls, dips + shrinks, then refills and settles. Countdown + edge maps are
   // keyed by fixture id so a _keyFloor rebuild mid-flush RESUMES. Zero alloc.
+  private _toiletBusy = new Set<string>();   // _advanceToilets scratch
   private _advanceToilets(entityOn: Record<string, boolean>, dt: number): void {
     if (!this._toilets.length) return;
-    const busy = new Set<string>();
+    const busy = this._toiletBusy; busy.clear();   // reused — no per-frame Set
     for (const key in this._humanoids) {
       const h = this._humanoids[key];
       if (h.activity === 'toilet' && h.activityAnchor) busy.add(h.activityAnchor.furnitureId);
-      if (h.sitSpotId && h.sit > 0.5) busy.add(h.sitSpotId.split(':')[0]);
+      // `sitSpot` is re-resolved from the live spots by id every frame.
+      const fid = h.sitSpotId && h.sit > 0.5 ? h.sitSpot?.furnitureId : undefined;
+      if (fid) busy.add(fid);
     }
     for (const wc of this._toilets) {
       const on = entityOn[wc.fuId] === true;
@@ -25858,7 +26117,7 @@ export class ThreeDRenderer {
   // updateTargets seated block). Zero alloc after build.
   private _advanceSwings(dt: number): void {
     if (!this._swings.length) return;
-    const occ = new Set<string>();
+    const occ = this._swingOcc; occ.clear();   // reused — no per-frame Set
     for (const key in this._humanoids) {
       const h = this._humanoids[key];
       if (h.sitSpotId && !h.quad && h.sit > 0.5) occ.add(h.sitSpotId);
@@ -25878,9 +26137,11 @@ export class ThreeDRenderer {
       const dyLocal = sw.ropeLen * (1 - Math.cos(angle));
       const dzLocal = -sw.ropeLen * Math.sin(angle);
       const gy = sw.groupYaw;
-      this._swingOffset[sw.spotId] = {
-        dx: dzLocal * Math.sin(gy), dy: dyLocal, dz: dzLocal * Math.cos(gy),
-      };
+      // Mutate the published offset in place (one object per swing seat for the
+      // life of the floor, not one per swing per frame).
+      let off = this._swingOffset[sw.spotId];
+      if (!off) off = this._swingOffset[sw.spotId] = { dx: 0, dy: 0, dz: 0 };
+      off.dx = dzLocal * Math.sin(gy); off.dy = dyLocal; off.dz = dzLocal * Math.cos(gy);
     }
   }
 
@@ -27068,6 +27329,7 @@ export class ThreeDRenderer {
       this._paintPrint(g, W, H, d.print ?? 'dots', mark);
     }
     const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;   // canvas-painted sRGB colours (untagged = washed out)
     tex.needsUpdate = true;
     return tex;
   }
@@ -27465,8 +27727,7 @@ export class ThreeDRenderer {
     const settle = Math.max(curl, haunch);
     // Trot: legs = [FL, FR, BL, BR]; diagonals FL+BR and FR+BL share a phase and
     // the two diagonals are antiphase.
-    const legSign = [1, -1, -1, 1];
-    const isFront = [true, true, false, false];
+    const legSign = QUAD_LEG_SIGN, isFront = QUAD_LEG_FRONT;   // module constants (no per-frame arrays)
     for (let i = 0; i < 4; i++) {
       const s = legSign[i] * sinP;
       let hipR = s * amp;                            // fore/aft swing
@@ -28262,6 +28523,7 @@ export class ThreeDRenderer {
     spr.scale.set(240, 240, 1);
     spr.position.set(0, h.shoulderY, 0);   // torso/shoulder height, rig-local
     spr.userData.outlineSkip = true;
+    spr.userData.sharedMap = true;   // _sparkleTex is shared — see _disposeSpriteMaps
     h.group.add(spr);
     this._sparkles.push({ sprite: spr, t: 0 });
   }
@@ -28399,6 +28661,13 @@ export class ThreeDRenderer {
       cancelAnimationFrame(this._rafId);
       this._rafId = null;
     }
+    // The ONLY window-level listener this class installs (every other listener
+    // lives on the canvas / OrbitControls, which die with them). Same capture
+    // flag as the add, or removeEventListener silently matches nothing.
+    if (this._cursorZoomHandler) {
+      window.removeEventListener('wheel', this._cursorZoomHandler, { capture: true });
+      this._cursorZoomHandler = null;
+    }
     this._lightFlickers = [];
     this._fireFlames = [];
     // Dispose every per-frame group BEFORE tearing down the WebGL context so
@@ -28408,7 +28677,7 @@ export class ThreeDRenderer {
       this._sensorGroup, this._motionGroup, this._envGroup, this._infoGroup, this._actionGroup, this._bleGroup,
       this._alarmGroup, this._calendarGroup, this._thermoGroup, this._safetyGroup, this._alertGroup, this._robotGroup, this._robotRigGroup,
       this._cameraGroup, this._projGroup, this._valveGroup, this._plugGroup, this._camAlertGroup, this._pzoneGroup, this._groundGroup, this._poolGroup, this._sprinklerGroup, this._flagpoleGroup, this._solarGroup, this._heatmapGroup,
-      this._lightGroup, this._switchGroup, this._targetGroup, this._gpsGroup, this._compassGroup, this._weatherGroup,
+      this._lightGroup, this._switchGroup, this._targetGroup, this._ghostGroup, this._gpsGroup, this._compassGroup, this._weatherGroup,
       this._skyGroup, this._flightsGroup, this._flightVizGroup, this._issGroup,
       this._bgTextGroup, this._pulseGroup, this._nowPlayingGroup, this._neighborhoodGroup,
     ]) {
@@ -28525,7 +28794,9 @@ export class ThreeDRenderer {
     const floorFitD = Math.max(this._fw, this._fd) * 1.35;
 
     let n = 0, minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
-    for (const key of Object.keys(this._humanoids)) {
+    // A hidden Avatars layer (`_targetGroup.visible` false) must not steer the
+    // camera toward figures the user cannot see — frame the floor instead.
+    if (this._targetGroup.visible) for (const key of Object.keys(this._humanoids)) {
       const h = this._humanoids[key];
       if (h.scale <= 0.3) continue;
       const px = h.group.position.x, pz = h.group.position.z;
@@ -28556,14 +28827,14 @@ export class ThreeDRenderer {
     const az = Math.atan2(dx, dz);                    // preserved
     const elCur = Math.atan2(dy, Math.hypot(dx, dz));
     const elGoal = Math.atan(1 / Math.SQRT2);         // ≈ 35.26°
-    const el = elCur + (elGoal - elCur) * Math.min(1, dt * 0.8);
+    const el = elCur + (elGoal - elCur) * (1 - Math.exp(-dt * 0.8));
 
     const r = desiredDist * Math.cos(el), hgt = desiredDist * Math.sin(el);
     const desCamX = tgtX + r * Math.sin(az);
     const desCamZ = tgtZ + r * Math.cos(az);
     const desCamY = tgtY + hgt;
 
-    const k = Math.min(1, dt * 0.8);                  // τ ≈ 1.2 s
+    const k = 1 - Math.exp(-dt * 0.8);                // τ = 1.25 s (exact, fps-independent)
     ctrl.target.x += (tgtX - ctrl.target.x) * k;
     ctrl.target.y += (tgtY - ctrl.target.y) * k;
     ctrl.target.z += (tgtZ - ctrl.target.z) * k;
@@ -28585,7 +28856,8 @@ export class ThreeDRenderer {
     if (!this._autoFollow) {
       // Orbit center = active-rig bbox center (scene coords), else floor center.
       let n = 0, minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
-      for (const key of Object.keys(this._humanoids)) {
+      // Hidden Avatars layer ⇒ orbit the floor centre (see _updateAutoFollow).
+      if (this._targetGroup.visible) for (const key of Object.keys(this._humanoids)) {
         const h = this._humanoids[key];
         if (h.scale <= 0.3) continue;
         const px = h.group.position.x, pz = h.group.position.z;
@@ -28594,7 +28866,7 @@ export class ThreeDRenderer {
         n++;
       }
       const cx = n ? (minX + maxX) / 2 : 0, cz = n ? (minZ + maxZ) / 2 : 0;
-      const k = Math.min(1, dt * 0.8);
+      const k = 1 - Math.exp(-dt * 0.8);
       ctrl.target.x += (cx - ctrl.target.x) * k;
       ctrl.target.z += (cz - ctrl.target.z) * k;
     }
@@ -28784,7 +29056,10 @@ export class ThreeDRenderer {
   // TOUCH PINCH deliberately still goes through OrbitControls unchanged (a
   // two-finger gesture already has its own natural centre).
   private _installCursorZoom(dom: HTMLElement): void {
-    window.addEventListener('wheel', (e: WheelEvent) => {
+    // Stored so `destroy()` can detach it: a window-level listener holds a
+    // closure over `this`, so leaving it attached leaked the WHOLE renderer
+    // (scene graph, textures, GL context wrapper) on every view switch.
+    this._cursorZoomHandler = (e: WheelEvent) => {
       if (!this._zoomToCursor) return;
       if (e.target !== dom) return;
       const ctrl = this._controls, cam = this._camera;
@@ -28794,14 +29069,23 @@ export class ThreeDRenderer {
       // Mirror OC's wheel 'start'/'end' side effects (see the note above).
       this._followPauseUntil = performance.now() / 1000 + 6;
       this._camGestures++;
-      this._applyCursorZoom(e.clientX, e.clientY, e.deltaY);
+      // OrbitControls' `_customWheelEvent` normalisation, reproduced because we
+      // swallow its listener: LINE-mode deltas (Firefox, some mice) ×16, PAGE
+      // ×100, and a ctrl-flagged wheel (a trackpad PINCH on macOS/Chrome) ×10 —
+      // unless the Control KEY is genuinely held (OC tracks that itself).
+      let dY = e.deltaY;
+      if (e.deltaMode === 1) dY *= 16;
+      else if (e.deltaMode === 2) dY *= 100;
+      if (e.ctrlKey && !(ctrl as unknown as { _controlActive?: boolean })._controlActive) dY *= 10;
+      this._applyCursorZoom(e.clientX, e.clientY, dY);
       if (this._simsCam) {
         const t = ctrl.target;
         const az = Math.atan2(cam.position.x - t.x, cam.position.z - t.z);
         const step = Math.PI / 4;
         this._snapAzimuth = Math.round(az / step) * step;
       }
-    }, { capture: true, passive: false });
+    };
+    window.addEventListener('wheel', this._cursorZoomHandler, { capture: true, passive: false });
   }
 
   // One wheel tick of pointer-ray zoom. Zero allocation (module `_cz*` scratch).
@@ -28928,7 +29212,7 @@ export class ThreeDRenderer {
       }
       return;
     }
-    const k = Math.min(1, dt * 2);            // τ ≈ 0.5 s
+    const k = 1 - Math.exp(-dt * 2);          // τ = 0.5 s (exact first-order ease — fps-independent)
     const dx = ex * k, dz = ez * k;
     ctrl.target.x += dx; ctrl.target.z += dz;
     cam.position.x += dx; cam.position.z += dz;
@@ -28962,7 +29246,10 @@ export class ThreeDRenderer {
       if (Math.abs(delta) < 0.009) {   // ~0.5°
         this._snapAzimuth = null;
       } else {
-        const a = cur + delta * 0.2;   // eased step
+        // Eased step. Was a fixed 0.2 per FRAME (τ ≈ 75 ms at 60 Hz, 37 ms at
+        // 120 Hz, ~0.45 s at 10 fps). SNAP_AZ_K = −60·ln(0.8) reproduces the
+        // 60 fps feel exactly at every frame rate.
+        const a = cur + delta * (1 - Math.exp(-SNAP_AZ_K * frameDt));
         const r = Math.hypot(dx, dz);
         this._camera.position.x = t.x + r * Math.sin(a);
         this._camera.position.z = t.z + r * Math.cos(a);
@@ -29019,7 +29306,8 @@ export class ThreeDRenderer {
     // Glass-house transit puppet — scripted cross-STORY_H walk (Tier 2 stretch).
     this._advanceTransitPuppet(frameDt);
     // Info-card plaques — clock repaint on the minute + flash pulse (no rebuild).
-    this._advanceInfoCards(new Date());
+    // (Gate here too: `new Date()` per frame with zero info cards is pure garbage.)
+    if (this._infoRigs.length) this._advanceInfoCards(new Date());
     // TV news-ticker scroll — repaint the ticker CanvasTexture at ~12 Hz.
     this._advanceTvScreens(nowS);
     // Action buttons — cap depress + emissive pulse from the press-time map.

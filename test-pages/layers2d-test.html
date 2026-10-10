@@ -42,6 +42,8 @@
   const V = '?v=' + Date.now();
   const M = await import('./layers2d.mod.js' + V);
   const { Planner, drawAll, computeView, mmToPx, fixtureCaption, hitDoor, hitWindow,
+          hitFixture, hitSensor, hitMotionSensor, hitEnvSensor, hitInfoCard, hitActionButton,
+          hitPlug, hitSafetySensor, hitFurniture, hitWall, hitBgBody, onCanvasClick,
           LAYER_DEFS, LAYER_CATS, SIMPLE_LAYERS, DEFAULT_OFF_LAYERS,
           layerIsOn, layerDefsByCat } = M;
 
@@ -846,6 +848,82 @@
       paint(ctx, p);
       ok('9G …and neither is an entry with no road chosen at all',
          changedVs(withAreas) === 0, `${changedVs(withAreas)} px`);
+    }
+
+    // ── §10 Hidden = untappable, for EVERY fixture hit (2026-09 review) ─────
+    // Only openings / zones / ground / robots / flights / labels / geo gated
+    // their hits; a kiosk on the Simple preset could toggle a real light by
+    // tapping empty-looking floor, and a hidden layer grabbed edit presses first.
+    sec('§10 fixture hits follow their layer gates');
+    {
+      const f = baseFloor({
+        walls: [{ id: 'w1', points: [P(500, 5000), P(7500, 5000)], kind: 'full' }],
+        lights: [{ id: 'l1', x: 1000, y: 1000 }],
+        switches: [{ id: 's1', x: 2000, y: 1000 }],
+        plugs: [{ id: 'pg1', x: 3000, y: 1000 }],
+        actionButtons: [{ id: 'ab1', x: 4000, y: 1000, action: 'toggle' }],
+        envSensors: [{ id: 'e1', x: 5000, y: 1000, entity_id: 'sensor.t' }],
+        infoCards: [{ id: 'ic1', x: 6000, y: 1000, mode: 'clock' }],
+        sensors: [{ id: 'mm1', x: 1000, y: 3000, heading: 0, fov: 120, range: 6000, deviceSlug: null }],
+        motionSensors: [{ id: 'mo1', x: 2000, y: 3000, heading: 0, fov: 110, range: 5000 }],
+        safetySensors: [{ id: 'sa1', x: 3000, y: 3000, kind: 'smoke' }],
+        furniture: [
+          { id: 'fu1', kind: 'table', x: 4200, y: 3000, w: 800, h: 600, rotation: 0 },
+          { id: 'fu2', kind: 'fridge', x: 5800, y: 3000, w: 800, h: 700, rotation: 0 },
+        ],
+      });
+      const p = await mkPlanner([f]);
+      const { ctx } = mkCanvas();
+      const hits = () => {
+        const v = paint(ctx, p);
+        return {
+          lights: !!hitFixture(p, P(1000, 1000), 250),
+          switches: !!hitFixture(p, P(2000, 1000), 250),
+          plug: !!hitPlug(p, v, P(3000, 1000)),
+          action: !!hitActionButton(p, v, P(4000, 1000)),
+          env: !!hitEnvSensor(p, v, P(5000, 1000)),
+          info: !!hitInfoCard(p, v, P(6000, 1000)),
+          sensors: !!hitSensor(p, v, P(1000, 3000)),
+          motion: !!hitMotionSensor(p, v, P(2000, 3000)),
+          safety: !!hitSafetySensor(p, v, P(3000, 3000)),
+          furniture: !!hitFurniture(p, P(4200, 3000)),
+          appliances: !!hitFurniture(p, P(5800, 3000)),
+          walls: !!hitWall(p, P(4000, 5000)),
+        };
+      };
+      setLayers(p, undefined);
+      const on = hits();
+      ok('10A every probe hits with all layers ON', Object.values(on).every(Boolean), JSON.stringify(on));
+      const cases = [
+        ['lights', ['lights']], ['switches', ['switches', 'plug', 'action']],
+        ['env', ['env']], ['info', ['info']], ['sensors', ['sensors', 'safety']],
+        ['motion', ['motion']], ['furniture', ['furniture']], ['appliances', ['appliances']],
+        ['walls', ['walls']],
+      ];
+      for (const [layer, keys] of cases) {
+        setLayers(p, { [layer]: false });
+        const h = hits();
+        const gone = keys.every(k => !h[k]);
+        const others = Object.entries(h).filter(([k]) => !keys.includes(k)).every(([, v]) => v);
+        ok(`10B ${layer}=false → ${keys.join('/')} untappable, the rest still hit`, gone && others, JSON.stringify(h));
+      }
+      setLayers(p, undefined);
+
+      // Kiosk on the Simple preset: tapping the (hidden) light toggles nothing.
+      p.setUiMode('kiosk');
+      setLayers(p, { ...SIMPLE_LAYERS });
+      const v = paint(ctx, p);
+      const dpr = window.devicePixelRatio || 1;
+      const at = mmToPx(v, 1000, 1000);
+      const cvs = ctx.canvas;
+      p.dragJustEnded = false;
+      onCanvasClick(p, cvs, v, { clientX: at.x / dpr, clientY: at.y / dpr, altKey: false });
+      ok('10C kiosk + Simple preset: a tap on a hidden light does NOT toggle it',
+         p.floor().lights[0].localState == null, String(p.floor().lights[0].localState));
+      setLayers(p, undefined);
+      onCanvasClick(p, cvs, v, { clientX: at.x / dpr, clientY: at.y / dpr, altKey: false });
+      ok('10C …while the same tap with the layer shown DOES (negative control)',
+         p.floor().lights[0].localState === 'on', String(p.floor().lights[0].localState));
     }
 
   } catch (err) {

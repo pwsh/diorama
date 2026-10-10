@@ -7,7 +7,7 @@
 // Lives in the app graph only. NEVER import this into the renderer chunk
 // (three-renderer.js) — it would collapse the lazy 3D code-split.
 
-import type { HaApi, StateListener, ConnListener, HaDevice, HaEntityReg, HaFloorReg, HaAreaReg, HistoryPoint, ForecastRecord } from './ha-client.js';
+import type { HaApi, StateListener, ConnListener, HaDevice, HaEntityReg, HaFloorReg, HaAreaReg, HistoryPoint, ForecastRecord, ServiceCallResult } from './ha-client.js';
 import type { CalEvent } from './surfaces.js';
 import type { NotificationsUpdate, RepairIssue } from './alerts.js';
 import type { HassState, ConnStatus } from './types.js';
@@ -70,9 +70,9 @@ export class LocalApi implements HaApi {
   onState(fn: StateListener): void { this._stateListeners.push(fn); }
   onConn(fn: ConnListener): void { this._connListeners.push(fn); }
 
-  callService(domain: string, service: string, data: Record<string, unknown>): unknown {
+  callService(domain: string, service: string, data: Record<string, unknown>): Promise<ServiceCallResult> {
     console.debug('[diorama offline] callService no-op:', `${domain}.${service}`, data);
-    return undefined;
+    return Promise.resolve({ success: false, error: { code: 'offline' } });
   }
 
   // No HA ⇒ nothing can fetch on our behalf. Inert, like callService above —
@@ -119,6 +119,13 @@ export class LocalApi implements HaApi {
   }
 
   async refreshStates(): Promise<void> { /* no HA to re-fetch */ }
+
+  // Nothing to tear down (no socket, no timers) — listeners are dropped so a
+  // disposed Planner is no longer reachable from this object.
+  close(): void { this._stateListeners = []; this._connListeners = []; }
+  // No Home Assistant → no HA user, and certainly no admin.
+  isAdmin(): boolean | undefined { return false; }
+  userName(): string | undefined { return undefined; }
 
   // ── Alert Center — inert offline (no HA to surface notifications/repairs) ──
   async subscribePersistentNotifications(_cb: (u: NotificationsUpdate) => void): Promise<() => void> { return () => {}; }

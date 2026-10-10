@@ -514,6 +514,25 @@
   ok('camera far plane raised to 150000 (no zoom-out clip)', r._camera.far === 150000,
      `far=${r._camera.far}`);
 
+  // ════════════ WIND reaches the sky drift WITHOUT a rebuild ════════════
+  // _keyBgText deliberately carries no wind term (wind is not a build input), so
+  // three-view pushes it through setBgWind each time it moves. Before that the
+  // drift speed/direction froze at whatever the FIRST build saw.
+  {
+    r.updateBgTexts([ent('sky', 'WINDY')], false, 0, 0);
+    const s = r._bgRigs.find(x => x.mode === 'sky');
+    step(2);
+    const d0 = s.skyDrift; step(30); const calm = s.skyDrift - d0;
+    r.setBgWind(Math.PI, 40);                                 // stronger + reversed
+    const sameRig = r._bgRigs.find(x => x.mode === 'sky') === s;
+    const d1 = s.skyDrift; step(30); const windy = s.skyDrift - d1;
+    ok('setBgWind keeps the SAME rig (no rebuild)', sameRig, '');
+    ok('setBgWind: drift speeds up with the wind', Math.abs(windy) > Math.abs(calm) * 2,
+       `calm=${calm.toFixed(5)} windy=${windy.toFixed(5)}`);
+    ok('setBgWind: drift direction follows the bearing', Math.sign(windy) === -Math.sign(calm),
+       `calm=${calm.toFixed(5)} windy=${windy.toFixed(5)}`);
+  }
+
   // ════════════ GRASS: multi-line reflow + target area (bug 4) ════════════
   // Count contiguous horizontal text-ink bands. Ground writing carries NO
   // background on either placement now, so "ink" is simply a non-transparent

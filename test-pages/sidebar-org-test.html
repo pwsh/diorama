@@ -43,7 +43,7 @@
          "http://localhost:8932/sidebar-org-test.html" | grep -o "<title>[^<]*"  -->
 <script type="module">
   const V = '?v=' + Date.now();
-  const { Planner, injectSharedStyles } = await import('./layers2d.mod.js' + V);
+  const { Planner, injectSharedStyles, ruleValueFromText } = await import('./layers2d.mod.js' + V);
   // Section L measures REAL laid-out geometry (header wrap height, collapsed
   // pill gaps) at the shipped 250 px sidebar width, so the app's document-level
   // CSS has to be present — the page mounts <diorama-sidebar> directly, which
@@ -804,6 +804,88 @@
          && groups.findIndex(g => g.label === 'Plants & trees') + 1
            === groups.findIndex(g => g.label === 'Appliances'),
          groups.map(g => g.label).join(' | '));
+    }
+    // ── N: numeric fields commit on CHANGE, never mid-typing (2026-09) ─────
+    // Width used to clamp + save + re-render on EVERY keystroke: typing "600"
+    // over a selected value went 6 → max(50,6)=50 → "500" → "5000", and each
+    // keystroke was its own undo step. Typing now touches nothing; `change`
+    // (Enter / blur / a press elsewhere) commits once. See ui/num-commit.ts.
+    {
+      p.floor().furniture.push({ id: 'fu_num', kind: 'table', x: 5000, y: 5000, w: 1200, h: 800, rotation: 90 });
+      p.activeFurnitureId = 'fu_num'; p.save(); p.emitConfig(); await frames(4);
+      sb.querySelector('[data-expand-all]')?.click(); await frames(3);
+      const row = sb.querySelector('[data-item-row="fu_num"]');
+      if (row && !row.querySelector('input[type="number"]')) { row.querySelector('.icon-btn')?.click(); await frames(4); }
+      const numIn = label => {
+        const r = [...sb.querySelectorAll('[data-item-row="fu_num"] .row')]
+          .find(x => (x.querySelector('label')?.textContent || '').trim() === label);
+        return r?.querySelector('input[type="number"]') ?? null;
+      };
+      const wIn = numIn('Width (mm)');
+      ok('N0 the furniture editor exposes a Width input', !!wIn);
+      if (wIn) {
+        let saves = 0; const realSave = p.save.bind(p);
+        p.save = (...a) => { saves++; return realSave(...a); };
+        const piece = p.floor().furniture.find(f => f.id === 'fu_num');
+        // Simulate keystrokes: select-all then type 6, 0, 0 (each an `input`).
+        wIn.focus();
+        const typed = [];
+        for (const t of ['6', '60', '600']) {
+          wIn.value = t; wIn.dispatchEvent(new Event('input', { bubbles: true }));
+          p.emitConfig();                     // a config re-render mid-typing (HA traffic)
+          await frames(2);
+          typed.push(wIn.value);
+        }
+        ok('N1 mid-typing the field keeps EXACTLY what was typed (no clamp write-back)',
+           typed.join(',') === '6,60,600', typed.join(','));
+        ok('N2 no save() and no model change while typing', saves === 0 && piece.w === 1200,
+           `saves=${saves} w=${piece.w}`);
+        wIn.dispatchEvent(new Event('change', { bubbles: true }));
+        await frames(3);
+        ok('N3 change commits the typed value once: w === 600, ONE save',
+           piece.w === 600 && saves === 1 && wIn.value === '600', `w=${piece.w} saves=${saves} field=${wIn.value}`);
+        // Stale-after-clamp: a value that normalizes back to what was already
+        // rendered must still re-sync the field (Lit alone would not touch it).
+        piece.w = 50; p.emitConfig(); await frames(3);
+        wIn.value = '30'; wIn.dispatchEvent(new Event('input', { bubbles: true }));
+        wIn.dispatchEvent(new Event('change', { bubbles: true }));
+        await frames(3);
+        ok('N4 a clamp that lands on the already-rendered value re-syncs the field',
+           piece.w === 50 && wIn.value === '50', `w=${piece.w} field=${wIn.value}`);
+        // Empty text is ignored (reverts), it no longer collapses the piece to 50.
+        piece.w = 900; p.emitConfig(); await frames(3);
+        wIn.value = ''; wIn.dispatchEvent(new Event('change', { bubbles: true }));
+        await frames(3);
+        ok('N5 an emptied width reverts instead of shrinking to the 50 mm floor',
+           piece.w === 900 && wIn.value === '900', `w=${piece.w} field=${wIn.value}`);
+        // Rotation: "4" used to round to 0 mid-typing, so 45 was untypable.
+        const rIn = numIn('Rotation (°)');
+        if (rIn) {
+          rIn.focus();
+          for (const t of ['4', '45']) { rIn.value = t; rIn.dispatchEvent(new Event('input', { bubbles: true })); p.emitConfig(); await frames(2); }
+          const mid = rIn.value;
+          rIn.dispatchEvent(new Event('change', { bubbles: true })); await frames(3);
+          ok('N6 rotation 90 → 45 is typable (field held "45", commit stored 45)',
+             mid === '45' && piece.rotation === 45, `mid=${mid} rot=${piece.rotation}`);
+        } else ok('N6 rotation input present', false);
+        // A press elsewhere with a pending edit commits it to the item being
+        // edited (the canvas preventDefault()s its mousedown, so no native blur).
+        wIn.focus();
+        document.execCommand('selectAll'); document.execCommand('insertText', false, '700');
+        const pendingText = wIn.value;
+        document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+        await frames(3);
+        ok('N7 a pointerdown elsewhere commits the pending edit (blur → change)',
+           piece.w === 700 && document.activeElement !== wIn, `typed=${pendingText} w=${piece.w}`);
+        p.save = realSave;
+      }
+      // Rule operands: stored as a number only for a whole numeric literal.
+      const rv = ruleValueFromText;
+      ok('N8 rule operand parse is strict (times / dates / pipes stay strings)',
+         typeof rv === 'function' && rv('12:30') === '12:30' && rv('2026-07-20') === '2026-07-20'
+         && rv('10|20') === '10|20' && rv('12.5') === 12.5 && rv(' 7 ') === 7 && rv('1e3') === 1000
+         && rv('-3') === -3 && rv('on') === 'on',
+         typeof rv === 'function' ? ['12:30','2026-07-20','10|20','12.5',' 7 ','1e3'].map(x => JSON.stringify(rv(x))).join(' ') : 'missing export');
     }
   } catch (err) {
     ok('harness threw', false, (err && (err.stack || err.message)) || String(err));
