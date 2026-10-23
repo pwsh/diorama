@@ -386,7 +386,10 @@ export class App extends LitElement {
     const p = this._planner;
     const f = p.floor();
     return html`
-      <div style="display:flex;flex-direction:column;height:100%">
+      <!-- position:relative is LOAD-BEARING: it is the containing block for the
+           settings drawer overlay (absolute). Without it the drawer anchored to
+           HA's host and its ✕ landed under the phone status bar (2026-10-23). -->
+      <div style="display:flex;flex-direction:column;height:100%;position:relative">
         <diorama-topbar .planner=${p}></diorama-topbar>
         <div style="display:flex;flex:1;overflow:hidden;position:relative">
           ${p.uiMode === 'edit' && p.sidebarOpen ? html`

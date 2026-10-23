@@ -1,0 +1,206 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SETTINGSDRAWER …</title>
+<style>
+  html, body { margin:0; background:#0d1116; color:#cfd8dc; font:13px/1.5 sans-serif; }
+  #summary { font-size:14px; font-weight:bold; margin:10px 0; padding:8px 10px; border-radius:5px; }
+  .okbg { background:#12331f; color:#69f0ae; } .badbg { background:#3a1414; color:#ff8a80; }
+  .row { display:flex; justify-content:space-between; gap:10px; padding:2px 0; border-bottom:1px solid #1c2530; }
+  .pass { color:#69f0ae; } .fail { color:#ff5252; }
+  .name { color:#90caf9; } .extra { color:#ffd54f; font-size:11px; }
+  /* Stand-in for HA's <ha-panel-custom>: a POSITIONED host whose content box is
+     inset by a 60 px "safe area" PADDING — exactly the panel-mode shape that put
+     the drawer's ✕ under the phone status bar (absolute positioning resolves
+     against the containing block's PADDING box, ignoring that padding). */
+  #host { position:fixed; left:0; top:0; width:100vw; height:100vh; padding-top:60px;
+          box-sizing:border-box; }
+</style>
+<div id="summary">Running…</div>
+<div id="rows"></div>
+<div id="host"></div>
+
+<!-- Settings drawer on a phone (2026-10-23, "can't close settings in the mobile
+     app"). Mounts the REAL <diorama-app> (adoptPlanner, panel-mode path) over a
+     fake HaApi at a 390×844 window. Harness build (from repo root):
+       npm run build
+       H=/tmp/diorama-harness-sdrawer; rm -rf "$H"; mkdir -p "$H"
+       cp test-pages/settings-drawer-test.html "$H"/      # page FIRST
+       cp -r dist/* "$H"/                                 # dist SECOND
+       T=$(mktemp -d); cp -r src/* "$T"/; cp tsconfig.json "$T"/
+       cp test-pages/fake-avatar-store.ts "$T"/avatar-store.ts
+       printf "export { Planner } from '../planner.js';\nimport './app.js';\n" > "$T"/ui/sdrawer-entry.ts
+       npx esbuild "$T"/ui/sdrawer-entry.ts --bundle --format=esm --tsconfig="$T"/tsconfig.json \
+         --alias:lit=$PWD/node_modules/lit/index.js \
+         --alias:lit/decorators.js=$PWD/node_modules/lit/decorators.js \
+         --alias:three=$PWD/node_modules/three --define:__DIORAMA_VERSION__='"test"' \
+         --outfile="$H"/sdrawer.mod.js                    # bundles LAST
+       (cd "$H" && python3 -m http.server 8797 &)
+       google-chrome --headless=new --disable-gpu --use-angle=swiftshader --enable-unsafe-swiftshader \
+         --run-all-compositor-stages-before-draw --window-size=390,844 \
+         --virtual-time-budget=30000 --dump-dom \
+         "http://localhost:8797/settings-drawer-test.html" | grep -o "<title>[^<]*"  -->
+<script type="module">
+  const V = '?v=' + Date.now();
+  const results = [];
+  const ok = (name, cond, extra = '') => results.push({ name, pass: !!cond, extra: String(extra) });
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  async function waitFor(cond, tries = 400) {
+    for (let i = 0; i < tries; i++) { if (cond()) return true; await sleep(8); }
+    return !!cond();
+  }
+  const r1 = n => Math.round(n * 10) / 10;
+
+  class FakeHa {
+    constructor(seed) { this.map = new Map(); for (const [k, v] of Object.entries(seed || {})) this.map.set(k, JSON.parse(JSON.stringify(v))); this.states = {}; this._s = []; this._c = []; }
+    connect() { for (const cb of this._c) cb('connected'); for (const cb of this._s) cb(this.states, undefined); }
+    onState(fn) { this._s.push(fn); } onConn(fn) { this._c.push(fn); }
+    callService() { return Promise.resolve({ success: true }); }
+    async callServiceWithResponse() { return null; }
+    async getHistory() { return {}; } async getWeatherForecasts() { return null; }
+    async getCalendarEvents() { return []; }
+    async getDevices() { return []; } async getEntityRegistry() { return []; } async updateEntityRegistry() { return true; }
+    async getFloorRegistry() { return []; } async getAreaRegistry() { return []; }
+    async getUserData(k) { return this.map.has(k) ? JSON.parse(JSON.stringify(this.map.get(k))) : null; }
+    async setUserData(k, v) { this.map.set(k, JSON.parse(JSON.stringify(v))); return true; }
+    async refreshStates() {} async subscribeMqtt() { return () => {}; } async publishMqtt() {}
+    async subscribePersistentNotifications() { return () => {}; } async listRepairsIssues() { return []; }
+  }
+  const floor = () => ({ id: 'f1', name: 'Home', w: 8000, d: 8000, walls: [], furniture: [],
+    lights: [], switches: [], sensors: [], motionSensors: [], envSensors: [], bleProxies: [],
+    doors: [], windows: [], rooms: [], bg: null });
+
+  try {
+    localStorage.clear();
+    localStorage.setItem('diorama:view', '2d');
+    const { Planner } = await import('./sdrawer.mod.js' + V);
+    // Headless Chrome clamps --window-size=390,844 to ~500 px wide; what matters
+    // is being under the 900 px overlay-sidebar breakpoint (the phone layout).
+    ok('window is phone-layout width (< 900 px)', window.innerWidth < 900,
+       `${window.innerWidth}×${window.innerHeight}`);
+
+    const seed = { v: 2, floors: [floor()], currentFloorId: 'f1', activeSensorId: null,
+      coverage: true, imperial: false, showDetails: false, useRawTargets: false };
+    const p = new Planner(); p.connectWith(new FakeHa({ diorama: seed }));
+    await waitFor(() => p.configIndex !== null);
+
+    const host = document.getElementById('host');
+    const app = document.createElement('diorama-app');
+    app.adoptPlanner(p);
+    host.appendChild(app);
+    await waitFor(() => app.querySelector('diorama-settings-drawer'));
+    const drawer = app.querySelector('diorama-settings-drawer');
+    const root = app.firstElementChild;
+    ok('app root is the flex column', root && root.style.flexDirection === 'column');
+    ok('app root is position:relative (drawer containing block)',
+       root && getComputedStyle(root).position === 'relative', root && getComputedStyle(root).position);
+
+    async function openDrawer(tab) {
+      drawer.show(tab); await drawer.updateComplete;
+      return { ov: drawer.querySelector('[data-settings-ov]'), panel: drawer.querySelector('[data-settings-panel]'),
+               close: drawer.querySelector('[data-settings-close]') };
+    }
+
+    // ── (a) panel top tracks the app root, not HA's host padding box ────────
+    let { ov, panel, close } = await openDrawer('connection');
+    ok('drawer renders overlay + panel + close button', ov && panel && close);
+    const rr = root.getBoundingClientRect(), pr = panel.getBoundingClientRect(), hr = host.getBoundingClientRect();
+    ok('(a) panel top ≥ app root top', pr.top >= rr.top - 0.01, `panel ${r1(pr.top)} root ${r1(rr.top)}`);
+    ok('(a) panel top ≤ app root top + 1 px', pr.top <= rr.top + 1, `panel ${r1(pr.top)} root ${r1(rr.top)}`);
+    ok('(a) panel clears the 60 px simulated safe area', pr.top >= hr.top + 60 - 0.01, `panel ${r1(pr.top)}`);
+    ok('(a) panel bottom = root bottom', Math.abs(pr.bottom - rr.bottom) <= 1, `${r1(pr.bottom)} vs ${r1(rr.bottom)}`);
+    const or = ov.getBoundingClientRect();
+    ok('overlay covers the app root', Math.abs(or.top - rr.top) <= 1 && Math.abs(or.left - rr.left) <= 1
+       && Math.abs(or.width - rr.width) <= 1 && Math.abs(or.height - rr.height) <= 1,
+       `ov ${r1(or.left)},${r1(or.top)} ${r1(or.width)}×${r1(or.height)}`);
+    ok('panel leaves a tappable backdrop strip (≤ 92 vw)', pr.left - rr.left >= 20, `strip ${r1(pr.left - rr.left)} px`);
+    const zOv = Number(getComputedStyle(ov).zIndex);
+    ok('overlay stacks above the mobile sidebar (z 30)', zOv > 30, `z ${zOv}`);
+
+    // ── (b) close button: ≥ 44×44, fully on-screen inside the root ──────────
+    const cr = close.getBoundingClientRect();
+    ok('(b) close button ≥ 44×44', cr.width >= 44 && cr.height >= 44, `${r1(cr.width)}×${r1(cr.height)}`);
+    ok('(b) close button fully inside app root', cr.top >= rr.top - 0.01 && cr.left >= rr.left - 0.01
+       && cr.right <= rr.right + 0.01 && cr.bottom <= rr.bottom + 0.01,
+       `btn ${r1(cr.left)},${r1(cr.top)}-${r1(cr.right)},${r1(cr.bottom)}`);
+    ok('(b) close button has an accessible name', close.getAttribute('aria-label') === 'Close settings');
+    const hit = document.elementFromPoint(cr.left + cr.width / 2, cr.top + cr.height / 2);
+    ok('(b) close button is the topmost element at its centre', hit === close || close.contains(hit), hit && hit.tagName);
+    close.click(); await drawer.updateComplete;
+    ok('(b) ✕ closes', drawer.open === false && !drawer.querySelector('[data-settings-panel]'));
+
+    // ── (c) backdrop click closes, panel click does not ─────────────────────
+    ({ ov, panel } = await openDrawer());
+    panel.querySelector('h2').click(); await drawer.updateComplete;
+    ok('(c) click inside panel keeps it open', drawer.open === true);
+    panel.click(); await drawer.updateComplete;
+    ok('(c) click on panel background keeps it open', drawer.open === true);
+    const or2 = ov.getBoundingClientRect(), pr2 = panel.getBoundingClientRect();
+    const bx = or2.left + (pr2.left - or2.left) / 2, by = or2.top + 200;
+    const bhit = document.elementFromPoint(bx, by);
+    ok('(c) backdrop strip is hit-testable', bhit === ov, bhit && (bhit.className || bhit.tagName));
+    ov.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, clientX: bx, clientY: by }));
+    await drawer.updateComplete;
+    ok('(c) pointerdown alone on the backdrop does NOT close (scroll-safe)', drawer.open === true);
+    ov.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: bx, clientY: by }));
+    await drawer.updateComplete;
+    ok('(c) click on the backdrop closes', drawer.open === false);
+
+    // ── (d) Escape closes; listener removed after close ─────────────────────
+    await openDrawer();
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', bubbles: true }));
+    await drawer.updateComplete;
+    ok('(d) a non-Escape key leaves it open', drawer.open === true);
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await drawer.updateComplete;
+    ok('(d) Escape closes', drawer.open === false);
+    ok('(d) window listener released on close', drawer._keyListening === false);
+    // Escape from inside a text field also closes (bubbles to window).
+    ({ panel } = await openDrawer('connection'));
+    const inp = panel.querySelector('input');
+    ok('(d) connection tab has an input', !!inp);
+    inp.focus();
+    inp.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await drawer.updateComplete;
+    ok('(d) Escape in an input closes the drawer', drawer.open === false);
+    // Keybind capture: Escape cancels the rebind, NOT the drawer.
+    ({ panel } = await openDrawer('display'));
+    const cap = panel.querySelector('[data-keybind-capture]');
+    ok('(d) display tab has a keybind capture button', !!cap);
+    cap.click(); await drawer.updateComplete;
+    ok('(d) capture armed', drawer._rebind != null);
+    cap.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    await drawer.updateComplete;
+    ok('(d) Escape during capture cancels the rebind', drawer._rebind == null);
+    ok('(d) …and leaves the drawer open', drawer.open === true);
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await drawer.updateComplete;
+    ok('(d) next Escape closes', drawer.open === false);
+
+    // ── (e) negative control: drop the root's position:relative ─────────────
+    ({ panel } = await openDrawer());
+    const saved = root.style.position;
+    root.style.position = 'static';
+    const prBad = panel.getBoundingClientRect(), hrBad = host.getBoundingClientRect(), rrBad = root.getBoundingClientRect();
+    ok('(e) NEG: without position:relative the panel anchors to the host padding box',
+       Math.abs(prBad.top - hrBad.top) <= 1 && prBad.top < rrBad.top - 30,
+       `panel ${r1(prBad.top)} host ${r1(hrBad.top)} root ${r1(rrBad.top)}`);
+    const cBad = drawer.querySelector('[data-settings-close]').getBoundingClientRect();
+    ok('(e) NEG: …which puts the ✕ inside the simulated safe area', cBad.top < hrBad.top + 60,
+       `btn top ${r1(cBad.top)}`);
+    root.style.position = saved;
+    const prGood = panel.getBoundingClientRect();
+    ok('(e) restoring position:relative re-anchors to the root', Math.abs(prGood.top - root.getBoundingClientRect().top) <= 1);
+    drawer.open = false; await drawer.updateComplete;
+  } catch (err) {
+    ok('harness error', false, err && (err.stack || err.message || err));
+  }
+
+  const pass = results.filter(r => r.pass).length, tot = results.length;
+  const allOk = pass === tot && tot > 0;
+  document.title = `SETTINGSDRAWER ${allOk ? 'PASS' : 'FAIL'} ${pass}/${tot}`;
+  const s = document.getElementById('summary'); s.textContent = document.title; s.className = allOk ? 'okbg' : 'badbg';
+  document.getElementById('rows').innerHTML = results.map(r =>
+    `<div class="row"><span class="${r.pass ? 'pass' : 'fail'}">${r.pass ? 'PASS' : 'FAIL'}</span>`
+    + `<span class="name">${r.name}</span><span class="extra">${r.extra}</span></div>`).join('');
+</script>

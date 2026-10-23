@@ -1317,8 +1317,32 @@ export class SettingsDrawer extends LitElement {
   override disconnectedCallback(): void {
     super.disconnectedCallback();
     this.planner.removeEventListener('config', this._tick);
+    window.removeEventListener('keydown', this._onWinKey);
+    this._keyListening = false;
   }
   private _tick = () => { if (this.open) this.requestUpdate(); };
+
+  // Escape closes the drawer (2026-10-23). Added while open, removed on close /
+  // disconnect — reconciled in updated() so every path that flips `open`
+  // (✕, backdrop, Escape, external callers) is covered. The keybind-capture
+  // button's own keydown handler stopPropagation()s, so an Escape that cancels
+  // a rebind never reaches this window listener; the `_rebind` check is
+  // belt-and-braces. Escape inside a text field still closes the drawer —
+  // that's the normal expectation for a dismissible sheet.
+  private _keyListening = false;
+  private _onWinKey = (e: KeyboardEvent) => {
+    if (e.key !== 'Escape' || !this.open || this._rebind) return;
+    this.open = false;
+  };
+  override updated(): void {
+    if (this.open && !this._keyListening) {
+      window.addEventListener('keydown', this._onWinKey);
+      this._keyListening = true;
+    } else if (!this.open && this._keyListening) {
+      window.removeEventListener('keydown', this._onWinKey);
+      this._keyListening = false;
+    }
+  }
 
   show(tab?: SettingsTab): void {
     this._url = localStorage.getItem('diorama:url') || '';
@@ -1337,13 +1361,21 @@ export class SettingsDrawer extends LitElement {
          ['integrations', 'Integrations'], ['data', 'Floor Plan']]
       : [['connection', 'Connection']];
     const tab: SettingsTab = tabs.some(t => t[0] === this._tab) ? this._tab : 'connection';
+    // Backdrop + panel (2026-10-23, "can't close settings on mobile"). The
+    // overlay is position:absolute against diorama-app's ROOT div (which is
+    // position:relative for exactly this reason) — before, nothing in Diorama
+    // was positioned above the drawer, so its containing block was HA's host
+    // and `top:0` put the ✕ under the phone's status bar / notch. Tapping the
+    // backdrop strip (the ~8 vw left of the panel on a phone) closes it; a
+    // CLICK, not pointerdown, so a scroll that starts there doesn't.
     return html`
-      <div style="position:absolute;top:0;right:0;bottom:0;width:min(560px,92vw);background:var(--surface);
-                  border-left:1px solid var(--border);display:flex;flex-direction:column;z-index:10;
-                  box-shadow:-4px 0 16px rgba(0,0,0,0.4)">
-        <div style="display:flex;justify-content:space-between;align-items:center;padding:14px 16px 8px">
+      <div class="settings-ov" data-settings-ov
+           @click=${(e: MouseEvent) => { if (e.target === e.currentTarget) this.open = false; }}>
+      <div class="settings-panel" data-settings-panel>
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 6px 2px 16px">
           <h2 style="font-size:14px;margin:0">Settings</h2>
-          <button style="background:none;border:none;color:var(--text-dim);font-size:18px;cursor:pointer"
+          <button class="settings-close" aria-label="Close settings" title="Close settings"
+                  data-settings-close
                   @click=${() => this.open = false}>✕</button>
         </div>
         <div style="display:flex;gap:2px;padding:0 12px;border-bottom:1px solid var(--border);flex-wrap:wrap">
@@ -1366,6 +1398,7 @@ export class SettingsDrawer extends LitElement {
              title="Diorama build version (from package.json)">
           Diorama v${__DIORAMA_VERSION__}
         </div>
+      </div>
       </div>
     `;
   }

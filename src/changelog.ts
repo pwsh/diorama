@@ -22,6 +22,13 @@ export interface ChangelogEntry {
 export const CHANGELOG_DISPLAY_COUNT = 10;
 
 export const CHANGELOG: ChangelogEntry[] = [
+  // DRAFT — bump package.json + tag when cutting v0.67.1
+  {
+    version: 'v0.67.1', name: 'reachable', date: '2026-10-23',
+    notes: [
+      'Settings can be closed on phones again: the ✕ no longer hides under the status bar, it is a bigger tap target, and tapping outside the drawer or pressing Escape closes it',
+    ],
+  },
   {
     version: 'v0.67.0', name: 'fine tuning', date: '2026-10-23',
     notes: [

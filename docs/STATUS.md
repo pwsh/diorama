@@ -466,6 +466,21 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Settings drawer closable on phones** (2026-10-23, uncommitted,
+  user-reported "unable to close the settings dialog on the mobile app").
+  The drawer was `position:absolute` but nothing in Diorama was positioned
+  above it, so in panel mode its containing block was HA's host — whose
+  PADDING box (the safe-area inset the panel reserves as padding) starts at
+  the top of the screen; the 18 px ✕ sat under the status bar / notch. Fix:
+  app root div is `position:relative`; the drawer now sits in a
+  `.settings-ov` backdrop (z 40, tap the ~8 vw strip to close — click, not
+  pointerdown), Escape closes (the keybind-capture Escape still only cancels
+  the capture), ✕ is a 44×44 target with `aria-label`. The header
+  `env(safe-area-inset-top)` belt-and-braces was SKIPPED: panel.ts already
+  reserves the inset, so adding it would double-pad in panel mode. Test
+  `settings-drawer-test.html` (`SETTINGSDRAWER PASS 34/34`, mutation-checked:
+  dropping the root's position:relative fails 6).
+
 - **Neighborhood property exclusion + surroundings ground plane**
   (2026-10-22, uncommitted). Two user reports. (1) The OpenFreeMap overlay
   drew OSM over the user's own plot (incl. their own house, from OSM):

@@ -3313,6 +3313,19 @@ reference; keep it updated when the schema grows.
   offline/kiosk/demo). **Every release PREPENDS an entry there** — a release
   runbook step (docs/STATUS.md); keep all history in the file, the UI slices
   the first 10; the first entry's version should match package.json at release.
+  **Containing block (2026-10-23, user-reported "can't close settings on the
+  phone app")**: the drawer is `position:absolute`, and nothing above it in
+  Diorama was positioned — in panel mode it anchored to HA's host, whose
+  PADDING box (the safe-area inset) starts at the screen top, so the ✕ sat
+  under the status bar. diorama-app's ROOT div is now `position:relative`
+  (load-bearing — commented), the panel lives in a `.settings-ov` backdrop
+  (z 40; a backdrop CLICK closes, pointerdown doesn't), Escape closes (a
+  window listener reconciled in `updated()`; the keybind-capture button
+  stopPropagation()s, so its Escape only cancels the capture), and the ✕ is a
+  44×44 `aria-label` target. No `env(safe-area-inset-top)` padding on the
+  header — panel.ts already reserves the inset (it would double-pad). Test
+  `settings-drawer-test.html` (`SETTINGSDRAWER PASS 34/34`, mounts the REAL
+  app at a phone width inside a padded positioned "host" + a negative control).
 - Test pages: `avatar-pack-test` (registry/config math), `avatar-build-test`
   (declarative builds + rig extensions), `avatar-store-test` (IDB + validator),
   `avatar-content-test` (builds EVERY member of every builtin pack).

@@ -157,6 +157,20 @@ h3.collapsible-header.open {
   width: 70px; background: #111; border: 1px solid var(--border); border-radius: 3px;
   color: var(--text); font-size: 11px; padding: 3px 5px; text-align: right;
 }
+/* Settings drawer (2026-10-23): absolute against diorama-app's positioned root
+   (NOT fixed — in panel mode the root's box already sits inside HA's safe-area
+   padding, which a fixed overlay would ignore). z 40 clears the mobile sidebar
+   (30) + its backdrop (25) and the toolbar. */
+.settings-ov { position: absolute; inset: 0; z-index: 40; background: rgba(0,0,0,0.35); }
+.settings-panel { position: absolute; top: 0; right: 0; bottom: 0; width: min(560px, 92vw);
+                  background: var(--surface); border-left: 1px solid var(--border);
+                  display: flex; flex-direction: column;
+                  box-shadow: -4px 0 16px rgba(0,0,0,0.4); }
+.settings-close { background: none; border: none; color: var(--text-dim); font-size: 18px;
+                  cursor: pointer; min-width: 44px; min-height: 44px; padding: 0;
+                  display: inline-flex; align-items: center; justify-content: center;
+                  border-radius: 6px; }
+.settings-close:hover { color: var(--text); background: rgba(255,255,255,0.06); }
 .modal-ov { position: fixed; inset: 0; z-index: 100;
             background: rgba(0,0,0,0.55);
             display: flex; align-items: center; justify-content: center; }
