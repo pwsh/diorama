@@ -1229,6 +1229,9 @@ export interface Scene3D {
                              // walls, furniture, fixtures and authored ground areas / terraces /
                              // pools never move. NEGATIVE = surroundings BELOW the slab — the
                              // raised-foundation / hilltop look. Clamped ±10 000 mm.
+  groundPlane?: GroundKind | 'none'; // 2026-10-22: opaque SURROUNDINGS ground plane at the grade
+                             // (groundLevelMm − 20) so the sky dome can't glow from beneath the
+                             // property. Absent / 'none' = off (byte-identical).
 }
 
 // A named room. No polygon is persisted — the room IS whichever closed wall
@@ -1649,6 +1652,9 @@ export interface NeighborhoodConfig {
 
   exclusions?: Vec2[][];                // plan-mm mask polygons (same shared frame as Store.geo.landmarks) —
                                         // neighborhood geometry intersecting one is clipped OUT
+  excludeProperty?: boolean;            // absent = ON (2026-10-22): keep OSM off the property footprint
+                                        // (0..max(w) × 0..max(d) over all floors) — buildings drop, roads
+                                        // split, water/landuse polygons are clipped (subtractRectFromPolygon)
 }
 
 // ── Flight & satellite tracking (roadmap P4) ─────────────────────────────

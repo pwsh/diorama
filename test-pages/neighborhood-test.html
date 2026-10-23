@@ -240,6 +240,76 @@
   ok('scheme: file rejected', NB.tileTemplateSchemeOk('file:///etc/passwd') === false);
   ok('scheme: empty rejected', NB.tileTemplateSchemeOk('') === false);
 
+  // ═══════════════ Property-footprint exclusion (2026-10-22) ═══════════════
+  {
+    const A = pts => NB.polygonAreaAbs(pts);
+    const sumA = list => list.reduce((s, q) => s + A(q), 0);
+    const rel = (a, b) => Math.abs(a - b) / Math.max(1, Math.abs(b));
+    const R = { x0: 0, y0: 0, x1: 10000, y1: 8000 };
+    // fully inside → []
+    ok('subtract: polygon fully inside the rect → []', NB.subtractRectFromPolygon(sq(5000, 4000, 1000), R).length === 0);
+    // fully outside → [original] (by identity)
+    const far = sq(30000, 30000, 1000);
+    const outR = NB.subtractRectFromPolygon(far, R);
+    ok('subtract: polygon fully outside → [original]', outR.length === 1 && outR[0] === far);
+    // straddling: square centred on the right edge
+    const st = sq(10000, 4000, 2000);          // 4000×4000 = 16e6; overlap 2000×4000 = 8e6
+    const stR = NB.subtractRectFromPolygon(st, R);
+    ok('subtract: straddling → area = original − overlap', rel(sumA(stR), 16e6 - 8e6) < 1e-6, `${sumA(stR)} vs 8e6`);
+    ok('subtract: straddling pieces all lie outside the rect interior', stR.every(q => q.every(v => !(v.x > R.x0 + 1e-6 && v.x < R.x1 - 1e-6 && v.y > R.y0 + 1e-6 && v.y < R.y1 - 1e-6))));
+    // a polygon fully ENCLOSING the rect → a ring (area = big − rect)
+    const big = sq(5000, 4000, 50000);
+    ok('subtract: enclosing polygon → area = original − rect', rel(sumA(NB.subtractRectFromPolygon(big, R)), A(big) - 80e6) < 1e-6);
+    // concave U straddling the rect (opening upward, arms crossing the rect's bottom edge)
+    const U = [{ x: -5000, y: -5000 }, { x: 15000, y: -5000 }, { x: 15000, y: 3000 }, { x: 11000, y: 3000 },
+               { x: 11000, y: -1000 }, { x: -1000, y: -1000 }, { x: -1000, y: 3000 }, { x: -5000, y: 3000 }];
+    // overlap with R: U ∩ R — the U's bottom bar spans y∈[-5000,-1000] (below R); arms at x∈[-5000,-1000] and [11000,15000] (outside R in x) → overlap 0
+    const U2 = U.map(v => ({ x: v.x, y: v.y + 3000 }));   // shift up: bar y∈[-2000,2000] overlaps R in x∈[0,10000], y∈[0,2000]
+    const ovU2 = 10000 * 2000;
+    ok('subtract: concave U straddling → area = original − overlap', rel(sumA(NB.subtractRectFromPolygon(U2, R)), A(U2) - ovU2) < 1e-6, `${sumA(NB.subtractRectFromPolygon(U2, R))} vs ${A(U2) - ovU2}`);
+    ok('subtract: concave U not overlapping in area keeps its area', rel(sumA(NB.subtractRectFromPolygon(U, R)), A(U)) < 1e-6);
+    ok('subtract: degenerate rect → [original]', NB.subtractRectFromPolygon(far, { x0: 0, y0: 0, x1: 0, y1: 5 }).length === 1);
+
+    // buildNeighborhoodFeatures with propertyRect — synthetic building/road/water tile
+    const bPts = fs1.buildings[0].points;
+    const bx0 = Math.min(...bPts.map(v => v.x)), bx1 = Math.max(...bPts.map(v => v.x));
+    const by0 = Math.min(...bPts.map(v => v.y)), by1 = Math.max(...bPts.map(v => v.y));
+    const prop = { x0: bx0 - 100, y0: by0 - 100, x1: bx1 + 100, y1: by1 + 100 };   // around the synthetic house
+    const mixTile = {
+      addr: synthTile.addr,
+      layers: {
+        building: synthTile.layers.building,
+        transportation: { name: 'transportation', extent: 4096, features: [
+          // tile row y=5 crosses the house footprint (tile x 0..10) — a long road through the property
+          { id: 5, type: 'line', tags: { class: 'residential' }, geometry: [[{ x: -40, y: 5 }, { x: -20, y: 5 }, { x: 0, y: 5 }, { x: 5, y: 5 }, { x: 10, y: 5 }, { x: 30, y: 5 }, { x: 50, y: 5 }]] }] },
+        water: { name: 'water', extent: 4096, features: [
+          { id: 6, type: 'polygon', tags: { class: 'lake' }, geometry: [[{ x: -30, y: -30 }, { x: 40, y: -30 }, { x: 40, y: 40 }, { x: -30, y: 40 }]] }] },
+        landuse: { name: 'landuse', extent: 4096, features: [
+          { id: 7, type: 'polygon', tags: { class: 'residential' }, geometry: [[{ x: -30, y: -30 }, { x: 40, y: -30 }, { x: 40, y: 40 }, { x: -30, y: 40 }]] }] },
+      },
+    };
+    const base = NB.buildNeighborhoodFeatures([mixTile], tf0, { layers: { landuse: true } });
+    const wi = NB.buildNeighborhoodFeatures([mixTile], tf0, { layers: { landuse: true }, propertyRect: prop });
+    ok('prop: negative control — without the rect the building is kept', base.buildings.length === 1);
+    ok('prop: building inside the property is DROPPED', wi.buildings.length === 0, wi.buildings.length);
+    ok('prop: negative control — without the rect the road is one run', base.roads.length === 1);
+    ok('prop: road through the property is SPLIT into two runs', wi.roads.length === 2, wi.roads.length);
+    ok('prop: no road segment midpoint inside the property', wi.roads.every(rd => rd.points.every((v, i) => {
+      if (i === 0) return true; const a = rd.points[i - 1]; const mx = (a.x + v.x) / 2, my = (a.y + v.y) / 2;
+      return !(mx > prop.x0 && mx < prop.x1 && my > prop.y0 && my < prop.y1); })));
+    const propArea = (prop.x1 - prop.x0) * (prop.y1 - prop.y0);
+    ok('prop: negative control — without the rect water is one unclipped patch', base.water.length === 1);
+    ok('prop: water CLIPPED — area = lake − property', rel(sumA(wi.water.map(w => w.points)), A(base.water[0].points) - propArea) < 1e-6,
+      `${sumA(wi.water.map(w => w.points)).toFixed(0)} vs ${(A(base.water[0].points) - propArea).toFixed(0)}`);
+    ok('prop: landuse CLIPPED too', rel(sumA(wi.landuse.map(w => w.points)), A(base.landuse[0].points) - propArea) < 1e-6);
+    ok('prop: clipped pieces keep the class', wi.water.every(w => w.cls === 'lake'));
+    const same = NB.buildNeighborhoodFeatures([mixTile], tf0, { layers: { landuse: true }, propertyRect: undefined });
+    ok('prop: absent rect ⇒ identical output', JSON.stringify(same) === JSON.stringify(base));
+    const farProp = { x0: 1e8, y0: 1e8, x1: 1e8 + 1000, y1: 1e8 + 1000 };
+    const farB = NB.buildNeighborhoodFeatures([mixTile], tf0, { layers: { landuse: true }, propertyRect: farProp });
+    ok('prop: a far-away rect changes nothing', JSON.stringify(farB) === JSON.stringify(base));
+  }
+
   // ═══════════════ PLANNER: fetch / cache / gates ═══════════════
   await runPlanner();
 
@@ -406,6 +476,31 @@
     pa.deleteExclusion(0);
     await waitFor(() => pa.neighborhoodData && pa.neighborhoodData.buildings.length > 0, 800);
     ok('planner: deleteExclusion restores buildings (still no refetch)', pa.neighborhoodData.buildings.length > 0 && pbfCount === pbfBeforeExcl, `pbf=${pbfCount}`);
+
+    // (P13b) property-footprint exclusion (2026-10-22, default ON): toggling it
+    // off re-extracts WITHOUT a refetch and can only ADD features back; the
+    // default-on extract keeps no building intersecting the floor rect.
+    {
+      const pr = pa.neighborhoodPropertyRect();
+      ok('planner: property rect = 0..max(w) × 0..max(d)', pr && pr.x0 === 0 && pr.y0 === 0 && pr.x1 === 8000 && pr.y1 === 6000, JSON.stringify(pr));
+      const inRect = b => b.points.some(v => v.x > 0 && v.x < 8000 && v.y > 0 && v.y < 6000);
+      ok('planner: default ON — no building vertex inside the property', !pa.neighborhoodData.buildings.some(inRect));
+      const onB = pa.neighborhoodData.buildings.length, onRev = pa.neighborhoodRev, pbf0 = pbfCount;
+      pa.setNeighborhood(n => { n.excludeProperty = false; });
+      await waitFor(() => pa.neighborhoodRev > onRev, 800);
+      ok('planner: excludeProperty=false re-extracts without refetch', pa.neighborhoodRev > onRev && pbfCount === pbf0, `pbf ${pbf0}→${pbfCount}`);
+      ok('planner: excludeProperty=false keeps ≥ as many buildings', pa.neighborhoodData.buildings.length >= onB, `${onB}→${pa.neighborhoodData.buildings.length}`);
+      const r2 = pa.neighborhoodRev;
+      pa.setNeighborhood(n => { n.excludeProperty = undefined; });
+      await waitFor(() => pa.neighborhoodRev > r2, 800);
+      ok('planner: re-enabling restores the excluded count', pa.neighborhoodData.buildings.length === onB, pa.neighborhoodData.buildings.length);
+      // a floor resize re-extracts through save()
+      const r3 = pa.neighborhoodRev;
+      pa.store.floors[0].w = 9000; pa.save();
+      await waitFor(() => pa.neighborhoodRev > r3, 800);
+      ok('planner: floor resize → save() re-extracts the footprint', pa.neighborhoodRev > r3 && pbfCount === pbf0);
+      pa.store.floors[0].w = 8000; pa.save();
+    }
 
     // (P14) refresh tiles → clears IDB + warm cache + REFETCHES (fetch count +N)
     const pbfBeforeRefresh = pbfCount;

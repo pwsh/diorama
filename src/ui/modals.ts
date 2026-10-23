@@ -4,7 +4,7 @@ import { customElement } from './define.js';
 import { installNumCommit } from './num-commit.js';
 import { CHANGELOG, CHANGELOG_DISPLAY_COUNT } from '../changelog.js';
 import { finishZoneEdit, cancelZoneEdit } from '../canvas-interact.js';
-import { floorContentBbox, GRID_MM } from '../geometry.js';
+import { floorContentBbox, GRID_MM, GROUND_KINDS } from '../geometry.js';
 import { alarmStateColor, hvacModeColor, climateFeature, CLIMATE_FEATURE, climateTempUnit, fmtTempNum, clampSetpoint, resolvePivotMode, floorsDisplayOrder } from '../geometry.js';
 import { CONDITION_GLYPH, CONDITION_LABEL, tempText, weatherEffectEnabled, worstAlertSeverity } from '../weather.js';
 import type { HaCondition } from '../weather.js';
@@ -17,7 +17,7 @@ import type { VehicleModelDef, VehiclePackDef } from '../vehicles.js';
 import { VEHICLE_PACK_MANIFEST } from '../vehicle-packs/manifest.js';
 import { listActiveVehiclePacks, resolveVehicleDef } from '../vehicles.js';
 import type { Planner } from '../planner.js';
-import type { Floor, HassState, WeatherConfig, DemoWeatherConfig, WeatherEffectKey, ScenePreset, FloorTexKind, MqttBridgeConfig, BgTextEntry, BgTextEntryMode, HeatmapConfig, CompassConfig } from '../types.js';
+import type { GroundKind, Floor, HassState, WeatherConfig, DemoWeatherConfig, WeatherEffectKey, ScenePreset, FloorTexKind, MqttBridgeConfig, BgTextEntry, BgTextEntryMode, HeatmapConfig, CompassConfig } from '../types.js';
 import { resolveNorth } from '../compass.js';
 import { KEYBIND_ACTIONS, resolveKeybind, keybindConflict, keybindDef, keyLabel,
          isModifierKey, normalizeKey, type KeybindAction } from '../keybinds.js';
@@ -2424,6 +2424,12 @@ export class SettingsDrawer extends LitElement {
               cached on this device for 30 days, and the 3D view automatically extends
               its camera range so distant buildings stay visible.
             </div>
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text)"
+                   title="Keep map data off your own plan: buildings on the property (incl. your own house) are dropped, roads are cut, and water/land areas are clipped around it.">
+              <input type="checkbox" .checked=${cfg.excludeProperty !== false}
+                     @change=${(e: Event) => set(n => { n.excludeProperty = (e.target as HTMLInputElement).checked ? undefined : false; })}>
+              <span style="flex:1">Exclude the property footprint</span>
+            </label>
             <button class="btn" style="align-self:flex-start" @click=${() => { void this.planner.clearNeighborhoodCache(); }}>Clear tile cache</button>
             <div style="font-size:10px;color:var(--text-dim);line-height:1.35">
               Third-party fetch when enabled. Data: © OpenMapTiles · © OpenStreetMap
@@ -2679,6 +2685,21 @@ export class SettingsDrawer extends LitElement {
       <div style="font-size:10px;color:var(--text-dim);line-height:1.3;margin:2px 0 4px">
         Surroundings relative to the floor slab — negative = ground below a raised foundation.
         The house, furniture and your own ground areas / terraces stay put.
+      </div>
+      <div class="row" title="Renders an opaque ground plane at the surroundings grade so the sky can't show from beneath the property.">
+        <label>Surroundings ground</label>
+        <select style="flex:1" data-ground-plane
+                @change=${(e: Event) => upd(() => {
+                  const v = (e.target as HTMLSelectElement).value;
+                  p.store.scene3d!.groundPlane = v ? v as GroundKind : undefined;
+                })}>
+          <option value="" ?selected=${!sc.groundPlane || sc.groundPlane === 'none'}>None</option>
+          ${(Object.keys(GROUND_KINDS) as GroundKind[]).map(k => html`
+            <option value=${k} ?selected=${sc.groundPlane === k}>${GROUND_KINDS[k].label}</option>`)}
+        </select>
+      </div>
+      <div style="font-size:10px;color:var(--text-dim);line-height:1.3;margin:2px 0 4px">
+        Renders an opaque ground plane at the surroundings grade so the sky can't show from beneath the property.
       </div>
       ${check('Glass house', !!sc.glassHouse, v => { p.store.scene3d!.glassHouse = v; })}
       ${check('Wall cutaway', sc.wallCutaway !== false, v => { p.store.scene3d!.wallCutaway = v; })}

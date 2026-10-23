@@ -466,6 +466,19 @@ instance.
 
 ### Shipped since the DESIGN-sims arc (reverse order)
 
+- **Neighborhood property exclusion + surroundings ground plane**
+  (2026-10-22, uncommitted). Two user reports. (1) The OpenFreeMap overlay
+  drew OSM over the user's own plot (incl. their own house, from OSM):
+  `NeighborhoodConfig.excludeProperty` (absent = ON) feeds the floor-union
+  rect `0..max(w) × 0..max(d)` as `BuildOpts.propertyRect` — buildings
+  intersecting it drop, roads split, water/landuse polygons are CLIPPED via
+  the new pure `subtractRectFromPolygon` (4 convex complement strips ×
+  Sutherland–Hodgman); re-extracts on toggle and on a floor resize (save()),
+  never refetches. (2) The sky dome's lower hemisphere glowed from beneath
+  the property: opt-in `Scene3D.groundPlane` (GroundKind | 'none') builds
+  one opaque plane at `gl − 20` in `updateGroundAreas`. Tests:
+  `NEIGHBORHOOD PASS 123/123` (was 98), `GROUNDPLANE PASS 26/26` (new),
+  NBHDRENDER 95/95, TERRAIN 126/126, LAYERS2D 113/113.
 - **Full review batch: upstream refresh, deps, CI, ~60 logic/perf fixes**
   (2026-09-26; UNCOMMITTED in the working tree pending the user's review
   — sits on top of the 19 unreleased commits past v0.66.1). Reviewed HA

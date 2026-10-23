@@ -1134,6 +1134,7 @@ export class Planner extends EventTarget {
   private _nbhdDecoded = new Map<string, { addr: TileAddr; layers: Record<string, MvtLayer> }>();
   private _nbhdTemplate: { source: string; custom?: string; template: string } | null = null;
   private _nbhdSourceKey = '';                     // last source/custom key — clears the caches on a source switch
+  private _nbhdPropKey = '';                         // footprint key of the last extract (save() re-extracts on change)
   private _nbhdRunId = 0;                           // guards against an older async reconfigure clobbering a newer
 
   // ── Flights & ISS (roadmap P4) ────────────────────────────────────────────
@@ -1471,6 +1472,8 @@ export class Planner extends EventTarget {
     // Shared configs: a recent local edit holds off reloading another user's
     // newer version over it (refreshSharedIndex's 5 s rule).
     if (!this._suppressHaSave) this._lastLocalEditAt = Date.now();
+    // Neighborhood property exclusion follows a floor resize (cheap key compare).
+    this._maybeReextractNeighborhoodForFootprint();
     // Local cache (diorama:store:v1) is the ACTIVE config body — written
     // immediately so it survives reload / paints instantly next load.
     try { localStorage.setItem(STORE_KEY, json); } catch { /* ignore */ }
@@ -1604,7 +1607,7 @@ export class Planner extends EventTarget {
       weather: j(st.weather),
       alerts: j(st.alerts),
       // The neighborhood overlay is positioned by the geo fit.
-      nbhd: j(st.neighborhood) + '|' + geo,
+      nbhd: j(st.neighborhood) + '|' + geo + '|' + this._nbhdPropertyKey(),
       // The flight observer origin chain reads the geo fit, then weather lat/lon.
       flights: j(st.flights) + '|' + geo + '|' + j([st.weather?.lat, st.weather?.lon]),
       presence: j(st.presenceHistory),
@@ -8246,6 +8249,8 @@ export class Planner extends EventTarget {
     this.neighborhoodData = buildNeighborhoodFeatures(tiles, t, {
       align: cfg.align,
       exclusions: cfg.exclusions,
+      // 2026-10-22: keep OSM off the plan itself (absent = ON).
+      propertyRect: cfg.excludeProperty === false ? undefined : (this.neighborhoodPropertyRect() ?? undefined),
       verticalScale: Math.max(0.2, Math.min(3, cfg.verticalScale ?? 1)),
       defaultLevelHeightM: Math.max(2, Math.min(5, cfg.defaultLevelHeightM ?? 3)),
       layers: cfg.layers,
@@ -8254,8 +8259,34 @@ export class Planner extends EventTarget {
       // for 500 m would silently eat everything a 3 km radius fetched.
       maxBuildings: buildingCapForRadius(this.neighborhoodRadiusM()),
     });
+    this._nbhdPropKey = this._nbhdPropertyKey();
     this.neighborhoodRev++;
     this.emitConfig();
+  }
+
+  // The property footprint the neighborhood overlay keeps clear: every floor is
+  // origin-anchored 0..w × 0..d in ONE shared world frame, so the union is the
+  // single rect 0..max(w) × 0..max(d) over ALL floors (not just enabled — a
+  // disabled test copy must not shrink the clear zone; floorElevationMm's rule).
+  neighborhoodPropertyRect(): { x0: number; y0: number; x1: number; y1: number } | null {
+    let w = 0, d = 0;
+    for (const f of this.store.floors ?? []) {
+      if (Number.isFinite(f.w) && f.w > w) w = f.w;
+      if (Number.isFinite(f.d) && f.d > d) d = f.d;
+    }
+    return w > 0 && d > 0 ? { x0: 0, y0: 0, x1: w, y1: d } : null;
+  }
+  private _nbhdPropertyKey(): string {
+    const r = this.neighborhoodPropertyRect();
+    return r ? `${r.x1}x${r.y1}` : '';
+  }
+  // Called from save(): a floor resize moves the clear zone — re-extract (pure,
+  // warm cache, no refetch) only when the footprint actually changed.
+  private _maybeReextractNeighborhoodForFootprint(): void {
+    const cfg = this.store.neighborhood;
+    if (!cfg?.enabled || cfg.excludeProperty === false || !this.neighborhoodData) return;
+    if (this._nbhdPropertyKey() === this._nbhdPropKey) return;
+    void this._reconfigureNeighborhood();
   }
 
   // ── Valetudo room-map overlay (Phase 5, batch M-C) ──────────────────────────

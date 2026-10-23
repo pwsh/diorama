@@ -1,0 +1,156 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>GROUNDPLANE …</title>
+<style>html,body{margin:0;background:#0b0f14;color:#cfd8dc;font:12px/1.4 monospace} #c{width:800px;height:500px}</style>
+<div id="c"></div>
+<pre id="log"></pre>
+<!--
+  Scene3D.groundPlane (2026-10-22) — the opaque SURROUNDINGS ground plane that
+  stops the sky dome glowing from beneath the property.
+
+   - OFF (absent / 'none'): no groundPlane mesh, ground-group child count
+     unchanged (negative control);
+   - ON: exactly one userData.groundPlane mesh at y = groundLevel − 20,
+     half-size ≥ 400 000 mm, DoubleSide, outline-skipped, positive polygonOffset;
+   - hole only when the grade sits ABOVE the slab (gl > 0): a ray straight down
+     at the floor centre hits the SLAB, not the plane; a ray outside the rect
+     hits the plane; at gl ≤ 0 the plane is continuous (no hole);
+   - glassHouse ⇒ transparent 0.45;
+   - sky pin: a ray from a camera BELOW slab height aimed slightly downward,
+     away from the rect, hits the plane (it occludes the dome); OFF ⇒ no hit;
+   - a changed kind swaps the texture; the plane follows groundLevelMm;
+   - half-size grows with a recorded neighborhood frustum reach.
+
+  Raycasts are hand-rolled Möller–Trumbore over the built triangles (world
+  matrices updated first), so the page needs no THREE import.
+
+  Run: npm run build; harness = test pages FIRST, dist assets SECOND:
+    H=/tmp/diorama-harness; mkdir -p $H; cp test-pages/ground-plane-test.html $H/; cp -r dist/* $H/
+    (cd $H && python3 -m http.server 8931 &)
+    google-chrome --headless=new --window-size=1280,880 --virtual-time-budget=9000 \
+      --disk-cache-size=1 --dump-dom "http://localhost:8931/ground-plane-test.html?b=$RANDOM" | grep -o "<title>[^<]*</title>"
+-->
+<script type="module">
+  const mod = await import('./assets/three-renderer.js?v=' + Date.now());
+  const r = new mod.ThreeDRenderer(document.getElementById('c'));
+  await r.load();
+  const tests = [];
+  const ok = (name, cond, detail = '') => tests.push({ name, ok: !!cond, detail: String(detail) });
+
+  const FW = 10000, FD = 8000;
+  const walls = [{ id: 'w', kind: 'full', points: [{x:2000,y:2000},{x:8000,y:2000},{x:8000,y:6000},{x:2000,y:6000},{x:2000,y:2000}] }];
+  const floor = { id: 'f1', name: 'T', w: FW, d: FD, walls, furniture: [], lights: [], switches: [], sensors: [],
+    motionSensors: [], envSensors: [], doors: [], windows: [], bg: null, model3d: null, look3d: null, groundAreas: [] };
+  r.updateFloor(floor, { preset: 'day', floorColor: '#8a7860', floorTex: 'none', wallColor: '#cfd2d6' });
+
+  const planes = () => r._groundGroup.children.filter(c => c.userData && c.userData.groundPlane);
+
+  // Möller–Trumbore over every mesh in the given groups → nearest {dist, mesh}
+  function raycast(groups, o, d) {
+    let best = null;
+    for (const g of groups) {
+      g.updateMatrixWorld(true);
+      g.traverse(m => {
+        if (!m.isMesh || !m.visible || !m.geometry) return;
+        const pos = m.geometry.attributes.position; if (!pos) return;
+        const e = m.matrixWorld.elements;
+        const tf = i => { const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+          return [e[0]*x+e[4]*y+e[8]*z+e[12], e[1]*x+e[5]*y+e[9]*z+e[13], e[2]*x+e[6]*y+e[10]*z+e[14]]; };
+        const idx = m.geometry.index;
+        const n = idx ? idx.count : pos.count;
+        for (let t = 0; t + 2 < n; t += 3) {
+          const a = tf(idx ? idx.getX(t) : t), b = tf(idx ? idx.getX(t+1) : t+1), c = tf(idx ? idx.getX(t+2) : t+2);
+          const e1 = [b[0]-a[0], b[1]-a[1], b[2]-a[2]], e2 = [c[0]-a[0], c[1]-a[1], c[2]-a[2]];
+          const p = [d[1]*e2[2]-d[2]*e2[1], d[2]*e2[0]-d[0]*e2[2], d[0]*e2[1]-d[1]*e2[0]];
+          const det = e1[0]*p[0]+e1[1]*p[1]+e1[2]*p[2]; if (Math.abs(det) < 1e-12) continue;
+          const inv = 1 / det, s = [o[0]-a[0], o[1]-a[1], o[2]-a[2]];
+          const u = (s[0]*p[0]+s[1]*p[1]+s[2]*p[2]) * inv; if (u < 0 || u > 1) continue;
+          const q = [s[1]*e1[2]-s[2]*e1[1], s[2]*e1[0]-s[0]*e1[2], s[0]*e1[1]-s[1]*e1[0]];
+          const v = (d[0]*q[0]+d[1]*q[1]+d[2]*q[2]) * inv; if (v < 0 || u + v > 1) continue;
+          const dist = (e2[0]*q[0]+e2[1]*q[1]+e2[2]*q[2]) * inv;
+          if (dist > 1e-6 && (!best || dist < best.dist)) best = { dist, mesh: m };
+        }
+      });
+    }
+    return best;
+  }
+  const norm = v => { const l = Math.hypot(...v); return v.map(x => x / l); };
+  const G = () => [r._floorGroup, r._groundGroup];
+
+  // ── OFF (negative control) ─────────────────────────────────────────────
+  r.updateGroundAreas([], undefined, FW, FD, walls, false, 0);
+  const offCount = r._groundGroup.children.length;
+  ok('off: no groundPlane mesh', planes().length === 0);
+  r.updateGroundAreas([], undefined, FW, FD, walls, false, 0, 'none');
+  ok("off: 'none' builds nothing, child count unchanged", planes().length === 0 && r._groundGroup.children.length === offCount, `${offCount}→${r._groundGroup.children.length}`);
+  const skyOrigin = [0, -10, -(FD / 2 + 1000)], skyDir = norm([0, -0.05, -1]);
+  ok('off: sky pin — low ray past the rect hits NOTHING (dome shows)', raycast(G(), skyOrigin, skyDir) === null);
+
+  // ── ON at grade 0 ───────────────────────────────────────────────────────
+  r.updateGroundAreas([], undefined, FW, FD, walls, false, 0, 'grass');
+  const gp = planes();
+  ok('on: exactly one groundPlane mesh', gp.length === 1, gp.length);
+  ok('on: child count = off + 1', r._groundGroup.children.length === offCount + 1);
+  const m = gp[0];
+  ok('on: y = gl − 20', m && m.position.y === -20, m?.position.y);
+  ok('on: half-size ≥ 400 000 mm', m && m.userData.groundPlaneHalfMm >= 400000, m?.userData.groundPlaneHalfMm);
+  m.geometry.computeBoundingBox();
+  const bb = m.geometry.boundingBox;
+  ok('on: geometry extent ≥ 400 000 each way', bb.max.x >= 400000 && bb.min.x <= -400000 && bb.max.y >= 400000 && bb.min.y <= -400000);
+  ok('on: DoubleSide + outlineSkip + positive polygonOffset', m.material.side === 2 && m.userData.outlineSkip === true
+     && m.material.polygonOffset === true && m.material.polygonOffsetFactor > 0 && m.material.polygonOffsetUnits > 0);
+  ok('on: opaque outside glass house', m.material.transparent === false && m.material.opacity === 1);
+  ok('on: grade 0 → no hole (continuous under the pad)', m.userData.groundPlaneHoled === false);
+  const down = [0, -1, 0];
+  const cHit = raycast(G(), [0, 5000, 0], down);
+  ok('on: ray down at the floor centre hits the SLAB first', cHit && !cHit.mesh.userData.groundPlane && Math.abs(cHit.dist - 5000) < 1, cHit && cHit.dist);
+  const oHit = raycast(G(), [FW / 2 + 3000, 5000, 0], down);
+  ok('on: ray outside the rect hits the plane', oHit && oHit.mesh.userData.groundPlane && Math.abs(oHit.dist - 5020) < 1, oHit && oHit.dist);
+  const sHit = raycast(G(), skyOrigin, skyDir);
+  ok('on: sky pin — low ray past the rect hits the plane (dome occluded)', sHit && sHit.mesh.userData.groundPlane, sHit && sHit.dist);
+  const tex0 = m.material.map;
+
+  // ── kind swap ──────────────────────────────────────────────────────────
+  r.updateGroundAreas([], undefined, FW, FD, walls, false, 0, 'concrete');
+  const m2 = planes()[0];
+  ok('kind: concrete swaps the texture', m2 && m2.material.map && m2.material.map !== tex0 && m2.userData.groundPlane === 'concrete');
+  r.updateGroundAreas([], undefined, FW, FD, walls, false, 0, 'water');
+  const mw = planes()[0];
+  ok('kind: water builds opaque with a shimmer clone', mw && mw.material.transparent === false && mw.material.map?.userData?.waterKey === 'gp');
+
+  // ── glass house ────────────────────────────────────────────────────────
+  r.updateGroundAreas([], undefined, FW, FD, walls, true, 0, 'grass');
+  const mg = planes()[0];
+  ok('glass: transparent 0.45, depthWrite on', mg.material.transparent === true && mg.material.opacity === 0.45 && mg.material.depthWrite === true);
+
+  // ── follows the grade; hole only above the slab ─────────────────────────
+  r.updateGroundAreas([], undefined, FW, FD, walls, false, -1500, 'grass');
+  const ml = planes()[0];
+  ok('grade −1500: plane at −1520, no hole', ml.position.y === -1520 && ml.userData.groundPlaneHoled === false, ml.position.y);
+  r.updateGroundAreas([], 'grass', FW, FD, walls, false, -1500, 'grass');
+  const yf = r._groundGroup.children.find(c => c.userData.yardFill);
+  ok('grade −1500: yardFill (2+gl) sits above the plane', yf && yf.position.y > planes()[0].position.y, `${yf?.position.y} > ${planes()[0].position.y}`);
+  r.updateGroundAreas([], undefined, FW, FD, walls, false, 800, 'grass');
+  const mh = planes()[0];
+  ok('grade +800: plane at 780 WITH a floor-rect hole', mh.position.y === 780 && mh.userData.groundPlaneHoled === true);
+  const hHit = raycast(G(), [0, 5000, 0], down);
+  ok('grade +800: ray at the floor centre passes the hole and hits the SLAB', hHit && !hHit.mesh.userData.groundPlane && Math.abs(hHit.dist - 5000) < 1, hHit && hHit.dist);
+  const hOut = raycast(G(), [FW / 2 + 3000, 5000, 0], down);
+  ok('grade +800: outside the rect hits the plane at 780', hOut && hOut.mesh.userData.groundPlane && Math.abs(hOut.dist - 4220) < 1, hOut && hOut.dist);
+
+  // ── sized off the recorded frustum reach ────────────────────────────────
+  r._recordFrustumReq('nbhd', 1000000);
+  ok('reach: half-size = 3 × recorded nbhd reach', r.groundPlaneHalfSizeMm() === 3000000, r.groundPlaneHalfSizeMm());
+  r.updateGroundAreas([], undefined, FW, FD, walls, false, 0, 'grass');
+  ok('reach: rebuilt plane uses the widened half-size', planes()[0].userData.groundPlaneHalfMm === 3000000);
+  r._recordFrustumReq('nbhd', null);
+  ok('reach: cleared → back to 400 000', r.groundPlaneHalfSizeMm() === 400000);
+
+  // stale caller (no trailing arg) ⇒ no plane
+  r.updateGroundAreas([], undefined, FW, FD, walls, false, 0);
+  ok('stale caller (7 args) builds no plane', planes().length === 0);
+
+  const pass = tests.filter(t => t.ok).length;
+  document.title = `GROUNDPLANE ${pass === tests.length ? 'PASS' : 'FAIL'} ${pass}/${tests.length}`;
+  document.getElementById('log').textContent = document.title + '\n' + tests.map(t => `${t.ok ? 'ok  ' : 'FAIL'} ${t.name} ${t.detail}`).join('\n');
+</script>

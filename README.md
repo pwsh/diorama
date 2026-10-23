@@ -58,7 +58,8 @@ pushes the whole site to GitHub Pages.
   snow, fog, wind and lightning under an astronomically-correct **night sky**
   (real constellations, planets, and moon phase).
 - **Beyond the property line** — a **neighborhood overlay** that pulls the real
-  surrounding buildings, roads and water from OpenFreeMap/OSM vector tiles, and
+  surrounding buildings, roads and water from OpenFreeMap/OSM vector tiles (kept
+  off your own property footprint), and
   live **flight tracking** — ADS-B aircraft and the ISS rendered in the sky,
   with archetype-accurate models, callsign labels, status beacons and
   user-defined glow rules.
@@ -434,7 +435,8 @@ global colors.
 
 Also here: the **glass-house** doll's-house view and wall cutaway, auto-follow
 and cinematic-orbit cameras, camera pivot / free-movement and FOV, the sky
-backdrop, ground level, the compass, and background text. Per-floor elevations
+backdrop, ground level, an opaque **surroundings ground** plane (so the sky can't
+show from beneath the property), the compass, and background text. Per-floor elevations
 and the yard fill live in the sidebar's **Floors** section.
 
 ## Storage

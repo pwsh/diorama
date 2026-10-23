@@ -1934,11 +1934,16 @@ export class ThreeView extends LitElement {
         `${g.id}:${g.kind}:${g.elevationMm ?? 0}:${g.hidden ? 'h' : ''}:${g.points.map(v => `${v.x | 0},${v.y | 0}`).join(';')}`).join('|')));
       // glassHouse is the POST-MERGE value (a card override changes it with no
       // configRev bump; updateGroundAreas bakes the translucent build).
+      // Surroundings ground plane (2026-10-22): its kind + a 200 m bucket of its
+      // half-size (it grows with the recorded neighborhood/flights/bg-text
+      // frustum reach, which the renderer records outside configRev).
+      const groundPlane = scBase.groundPlane && scBase.groundPlane !== 'none' ? scBase.groundPlane : undefined;
+      const gpBucket = groundPlane ? Math.round((r.groundPlaneHalfSizeMm?.() ?? 400000) / 200000) : 0;
       const keyGround = `${p.configRev}|${f.yardFill ?? ''}|${f.w | 0}x${f.d | 0}|${wallHash}|${groundLevelMm}|` +
-        `${!!scBase.glassHouse}|${groundHash}`;
+        `${!!scBase.glassHouse}|${groundHash}|${groundPlane ?? ''}:${gpBucket}`;
       if (keyGround !== this._keyGround) {
         this._keyGround = keyGround;
-        r.updateGroundAreas(groundList, f.yardFill, f.w, f.d, f.walls ?? [], !!scBase.glassHouse, groundLevelMm);
+        r.updateGroundAreas(groundList, f.yardFill, f.w, f.d, f.walls ?? [], !!scBase.glassHouse, groundLevelMm, groundPlane);
       }
 
       // Pools / spas (T4): structural geometry + a bound-entity state hash (heater

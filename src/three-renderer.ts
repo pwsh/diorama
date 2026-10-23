@@ -4776,6 +4776,12 @@ export class ThreeDRenderer {
   private _frustumReqNbhd: number | null = null;
   private _frustumReqFlights: number | null = null;
   private _frustumReqBgText: number | null = null;
+  // Half-size of the surroundings ground plane: it must reach past the
+  // dynamic far plane whenever the neighborhood / flights / bg-text widened it.
+  groundPlaneHalfSizeMm(): number {
+    const r = Math.max(this._frustumReqNbhd ?? 0, this._frustumReqFlights ?? 0, this._frustumReqBgText ?? 0);
+    return Math.max(400000, 3 * r);
+  }
   private _recordFrustumReq(src: 'nbhd' | 'flights' | 'bgtext', requiredMm: number | null): void {
     const v = requiredMm != null && isFinite(requiredMm) && requiredMm > 0 ? requiredMm : null;
     if (src === 'nbhd') this._frustumReqNbhd = v;
@@ -6005,7 +6011,7 @@ export class ThreeDRenderer {
   // Terrace TOPS are registered into _terrain in updateFloor (which owns that
   // array) so nav height survives _keyFloor rebuilds — this call is visuals only.
   updateGroundAreas(areas: GroundArea[], yardFill?: GroundKind, fw?: number, fd?: number, walls?: Wall[], glassHouse?: boolean,
-                    groundLevelMm?: number): void {
+                    groundLevelMm?: number, groundPlane?: GroundKind | 'none'): void {
     if (!this._scene) return;
     // Surroundings level: the yard-fill underlay IS the surrounding grade, and
     // a user-drawn area whose CENTROID is outdoors is paint ON that grade — its
@@ -6077,6 +6083,52 @@ export class ThreeDRenderer {
       yMesh.userData.outlineSkip = true;
       yMesh.userData.yardFill = true;
       this._groundGroup.add(yMesh);
+    }
+
+    // Surroundings ground plane (Scene3D.groundPlane, 2026-10-22 — absent /
+    // 'none' = nothing built, byte-identical). The sky dome is a FULL camera-
+    // centred sphere whose gradient (and the camera-relative sun sprite)
+    // continues below the horizon, and nothing opaque existed at grade outside
+    // the floor rect — so from a low camera the "sky" glowed from under the
+    // property. This is one huge opaque square at the SURROUNDINGS grade
+    // (gl − 20, pushed back by a positive polygonOffset so it never fights the
+    // slab, yardFill (2+gl), the neighborhood stack (1/2/3+gl) or ground paint).
+    // Half-size covers the widened far plane: max(400 km, 3× every recorded
+    // frustum reach). The floor rect is a HOLE only when the grade sits ABOVE
+    // the slab (gl > 0 — a below-grade active floor would otherwise be buried);
+    // at gl ≤ 0 the plane runs continuously under the pad, so the yard inside
+    // the rect but outside the wall loops is ground too, not sky.
+    if (groundPlane && groundPlane !== 'none' && GROUND_KINDS[groundPlane]) {
+      const gk = GROUND_KINDS[groundPlane];
+      const R = this.groundPlaneHalfSizeMm();
+      const gpWater = groundPlane === 'water';
+      const gtex = gpWater ? this._waterTexClone('gp') : this._groundTexture(groundPlane);
+      if (!gpWater) gtex.repeat.set(1 / 800, 1 / 800);
+      const gShape = new THREE.Shape();
+      gShape.moveTo(R, R); gShape.lineTo(-R, R); gShape.lineTo(-R, -R); gShape.lineTo(R, -R); gShape.closePath();
+      const hfw = (fw ?? this._fw) / 2, hfd = (fd ?? this._fd) / 2;
+      const holed = gl > 0 && hfw > 0 && hfd > 0;
+      if (holed) {
+        const hole = new THREE.Path();
+        hole.moveTo(hfw, hfd); hole.lineTo(hfw, -hfd); hole.lineTo(-hfw, -hfd); hole.lineTo(-hfw, hfd); hole.closePath();
+        gShape.holes.push(hole);
+      }
+      const gMesh = new THREE.Mesh(new THREE.ShapeGeometry(gShape), this._mat({
+        color: hexToInt(gk.color), map: gtex, side: THREE.DoubleSide,
+        roughness: 0.95, metalness: 0,
+        polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 4,
+        // Water is opaque here on purpose: a translucent ground would let the
+        // sky glow through, which is the whole thing this plane exists to stop.
+        ...(glassHouse ? { transparent: true, opacity: 0.45, depthWrite: true } : {}),
+      }));
+      gMesh.rotation.x = -Math.PI / 2;
+      gMesh.position.y = gl - 20;
+      gMesh.receiveShadow = true;
+      gMesh.userData.outlineSkip = true;
+      gMesh.userData.groundPlane = groundPlane;
+      gMesh.userData.groundPlaneHalfMm = R;
+      gMesh.userData.groundPlaneHoled = holed;
+      this._groundGroup.add(gMesh);
     }
 
     // Depth layer per area: overlapping same-elevation areas are EXACTLY

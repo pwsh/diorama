@@ -32,6 +32,7 @@ export const CHANGELOG: ChangelogEntry[] = [
       'Typing in number fields no longer fights you, and kiosk taps on hidden layers no longer toggle real devices',
       'Lost Home Assistant connections recover cleanly, Valetudo room maps work over direct MQTT, and a long list of smaller fixes',
       'Share a floor plan with every Home Assistant user — kiosk tablets and family accounts pick it from the list and edits sync both ways (one shell_command to paste, shown in Settings ▸ Floor Plan)',
+      'The neighborhood overlay now keeps off your own property, and a new Surroundings ground option (Settings ▸ Display) stops the sky glowing up from under the house',
     ],
   },
   {

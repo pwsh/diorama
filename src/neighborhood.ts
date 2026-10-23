@@ -218,6 +218,72 @@ export function filterPolylineByExclusions(points: Vec2[], exclusions: Vec2[][])
   return runs.filter(r => r.length >= 2);
 }
 
+// (c) Property-footprint subtraction for AREA layers (water / landuse) —
+//     2026-10-22. Buildings DROP and roads SPLIT on the property rect (the
+//     user's own house is in OSM too — the visible symptom of the report), but
+//     a lake or a residential landuse polygon is routinely LARGER than the
+//     property, so dropping it would erase the whole neighbourhood fill and
+//     keeping it paints OSM over the plan. Instead the polygon is CLIPPED: the
+//     rect's complement decomposes into four CONVEX strips (x<x0 · x>x1 ·
+//     x0≤x≤x1 ∧ y<y0 · x0≤x≤x1 ∧ y>y1) and the (possibly concave) polygon is
+//     Sutherland–Hodgman-clipped against each — S-H is exact for a convex clip
+//     region at any subject concavity. Caveat (inherent to S-H): a concave
+//     subject that leaves a strip and re-enters it comes back as ONE ring
+//     joined by zero-area edges along the strip boundary; the AREA is exact
+//     and earcut/ShapeGeometry triangulate it fine. Pure, deterministic.
+export interface PlanRect { x0: number; y0: number; x1: number; y1: number; }
+type HalfPlane = { axis: 'x' | 'y'; v: number; keepLess: boolean };
+function clipHalfPlane(pts: Vec2[], h: HalfPlane): Vec2[] {
+  const out: Vec2[] = [];
+  const n = pts.length;
+  if (n === 0) return out;
+  const inside = (p: Vec2) => (h.keepLess ? p[h.axis] <= h.v : p[h.axis] >= h.v);
+  const cross = (a: Vec2, b: Vec2): Vec2 => {
+    const t = (h.v - a[h.axis]) / (b[h.axis] - a[h.axis]);
+    return h.axis === 'x' ? { x: h.v, y: a.y + (b.y - a.y) * t } : { x: a.x + (b.x - a.x) * t, y: h.v };
+  };
+  for (let i = 0; i < n; i++) {
+    const cur = pts[i], prev = pts[(i + n - 1) % n];
+    const ci = inside(cur), pi = inside(prev);
+    if (ci) { if (!pi) out.push(cross(prev, cur)); out.push(cur); }
+    else if (pi) out.push(cross(prev, cur));
+  }
+  return out;
+}
+export function polygonAreaAbs(pts: Vec2[]): number {
+  let a = 0;
+  for (let i = 0, n = pts.length; i < n; i++) { const p = pts[i], q = pts[(i + 1) % n]; a += p.x * q.y - q.x * p.y; }
+  return Math.abs(a) / 2;
+}
+export function subtractRectFromPolygon(points: Vec2[], rect: PlanRect): Vec2[][] {
+  if (!points || points.length < 3) return [];
+  const x0 = Math.min(rect.x0, rect.x1), x1 = Math.max(rect.x0, rect.x1);
+  const y0 = Math.min(rect.y0, rect.y1), y1 = Math.max(rect.y0, rect.y1);
+  if (!(x1 > x0) || !(y1 > y0)) return [points];
+  // bbox fast paths — disjoint keeps the original BY IDENTITY; fully inside → []
+  let bx0 = Infinity, by0 = Infinity, bx1 = -Infinity, by1 = -Infinity;
+  for (const p of points) { if (p.x < bx0) bx0 = p.x; if (p.x > bx1) bx1 = p.x; if (p.y < by0) by0 = p.y; if (p.y > by1) by1 = p.y; }
+  if (bx1 <= x0 || bx0 >= x1 || by1 <= y0 || by0 >= y1) return [points];
+  if (bx0 >= x0 && bx1 <= x1 && by0 >= y0 && by1 <= y1) return [];
+  const strips: HalfPlane[][] = [
+    [{ axis: 'x', v: x0, keepLess: true }],
+    [{ axis: 'x', v: x1, keepLess: false }],
+    [{ axis: 'x', v: x0, keepLess: false }, { axis: 'x', v: x1, keepLess: true }, { axis: 'y', v: y0, keepLess: true }],
+    [{ axis: 'x', v: x0, keepLess: false }, { axis: 'x', v: x1, keepLess: true }, { axis: 'y', v: y1, keepLess: false }],
+  ];
+  const total = polygonAreaAbs(points);
+  const minArea = Math.max(1, total * 1e-9);   // drop slivers (mm² — 1 mm² floor)
+  const out: Vec2[][] = [];
+  for (const strip of strips) {
+    let poly = points;
+    for (const h of strip) { poly = clipHalfPlane(poly, h); if (poly.length < 3) break; }
+    if (poly.length < 3) continue;
+    if (polygonAreaAbs(poly) <= minArea) continue;
+    out.push(poly);
+  }
+  return out;
+}
+
 // ── Nearest-N building cap (PIN) ─────────────────────────────────────────────
 export function centroidOf(points: Vec2[]): Vec2 {
   let sx = 0, sy = 0;
@@ -269,6 +335,10 @@ function makeAlign(origin: Vec2, align?: { dx?: number; dy?: number; rotDeg?: nu
 export interface BuildOpts {
   align?: { dx?: number; dy?: number; rotDeg?: number };
   exclusions?: Vec2[][];
+  // 2026-10-22: the property footprint (plan mm, the shared floor frame). When
+  // set, buildings intersecting it DROP, roads SPLIT on it, and water/landuse
+  // polygons are CLIPPED by it (subtractRectFromPolygon). Absent ⇒ byte-identical.
+  propertyRect?: PlanRect;
   verticalScale?: number;         // clamp 0.2..3 by the caller; multiplies resolved heights
   defaultLevelHeightM?: number;   // clamp 2..5 by the caller
   layers?: { buildings?: boolean; roads?: boolean; water?: boolean; landuse?: boolean };
@@ -294,7 +364,14 @@ export function buildNeighborhoodFeatures(
 
   const origin = latLonToPlan(transform, transform.originLat, transform.originLon) ?? { x: transform.tx, y: transform.ty };
   const align = makeAlign(origin, opts.align);
-  const exclusions = opts.exclusions ?? [];
+  const userEx = opts.exclusions ?? [];
+  const pr = opts.propertyRect;
+  const propPoly: Vec2[] | null = pr && pr.x1 > pr.x0 && pr.y1 > pr.y0
+    ? [{ x: pr.x0, y: pr.y0 }, { x: pr.x1, y: pr.y0 }, { x: pr.x1, y: pr.y1 }, { x: pr.x0, y: pr.y1 }]
+    : null;
+  // The rect rides the existing building/road exclusion semantics as one more
+  // mask polygon; user exclusions alone ⇒ the same array as before (identical).
+  const exclusions = propPoly ? [...userEx, propPoly] : userEx;
   const vScale = opts.verticalScale ?? 1;
   const levelH = opts.defaultLevelHeightM ?? 3;
   const want = {
@@ -325,8 +402,8 @@ export function buildNeighborhoodFeatures(
   for (const tile of tiles) {
     if (want.buildings) extractBuildings(tile, projectRun, vScale, levelH, exclusions, buildings);
     if (want.roads) extractRoads(tile, projectRun, exclusions, roads);
-    if (want.water) extractPolygons(tile.layers.water, tile.addr, projectRun, water);
-    if (want.landuse) extractPolygons(tile.layers.landuse, tile.addr, projectRun, landuse);
+    if (want.water) extractPolygons(tile.layers.water, tile.addr, projectRun, water, propPoly ? pr! : null);
+    if (want.landuse) extractPolygons(tile.layers.landuse, tile.addr, projectRun, landuse, propPoly ? pr! : null);
   }
 
   const cap = opts.maxBuildings ?? MAX_BUILDINGS;
@@ -380,7 +457,7 @@ function extractRoads(tile: DecodedTileInput, project: ProjectFn, exclusions: Ve
   }
 }
 
-function extractPolygons(layer: MvtLayer | undefined, addr: TileAddr, project: ProjectFn, out: NbPatch[]): void {
+function extractPolygons(layer: MvtLayer | undefined, addr: TileAddr, project: ProjectFn, out: NbPatch[], rect: PlanRect | null): void {
   if (!layer) return;
   for (const f of layer.features) {
     if (f.type !== 'polygon') continue;
@@ -390,7 +467,8 @@ function extractPolygons(layer: MvtLayer | undefined, addr: TileAddr, project: P
       if (signedArea(ring) <= 0) continue;   // exterior rings only
       const pts = project(addr, layer.extent, ring);
       if (!pts || pts.length < 3) continue;
-      out.push({ points: pts, cls });
+      if (!rect) { out.push({ points: pts, cls }); continue; }
+      for (const piece of subtractRectFromPolygon(pts, rect)) out.push({ points: piece, cls });
     }
   }
 }
